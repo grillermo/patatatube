@@ -1,6 +1,7 @@
 import sqlite3
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 def _conn():
     conn = sqlite3.connect(os.getenv("DB_PATH", "data/watch_later.db"), timeout=5)
@@ -9,6 +10,7 @@ def _conn():
 
 
 def init_db():
+    Path(os.getenv("DB_PATH", "data/watch_later.db")).parent.mkdir(parents=True, exist_ok=True)
     with _conn() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS videos (

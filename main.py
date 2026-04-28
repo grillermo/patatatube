@@ -1,4 +1,6 @@
 import os
+import secrets
+from html import escape
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -27,8 +29,10 @@ app = FastAPI(lifespan=lifespan)
 
 def _check_token(request: Request):
     token = os.getenv("UPLOAD_TOKEN", "")
+    if not token:
+        raise HTTPException(status_code=503, detail="Upload not configured")
     auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer ") or auth[7:] != token:
+    if not auth.startswith("Bearer ") or not secrets.compare_digest(auth[7:], token):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -66,6 +70,8 @@ async def stream_video(video_id: int, request: Request):
     if range_header:
         try:
             unit, ranges = range_header.split("=")
+            if unit.strip() != "bytes":
+                raise HTTPException(status_code=416, detail="Invalid Range header")
             start_str, end_str = ranges.split("-")
             start = int(start_str)
             end = int(end_str) if end_str else file_size - 1
@@ -140,7 +146,7 @@ def _build_html(videos: list[dict]) -> str:
     for v in videos:
         progress = db.get_progress(v["id"])
         badge = _status_badge(v["status"])
-        short_url = v["url"][:60] + ("…" if len(v["url"]) > 60 else "")
+        short_url = escape(v["url"][:60]) + ("…" if len(v["url"]) > 60 else "")
 
         if v["status"] == "done":
             player = f"""
@@ -150,7 +156,7 @@ def _build_html(videos: list[dict]) -> str:
               <source src="/videos/{v['id']}/stream" type="video/mp4">
             </video>"""
         elif v["status"] == "error":
-            player = f'<p style="color:#c00;font-size:0.85em">Error: {v.get("error_msg","unknown")}</p>'
+            player = f'<p style="color:#c00;font-size:0.85em">Error: {escape(v.get("error_msg","unknown"))}</p>'
         else:
             player = f'<p style="color:#aaa;font-size:0.85em">Video is {v["status"]}…</p>'
 
