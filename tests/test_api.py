@@ -49,3 +49,31 @@ def test_upload_success(client, monkeypatch):
     data = resp.json()
     assert "id" in data
     assert data["status"] == "queued"
+
+def test_stream_not_found(client):
+    resp = client.get("/videos/999/stream")
+    assert resp.status_code == 404
+
+def test_stream_not_done(client):
+    import db
+    vid_id = db.add_video("https://twitter.com/x/status/1")
+    resp = client.get(f"/videos/{vid_id}/stream")
+    assert resp.status_code == 404
+
+def test_stream_returns_video(client):
+    import db
+    from pathlib import Path
+
+    # Create a fake video file
+    fake_video = Path("videos") / "1.mp4"
+    fake_video.parent.mkdir(exist_ok=True)
+    fake_video.write_bytes(b"FAKEVIDEOCONTENT")
+
+    vid_id = db.add_video("https://twitter.com/x/status/1")
+    db.update_video(vid_id, status="done", filename="1.mp4")
+
+    resp = client.get(f"/videos/{vid_id}/stream")
+    assert resp.status_code in (200, 206)
+    assert b"FAKEVIDEOCONTENT" in resp.content
+
+    fake_video.unlink()
