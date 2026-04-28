@@ -88,3 +88,24 @@ def test_save_progress(client):
 def test_save_progress_video_not_found(client):
     resp = client.post("/videos/999/progress", json={"position_seconds": 10.0})
     assert resp.status_code == 404
+
+def test_videos_page_returns_html(client):
+    resp = client.get("/videos")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+
+def test_videos_page_shows_video(client):
+    import db
+    vid_id = db.add_video("https://twitter.com/x/status/123")
+    db.update_video(vid_id, status="done", filename="1.mp4")
+    resp = client.get("/videos")
+    assert resp.status_code == 200
+    assert f"/videos/{vid_id}/stream" in resp.text
+
+def test_videos_page_sets_resume_time(client):
+    import db
+    vid_id = db.add_video("https://twitter.com/x/status/123")
+    db.update_video(vid_id, status="done", filename="1.mp4")
+    db.upsert_progress(vid_id, 55.0)
+    resp = client.get("/videos")
+    assert "55.0" in resp.text

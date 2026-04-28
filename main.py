@@ -128,3 +128,79 @@ async def save_progress(video_id: int, body: ProgressRequest):
         raise HTTPException(status_code=404, detail="Video not found")
     db.upsert_progress(video_id, body.position_seconds)
     return {"ok": True}
+
+
+def _status_badge(status: str) -> str:
+    colors = {"queued": "#888", "downloading": "#f90", "done": "#0a0", "error": "#c00"}
+    return f'<span style="color:{colors.get(status,"#888")};font-size:0.8em">{status}</span>'
+
+
+def _build_html(videos: list[dict]) -> str:
+    cards = []
+    for v in videos:
+        progress = db.get_progress(v["id"])
+        badge = _status_badge(v["status"])
+        short_url = v["url"][:60] + ("…" if len(v["url"]) > 60 else "")
+
+        if v["status"] == "done":
+            player = f"""
+            <video id="v{v['id']}" controls playsinline preload="metadata"
+                   style="width:100%;border-radius:8px;background:#000;"
+                   onloadedmetadata="this.currentTime={progress}">
+              <source src="/videos/{v['id']}/stream" type="video/mp4">
+            </video>"""
+        elif v["status"] == "error":
+            player = f'<p style="color:#c00;font-size:0.85em">Error: {v.get("error_msg","unknown")}</p>'
+        else:
+            player = f'<p style="color:#aaa;font-size:0.85em">Video is {v["status"]}…</p>'
+
+        cards.append(f"""
+        <div class="card">
+          <div class="meta">{badge} &nbsp;{short_url}</div>
+          {player}
+        </div>""")
+
+    cards_html = "\n".join(cards) if cards else '<p style="color:#aaa;text-align:center">No videos yet.</p>'
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Watch Later</title>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{background:#111;color:#eee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:12px}}
+  .card{{background:#1e1e1e;border-radius:10px;padding:12px;margin-bottom:14px;max-width:480px;margin-left:auto;margin-right:auto}}
+  .meta{{font-size:0.78em;color:#aaa;margin-bottom:8px;word-break:break-all}}
+  video{{display:block}}
+</style>
+</head>
+<body>
+<h2 style="text-align:center;margin-bottom:16px;font-size:1.1em;max-width:480px;margin-left:auto;margin-right:auto">Watch Later</h2>
+{cards_html}
+<script>
+document.querySelectorAll('video[id]').forEach(function(v){{
+  var lastSaved=v.currentTime, timer=null;
+  function save(){{
+    if(v.currentTime===lastSaved) return;
+    lastSaved=v.currentTime;
+    fetch('/videos/'+v.id.slice(1)+'/progress',{{
+      method:'POST',
+      headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{position_seconds:v.currentTime}})
+    }});
+  }}
+  v.addEventListener('play',function(){{timer=setInterval(save,5000)}});
+  v.addEventListener('pause',function(){{clearInterval(timer);save()}});
+  v.addEventListener('ended',function(){{clearInterval(timer);save()}});
+}});
+</script>
+</body>
+</html>"""
+
+
+@app.get("/videos", response_class=HTMLResponse)
+async def videos_page():
+    all_videos = db.get_all_videos()
+    return _build_html(all_videos)
