@@ -77,3 +77,14 @@ def test_stream_returns_video(client):
     assert b"FAKEVIDEOCONTENT" in resp.content
 
     fake_video.unlink()
+
+def test_save_progress(client):
+    import db
+    vid_id = db.add_video("https://twitter.com/x/status/1")
+    resp = client.post(f"/videos/{vid_id}/progress", json={"position_seconds": 37.5})
+    assert resp.status_code == 200
+    assert db.get_progress(vid_id) == 37.5
+
+def test_save_progress_video_not_found(client):
+    resp = client.post("/videos/999/progress", json={"position_seconds": 10.0})
+    assert resp.status_code == 404

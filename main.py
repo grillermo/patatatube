@@ -116,3 +116,15 @@ async def stream_video(video_id: int, request: Request):
             "Content-Length": str(file_size),
         },
     )
+
+
+class ProgressRequest(BaseModel):
+    position_seconds: float
+
+
+@app.post("/videos/{video_id}/progress")
+async def save_progress(video_id: int, body: ProgressRequest):
+    if not db.get_video(video_id):
+        raise HTTPException(status_code=404, detail="Video not found")
+    db.upsert_progress(video_id, body.position_seconds)
+    return {"ok": True}
