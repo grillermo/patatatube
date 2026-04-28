@@ -1,16 +1,10 @@
 # tests/test_db.py
 import pytest
-import tempfile
-import os
 
-# Override DB path before importing db
 @pytest.fixture(autouse=True)
 def tmp_db(monkeypatch, tmp_path):
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setenv("DB_PATH", db_path)
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
     import db
-    import importlib
-    importlib.reload(db)
     db.init_db()
     yield db
 
