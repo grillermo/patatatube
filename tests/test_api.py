@@ -72,6 +72,7 @@ def test_upload_youtube_success(client, monkeypatch):
     video = db.get_video(data["id"])
     assert video["platform"] == "youtube"
     assert video["source_key"] == "dQw4w9WgXcQ"
+    assert video["preview_url"] == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
 
 
 def test_upload_youtube_strips_non_video_query_params(client, monkeypatch):
@@ -89,7 +90,7 @@ def test_upload_youtube_strips_non_video_query_params(client, monkeypatch):
     import db
 
     video = db.get_video(data["id"])
-    assert video["url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=60"
+    assert video["url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     assert video["source_key"] == "dQw4w9WgXcQ"
 
 
@@ -160,29 +161,10 @@ def test_stream_returns_video(client):
     finally:
         fake_video.unlink(missing_ok=True)
 
-def test_save_progress(client):
+def test_progress_endpoint_removed(client):
     import db
     vid_id = db.add_video("https://twitter.com/x/status/1")
     resp = client.post(f"/videos/{vid_id}/progress", json={"position_seconds": 37.5})
-    assert resp.status_code == 200
-    assert db.get_progress(vid_id) == 37.5
-
-
-def test_save_progress_ignores_youtube_time_param(client):
-    import db
-
-    vid_id = db.add_video(
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=60",
-        platform="youtube",
-        source_key="dQw4w9WgXcQ",
-    )
-    resp = client.post(f"/videos/{vid_id}/progress", json={"position_seconds": 37.5})
-    assert resp.status_code == 200
-    assert db.get_progress(vid_id) == 0.0
-
-
-def test_save_progress_video_not_found(client):
-    resp = client.post("/videos/999/progress", json={"position_seconds": 10.0})
     assert resp.status_code == 404
 
 def test_videos_page_returns_html(client):
@@ -209,12 +191,11 @@ def test_videos_page_sets_resume_time(client):
     import db
     vid_id = db.add_video("https://twitter.com/x/status/123")
     db.update_video(vid_id, status="done", filename="1.mp4")
-    db.upsert_progress(vid_id, 55.0)
     resp = client.get("/videos")
-    assert "55.0" in resp.text
+    assert 'onloadedmetadata="this.currentTime=0"' in resp.text
 
 
-def test_videos_page_uses_youtube_time_param_without_progress_tracking(client):
+def test_videos_page_starts_youtube_at_zero(client):
     import db
 
     vid_id = db.add_video(
@@ -223,11 +204,8 @@ def test_videos_page_uses_youtube_time_param_without_progress_tracking(client):
         source_key="dQw4w9WgXcQ",
     )
     db.update_video(vid_id, status="done", filename="yt.mp4")
-    db.upsert_progress(vid_id, 55.0)
     resp = client.get("/videos")
-    assert 'onloadedmetadata="this.currentTime=60"' in resp.text
-    assert 'data-progress-disabled="1"' in resp.text
-    assert "55.0" not in resp.text
+    assert 'onloadedmetadata="this.currentTime=0"' in resp.text
 
 
 def test_videos_page_shows_youtube_title(client):
@@ -244,3 +222,32 @@ def test_videos_page_shows_youtube_title(client):
     assert resp.status_code == 200
     assert "Saved YouTube Title" in resp.text
     assert "https://youtu.be/dQw4w9WgXcQ" in resp.text
+
+
+def test_videos_page_shows_youtube_video_directly(client):
+    import db
+
+    vid_id = db.add_video(
+        "https://youtu.be/dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+        preview_url="https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+    )
+    db.update_video(vid_id, status="done", filename="yt.mp4")
+    resp = client.get("/videos")
+    assert resp.status_code == 200
+    assert f'<video id="v{vid_id}" controls playsinline preload="metadata"' in resp.text
+    assert f'<source src="/videos/{vid_id}/stream" type="video/mp4">' in resp.text
+    assert 'class="preview-button"' not in resp.text
+
+
+def test_videos_page_includes_iphone_fullscreen_playback_script(client):
+    import db
+
+    vid_id = db.add_video("https://twitter.com/x/status/123")
+    db.update_video(vid_id, status="done", filename="1.mp4")
+    resp = client.get("/videos")
+    assert resp.status_code == 200
+    assert "var isIphone = /iPhone/i.test(navigator.userAgent);" in resp.text
+    assert "function enterFullscreenOnIphone(video)" in resp.text
+    assert "video.webkitEnterFullscreen" in resp.text

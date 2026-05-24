@@ -105,37 +105,14 @@ def _extract_youtube_id(raw_url: str) -> str:
     return video_id
 
 
-def _parse_youtube_time_seconds(raw_time: str | None) -> int | None:
-    if not raw_time:
-        return None
-
-    if raw_time.isdigit():
-        return int(raw_time)
-
-    match = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", raw_time)
-    if not match or not any(match.groups()):
-        return None
-
-    hours, minutes, seconds = (int(part or 0) for part in match.groups())
-    return hours * 3600 + minutes * 60 + seconds
-
-
-def _extract_youtube_time_seconds(raw_url: str) -> int | None:
-    parsed = urlparse(raw_url)
-    host = parsed.netloc.lower().removeprefix("www.")
-    if host not in {"youtube.com", "m.youtube.com", "youtu.be"}:
-        return None
-    query = parse_qs(parsed.query)
-    return _parse_youtube_time_seconds(query.get("t", [""])[0])
-
-
 def _normalize_youtube_url(raw_url: str) -> tuple[str, str]:
     video_id = _extract_youtube_id(raw_url)
     normalized_url = f"https://www.youtube.com/watch?v={video_id}"
-    start_time = _extract_youtube_time_seconds(raw_url)
-    if start_time is not None:
-        normalized_url = f"{normalized_url}&t={start_time}"
     return normalized_url, video_id
+
+
+def _youtube_preview_url(video_id: str) -> str:
+    return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
 
 def _classify_url(raw_url: str) -> dict:
@@ -175,6 +152,7 @@ async def upload(body: UploadRequest, request: Request, background_tasks: Backgr
         source["normalized_url"] if source["platform"] == "youtube" else body.url,
         platform=source["platform"],
         source_key=source["source_key"],
+        preview_url=_youtube_preview_url(source["source_key"]) if source["platform"] == "youtube" else None,
     )
     background_tasks.add_task(download_video, video_id)
     return {"id": video_id, "status": "queued"}
@@ -256,21 +234,6 @@ async def stream_video(video_id: int, request: Request):
     )
 
 
-class ProgressRequest(BaseModel):
-    position_seconds: float
-
-
-@app.post("/videos/{video_id}/progress")
-async def save_progress(video_id: int, body: ProgressRequest):
-    video = db.get_video(video_id)
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-    if _extract_youtube_time_seconds(video["url"]) is not None:
-        return {"ok": True}
-    db.upsert_progress(video_id, body.position_seconds)
-    return {"ok": True}
-
-
 def _status_badge(status: str) -> str:
     colors = {"queued": "#888", "downloading": "#f90", "done": "#0a0", "error": "#c00"}
     return f'<span style="color:{colors.get(status,"#888")};font-size:0.8em">{status}</span>'
@@ -279,18 +242,15 @@ def _status_badge(status: str) -> str:
 def _build_html(videos: list[dict]) -> str:
     cards = []
     for v in videos:
-        start_time = _extract_youtube_time_seconds(v["url"])
-        progress = start_time if start_time is not None else db.get_progress(v["id"])
-        progress_disabled_attr = ' data-progress-disabled="1"' if start_time is not None else ""
         badge = _status_badge(v["status"])
         short_url = escape(v["url"][:60]) + ("…" if len(v["url"]) > 60 else "")
         title = escape(v["title"]) if v.get("platform") == "youtube" and v.get("title") else None
 
         if v["status"] == "done":
             player = f"""
-            <video id="v{v['id']}"{progress_disabled_attr} controls playsinline preload="metadata"
+            <video id="v{v['id']}" controls playsinline preload="metadata"
                    style="width:100%;border-radius:8px;background:#000;"
-                   onloadedmetadata="this.currentTime={progress}">
+                   onloadedmetadata="this.currentTime=0">
               <source src="/videos/{v['id']}/stream" type="video/mp4">
             </video>"""
         elif v["status"] == "error":
@@ -347,21 +307,21 @@ def _build_html(videos: list[dict]) -> str:
 <h2 style="text-align:center;margin-bottom:16px;font-size:1.1em;max-width:480px;margin-left:auto;margin-right:auto">Videos</h2>
 {cards_html}
 <script>
-document.querySelectorAll('video[id]').forEach(function(v){{
-  if(v.dataset.progressDisabled==='1') return;
-  var lastSaved=v.currentTime, timer=null;
-  function save(){{
-    if(v.currentTime===lastSaved) return;
-    lastSaved=v.currentTime;
-    fetch('/videos/'+v.id.slice(1)+'/progress',{{
-      method:'POST',
-      headers:{{'Content-Type':'application/json'}},
-      body:JSON.stringify({{position_seconds:v.currentTime}})
-    }});
+var isIphone = /iPhone/i.test(navigator.userAgent);
+function enterFullscreenOnIphone(video){{
+  if(!isIphone || !video) return;
+  if(typeof video.webkitEnterFullscreen === 'function') {{
+    try {{ video.webkitEnterFullscreen(); }} catch (_err) {{}}
+    return;
   }}
-  v.addEventListener('play',function(){{timer=setInterval(save,5000)}});
-  v.addEventListener('pause',function(){{clearInterval(timer);save()}});
-  v.addEventListener('ended',function(){{clearInterval(timer);save()}});
+  if(video.requestFullscreen) {{
+    var fsPromise = video.requestFullscreen();
+    if(fsPromise && fsPromise.catch) fsPromise.catch(function(){{}});
+  }}
+}}
+
+document.querySelectorAll('video[id]').forEach(function(v){{
+  v.addEventListener('play',function(){{enterFullscreenOnIphone(v);}});
 }});
 </script>
 </body>

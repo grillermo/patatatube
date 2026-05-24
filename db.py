@@ -37,6 +37,9 @@ def init_db():
             conn.execute("ALTER TABLE videos ADD COLUMN source_key TEXT")
         if "title" not in columns:
             conn.execute("ALTER TABLE videos ADD COLUMN title TEXT")
+        if "preview_url" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN preview_url TEXT")
+        _backfill_youtube_preview_urls(conn)
         _delete_error_videos(conn)
 
 
@@ -59,14 +62,15 @@ def add_video(
     platform: str | None = None,
     source_key: str | None = None,
     title: str | None = None,
+    preview_url: str | None = None,
 ) -> int:
     with _conn() as conn:
         cur = conn.execute(
             """
-            INSERT INTO videos (url, platform, source_key, title, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO videos (url, platform, source_key, title, preview_url, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (url, platform, source_key, title, datetime.now(timezone.utc).isoformat()),
+            (url, platform, source_key, title, preview_url, datetime.now(timezone.utc).isoformat()),
         )
         return cur.lastrowid
 
@@ -109,6 +113,7 @@ def update_video(
     filename: str | None = None,
     error_msg: str | None = None,
     title: str | None = None,
+    preview_url: str | None = None,
 ):
     if status == "error":
         delete_video(video_id)
@@ -121,11 +126,40 @@ def update_video(
             SET status = ?,
                 filename = COALESCE(?, filename),
                 error_msg = ?,
-                title = COALESCE(?, title)
+                title = COALESCE(?, title),
+                preview_url = COALESCE(?, preview_url)
             WHERE id = ?
             """,
-            (status, filename, error_msg, title, video_id),
+            (status, filename, error_msg, title, preview_url, video_id),
         )
+
+
+def youtube_preview_url(source_key: str | None) -> str | None:
+    if not source_key:
+        return None
+    return f"https://i.ytimg.com/vi/{source_key}/hqdefault.jpg"
+
+
+def _backfill_youtube_preview_urls(conn: sqlite3.Connection) -> int:
+    rows = conn.execute(
+        """
+        SELECT id, source_key
+        FROM videos
+        WHERE platform = 'youtube'
+          AND source_key IS NOT NULL
+          AND source_key != ''
+          AND (preview_url IS NULL OR preview_url = '')
+        """
+    ).fetchall()
+
+    updated = 0
+    for row in rows:
+        preview_url = youtube_preview_url(row["source_key"])
+        if not preview_url:
+            continue
+        conn.execute("UPDATE videos SET preview_url = ? WHERE id = ?", (preview_url, row["id"]))
+        updated += 1
+    return updated
 
 
 def get_progress(video_id: int) -> float:

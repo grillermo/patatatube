@@ -61,12 +61,20 @@ def test_video_metadata_fields_and_source_lookup(tmp_db):
         platform="youtube",
         source_key="dQw4w9WgXcQ",
         title="Original Title",
+        preview_url="https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
     )
-    tmp_db.update_video(vid_id, status="done", filename="1.mp4", title="Saved Title")
+    tmp_db.update_video(
+        vid_id,
+        status="done",
+        filename="1.mp4",
+        title="Saved Title",
+        preview_url="https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+    )
     video = tmp_db.get_video(vid_id)
     assert video["platform"] == "youtube"
     assert video["source_key"] == "dQw4w9WgXcQ"
     assert video["title"] == "Saved Title"
+    assert video["preview_url"] == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
 
     existing = tmp_db.get_completed_video_by_source("youtube", "dQw4w9WgXcQ")
     assert existing is not None
@@ -80,3 +88,18 @@ def test_progress_upsert_and_get(tmp_db):
     assert tmp_db.get_progress(vid_id) == 42.5
     tmp_db.upsert_progress(vid_id, 100.0)
     assert tmp_db.get_progress(vid_id) == 100.0
+
+
+def test_init_db_backfills_youtube_preview_urls(tmp_db):
+    vid_id = tmp_db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+    )
+
+    with tmp_db._conn() as conn:
+        conn.execute("UPDATE videos SET preview_url = NULL WHERE id = ?", (vid_id,))
+
+    tmp_db.init_db()
+    video = tmp_db.get_video(vid_id)
+    assert video["preview_url"] == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
