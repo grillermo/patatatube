@@ -206,6 +206,7 @@ document.querySelectorAll('video[id]').forEach(function(v){{
 </html>"""
 
 
+@app.get("/", response_class=HTMLResponse)
 @app.get("/videos", response_class=HTMLResponse)
 async def videos_page():
     all_videos = db.get_all_videos()
