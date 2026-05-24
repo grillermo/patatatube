@@ -25,16 +25,53 @@ def test_update_video_status(tmp_db):
 
 def test_update_video_error(tmp_db):
     vid_id = tmp_db.add_video("https://twitter.com/x/status/789")
+    tmp_db.upsert_progress(vid_id, 12.0)
     tmp_db.update_video(vid_id, status="error", error_msg="Download failed")
-    video = tmp_db.get_video(vid_id)
-    assert video["status"] == "error"
-    assert video["error_msg"] == "Download failed"
+    assert tmp_db.get_video(vid_id) is None
+    assert tmp_db.get_progress(vid_id) == 0.0
+
+
+def test_init_db_deletes_legacy_error_videos(tmp_db):
+    good_id = tmp_db.add_video("https://twitter.com/x/status/123")
+    bad_id = tmp_db.add_video("https://twitter.com/x/status/789")
+    tmp_db.upsert_progress(bad_id, 12.0)
+
+    with tmp_db._conn() as conn:
+        conn.execute(
+            "UPDATE videos SET status = ?, error_msg = ? WHERE id = ?",
+            ("error", "Download failed", bad_id),
+        )
+
+    tmp_db.init_db()
+
+    assert tmp_db.get_video(good_id) is not None
+    assert tmp_db.get_video(bad_id) is None
+    assert tmp_db.get_progress(bad_id) == 0.0
 
 def test_get_all_videos(tmp_db):
     tmp_db.add_video("https://twitter.com/x/status/1")
     tmp_db.add_video("https://twitter.com/x/status/2")
     videos = tmp_db.get_all_videos()
     assert len(videos) == 2
+
+
+def test_video_metadata_fields_and_source_lookup(tmp_db):
+    vid_id = tmp_db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+        title="Original Title",
+    )
+    tmp_db.update_video(vid_id, status="done", filename="1.mp4", title="Saved Title")
+    video = tmp_db.get_video(vid_id)
+    assert video["platform"] == "youtube"
+    assert video["source_key"] == "dQw4w9WgXcQ"
+    assert video["title"] == "Saved Title"
+
+    existing = tmp_db.get_completed_video_by_source("youtube", "dQw4w9WgXcQ")
+    assert existing is not None
+    assert existing["id"] == vid_id
+    assert existing["filename"] == "1.mp4"
 
 def test_progress_upsert_and_get(tmp_db):
     vid_id = tmp_db.add_video("https://twitter.com/x/status/999")

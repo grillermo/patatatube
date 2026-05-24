@@ -3,6 +3,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+
 def _conn():
     conn = sqlite3.connect(os.getenv("DB_PATH", "data/watch_later.db"), timeout=5)
     conn.row_factory = sqlite3.Row
@@ -16,6 +17,9 @@ def init_db():
             CREATE TABLE IF NOT EXISTS videos (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 url       TEXT NOT NULL,
+                platform  TEXT,
+                source_key TEXT,
+                title     TEXT,
                 filename  TEXT,
                 status    TEXT NOT NULL DEFAULT 'queued',
                 error_msg TEXT,
@@ -26,13 +30,43 @@ def init_db():
                 position_seconds REAL NOT NULL DEFAULT 0
             );
         """)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()}
+        if "platform" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN platform TEXT")
+        if "source_key" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN source_key TEXT")
+        if "title" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN title TEXT")
+        _delete_error_videos(conn)
 
 
-def add_video(url: str) -> int:
+def _delete_error_videos(conn: sqlite3.Connection) -> int:
+    error_ids = [
+        row["id"]
+        for row in conn.execute("SELECT id FROM videos WHERE status = 'error'").fetchall()
+    ]
+    if not error_ids:
+        return 0
+
+    placeholders = ",".join("?" for _ in error_ids)
+    conn.execute(f"DELETE FROM progress WHERE video_id IN ({placeholders})", error_ids)
+    conn.execute(f"DELETE FROM videos WHERE id IN ({placeholders})", error_ids)
+    return len(error_ids)
+
+
+def add_video(
+    url: str,
+    platform: str | None = None,
+    source_key: str | None = None,
+    title: str | None = None,
+) -> int:
     with _conn() as conn:
         cur = conn.execute(
-            "INSERT INTO videos (url, created_at) VALUES (?, ?)",
-            (url, datetime.now(timezone.utc).isoformat()),
+            """
+            INSERT INTO videos (url, platform, source_key, title, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (url, platform, source_key, title, datetime.now(timezone.utc).isoformat()),
         )
         return cur.lastrowid
 
@@ -43,17 +77,54 @@ def get_video(video_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+def delete_video(video_id: int):
+    with _conn() as conn:
+        conn.execute("DELETE FROM progress WHERE video_id = ?", (video_id,))
+        conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+
+
 def get_all_videos() -> list[dict]:
     with _conn() as conn:
         rows = conn.execute("SELECT * FROM videos ORDER BY created_at DESC").fetchall()
         return [dict(r) for r in rows]
 
 
-def update_video(video_id: int, status: str, filename: str | None = None, error_msg: str | None = None):
+def get_completed_video_by_source(platform: str, source_key: str) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM videos
+            WHERE platform = ? AND source_key = ? AND status = 'done'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (platform, source_key),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_video(
+    video_id: int,
+    status: str,
+    filename: str | None = None,
+    error_msg: str | None = None,
+    title: str | None = None,
+):
+    if status == "error":
+        delete_video(video_id)
+        return
+
     with _conn() as conn:
         conn.execute(
-            "UPDATE videos SET status=?, filename=?, error_msg=? WHERE id=?",
-            (status, filename, error_msg, video_id),
+            """
+            UPDATE videos
+            SET status = ?,
+                filename = COALESCE(?, filename),
+                error_msg = ?,
+                title = COALESCE(?, title)
+            WHERE id = ?
+            """,
+            (status, filename, error_msg, title, video_id),
         )
 
 

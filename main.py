@@ -1,8 +1,10 @@
 import os
+import re
 import secrets
 from html import escape
 from pathlib import Path
 from contextlib import asynccontextmanager
+from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
@@ -26,6 +28,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
 
 def _check_token(request: Request):
     token = os.getenv("UPLOAD_TOKEN", "")
@@ -40,11 +44,132 @@ class UploadRequest(BaseModel):
     url: str
 
 
+def _print_bad_request_details(request: Request, body: UploadRequest):
+    print("400 Bad Request details:", flush=True)
+    print(f"  method={request.method}", flush=True)
+    print(f"  url={request.url}", flush=True)
+    print(f"  path_params={dict(request.path_params)}", flush=True)
+    print(f"  query_params={dict(request.query_params)}", flush=True)
+    print(f"  headers={dict(request.headers)}", flush=True)
+    print(f"  body={body.model_dump()}", flush=True)
+
+
+def _normalize_twitter_url(raw_url: str) -> tuple[str, str | None]:
+    parsed = urlparse(raw_url)
+    host = parsed.netloc.lower().removeprefix("www.")
+    if host not in {"twitter.com", "x.com", "mobile.twitter.com", "mobile.x.com"}:
+        raise ValueError("Unsupported URL")
+
+    match = re.search(r"/status/(\d+)", parsed.path)
+    if not match:
+        raise ValueError("Unsupported URL")
+
+    canonical_host = "x.com" if host.endswith("x.com") else "twitter.com"
+    canonical_url = f"https://{canonical_host}{parsed.path}"
+    if parsed.query:
+        canonical_url = f"{canonical_url}?{parsed.query}"
+    return canonical_url, None
+
+
+def _extract_youtube_id(raw_url: str) -> str:
+    parsed = urlparse(raw_url)
+    host = parsed.netloc.lower().removeprefix("www.")
+
+    if host == "youtu.be":
+        video_id = parsed.path.strip("/").split("/")[0]
+    elif host in {"youtube.com", "m.youtube.com"}:
+        path = parsed.path.rstrip("/")
+        query = parse_qs(parsed.query)
+        if path == "/watch":
+            video_id = query.get("v", [""])[0]
+        elif path.startswith("/shorts/"):
+            video_id = path.split("/")[2]
+        elif path.startswith("/embed/"):
+            video_id = path.split("/")[2]
+        elif path.startswith(("/channel/", "/c/", "/user/", "/@")) or path in {"", "/playlist"}:
+            raise ValueError("Unsupported YouTube URL")
+        else:
+            raise ValueError("Unsupported YouTube URL")
+    else:
+        raise ValueError("Unsupported URL")
+
+    if not YOUTUBE_ID_RE.fullmatch(video_id):
+        raise ValueError("Unsupported YouTube URL")
+    return video_id
+
+
+def _parse_youtube_time_seconds(raw_time: str | None) -> int | None:
+    if not raw_time:
+        return None
+
+    if raw_time.isdigit():
+        return int(raw_time)
+
+    match = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", raw_time)
+    if not match or not any(match.groups()):
+        return None
+
+    hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _extract_youtube_time_seconds(raw_url: str) -> int | None:
+    parsed = urlparse(raw_url)
+    host = parsed.netloc.lower().removeprefix("www.")
+    if host not in {"youtube.com", "m.youtube.com", "youtu.be"}:
+        return None
+    query = parse_qs(parsed.query)
+    return _parse_youtube_time_seconds(query.get("t", [""])[0])
+
+
+def _normalize_youtube_url(raw_url: str) -> tuple[str, str]:
+    video_id = _extract_youtube_id(raw_url)
+    normalized_url = f"https://www.youtube.com/watch?v={video_id}"
+    start_time = _extract_youtube_time_seconds(raw_url)
+    if start_time is not None:
+        normalized_url = f"{normalized_url}&t={start_time}"
+    return normalized_url, video_id
+
+
+def _classify_url(raw_url: str) -> dict:
+    try:
+        normalized_url, source_key = _normalize_twitter_url(raw_url)
+        return {"platform": "twitter", "source_key": source_key, "normalized_url": normalized_url}
+    except ValueError:
+        pass
+
+    try:
+        normalized_url, video_id = _normalize_youtube_url(raw_url)
+        return {
+            "platform": "youtube",
+            "source_key": video_id,
+            "normalized_url": normalized_url,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/upload", status_code=202)
 async def upload(body: UploadRequest, request: Request, background_tasks: BackgroundTasks):
     _check_token(request)
-    video_id = db.add_video(body.url)
-    background_tasks.add_task(download_video, video_id, body.url)
+    try:
+        source = _classify_url(body.url)
+    except HTTPException as exc:
+        if exc.status_code == 400:
+            _print_bad_request_details(request, body)
+        raise
+
+    if source["platform"] == "youtube":
+        existing = db.get_completed_video_by_source("youtube", source["source_key"])
+        if existing:
+            return {"id": existing["id"], "status": "queued"}
+
+    video_id = db.add_video(
+        source["normalized_url"] if source["platform"] == "youtube" else body.url,
+        platform=source["platform"],
+        source_key=source["source_key"],
+    )
+    background_tasks.add_task(download_video, video_id)
     return {"id": video_id, "status": "queued"}
 
 
@@ -130,8 +255,11 @@ class ProgressRequest(BaseModel):
 
 @app.post("/videos/{video_id}/progress")
 async def save_progress(video_id: int, body: ProgressRequest):
-    if not db.get_video(video_id):
+    video = db.get_video(video_id)
+    if not video:
         raise HTTPException(status_code=404, detail="Video not found")
+    if _extract_youtube_time_seconds(video["url"]) is not None:
+        return {"ok": True}
     db.upsert_progress(video_id, body.position_seconds)
     return {"ok": True}
 
@@ -144,13 +272,16 @@ def _status_badge(status: str) -> str:
 def _build_html(videos: list[dict]) -> str:
     cards = []
     for v in videos:
-        progress = db.get_progress(v["id"])
+        start_time = _extract_youtube_time_seconds(v["url"])
+        progress = start_time if start_time is not None else db.get_progress(v["id"])
+        progress_disabled_attr = ' data-progress-disabled="1"' if start_time is not None else ""
         badge = _status_badge(v["status"])
         short_url = escape(v["url"][:60]) + ("…" if len(v["url"]) > 60 else "")
+        title = escape(v["title"]) if v.get("platform") == "youtube" and v.get("title") else None
 
         if v["status"] == "done":
             player = f"""
-            <video id="v{v['id']}" controls playsinline preload="metadata"
+            <video id="v{v['id']}"{progress_disabled_attr} controls playsinline preload="metadata"
                    style="width:100%;border-radius:8px;background:#000;"
                    onloadedmetadata="this.currentTime={progress}">
               <source src="/videos/{v['id']}/stream" type="video/mp4">
@@ -162,7 +293,10 @@ def _build_html(videos: list[dict]) -> str:
 
         cards.append(f"""
         <div class="card">
-          <div class="meta">{badge} &nbsp;{short_url}</div>
+          <div class="meta">
+            {f'<div class="title">{title}</div>' if title else ''}
+            <div>{badge} &nbsp;{short_url}</div>
+          </div>
           {player}
         </div>""")
 
@@ -179,6 +313,7 @@ def _build_html(videos: list[dict]) -> str:
   body{{background:#111;color:#eee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:12px}}
   .card{{background:#1e1e1e;border-radius:10px;padding:12px;margin-bottom:14px;max-width:480px;margin-left:auto;margin-right:auto}}
   .meta{{font-size:0.78em;color:#aaa;margin-bottom:8px;word-break:break-all}}
+  .title{{font-size:1.15em;color:#eee;margin-bottom:4px;word-break:break-word}}
   video{{display:block}}
 </style>
 </head>
@@ -187,6 +322,7 @@ def _build_html(videos: list[dict]) -> str:
 {cards_html}
 <script>
 document.querySelectorAll('video[id]').forEach(function(v){{
+  if(v.dataset.progressDisabled==='1') return;
   var lastSaved=v.currentTime, timer=null;
   function save(){{
     if(v.currentTime===lastSaved) return;

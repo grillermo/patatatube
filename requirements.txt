@@ -1,6 +1,7 @@
 fastapi==0.115.0
 uvicorn==0.30.6
 pybalt==2025.7.1
+yt-dlp==2026.3.17
 PyYAML==6.0.2
 python-dotenv==1.0.1
 httpx==0.27.2
