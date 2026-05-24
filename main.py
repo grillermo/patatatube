@@ -19,6 +19,67 @@ load_dotenv()
 
 VIDEOS_DIR = Path("videos")
 SPLASH_DIR = Path("assets/splash")
+SPLASH_ICON = "icon.png"
+SPLASH_MIME_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+}
+
+# filename, CSS device width, CSS device height, pixel ratio, orientation
+SPLASH_STARTUP_IMAGES = (
+    ("4__iPhone_SE__iPod_touch_5th_generation_and_later_portrait.png", 320, 568, 2, "portrait"),
+    ("4__iPhone_SE__iPod_touch_5th_generation_and_later_landscape.png", 320, 568, 2, "landscape"),
+    ("iPhone_8__iPhone_7__iPhone_6s__iPhone_6__4.7__iPhone_SE_portrait.png", 375, 667, 2, "portrait"),
+    ("iPhone_8__iPhone_7__iPhone_6s__iPhone_6__4.7__iPhone_SE_landscape.png", 375, 667, 2, "landscape"),
+    ("iPhone_8_Plus__iPhone_7_Plus__iPhone_6s_Plus__iPhone_6_Plus_portrait.png", 414, 736, 3, "portrait"),
+    ("iPhone_8_Plus__iPhone_7_Plus__iPhone_6s_Plus__iPhone_6_Plus_landscape.png", 414, 736, 3, "landscape"),
+    ("iPhone_13_mini__iPhone_12_mini__iPhone_11_Pro__iPhone_XS__iPhone_X_portrait.png", 375, 812, 3, "portrait"),
+    ("iPhone_13_mini__iPhone_12_mini__iPhone_11_Pro__iPhone_XS__iPhone_X_landscape.png", 375, 812, 3, "landscape"),
+    ("iPhone_11__iPhone_XR_portrait.png", 414, 896, 2, "portrait"),
+    ("iPhone_11__iPhone_XR_landscape.png", 414, 896, 2, "landscape"),
+    ("iPhone_11_Pro_Max__iPhone_XS_Max_portrait.png", 414, 896, 3, "portrait"),
+    ("iPhone_11_Pro_Max__iPhone_XS_Max_landscape.png", 414, 896, 3, "landscape"),
+    ("iPhone_17e__iPhone_16e__iPhone_14__iPhone_13_Pro__iPhone_13__iPhone_12_Pro__iPhone_12_portrait.png", 390, 844, 3, "portrait"),
+    ("iPhone_17e__iPhone_16e__iPhone_14__iPhone_13_Pro__iPhone_13__iPhone_12_Pro__iPhone_12_landscape.png", 390, 844, 3, "landscape"),
+    ("iPhone_14_Plus__iPhone_13_Pro_Max__iPhone_12_Pro_Max_portrait.png", 428, 926, 3, "portrait"),
+    ("iPhone_14_Plus__iPhone_13_Pro_Max__iPhone_12_Pro_Max_landscape.png", 428, 926, 3, "landscape"),
+    ("iPhone_16__iPhone_15_Pro__iPhone_15__iPhone_14_Pro_portrait.png", 393, 852, 3, "portrait"),
+    ("iPhone_16__iPhone_15_Pro__iPhone_15__iPhone_14_Pro_landscape.png", 393, 852, 3, "landscape"),
+    ("iPhone_16_Plus__iPhone_15_Pro_Max__iPhone_15_Plus__iPhone_14_Pro_Max_portrait.png", 430, 932, 3, "portrait"),
+    ("iPhone_16_Plus__iPhone_15_Pro_Max__iPhone_15_Plus__iPhone_14_Pro_Max_landscape.png", 430, 932, 3, "landscape"),
+    ("iPhone_Air_landscape.png", 420, 912, 3, "landscape"),
+    ("iPhone_17_Pro__iPhone_17__iPhone_16_Pro_portrait.png", 402, 874, 3, "portrait"),
+    ("iPhone_17_Pro__iPhone_17__iPhone_16_Pro_landscape.png", 402, 874, 3, "landscape"),
+    ("iPhone_17_Pro_Max__iPhone_16_Pro_Max_portrait.png", 440, 956, 3, "portrait"),
+    ("iPhone_17_Pro_Max__iPhone_16_Pro_Max_landscape.png", 440, 956, 3, "landscape"),
+    ("9.7__iPad_Pro__7.9__iPad_mini__9.7__iPad_Air__9.7__iPad_portrait.png", 768, 1024, 2, "portrait"),
+    ("9.7__iPad_Pro__7.9__iPad_mini__9.7__iPad_Air__9.7__iPad_landscape.png", 768, 1024, 2, "landscape"),
+    ("10.2__iPad_portrait.png", 810, 1080, 2, "portrait"),
+    ("10.2__iPad_landscape.png", 810, 1080, 2, "landscape"),
+    ("10.5__iPad_Air_portrait.png", 834, 1112, 2, "portrait"),
+    ("10.5__iPad_Air_landscape.png", 834, 1112, 2, "landscape"),
+    ("10.9__iPad_Air_portrait.png", 820, 1180, 2, "portrait"),
+    ("10.9__iPad_Air_landscape.png", 820, 1180, 2, "landscape"),
+    ("8.3__iPad_Mini_portrait.png", 744, 1133, 2, "portrait"),
+    ("8.3__iPad_Mini_landscape.png", 744, 1133, 2, "landscape"),
+    ("11__iPad_Pro__10.5__iPad_Pro_portrait.png", 834, 1194, 2, "portrait"),
+    ("11__iPad_Pro__10.5__iPad_Pro_landscape.png", 834, 1194, 2, "landscape"),
+    ("11__iPad_Pro_M4_portrait.png", 834, 1210, 2, "portrait"),
+    ("11__iPad_Pro_M4_landscape.png", 834, 1210, 2, "landscape"),
+    ("12.9__iPad_Pro_portrait.png", 1024, 1366, 2, "portrait"),
+    ("12.9__iPad_Pro_landscape.png", 1024, 1366, 2, "landscape"),
+    ("13__iPad_Pro_M4_portrait.png", 1032, 1376, 2, "portrait"),
+    ("13__iPad_Pro_M4_landscape.png", 1032, 1376, 2, "landscape"),
+    ("iphone-16-pro-max.jpg", 440, 956, 3, "portrait"),
+    ("iphone-15-pro-max.jpg", 430, 932, 3, "portrait"),
+    ("iphone-15-14-pro.jpg", 393, 852, 3, "portrait"),
+    ("iphone-13-12-pro.jpg", 390, 844, 3, "portrait"),
+    ("iphone-14-plus.jpg", 428, 926, 3, "portrait"),
+    ("iphone-11-pro-max-xs-max.jpg", 414, 896, 3, "portrait"),
+    ("iphone-11-xr.jpg", 414, 896, 2, "portrait"),
+    ("iphone-8-plus.jpg", 414, 736, 3, "portrait"),
+)
 
 
 @asynccontextmanager
@@ -160,7 +221,42 @@ async def upload(body: UploadRequest, request: Request, background_tasks: Backgr
 
 def _guess_mime(filename: str) -> str:
     ext = Path(filename).suffix.lower()
-    return {"mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime"}.get(ext[1:], "video/mp4")
+    return {"mp4": "video/mp4", "m4v": "video/mp4", "webm": "video/webm", "mov": "video/quicktime"}.get(ext[1:], "video/mp4")
+
+
+def _range_not_satisfiable(file_size: int) -> HTTPException:
+    return HTTPException(
+        status_code=416,
+        headers={"Content-Range": f"bytes */{file_size}"},
+        detail="Range Not Satisfiable",
+    )
+
+
+def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
+    if file_size <= 0:
+        raise _range_not_satisfiable(file_size)
+
+    try:
+        unit, ranges = range_header.split("=", 1)
+        if unit.strip().lower() != "bytes" or "," in ranges:
+            raise ValueError
+        start_str, end_str = ranges.strip().split("-", 1)
+
+        if start_str == "":
+            suffix_length = int(end_str)
+            if suffix_length <= 0:
+                raise ValueError
+            return max(file_size - suffix_length, 0), file_size - 1
+
+        start = int(start_str)
+        end = int(end_str) if end_str else file_size - 1
+    except (ValueError, AttributeError):
+        raise _range_not_satisfiable(file_size)
+
+    if start < 0 or start >= file_size or start > end:
+        raise _range_not_satisfiable(file_size)
+
+    return start, min(end, file_size - 1)
 
 
 @app.get("/videos/{video_id}/stream")
@@ -178,23 +274,7 @@ async def stream_video(video_id: int, request: Request):
     range_header = request.headers.get("Range")
 
     if range_header:
-        try:
-            unit, ranges = range_header.split("=")
-            if unit.strip() != "bytes":
-                raise HTTPException(status_code=416, detail="Invalid Range header")
-            start_str, end_str = ranges.split("-")
-            start = int(start_str)
-            end = int(end_str) if end_str else file_size - 1
-        except (ValueError, AttributeError):
-            raise HTTPException(status_code=416, detail="Invalid Range header")
-
-        if start >= file_size or end >= file_size or start > end:
-            raise HTTPException(
-                status_code=416,
-                headers={"Content-Range": f"bytes */{file_size}"},
-                detail="Range Not Satisfiable",
-            )
-
+        start, end = _parse_byte_range(range_header, file_size)
         chunk_size = end - start + 1
 
         def iter_chunk():
@@ -239,6 +319,23 @@ def _status_badge(status: str) -> str:
     return f'<span style="color:{colors.get(status,"#888")};font-size:0.8em">{status}</span>'
 
 
+def _splash_startup_link(filename: str, width: int, height: int, scale: int, orientation: str) -> str:
+    media = (
+        f"(device-width: {width}px) and (device-height: {height}px) "
+        f"and (-webkit-device-pixel-ratio: {scale}) and (orientation: {orientation})"
+    )
+    return (
+        '<link rel="apple-touch-startup-image" '
+        f'media="{media}" href="/assets/splash/{escape(filename, quote=True)}">'
+    )
+
+
+def _splash_startup_links() -> str:
+    links = ['<link rel="apple-touch-startup-image" href="/apple-splash-optimized.jpg">']
+    links.extend(_splash_startup_link(*image) for image in SPLASH_STARTUP_IMAGES)
+    return "\n".join(links)
+
+
 def _build_html(videos: list[dict]) -> str:
     cards = []
     for v in videos:
@@ -248,7 +345,7 @@ def _build_html(videos: list[dict]) -> str:
 
         if v["status"] == "done":
             player = f"""
-            <video id="v{v['id']}" controls playsinline preload="metadata"
+            <video id="v{v['id']}" controls playsinline webkit-playsinline preload="metadata"
                    style="width:100%;border-radius:8px;background:#000;"
                    onloadedmetadata="this.currentTime=0">
               <source src="/videos/{v['id']}/stream" type="video/mp4">
@@ -268,28 +365,21 @@ def _build_html(videos: list[dict]) -> str:
         </div>""")
 
     cards_html = "\n".join(cards) if cards else '<p style="color:#aaa;text-align:center">No videos yet.</p>'
+    splash_links = _splash_startup_links()
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Videos</title>
+<title>Patata Videos</title>
 <meta name="theme-color" content="#111111">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Videos">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="apple-touch-startup-image" href="/apple-splash-optimized.jpg">
-<link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-16-pro-max.jpg">
-<link rel="apple-touch-startup-image" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-15-pro-max.jpg">
-<link rel="apple-touch-startup-image" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-15-14-pro.jpg">
-<link rel="apple-touch-startup-image" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-13-12-pro.jpg">
-<link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-14-plus.jpg">
-<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-11-pro-max-xs-max.jpg">
-<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="/assets/splash/iphone-11-xr.jpg">
-<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-8-plus.jpg">
+{splash_links}
 <link rel="manifest" href="/manifest.webmanifest">
 <style>
   *{{box-sizing:border-box;margin:0;padding:0}}
@@ -304,24 +394,19 @@ def _build_html(videos: list[dict]) -> str:
 </style>
 </head>
 <body>
-<h2 style="text-align:center;margin-bottom:16px;font-size:1.1em;max-width:480px;margin-left:auto;margin-right:auto">Videos</h2>
+<h2 style="text-align:center;margin-bottom:16px;font-size:1.1em;max-width:480px;margin-left:auto;margin-right:auto">Patata Videos</h2>
 {cards_html}
 <script>
-var isIphone = /iPhone/i.test(navigator.userAgent);
-function enterFullscreenOnIphone(video){{
-  if(!isIphone || !video) return;
-  if(typeof video.webkitEnterFullscreen === 'function') {{
-    try {{ video.webkitEnterFullscreen(); }} catch (_err) {{}}
-    return;
-  }}
-  if(video.requestFullscreen) {{
-    var fsPromise = video.requestFullscreen();
-    if(fsPromise && fsPromise.catch) fsPromise.catch(function(){{}});
-  }}
+function reloadUnreadyVideos(){{
+  document.querySelectorAll('video[id]').forEach(function(v){{
+    if(v.readyState === 0 || v.error) {{
+      try {{ v.load(); }} catch (_err) {{}}
+    }}
+  }});
 }}
-
-document.querySelectorAll('video[id]').forEach(function(v){{
-  v.addEventListener('play',function(){{enterFullscreenOnIphone(v);}});
+window.addEventListener('pageshow', reloadUnreadyVideos);
+document.addEventListener('visibilitychange', function(){{
+  if(!document.hidden) reloadUnreadyVideos();
 }});
 </script>
 </body>
@@ -354,9 +439,10 @@ async def splash_asset(filename: str):
     if safe_name != filename:
         raise HTTPException(status_code=404, detail="Not found")
     target = SPLASH_DIR / safe_name
-    if not target.exists() or target.suffix.lower() != ".jpg":
+    media_type = SPLASH_MIME_TYPES.get(target.suffix.lower())
+    if not target.exists() or media_type is None:
         raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(target, media_type="image/jpeg")
+    return FileResponse(target, media_type=media_type)
 
 
 @app.get("/manifest.webmanifest", include_in_schema=False)
@@ -375,6 +461,12 @@ async def manifest():
                     "src": "/apple-touch-icon.png",
                     "sizes": "256x256",
                     "type": "image/png",
+                },
+                {
+                    "src": f"/assets/splash/{SPLASH_ICON}",
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "any maskable",
                 },
                 {
                     "src": "/favicon.ico",

@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _conn():
-    conn = sqlite3.connect(os.getenv("DB_PATH", "data/watch_later.db"), timeout=5)
+    conn = sqlite3.connect(os.getenv("DB_PATH", "data/watch_later.sqlite"), timeout=5)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -24,10 +24,6 @@ def init_db():
                 status    TEXT NOT NULL DEFAULT 'queued',
                 error_msg TEXT,
                 created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS progress (
-                video_id         INTEGER PRIMARY KEY REFERENCES videos(id),
-                position_seconds REAL NOT NULL DEFAULT 0
             );
         """)
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()}
@@ -52,7 +48,6 @@ def _delete_error_videos(conn: sqlite3.Connection) -> int:
         return 0
 
     placeholders = ",".join("?" for _ in error_ids)
-    conn.execute(f"DELETE FROM progress WHERE video_id IN ({placeholders})", error_ids)
     conn.execute(f"DELETE FROM videos WHERE id IN ({placeholders})", error_ids)
     return len(error_ids)
 
@@ -83,7 +78,6 @@ def get_video(video_id: int) -> dict | None:
 
 def delete_video(video_id: int):
     with _conn() as conn:
-        conn.execute("DELETE FROM progress WHERE video_id = ?", (video_id,))
         conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
 
 
@@ -161,19 +155,3 @@ def _backfill_youtube_preview_urls(conn: sqlite3.Connection) -> int:
         updated += 1
     return updated
 
-
-def get_progress(video_id: int) -> float:
-    with _conn() as conn:
-        row = conn.execute(
-            "SELECT position_seconds FROM progress WHERE video_id = ?", (video_id,)
-        ).fetchone()
-        return row[0] if row else 0.0
-
-
-def upsert_progress(video_id: int, position_seconds: float):
-    with _conn() as conn:
-        conn.execute(
-            """INSERT INTO progress (video_id, position_seconds) VALUES (?, ?)
-               ON CONFLICT(video_id) DO UPDATE SET position_seconds=excluded.position_seconds""",
-            (video_id, position_seconds),
-        )

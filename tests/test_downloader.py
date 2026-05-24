@@ -1,4 +1,5 @@
 import importlib
+import json
 import subprocess
 from pathlib import Path
 
@@ -31,7 +32,11 @@ async def test_download_youtube_success_persists_title(monkeypatch, downloader_e
         assert url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         return source_file, "Downloaded Title"
 
+    async def fake_normalize(path):
+        return Path(path)
+
     monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
 
     video_id = db.add_video(
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -76,7 +81,11 @@ async def test_download_twitter_uses_pybalt(monkeypatch, downloader_env, tmp_pat
         assert url == "https://twitter.com/user/status/123"
         return str(source_file)
 
+    async def fake_normalize(path):
+        return Path(path)
+
     monkeypatch.setattr(downloader, "pybalt_download", fake_pybalt)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
 
     video_id = db.add_video("https://twitter.com/user/status/123", platform="twitter")
     await downloader.download_video(video_id)
@@ -109,6 +118,93 @@ def test_youtube_download_uses_browser_cookies(monkeypatch, downloader_env):
     path, title = downloader._download_youtube_media_sync("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
     assert captured["cmd"][:3] == ["/opt/homebrew/bin/yt-dlp", "--cookies-from-browser", "chrome"]
+    ytdlp_format = captured["cmd"][captured["cmd"].index("-f") + 1]
+    assert "vcodec^=avc1" in ytdlp_format
+    assert "acodec^=mp4a" in ytdlp_format
     assert title == "Title"
     assert path.exists()
     path.unlink()
+
+
+def test_ios_normalization_reencodes_unsupported_streams(monkeypatch, downloader_env, tmp_path):
+    _db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"source")
+    commands = []
+
+    def fake_run(cmd, stdout, stderr, text):
+        commands.append(cmd)
+        if cmd[0] == "ffprobe-test":
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "streams": [
+                            {"codec_type": "video", "codec_name": "av1", "pix_fmt": "yuv420p"},
+                            {"codec_type": "audio", "codec_name": "opus", "channels": 2},
+                        ]
+                    }
+                ),
+            )
+
+        Path(cmd[-1]).write_bytes(b"ios-mp4")
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "FFMPEG_BIN", "ffmpeg-test")
+    monkeypatch.setattr(downloader, "FFPROBE_BIN", "ffprobe-test")
+
+    output_path = downloader._normalize_media_for_ios_sync(source_file)
+
+    try:
+        assert output_path.suffix == ".mp4"
+        assert output_path.read_bytes() == b"ios-mp4"
+        ffmpeg_cmd = commands[1]
+        assert ffmpeg_cmd[ffmpeg_cmd.index("-c:v") + 1] == "libx264"
+        assert ffmpeg_cmd[ffmpeg_cmd.index("-c:a") + 1] == "aac"
+        assert ffmpeg_cmd[ffmpeg_cmd.index("-movflags") + 1] == "+faststart"
+        assert ffmpeg_cmd[ffmpeg_cmd.index("-pix_fmt") + 1] == "yuv420p"
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
+def test_ios_normalization_remuxes_safe_h264_aac(monkeypatch, downloader_env, tmp_path):
+    _db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"source")
+    commands = []
+
+    def fake_run(cmd, stdout, stderr, text):
+        commands.append(cmd)
+        if cmd[0] == "ffprobe-test":
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "streams": [
+                            {"codec_type": "video", "codec_name": "h264", "pix_fmt": "yuv420p"},
+                            {"codec_type": "audio", "codec_name": "aac", "channels": 2},
+                        ]
+                    }
+                ),
+            )
+
+        Path(cmd[-1]).write_bytes(b"remuxed")
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "FFMPEG_BIN", "ffmpeg-test")
+    monkeypatch.setattr(downloader, "FFPROBE_BIN", "ffprobe-test")
+
+    output_path = downloader._normalize_media_for_ios_sync(source_file)
+
+    try:
+        ffmpeg_cmd = commands[1]
+        assert output_path.read_bytes() == b"remuxed"
+        assert ffmpeg_cmd[ffmpeg_cmd.index("-c:v") + 1] == "copy"
+        assert ffmpeg_cmd[ffmpeg_cmd.index("-c:a") + 1] == "copy"
+        assert ffmpeg_cmd[ffmpeg_cmd.index("-movflags") + 1] == "+faststart"
+    finally:
+        output_path.unlink(missing_ok=True)

@@ -161,6 +161,79 @@ def test_stream_returns_video(client):
     finally:
         fake_video.unlink(missing_ok=True)
 
+
+def test_stream_returns_requested_byte_range(client):
+    import db
+    from pathlib import Path
+
+    fake_video = Path("videos") / "1.mp4"
+    fake_video.parent.mkdir(exist_ok=True)
+    fake_video.write_bytes(b"0123456789")
+    try:
+        vid_id = db.add_video("https://twitter.com/x/status/1")
+        db.update_video(vid_id, status="done", filename="1.mp4")
+        resp = client.get(f"/videos/{vid_id}/stream", headers={"Range": "bytes=4-7"})
+        assert resp.status_code == 206
+        assert resp.content == b"4567"
+        assert resp.headers["content-range"] == "bytes 4-7/10"
+        assert resp.headers["accept-ranges"] == "bytes"
+        assert resp.headers["content-length"] == "4"
+    finally:
+        fake_video.unlink(missing_ok=True)
+
+
+def test_stream_supports_suffix_byte_range(client):
+    import db
+    from pathlib import Path
+
+    fake_video = Path("videos") / "1.mp4"
+    fake_video.parent.mkdir(exist_ok=True)
+    fake_video.write_bytes(b"0123456789")
+    try:
+        vid_id = db.add_video("https://twitter.com/x/status/1")
+        db.update_video(vid_id, status="done", filename="1.mp4")
+        resp = client.get(f"/videos/{vid_id}/stream", headers={"Range": "bytes=-4"})
+        assert resp.status_code == 206
+        assert resp.content == b"6789"
+        assert resp.headers["content-range"] == "bytes 6-9/10"
+    finally:
+        fake_video.unlink(missing_ok=True)
+
+
+def test_stream_clamps_range_end(client):
+    import db
+    from pathlib import Path
+
+    fake_video = Path("videos") / "1.mp4"
+    fake_video.parent.mkdir(exist_ok=True)
+    fake_video.write_bytes(b"0123456789")
+    try:
+        vid_id = db.add_video("https://twitter.com/x/status/1")
+        db.update_video(vid_id, status="done", filename="1.mp4")
+        resp = client.get(f"/videos/{vid_id}/stream", headers={"Range": "bytes=4-99"})
+        assert resp.status_code == 206
+        assert resp.content == b"456789"
+        assert resp.headers["content-range"] == "bytes 4-9/10"
+    finally:
+        fake_video.unlink(missing_ok=True)
+
+
+def test_stream_rejects_unsatisfiable_range(client):
+    import db
+    from pathlib import Path
+
+    fake_video = Path("videos") / "1.mp4"
+    fake_video.parent.mkdir(exist_ok=True)
+    fake_video.write_bytes(b"0123456789")
+    try:
+        vid_id = db.add_video("https://twitter.com/x/status/1")
+        db.update_video(vid_id, status="done", filename="1.mp4")
+        resp = client.get(f"/videos/{vid_id}/stream", headers={"Range": "bytes=20-30"})
+        assert resp.status_code == 416
+        assert resp.headers["content-range"] == "bytes */10"
+    finally:
+        fake_video.unlink(missing_ok=True)
+
 def test_progress_endpoint_removed(client):
     import db
     vid_id = db.add_video("https://twitter.com/x/status/1")
@@ -236,18 +309,69 @@ def test_videos_page_shows_youtube_video_directly(client):
     db.update_video(vid_id, status="done", filename="yt.mp4")
     resp = client.get("/videos")
     assert resp.status_code == 200
-    assert f'<video id="v{vid_id}" controls playsinline preload="metadata"' in resp.text
+    assert f'<video id="v{vid_id}" controls playsinline webkit-playsinline preload="metadata"' in resp.text
     assert f'<source src="/videos/{vid_id}/stream" type="video/mp4">' in resp.text
     assert 'class="preview-button"' not in resp.text
 
 
-def test_videos_page_includes_iphone_fullscreen_playback_script(client):
+def test_videos_page_uses_inline_ios_playback_recovery(client):
     import db
 
     vid_id = db.add_video("https://twitter.com/x/status/123")
     db.update_video(vid_id, status="done", filename="1.mp4")
     resp = client.get("/videos")
     assert resp.status_code == 200
-    assert "var isIphone = /iPhone/i.test(navigator.userAgent);" in resp.text
-    assert "function enterFullscreenOnIphone(video)" in resp.text
-    assert "video.webkitEnterFullscreen" in resp.text
+    assert "webkit-playsinline" in resp.text
+    assert "function reloadUnreadyVideos()" in resp.text
+    assert "window.addEventListener('pageshow', reloadUnreadyVideos);" in resp.text
+    assert "webkitEnterFullscreen" not in resp.text
+
+
+def test_videos_page_references_all_splash_startup_assets(client):
+    from pathlib import Path
+    import main
+
+    splash_files = {
+        p.name
+        for p in Path("assets/splash").iterdir()
+        if p.is_file() and p.suffix.lower() in main.SPLASH_MIME_TYPES
+    }
+    startup_files = {image[0] for image in main.SPLASH_STARTUP_IMAGES}
+
+    assert splash_files == startup_files | {main.SPLASH_ICON}
+
+    resp = client.get("/videos")
+    assert resp.status_code == 200
+    for filename in startup_files:
+        assert f'href="/assets/splash/{filename}"' in resp.text
+
+    assert (
+        'media="(device-width: 440px) and (device-height: 956px) '
+        'and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" '
+        'href="/assets/splash/iPhone_17_Pro_Max__iPhone_16_Pro_Max_portrait.png"'
+    ) in resp.text
+    assert (
+        'media="(device-width: 440px) and (device-height: 956px) '
+        'and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)" '
+        'href="/assets/splash/iPhone_17_Pro_Max__iPhone_16_Pro_Max_landscape.png"'
+    ) in resp.text
+
+
+def test_manifest_references_splash_icon(client):
+    import main
+
+    resp = client.get("/manifest.webmanifest")
+    assert resp.status_code == 200
+    icons = resp.json()["icons"]
+    assert {
+        "src": f"/assets/splash/{main.SPLASH_ICON}",
+        "sizes": "512x512",
+        "type": "image/png",
+        "purpose": "any maskable",
+    } in icons
+
+
+def test_splash_asset_serves_png_files(client):
+    resp = client.get("/assets/splash/iPhone_17_Pro_Max__iPhone_16_Pro_Max_portrait.png")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"

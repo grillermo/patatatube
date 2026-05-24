@@ -25,16 +25,13 @@ def test_update_video_status(tmp_db):
 
 def test_update_video_error(tmp_db):
     vid_id = tmp_db.add_video("https://twitter.com/x/status/789")
-    tmp_db.upsert_progress(vid_id, 12.0)
     tmp_db.update_video(vid_id, status="error", error_msg="Download failed")
     assert tmp_db.get_video(vid_id) is None
-    assert tmp_db.get_progress(vid_id) == 0.0
 
 
 def test_init_db_deletes_legacy_error_videos(tmp_db):
     good_id = tmp_db.add_video("https://twitter.com/x/status/123")
     bad_id = tmp_db.add_video("https://twitter.com/x/status/789")
-    tmp_db.upsert_progress(bad_id, 12.0)
 
     with tmp_db._conn() as conn:
         conn.execute(
@@ -46,7 +43,6 @@ def test_init_db_deletes_legacy_error_videos(tmp_db):
 
     assert tmp_db.get_video(good_id) is not None
     assert tmp_db.get_video(bad_id) is None
-    assert tmp_db.get_progress(bad_id) == 0.0
 
 def test_get_all_videos(tmp_db):
     tmp_db.add_video("https://twitter.com/x/status/1")
@@ -80,15 +76,6 @@ def test_video_metadata_fields_and_source_lookup(tmp_db):
     assert existing is not None
     assert existing["id"] == vid_id
     assert existing["filename"] == "1.mp4"
-
-def test_progress_upsert_and_get(tmp_db):
-    vid_id = tmp_db.add_video("https://twitter.com/x/status/999")
-    assert tmp_db.get_progress(vid_id) == 0.0
-    tmp_db.upsert_progress(vid_id, 42.5)
-    assert tmp_db.get_progress(vid_id) == 42.5
-    tmp_db.upsert_progress(vid_id, 100.0)
-    assert tmp_db.get_progress(vid_id) == 100.0
-
 
 def test_init_db_backfills_youtube_preview_urls(tmp_db):
     vid_id = tmp_db.add_video(
