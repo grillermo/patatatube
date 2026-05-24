@@ -1,2 +1,2 @@
 #!/bin/bash
-python_env/bin/uvicorn main:app --host 0.0.0.0 --port 3050 --reload
+python_env/bin/uvicorn main:app --host 0.0.0.0 --port 3050 --reload --proxy-headers --forwarded-allow-ips='*'

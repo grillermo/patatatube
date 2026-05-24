@@ -8,7 +8,8 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 import db
@@ -17,16 +18,21 @@ from downloader import download_video
 load_dotenv()
 
 VIDEOS_DIR = Path("videos")
+SPLASH_DIR = Path("assets/splash")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
     VIDEOS_DIR.mkdir(exist_ok=True)
+    SPLASH_DIR.mkdir(parents=True, exist_ok=True)
     yield
 
 
 app = FastAPI(lifespan=lifespan)
+
+allowed_hosts = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "videos.chiq.me,localhost,127.0.0.1,testserver").split(",") if h.strip()]
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
@@ -52,6 +58,7 @@ def _print_bad_request_details(request: Request, body: UploadRequest):
     print(f"  query_params={dict(request.query_params)}", flush=True)
     print(f"  headers={dict(request.headers)}", flush=True)
     print(f"  body={body.model_dump()}", flush=True)
+    print(f"  url={body.url}", flush=True)
 
 
 def _normalize_twitter_url(raw_url: str) -> tuple[str, str | None]:
@@ -306,11 +313,30 @@ def _build_html(videos: list[dict]) -> str:
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Watch Later</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Videos</title>
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Videos">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="apple-touch-startup-image" href="/apple-splash-optimized.jpg">
+<link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-16-pro-max.jpg">
+<link rel="apple-touch-startup-image" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-15-pro-max.jpg">
+<link rel="apple-touch-startup-image" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-15-14-pro.jpg">
+<link rel="apple-touch-startup-image" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-13-12-pro.jpg">
+<link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-14-plus.jpg">
+<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-11-pro-max-xs-max.jpg">
+<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="/assets/splash/iphone-11-xr.jpg">
+<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/assets/splash/iphone-8-plus.jpg">
+<link rel="manifest" href="/manifest.webmanifest">
 <style>
   *{{box-sizing:border-box;margin:0;padding:0}}
-  body{{background:#111;color:#eee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:12px}}
+  body{{background:#111;color:#eee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:12px;padding-top:calc(12px + env(safe-area-inset-top));padding-bottom:calc(12px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));}}
+  @media (display-mode: standalone) {{
+    body{{min-height:100dvh}}
+  }}
   .card{{background:#1e1e1e;border-radius:10px;padding:12px;margin-bottom:14px;max-width:480px;margin-left:auto;margin-right:auto}}
   .meta{{font-size:0.78em;color:#aaa;margin-bottom:8px;word-break:break-all}}
   .title{{font-size:1.15em;color:#eee;margin-bottom:4px;word-break:break-word}}
@@ -318,7 +344,7 @@ def _build_html(videos: list[dict]) -> str:
 </style>
 </head>
 <body>
-<h2 style="text-align:center;margin-bottom:16px;font-size:1.1em;max-width:480px;margin-left:auto;margin-right:auto">Watch Later</h2>
+<h2 style="text-align:center;margin-bottom:16px;font-size:1.1em;max-width:480px;margin-left:auto;margin-right:auto">Videos</h2>
 {cards_html}
 <script>
 document.querySelectorAll('video[id]').forEach(function(v){{
@@ -340,6 +366,64 @@ document.querySelectorAll('video[id]').forEach(function(v){{
 </script>
 </body>
 </html>"""
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse("favicon.ico", media_type="image/x-icon")
+
+
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+async def apple_touch_icon():
+    return FileResponse("apple-touch-icon.png", media_type="image/png")
+
+
+@app.get("/apple-splash.png", include_in_schema=False)
+async def apple_splash():
+    return FileResponse("apple-splash.png", media_type="image/png")
+
+
+@app.get("/apple-splash-optimized.jpg", include_in_schema=False)
+async def apple_splash_optimized():
+    return FileResponse("apple-splash-optimized.jpg", media_type="image/jpeg")
+
+
+@app.get("/assets/splash/{filename}", include_in_schema=False)
+async def splash_asset(filename: str):
+    safe_name = Path(filename).name
+    if safe_name != filename:
+        raise HTTPException(status_code=404, detail="Not found")
+    target = SPLASH_DIR / safe_name
+    if not target.exists() or target.suffix.lower() != ".jpg":
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(target, media_type="image/jpeg")
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+async def manifest():
+    return JSONResponse(
+        {
+            "name": "Twitter To Watch Later",
+            "short_name": "Videos",
+            "start_url": "/videos",
+            "scope": "/",
+            "display": "standalone",
+            "background_color": "#111111",
+            "theme_color": "#111111",
+            "icons": [
+                {
+                    "src": "/apple-touch-icon.png",
+                    "sizes": "256x256",
+                    "type": "image/png",
+                },
+                {
+                    "src": "/favicon.ico",
+                    "sizes": "48x48 32x32 16x16",
+                    "type": "image/x-icon",
+                },
+            ],
+        }
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
