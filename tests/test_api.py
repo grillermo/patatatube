@@ -234,6 +234,68 @@ def test_stream_rejects_unsatisfiable_range(client):
     finally:
         fake_video.unlink(missing_ok=True)
 
+
+@pytest.mark.asyncio
+async def test_stream_iterator_limits_concurrent_open_files(tmp_path, monkeypatch):
+    import asyncio
+    import main
+
+    fake_video = tmp_path / "video.mp4"
+    fake_video.write_bytes(b"abcdef")
+    real_open_file = main.anyio.open_file
+    open_calls = 0
+
+    async def counting_open_file(*args, **kwargs):
+        nonlocal open_calls
+        open_calls += 1
+        return await real_open_file(*args, **kwargs)
+
+    monkeypatch.setattr(main.anyio, "open_file", counting_open_file)
+    monkeypatch.setattr(main, "_video_stream_slots", asyncio.Semaphore(1))
+
+    first = main._iter_file_range(fake_video, 0, 3)
+    second = main._iter_file_range(fake_video, 3, 3)
+    second_read = None
+
+    try:
+        assert await anext(first) == b"abc"
+
+        second_read = asyncio.create_task(anext(second))
+        await asyncio.sleep(0.05)
+        assert not second_read.done()
+        assert open_calls == 1
+
+        await first.aclose()
+        assert await asyncio.wait_for(second_read, timeout=1) == b"def"
+        assert open_calls == 2
+    finally:
+        await first.aclose()
+        await second.aclose()
+        if second_read is not None and not second_read.done():
+            second_read.cancel()
+
+
+def test_favicon_uses_cached_bytes_when_open_would_fail(client, monkeypatch):
+    import builtins
+    import errno
+    import main
+
+    assert main._static_asset_cache["favicon.ico"]
+
+    real_open = builtins.open
+
+    def open_with_favicon_failure(file, *args, **kwargs):
+        if str(file).endswith("favicon.ico"):
+            raise OSError(errno.EMFILE, "Too many open files", str(file))
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", open_with_favicon_failure)
+
+    resp = client.get("/favicon.ico")
+    assert resp.status_code == 200
+    assert resp.content == main._static_asset_cache["favicon.ico"]
+
+
 def test_progress_endpoint_removed(client):
     import db
     vid_id = db.add_video("https://twitter.com/x/status/1")

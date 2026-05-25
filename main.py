@@ -1,23 +1,31 @@
+import asyncio
+import multiprocessing
 import os
 import re
 import secrets
+from collections.abc import AsyncIterator
 from html import escape
 from pathlib import Path
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs, urlparse
 
+import anyio
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
+from setproctitle import setproctitle
 
 import db
 from downloader import download_video
 
 load_dotenv()
 
+PROCESS_NAME = "[PatataTube]"
 VIDEOS_DIR = Path("videos")
+VIDEO_CHUNK_SIZE = 64 * 1024
+DEFAULT_VIDEO_STREAM_LIMIT = 16
 SPLASH_DIR = Path("assets/splash")
 SPLASH_ICON = "icon.png"
 SPLASH_MIME_TYPES = {
@@ -81,12 +89,37 @@ SPLASH_STARTUP_IMAGES = (
     ("iphone-8-plus.jpg", 414, 736, 3, "portrait"),
 )
 
+ROOT_STATIC_ASSETS = {
+    "favicon.ico": ("favicon.ico", "image/x-icon"),
+    "apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+    "apple-splash.png": ("apple-splash.png", "image/png"),
+    "apple-splash-optimized.jpg": ("apple-splash-optimized.jpg", "image/jpeg"),
+}
+_static_asset_cache: dict[str, bytes] = {}
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+_video_stream_slots = asyncio.Semaphore(_positive_int_env("VIDEO_STREAM_LIMIT", DEFAULT_VIDEO_STREAM_LIMIT))
+
+
+def _set_process_name(name: str = PROCESS_NAME) -> None:
+    multiprocessing.current_process().name = name
+    setproctitle(name)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _set_process_name()
     db.init_db()
     VIDEOS_DIR.mkdir(exist_ok=True)
     SPLASH_DIR.mkdir(parents=True, exist_ok=True)
+    _load_static_asset_cache()
     yield
 
 
@@ -224,6 +257,31 @@ def _guess_mime(filename: str) -> str:
     return {"mp4": "video/mp4", "m4v": "video/mp4", "webm": "video/webm", "mov": "video/quicktime"}.get(ext[1:], "video/mp4")
 
 
+def _load_static_asset_cache() -> None:
+    for cache_key, (filename, _media_type) in ROOT_STATIC_ASSETS.items():
+        try:
+            _static_asset_cache[cache_key] = Path(filename).read_bytes()
+        except FileNotFoundError:
+            _static_asset_cache.pop(cache_key, None)
+
+
+def _static_asset_response(cache_key: str) -> Response:
+    filename, media_type = ROOT_STATIC_ASSETS[cache_key]
+    content = _static_asset_cache.get(cache_key)
+    if content is None:
+        try:
+            content = Path(filename).read_bytes()
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Not found")
+        _static_asset_cache[cache_key] = content
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 def _range_not_satisfiable(file_size: int) -> HTTPException:
     return HTTPException(
         status_code=416,
@@ -259,6 +317,23 @@ def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
     return start, min(end, file_size - 1)
 
 
+async def _iter_file_range(file_path: Path, start: int = 0, byte_count: int | None = None) -> AsyncIterator[bytes]:
+    async with _video_stream_slots:
+        async with await anyio.open_file(file_path, "rb") as f:
+            if start:
+                await f.seek(start)
+
+            remaining = byte_count
+            while remaining is None or remaining > 0:
+                read_size = VIDEO_CHUNK_SIZE if remaining is None else min(VIDEO_CHUNK_SIZE, remaining)
+                chunk = await f.read(read_size)
+                if not chunk:
+                    break
+                if remaining is not None:
+                    remaining -= len(chunk)
+                yield chunk
+
+
 @app.get("/videos/{video_id}/stream")
 async def stream_video(video_id: int, request: Request):
     video = db.get_video(video_id)
@@ -277,19 +352,8 @@ async def stream_video(video_id: int, request: Request):
         start, end = _parse_byte_range(range_header, file_size)
         chunk_size = end - start + 1
 
-        def iter_chunk():
-            with open(file_path, "rb") as f:
-                f.seek(start)
-                remaining = chunk_size
-                while remaining > 0:
-                    data = f.read(min(65536, remaining))
-                    if not data:
-                        break
-                    remaining -= len(data)
-                    yield data
-
         return StreamingResponse(
-            iter_chunk(),
+            _iter_file_range(file_path, start, chunk_size),
             status_code=206,
             media_type=mime,
             headers={
@@ -299,13 +363,8 @@ async def stream_video(video_id: int, request: Request):
             },
         )
 
-    def iter_full():
-        with open(file_path, "rb") as f:
-            while chunk := f.read(65536):
-                yield chunk
-
     return StreamingResponse(
-        iter_full(),
+        _iter_file_range(file_path),
         media_type=mime,
         headers={
             "Accept-Ranges": "bytes",
@@ -415,22 +474,22 @@ document.addEventListener('visibilitychange', function(){{
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    return FileResponse("favicon.ico", media_type="image/x-icon")
+    return _static_asset_response("favicon.ico")
 
 
 @app.get("/apple-touch-icon.png", include_in_schema=False)
 async def apple_touch_icon():
-    return FileResponse("apple-touch-icon.png", media_type="image/png")
+    return _static_asset_response("apple-touch-icon.png")
 
 
 @app.get("/apple-splash.png", include_in_schema=False)
 async def apple_splash():
-    return FileResponse("apple-splash.png", media_type="image/png")
+    return _static_asset_response("apple-splash.png")
 
 
 @app.get("/apple-splash-optimized.jpg", include_in_schema=False)
 async def apple_splash_optimized():
-    return FileResponse("apple-splash-optimized.jpg", media_type="image/jpeg")
+    return _static_asset_response("apple-splash-optimized.jpg")
 
 
 @app.get("/assets/splash/{filename}", include_in_schema=False)
