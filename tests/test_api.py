@@ -316,6 +316,12 @@ def test_root_page_returns_html(client):
     assert "text/html" in resp.headers["content-type"]
 
 
+def test_patatatube_host_is_allowed(client):
+    resp = client.get("/", headers={"host": "patatatube.chiq.me"})
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+
+
 def test_videos_page_shows_video(client):
     import db
     vid_id = db.add_video("https://twitter.com/x/status/123")

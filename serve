@@ -1,2 +1,14 @@
 #!/bin/bash
-python_env/bin/uvicorn main:app --host 0.0.0.0 --port 3050 --reload --proxy-headers --forwarded-allow-ips='*' 
+python3.13 python_env/bin/uvicorn main:app \
+  --host 0.0.0.0 \
+  --port 3050 \
+  --reload \
+  --reload-dir . \
+  --reload-include '*.py' \
+  --reload-exclude '.git/*' \
+  --reload-exclude '.venv/*' \
+  --reload-exclude 'python_env/*' \
+  --reload-exclude 'videos/*' \
+  --reload-exclude 'assets/splash/*' \
+  --proxy-headers \
+  --forwarded-allow-ips='*'

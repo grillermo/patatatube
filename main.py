@@ -126,7 +126,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-allowed_hosts = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "videos.chiq.me,localhost,127.0.0.1,testserver").split(",") if h.strip()]
+allowed_hosts = [
+    h.strip()
+    for h in os.getenv(
+        "ALLOWED_HOSTS",
+        "videos.chiq.me,patatatube.chiq.me,localhost,127.0.0.1,testserver",
+    ).split(",")
+    if h.strip()
+]
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
