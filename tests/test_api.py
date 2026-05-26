@@ -158,6 +158,7 @@ def test_stream_returns_video(client):
         resp = client.get(f"/videos/{vid_id}/stream")
         assert resp.status_code in (200, 206)
         assert b"FAKEVIDEOCONTENT" in resp.content
+        assert resp.headers["cache-control"] == "public, max-age=31536000, immutable"
     finally:
         fake_video.unlink(missing_ok=True)
 
@@ -178,6 +179,7 @@ def test_stream_returns_requested_byte_range(client):
         assert resp.headers["content-range"] == "bytes 4-7/10"
         assert resp.headers["accept-ranges"] == "bytes"
         assert resp.headers["content-length"] == "4"
+        assert resp.headers["cache-control"] == "public, max-age=31536000, immutable"
     finally:
         fake_video.unlink(missing_ok=True)
 
@@ -371,7 +373,7 @@ def test_videos_page_shows_youtube_video_directly(client):
     db.update_video(vid_id, status="done", filename="yt.mp4")
     resp = client.get("/videos")
     assert resp.status_code == 200
-    assert f'<video id="v{vid_id}" controls playsinline webkit-playsinline preload="metadata"' in resp.text
+    assert f'<video id="v{vid_id}" controls playsinline webkit-playsinline preload="auto"' in resp.text
     assert f'<source src="/videos/{vid_id}/stream" type="video/mp4">' in resp.text
     assert 'class="preview-button"' not in resp.text
 

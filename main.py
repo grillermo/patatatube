@@ -26,6 +26,7 @@ PROCESS_NAME = "[PatataTube]"
 VIDEOS_DIR = Path("videos")
 VIDEO_CHUNK_SIZE = 64 * 1024
 DEFAULT_VIDEO_STREAM_LIMIT = 16
+VIDEO_CACHE_CONTROL = "public, max-age=31536000, immutable"
 SPLASH_DIR = Path("assets/splash")
 SPLASH_ICON = "icon.png"
 SPLASH_MIME_TYPES = {
@@ -360,6 +361,7 @@ async def stream_video(video_id: int, request: Request):
                 "Content-Range": f"bytes {start}-{end}/{file_size}",
                 "Accept-Ranges": "bytes",
                 "Content-Length": str(chunk_size),
+                "Cache-Control": VIDEO_CACHE_CONTROL,
             },
         )
 
@@ -369,6 +371,7 @@ async def stream_video(video_id: int, request: Request):
         headers={
             "Accept-Ranges": "bytes",
             "Content-Length": str(file_size),
+            "Cache-Control": VIDEO_CACHE_CONTROL,
         },
     )
 
@@ -404,7 +407,7 @@ def _build_html(videos: list[dict]) -> str:
 
         if v["status"] == "done":
             player = f"""
-            <video id="v{v['id']}" controls playsinline webkit-playsinline preload="metadata"
+            <video id="v{v['id']}" controls playsinline webkit-playsinline preload="auto"
                    style="width:100%;border-radius:8px;background:#000;"
                    onloadedmetadata="this.currentTime=0">
               <source src="/videos/{v['id']}/stream" type="video/mp4">
@@ -456,6 +459,10 @@ def _build_html(videos: list[dict]) -> str:
 <h2 style="text-align:center;margin-bottom:16px;font-size:1.1em;max-width:480px;margin-left:auto;margin-right:auto">Patata Videos</h2>
 {cards_html}
 <script>
+var activePreloadController = null;
+var activePreloadVideoId = null;
+var completedPreloads = new Set();
+
 function reloadUnreadyVideos(){{
   document.querySelectorAll('video[id]').forEach(function(v){{
     if(v.readyState === 0 || v.error) {{
@@ -463,9 +470,98 @@ function reloadUnreadyVideos(){{
     }}
   }});
 }}
+
+function stopAllPreloads(){{
+  if(!activePreloadController) return;
+  try {{ activePreloadController.abort(); }} catch (_err) {{}}
+  activePreloadController = null;
+  activePreloadVideoId = null;
+}}
+
+function resolveVideoSource(video){{
+  if(video.currentSrc) return video.currentSrc;
+  if(video.src) return video.src;
+  var source = video.querySelector('source[src]');
+  return source ? source.getAttribute('src') : null;
+}}
+
+function pauseOtherVideos(activeVideo){{
+  document.querySelectorAll('video[id]').forEach(function(v){{
+    if(v === activeVideo || v.paused || v.ended) return;
+    try {{ v.pause(); }} catch (_err) {{}}
+  }});
+}}
+
+function preloadEntireVideo(video){{
+  if(typeof fetch !== 'function' || typeof AbortController === 'undefined') return;
+
+  var src = resolveVideoSource(video);
+  if(!src) return;
+  if(completedPreloads.has(video.id)) return;
+  if(activePreloadVideoId === video.id && activePreloadController) return;
+
+  stopAllPreloads();
+  var controller = new AbortController();
+  activePreloadController = controller;
+  activePreloadVideoId = video.id;
+
+  fetch(src, {{ signal: controller.signal, cache: 'force-cache', credentials: 'same-origin' }})
+    .then(function(resp){{
+      if(activePreloadVideoId !== video.id || activePreloadController !== controller) return;
+      if(!resp.ok || !resp.body || typeof resp.body.getReader !== 'function') return;
+
+      var reader = resp.body.getReader();
+      function pump(){{
+        return reader.read().then(function(step){{
+          if(step.done) {{
+            completedPreloads.add(video.id);
+            return;
+          }}
+          if(activePreloadVideoId !== video.id || activePreloadController !== controller) {{
+            try {{ reader.cancel(); }} catch (_err) {{}}
+            return;
+          }}
+          return pump();
+        }});
+      }}
+      return pump();
+    }})
+    .catch(function(err){{
+      if(err && err.name === 'AbortError') return;
+    }})
+    .finally(function(){{
+      if(activePreloadVideoId === video.id && activePreloadController === controller) {{
+        activePreloadVideoId = null;
+        activePreloadController = null;
+      }}
+    }});
+}}
+
+document.querySelectorAll('video[id]').forEach(function(v){{
+  v.addEventListener('play', function(){{
+    pauseOtherVideos(v);
+    preloadEntireVideo(v);
+  }});
+  v.addEventListener('pause', function(){{
+    if(activePreloadVideoId === v.id) {{
+      stopAllPreloads();
+    }}
+  }});
+  v.addEventListener('ended', function(){{
+    if(activePreloadVideoId === v.id) {{
+      stopAllPreloads();
+    }}
+  }});
+}});
+
 window.addEventListener('pageshow', reloadUnreadyVideos);
+window.addEventListener('pagehide', stopAllPreloads);
 document.addEventListener('visibilitychange', function(){{
-  if(!document.hidden) reloadUnreadyVideos();
+  if(document.hidden) {{
+    stopAllPreloads();
+    return;
+  }}
+  reloadUnreadyVideos();
 }});
 </script>
 </body>
