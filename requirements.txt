@@ -1,4 +1,5 @@
 fastapi==0.115.0
+python-multipart==0.0.12
 uvicorn==0.30.6
 pybalt==2025.7.1
 yt-dlp==2026.3.17

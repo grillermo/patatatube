@@ -11,9 +11,9 @@ from urllib.parse import parse_qs, urlparse
 
 import anyio
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, Form, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from setproctitle import setproctitle
 
@@ -431,6 +431,16 @@ def _build_html(videos: list[dict]) -> str:
             <div>{badge} &nbsp;{short_url}</div>
           </div>
           {player}
+          <div class="move">
+            <form method="post" action="/videos/{v['id']}/move">
+              <input type="hidden" name="direction" value="up">
+              <button type="submit" aria-label="Move up">&#9650;</button>
+            </form>
+            <form method="post" action="/videos/{v['id']}/move">
+              <input type="hidden" name="direction" value="down">
+              <button type="submit" aria-label="Move down">&#9660;</button>
+            </form>
+          </div>
         </div>""")
 
     cards_html = "\n".join(cards) if cards else '<p style="color:#aaa;text-align:center">No videos yet.</p>'
@@ -460,6 +470,10 @@ def _build_html(videos: list[dict]) -> str:
   .meta{{font-size:0.78em;color:#aaa;margin-bottom:8px;word-break:break-all}}
   .title{{font-size:1.15em;color:#eee;margin-bottom:4px;word-break:break-word}}
   video{{display:block}}
+  .move{{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}}
+  .move form{{margin:0}}
+  .move button{{background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:6px;padding:6px 12px;font-size:1em;cursor:pointer}}
+  .move button:active{{background:#3a3a3a}}
 </style>
 </head>
 <body>
@@ -638,6 +652,12 @@ async def manifest():
             ],
         }
     )
+
+
+@app.post("/videos/{video_id}/move")
+async def move_video_endpoint(video_id: int, direction: str = Form(...)):
+    db.move_video(video_id, direction)
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/", response_class=HTMLResponse)

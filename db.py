@@ -35,8 +35,24 @@ def init_db():
             conn.execute("ALTER TABLE videos ADD COLUMN title TEXT")
         if "preview_url" not in columns:
             conn.execute("ALTER TABLE videos ADD COLUMN preview_url TEXT")
+        if "position" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN position INTEGER")
         _backfill_youtube_preview_urls(conn)
+        _backfill_positions(conn)
         _delete_error_videos(conn)
+
+
+def _backfill_positions(conn: sqlite3.Connection) -> int:
+    rows = conn.execute(
+        "SELECT id FROM videos WHERE position IS NULL ORDER BY created_at ASC"
+    ).fetchall()
+    if not rows:
+        return 0
+    current_max = conn.execute("SELECT MAX(position) FROM videos").fetchone()[0]
+    start = current_max if current_max is not None else 0
+    for offset, row in enumerate(rows):
+        conn.execute("UPDATE videos SET position = ? WHERE id = ?", (start + offset + 1, row["id"]))
+    return len(rows)
 
 
 def _delete_error_videos(conn: sqlite3.Connection) -> int:
@@ -60,12 +76,21 @@ def add_video(
     preview_url: str | None = None,
 ) -> int:
     with _conn() as conn:
+        next_position = (conn.execute("SELECT MAX(position) FROM videos").fetchone()[0] or 0) + 1
         cur = conn.execute(
             """
-            INSERT INTO videos (url, platform, source_key, title, preview_url, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO videos (url, platform, source_key, title, preview_url, created_at, position)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (url, platform, source_key, title, preview_url, datetime.now(timezone.utc).isoformat()),
+            (
+                url,
+                platform,
+                source_key,
+                title,
+                preview_url,
+                datetime.now(timezone.utc).isoformat(),
+                next_position,
+            ),
         )
         return cur.lastrowid
 
@@ -83,8 +108,41 @@ def delete_video(video_id: int):
 
 def get_all_videos() -> list[dict]:
     with _conn() as conn:
-        rows = conn.execute("SELECT * FROM videos ORDER BY created_at DESC").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM videos ORDER BY position DESC, created_at DESC"
+        ).fetchall()
         return [dict(r) for r in rows]
+
+
+def move_video(video_id: int, direction: str) -> bool:
+    if direction not in ("up", "down"):
+        return False
+    with _conn() as conn:
+        current = conn.execute(
+            "SELECT position FROM videos WHERE id = ?", (video_id,)
+        ).fetchone()
+        if not current or current["position"] is None:
+            return False
+        pos = current["position"]
+        if direction == "up":
+            neighbor = conn.execute(
+                "SELECT id, position FROM videos WHERE position > ? ORDER BY position ASC LIMIT 1",
+                (pos,),
+            ).fetchone()
+        else:
+            neighbor = conn.execute(
+                "SELECT id, position FROM videos WHERE position < ? ORDER BY position DESC LIMIT 1",
+                (pos,),
+            ).fetchone()
+        if not neighbor:
+            return False
+        conn.execute(
+            "UPDATE videos SET position = ? WHERE id = ?", (neighbor["position"], video_id)
+        )
+        conn.execute(
+            "UPDATE videos SET position = ? WHERE id = ?", (pos, neighbor["id"])
+        )
+        return True
 
 
 def get_completed_video_by_source(platform: str, source_key: str) -> dict | None:
