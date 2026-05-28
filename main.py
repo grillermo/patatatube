@@ -558,10 +558,26 @@ function preloadEntireVideo(video){{
     }});
 }}
 
+function enterFullscreen(v){{
+  if(document.fullscreenElement || document.webkitFullscreenElement) return;
+  if(v.webkitDisplayingFullscreen) return;
+  try {{
+    if(typeof v.webkitEnterFullscreen === 'function') {{
+      v.webkitEnterFullscreen();
+    }} else if(typeof v.requestFullscreen === 'function') {{
+      var p = v.requestFullscreen();
+      if(p && typeof p.catch === 'function') p.catch(function(){{}});
+    }} else if(typeof v.webkitRequestFullscreen === 'function') {{
+      v.webkitRequestFullscreen();
+    }}
+  }} catch(e) {{}}
+}}
+
 document.querySelectorAll('video[id]').forEach(function(v){{
   v.addEventListener('play', function(){{
     pauseOtherVideos(v);
     preloadEntireVideo(v);
+    enterFullscreen(v);
   }});
   v.addEventListener('pause', function(){{
     if(activePreloadVideoId === v.id) {{
