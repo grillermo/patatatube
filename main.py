@@ -466,10 +466,15 @@ def _build_html(videos: list[dict]) -> str:
   @media (display-mode: standalone) {{
     body{{min-height:100dvh}}
   }}
-  .card{{background:#1e1e1e;border-radius:10px;padding:12px;margin-bottom:14px;max-width:480px;margin-left:auto;margin-right:auto}}
+  .grid{{display:grid;grid-template-columns:1fr;gap:14px;max-width:480px;margin:0 auto}}
+  @media (orientation:landscape) and (min-width:600px){{
+    .grid{{grid-template-columns:1fr 1fr;max-width:900px}}
+  }}
+  .card{{background:#1e1e1e;border-radius:10px;padding:12px}}
   .meta{{font-size:0.78em;color:#aaa;margin-bottom:8px;word-break:break-all}}
   .title{{font-size:1.15em;color:#eee;margin-bottom:4px;word-break:break-word}}
-  video{{display:block}}
+  video{{display:block;max-height:55dvh}}
+  @media (orientation:landscape){{video{{max-height:45dvh}}}}
   .move{{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}}
   .move form{{margin:0}}
   .move button{{background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:6px;padding:6px 12px;font-size:1em;cursor:pointer}}
@@ -477,8 +482,10 @@ def _build_html(videos: list[dict]) -> str:
 </style>
 </head>
 <body>
-<h2 style="text-align:center;margin-bottom:16px;font-size:1.1em;max-width:480px;margin-left:auto;margin-right:auto">Patata Videos</h2>
+<h2 style="text-align:center;margin-bottom:16px;font-size:1.1em;max-width:900px;margin-left:auto;margin-right:auto">Patata Videos</h2>
+<div class="grid">
 {cards_html}
+</div>
 <script>
 var activePreloadController = null;
 var activePreloadVideoId = null;
