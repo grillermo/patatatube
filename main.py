@@ -413,12 +413,16 @@ def _build_html(videos: list[dict]) -> str:
         title = escape(v["title"]) if v.get("platform") == "youtube" and v.get("title") else None
 
         if v["status"] == "done":
+            name_text = title if title else short_url
             player = f"""
-            <video id="v{v['id']}" controls playsinline webkit-playsinline preload="auto"
-                   style="width:100%;border-radius:8px;background:#000;"
-                   onloadedmetadata="this.currentTime=0">
-              <source src="/videos/{v['id']}/stream" type="video/mp4">
-            </video>"""
+            <div class="video-wrap">
+              <div class="name-overlay">{name_text}</div>
+              <video id="v{v['id']}" controls playsinline webkit-playsinline preload="auto"
+                     style="width:100%;border-radius:8px;background:#000;"
+                     onloadedmetadata="this.currentTime=0">
+                <source src="/videos/{v['id']}/stream" type="video/mp4">
+              </video>
+            </div>"""
         elif v["status"] == "error":
             player = f'<p style="color:#c00;font-size:0.85em">Error: {escape(v.get("error_msg","unknown"))}</p>'
         else:
@@ -475,6 +479,9 @@ def _build_html(videos: list[dict]) -> str:
   .title{{font-size:1.15em;color:#eee;margin-bottom:4px;word-break:break-word}}
   video{{display:block;max-height:55dvh}}
   @media (orientation:landscape){{video{{max-height:45dvh}}}}
+  .video-wrap{{position:relative}}
+  .name-overlay{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;font-size:1.6em;font-weight:600;color:#eee;background:#000;border-radius:8px;pointer-events:none;word-break:break-word}}
+  .video-wrap.is-playing .name-overlay{{display:none}}
   .move{{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}}
   .move form{{margin:0}}
   .move button{{background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:6px;padding:6px 12px;font-size:1em;cursor:pointer}}
@@ -596,17 +603,21 @@ function enterFullscreen(v){{
 }}
 
 document.querySelectorAll('video[id]').forEach(function(v){{
+  var wrap = v.closest('.video-wrap');
   v.addEventListener('play', function(){{
+    if(wrap) wrap.classList.add('is-playing');
     pauseOtherVideos(v);
     preloadEntireVideo(v);
     enterFullscreen(v);
   }});
   v.addEventListener('pause', function(){{
+    if(wrap) wrap.classList.remove('is-playing');
     if(activePreloadVideoId === v.id) {{
       stopAllPreloads();
     }}
   }});
   v.addEventListener('ended', function(){{
+    if(wrap) wrap.classList.remove('is-playing');
     if(activePreloadVideoId === v.id) {{
       stopAllPreloads();
     }}
