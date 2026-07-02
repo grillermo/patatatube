@@ -20,6 +20,7 @@ import db
 import services
 from db import CLASSIFICATIONS
 from downloader import download_video
+from views.serializers import serialize_video
 from views.templates import SPLASH_STARTUP_IMAGES, build_videos_page
 
 load_dotenv()
@@ -407,6 +408,19 @@ async def classify_video_endpoint(video_id: int, classification: str = Form(...)
     services.apply_classification(video_id, classification)
     redirect_url = f"/?classification={current_classification}" if current_classification else "/"
     return RedirectResponse(url=redirect_url, status_code=303)
+
+
+@app.get("/api/classifications")
+async def api_classifications():
+    return {"classifications": CLASSIFICATIONS}
+
+
+@app.get("/api/videos")
+async def api_videos(classification: str | None = None):
+    if classification and classification not in CLASSIFICATIONS:
+        classification = None
+    videos = db.get_all_videos(classification)
+    return [serialize_video(v) for v in videos]
 
 
 @app.get("/", response_class=HTMLResponse)

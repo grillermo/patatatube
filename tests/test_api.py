@@ -441,3 +441,53 @@ def test_splash_asset_serves_png_files(client):
     resp = client.get("/assets/splash/iPhone_17_Pro_Max__iPhone_16_Pro_Max_portrait.png")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "image/png"
+
+
+def test_api_videos_returns_serialized_list(client):
+    import db
+    vid = db.add_video(
+        "https://youtu.be/dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+        title="Saved Title",
+        preview_url="https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+    )
+    db.update_video(vid, status="done", filename="yt.mp4", title="Saved Title")
+    resp = client.get("/api/videos")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    item = next(v for v in data if v["id"] == vid)
+    assert item["title"] == "Saved Title"
+    assert item["platform"] == "youtube"
+    assert item["status"] == "done"
+    assert item["stream_path"] == f"/videos/{vid}/stream"
+    assert "filename" not in item
+
+
+def test_api_videos_filters_by_classification(client):
+    import db
+    a = db.add_video("https://twitter.com/x/status/1")
+    b = db.add_video("https://twitter.com/x/status/2")
+    db.set_video_classification(a, "education")
+    db.set_video_classification(b, "children")
+    resp = client.get("/api/videos", params={"classification": "education"})
+    assert resp.status_code == 200
+    ids = {v["id"] for v in resp.json()}
+    assert a in ids and b not in ids
+
+
+def test_api_videos_ignores_unknown_classification(client):
+    import db
+    vid = db.add_video("https://twitter.com/x/status/1")
+    resp = client.get("/api/videos", params={"classification": "bogus"})
+    assert resp.status_code == 200
+    assert any(v["id"] == vid for v in resp.json())
+
+
+def test_api_classifications_lists_all(client):
+    resp = client.get("/api/classifications")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "classifications": ["children", "adults", "education", "entertainment"]
+    }
