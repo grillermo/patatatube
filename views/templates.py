@@ -110,7 +110,6 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
             <div class="video-wrap">
               <div class="name-overlay">{name_text}</div>
               <video id="v{v['id']}" controls playsinline webkit-playsinline preload="none"
-                     style="width:100%;border-radius:8px;background:#000;"
                      onloadedmetadata="this.currentTime=0">
                 <source src="/videos/{v['id']}/stream" type="video/mp4">
               </video>
@@ -179,9 +178,8 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
   .card{{background:#1e1e1e;border-radius:10px;padding:12px;position:relative}}
   .meta{{font-size:0.78em;color:#aaa;margin-bottom:8px;word-break:break-all}}
   .title{{font-size:1.15em;color:#eee;margin-bottom:4px;word-break:break-word}}
-  video{{display:block;max-height:55dvh}}
-  @media (orientation:landscape){{video{{max-height:45dvh}}}}
-  .video-wrap{{position:relative}}
+  video{{display:block;width:100%;height:100%;object-fit:contain}}
+  .video-wrap{{position:relative;aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden}}
   .name-overlay{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;font-size:1.6em;font-weight:600;color:#eee;background:#000;border-radius:8px;pointer-events:none;word-break:break-word}}
   .video-wrap.is-playing .name-overlay{{display:none}}
   .move{{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}}

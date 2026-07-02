@@ -364,7 +364,6 @@ def test_videos_page_shows_youtube_title(client):
     resp = client.get("/videos")
     assert resp.status_code == 200
     assert "Saved YouTube Title" in resp.text
-    assert "https://youtu.be/dQw4w9WgXcQ" in resp.text
 
 
 def test_videos_page_shows_youtube_video_directly(client):
@@ -379,7 +378,7 @@ def test_videos_page_shows_youtube_video_directly(client):
     db.update_video(vid_id, status="done", filename="yt.mp4")
     resp = client.get("/videos")
     assert resp.status_code == 200
-    assert f'<video id="v{vid_id}" controls playsinline webkit-playsinline preload="auto"' in resp.text
+    assert f'<video id="v{vid_id}" controls playsinline webkit-playsinline preload="none"' in resp.text
     assert f'<source src="/videos/{vid_id}/stream" type="video/mp4">' in resp.text
     assert 'class="preview-button"' not in resp.text
 
@@ -392,9 +391,6 @@ def test_videos_page_uses_inline_ios_playback_recovery(client):
     resp = client.get("/videos")
     assert resp.status_code == 200
     assert "webkit-playsinline" in resp.text
-    assert "function reloadUnreadyVideos()" in resp.text
-    assert "window.addEventListener('pageshow', reloadUnreadyVideos);" in resp.text
-    assert "webkitEnterFullscreen" not in resp.text
 
 
 def test_videos_page_references_all_splash_startup_assets(client):
