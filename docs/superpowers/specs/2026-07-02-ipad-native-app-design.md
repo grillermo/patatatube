@@ -1,7 +1,29 @@
 # PatataTube iPad Native App — Design
 
 **Date:** 2026-07-02
-**Status:** Approved (design)
+**Status:** Server side DONE (Plan 1 merged to main). iOS app (Plan 2) NOT STARTED.
+
+## Progress
+
+### Server JSON API — COMPLETE (2026-07-02)
+
+All committed to `main`. New files:
+- `views/serializers.py` — `serialize_video(video: dict) -> dict` presenter
+- `services.py` — `apply_move(video_id, direction)`, `apply_classification(video_id, classification)`
+- `tests/test_serializers.py`, `tests/test_services.py`
+
+SSR form endpoints now call `services.py`. JSON endpoints added to `main.py`:
+- `GET /api/classifications` → `{"classifications": [...]}`
+- `GET /api/videos?classification=` → list of serialized video dicts
+- `POST /api/videos/{id}/move` (Bearer) → `{"ok": bool}`
+- `POST /api/videos/{id}/classify` (Bearer) → `{"ok": bool}`
+
+61 tests pass. PWA untouched.
+
+### iOS SwiftUI App — NOT STARTED
+
+Plan 2 was being written when context was cleared. Start fresh from the spec.
+Next step: write `docs/superpowers/plans/2026-07-02-ios-swiftui-app.md` then execute it.
 
 ## Goal
 

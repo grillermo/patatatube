@@ -1,4 +1,9 @@
-# Server JSON API Implementation Plan (Plan 1 of 2)
+# Server JSON API Implementation Plan (Plan 1 of 2) — COMPLETE
+
+**Completed:** 2026-07-02. All 5 tasks done, 61 tests passing, merged to `main`.
+Commits: 33f3b2b → 76c421f.
+
+---
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
