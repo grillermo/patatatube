@@ -5,9 +5,11 @@
 
 ## Goal
 
-Replace the web PWA with a native SwiftUI iPad app that consumes the same
-backend, reaches feature parity with the web UI, and caches videos locally for
-offline playback.
+Add a native SwiftUI iPad app **alongside** the existing web PWA (the PWA is
+NOT replaced — both remain first-class clients). The app consumes a new JSON
+API, reaches feature parity with the web UI, and caches videos locally for
+offline playback. The JSON API shares as much server code as possible with the
+existing server-rendered (SSR) HTML app.
 
 ## Context
 
@@ -28,26 +30,49 @@ Classifications: `children, adults, education, entertainment`.
 
 ## Decisions
 
-- **Data source:** Add JSON endpoints to the FastAPI backend. HTML views stay
-  untouched (web keeps working).
+- **PWA stays:** The web SSR app is not replaced. The native app is an
+  additional client. Both consume the same underlying data/query layer.
+- **Data source:** Add JSON endpoints to the FastAPI backend. HTML views keep
+  working; JSON and HTML share server code (see "Shared server code").
 - **Offline caching:** Full-file mp4 download (not HLS segments) — matches how
   the backend stores whole mp4 files.
 - **Repo layout:** Xcode project lives in `ios/` inside this repo (monorepo).
+
+## Shared server code
+
+The SSR page and the JSON API must share logic, not duplicate it. Both already
+read from `db.get_all_videos(classification)`; the shared pieces:
+
+- **`serialize_video(video: dict) -> dict`** — canonical presenter producing the
+  JSON shape (`id, url, title, platform, source_key, preview_url,
+  classification, position, status, stream_path`). Extract to a shared module
+  (e.g. `views/serializers.py`). The JSON endpoint returns
+  `[serialize_video(v) for v in videos]`; `build_videos_page` consumes the same
+  serialized objects instead of poking raw DB dicts, so both stay consistent.
+- **Shared move/classify core** — extract the body of the existing form
+  endpoints (`move_video_endpoint`, `classify_video_endpoint`) into plain
+  functions that take `(video_id, direction)` / `(video_id, classification)`
+  and call `db`. The HTML form endpoints (303 redirect) and the JSON endpoints
+  both call these — no duplicated validation.
+- **`CLASSIFICATIONS`** — already the single source of truth in `db.py`; reused
+  by SSR, JSON, and validation. No change.
+- **Stream endpoint** — `GET /videos/{id}/stream` already shared by web `<video>`
+  and native `AVPlayer`/download; unchanged.
 
 ## Backend additions (Python)
 
 New JSON endpoints alongside existing HTML routes:
 
-- `GET /api/videos?classification=<opt>` → JSON array of video objects. Each:
-  `{ id, title, platform, source_key, preview_url, classification, position,
-  status, stream_path }`. Only `status == "done"` videos are playable; include
-  status so the app can show pending state. Ordered by `position DESC,
-  created_at DESC` (same as `db.get_all_videos`).
+- `GET /api/videos?classification=<opt>` → JSON array of `serialize_video(v)`
+  objects (see "Shared server code"). Includes `status` so the app can show
+  pending state. Ordered by `position DESC, created_at DESC` (same as
+  `db.get_all_videos`). Also returns available `CLASSIFICATIONS` (either as a
+  sibling `GET /api/classifications` or an envelope) so the app's filter tabs
+  stay in sync with the server.
 - `POST /api/videos/{id}/move` body `{ "direction": "up" | "down" }` → JSON
-  `{ ok: bool }`. Wraps `db.move_video`.
+  `{ ok: bool }`. Calls the shared move core.
 - `POST /api/videos/{id}/classify` body `{ "classification": "<one of
-  CLASSIFICATIONS>" }` → JSON `{ ok: bool }`. Wraps
-  `db.set_video_classification`.
+  CLASSIFICATIONS>" }` → JSON `{ ok: bool }`. Calls the shared classify core.
 - `POST /upload` — reuse as-is (already JSON, Bearer token).
 - `GET /videos/{id}/stream` — reuse as-is (range requests serve both AVPlayer
   streaming and `URLSession` download).
@@ -94,6 +119,14 @@ Layers, each independently testable:
 - Playback prefers local file when present.
 - LRU/size-cap eviction: out of scope for v1 (YAGNI). Rely on system Caches
   eviction.
+
+## Server test additions
+
+- `serialize_video` output shape (fixture-based).
+- SSR page still renders unchanged after refactor (existing template test /
+  smoke test of `build_videos_page`).
+- JSON endpoints: `GET /api/videos` shape + classification filter; move/classify
+  JSON endpoints require token and mutate via shared core.
 
 ## Feature parity checklist (vs web)
 
