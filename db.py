@@ -3,6 +3,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+CLASSIFICATIONS = ["children", "adults", "education", "entertainment"]
+
 
 def _conn():
     conn = sqlite3.connect(os.getenv("DB_PATH", "data/watch_later.sqlite"), timeout=5)
@@ -37,6 +39,8 @@ def init_db():
             conn.execute("ALTER TABLE videos ADD COLUMN preview_url TEXT")
         if "position" not in columns:
             conn.execute("ALTER TABLE videos ADD COLUMN position INTEGER")
+        if "classification" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN classification TEXT NOT NULL DEFAULT 'children'")
         _backfill_youtube_preview_urls(conn)
         _backfill_positions(conn)
         _delete_error_videos(conn)
@@ -106,12 +110,23 @@ def delete_video(video_id: int):
         conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
 
 
-def get_all_videos() -> list[dict]:
+def get_all_videos(classification: str | None = None) -> list[dict]:
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM videos ORDER BY position DESC, created_at DESC"
-        ).fetchall()
+        if classification:
+            rows = conn.execute(
+                "SELECT * FROM videos WHERE classification = ? ORDER BY position DESC, created_at DESC",
+                (classification,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM videos ORDER BY position DESC, created_at DESC"
+            ).fetchall()
         return [dict(r) for r in rows]
+
+
+def set_video_classification(video_id: int, classification: str) -> None:
+    with _conn() as conn:
+        conn.execute("UPDATE videos SET classification = ? WHERE id = ?", (classification, video_id))
 
 
 def move_video(video_id: int, direction: str) -> bool:
