@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/master.swiftdeps"
+  },
+  "/Users/grillermo/c/patatatube/ios/PatataTubeKit/Tests/PatataTubeKitTests/ScaffoldTests.swift": {
+    "dependencies": "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/ScaffoldTests.d",
+    "object": "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/ScaffoldTests.swift.o",
+    "swiftmodule": "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/ScaffoldTests~partial.swiftmodule",
+    "swift-dependencies": "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/ScaffoldTests.swiftdeps",
+    "diagnostics": "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/ScaffoldTests.dia"
+  }
+}

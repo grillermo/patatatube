@@ -1,0 +1,60 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.xctest/Contents/MacOS/PatataTubeKitPackageTests'
+relocations:
+  - { offset: 0xFB, size: 0x8, addend: 0x0, symName: '_$s13PatataTubeKitAAO6marker_WZ', symObjAddr: 0x0, symBinAddr: 0xB40, symSize: 0x40 }
+  - { offset: 0x11D, size: 0x8, addend: 0x0, symName: '_$s13PatataTubeKitAAO6markerSSvpZ', symObjAddr: 0xD80, symBinAddr: 0x80D0, symSize: 0x0 }
+  - { offset: 0x12A, size: 0x8, addend: 0x0, symName: '_$s13PatataTubeKitAAO6marker_WZ', symObjAddr: 0x0, symBinAddr: 0xB40, symSize: 0x40 }
+  - { offset: 0x143, size: 0x8, addend: 0x0, symName: '_$s13PatataTubeKitAAO6markerSSvau', symObjAddr: 0x40, symBinAddr: 0xB80, symSize: 0x50 }
+  - { offset: 0x17A, size: 0x8, addend: 0x0, symName: '_$s13PatataTubeKitAAOMa', symObjAddr: 0xC8, symBinAddr: 0xC08, symSize: 0x14 }
+  - { offset: 0x1AE, size: 0x8, addend: 0x0, symName: '_$s13PatataTubeKitAAO6markerSSvgZ', symObjAddr: 0x90, symBinAddr: 0xBD0, symSize: 0x38 }
+  - { offset: 0x237, size: 0x8, addend: 0x0, symName: '_$s25PatataTubeKitPackageTests6RunnerV14testingLibrary33_91BFB96765E89D491B7B8BFCE0418E4ELLSSyFZ', symObjAddr: 0x0, symBinAddr: 0xC1C, symSize: 0x230 }
+  - { offset: 0x334, size: 0x8, addend: 0x0, symName: ___swift_instantiateConcreteTypeFromMangledNameV2, symObjAddr: 0x230, symBinAddr: 0xE4C, symSize: 0x80 }
+  - { offset: 0x347, size: 0x8, addend: 0x0, symName: '_$sSaySSGSayxGSlsWl', symObjAddr: 0x2B0, symBinAddr: 0xECC, symSize: 0x74 }
+  - { offset: 0x35A, size: 0x8, addend: 0x0, symName: ___swift_instantiateConcreteTypeFromMangledNameAbstractV2, symObjAddr: 0x324, symBinAddr: 0xF40, symSize: 0x78 }
+  - { offset: 0x36D, size: 0x8, addend: 0x0, symName: '_$ss16IndexingIteratorVySaySSGGWOh', symObjAddr: 0x39C, symBinAddr: 0xFB8, symSize: 0x28 }
+  - { offset: 0x380, size: 0x8, addend: 0x0, symName: '_$sS2cMScAsWl', symObjAddr: 0x624, symBinAddr: 0x1240, symSize: 0x6C }
+  - { offset: 0x393, size: 0x8, addend: 0x0, symName: '_$sIetH_yts5Error_pIegHrzo_TR', symObjAddr: 0x920, symBinAddr: 0x153C, symSize: 0x78 }
+  - { offset: 0x3B0, size: 0x8, addend: 0x0, symName: '_$sIetH_yts5Error_pIegHrzo_TRTQ0_', symObjAddr: 0x998, symBinAddr: 0x15B4, symSize: 0x64 }
+  - { offset: 0x3CD, size: 0x8, addend: 0x0, symName: '_$sIetH_yts5Error_pIegHrzo_TRTA', symObjAddr: 0xA24, symBinAddr: 0x1640, symSize: 0x9C }
+  - { offset: 0x3E0, size: 0x8, addend: 0x0, symName: '_$sIetH_yts5Error_pIegHrzo_TRTATQ0_', symObjAddr: 0xAC0, symBinAddr: 0x16DC, symSize: 0x60 }
+  - { offset: 0x3F3, size: 0x8, addend: 0x0, symName: '_$s25PatataTubeKitPackageTests6RunnerVMa', symObjAddr: 0xB20, symBinAddr: 0x173C, symSize: 0x14 }
+  - { offset: 0x44F, size: 0x8, addend: 0x0, symName: '_$s25PatataTubeKitPackageTests6RunnerV14testingLibrary33_91BFB96765E89D491B7B8BFCE0418E4ELLSSyFZ', symObjAddr: 0x0, symBinAddr: 0xC1C, symSize: 0x230 }
+  - { offset: 0x4CF, size: 0x8, addend: 0x0, symName: '_$s25PatataTubeKitPackageTests6RunnerV4mainyyYaFZ', symObjAddr: 0x3C4, symBinAddr: 0xFE0, symSize: 0xA8 }
+  - { offset: 0x50C, size: 0x8, addend: 0x0, symName: '_$s25PatataTubeKitPackageTests6RunnerV4mainyyYaFZTY0_', symObjAddr: 0x46C, symBinAddr: 0x1088, symSize: 0x15C }
+  - { offset: 0x54C, size: 0x8, addend: 0x0, symName: '_$s25PatataTubeKitPackageTests6RunnerV4mainyyYaFZTQ1_', symObjAddr: 0x5C8, symBinAddr: 0x11E4, symSize: 0x5C }
+  - { offset: 0x58D, size: 0x8, addend: 0x0, symName: '_$s25PatataTubeKitPackageTests6RunnerV5$mainyyYaFZ', symObjAddr: 0x690, symBinAddr: 0x12AC, symSize: 0x84 }
+  - { offset: 0x5AA, size: 0x8, addend: 0x0, symName: '_$s25PatataTubeKitPackageTests6RunnerV5$mainyyYaFZTQ0_', symObjAddr: 0x714, symBinAddr: 0x1330, symSize: 0x8C }
+  - { offset: 0x5C7, size: 0x8, addend: 0x0, symName: '_$s25PatataTubeKitPackageTests6RunnerV5$mainyyYaFZTY1_', symObjAddr: 0x7A0, symBinAddr: 0x13BC, symSize: 0x40 }
+  - { offset: 0x5E4, size: 0x8, addend: 0x0, symName: '_$s25PatataTubeKitPackageTests6RunnerVACycfC', symObjAddr: 0x7E0, symBinAddr: 0x13FC, symSize: 0x4 }
+  - { offset: 0x604, size: 0x8, addend: 0x0, symName: _async_Main, symObjAddr: 0x7E4, symBinAddr: 0x1400, symSize: 0x6C }
+  - { offset: 0x617, size: 0x8, addend: 0x0, symName: _async_MainTQ0_, symObjAddr: 0x850, symBinAddr: 0x146C, symSize: 0x48 }
+  - { offset: 0x62A, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x898, symBinAddr: 0x14B4, symSize: 0x88 }
+  - { offset: 0x6A0, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC52Tests14packageIsWired4TestfMp_16Z3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLyyYaYbKF', symObjAddr: 0x0, symBinAddr: 0x1750, symSize: 0x20 }
+  - { offset: 0x6C2, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC59Tests14packageIsWired4TestfMp_23accessor3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLySbSv_S2VSgSutXCvp', symObjAddr: 0xD90, symBinAddr: 0x4258, symSize: 0x0 }
+  - { offset: 0x6DB, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC68Tests14packageIsWired4TestfMp_32testContentRecord3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLs6UInt32V4kind_AE9reserved1SbSv_S2VSgSutXCSg8accessorSu7contextSu9reserved2tvp', symObjAddr: 0xD98, symBinAddr: 0x4260, symSize: 0x0 }
+  - { offset: 0x6E8, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC52Tests14packageIsWired4TestfMp_16Z3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLyyYaYbKF', symObjAddr: 0x0, symBinAddr: 0x1750, symSize: 0x20 }
+  - { offset: 0x705, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC52Tests14packageIsWired4TestfMp_16Z3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLyyYaYbKF0eabcfghij10_7__localfL1_L_yyScA_pSgYiYaYbKF', symObjAddr: 0x1B8, symBinAddr: 0x1908, symSize: 0xE0 }
+  - { offset: 0x737, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC52Tests14packageIsWired4TestfMp_16Z3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLyyYaYbKF0eabcfghij10_7__localfL1_L_yyScA_pSgYiYaYbKFTY0_', symObjAddr: 0x298, symBinAddr: 0x19E8, symSize: 0x9C }
+  - { offset: 0x793, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC52Tests14packageIsWired4TestfMp_16Z3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLyyYaYbKF0eabcfghij10_7__localfL1_L_yyScA_pSgYiYaYbKFTQ1_', symObjAddr: 0x334, symBinAddr: 0x1A84, symSize: 0x7C }
+  - { offset: 0x7C8, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC52Tests14packageIsWired4TestfMp_16Z3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLyyYaYbKF0eabcfghij10_7__localfL1_L_yyScA_pSgYiYaYbKFTY2_', symObjAddr: 0x3B0, symBinAddr: 0x1B00, symSize: 0x11C }
+  - { offset: 0x802, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC52Tests14packageIsWired4TestfMp_16Z3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLyyYaYbKFTY0_', symObjAddr: 0x20, symBinAddr: 0x1770, symSize: 0x84 }
+  - { offset: 0x825, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC52Tests14packageIsWired4TestfMp_16Z3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLyyYaYbKFTQ1_', symObjAddr: 0xA4, symBinAddr: 0x17F4, symSize: 0xB0 }
+  - { offset: 0x848, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC52Tests14packageIsWired4TestfMp_16Z3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLyyYaYbKFTY2_', symObjAddr: 0x154, symBinAddr: 0x18A4, symSize: 0x50 }
+  - { offset: 0x86B, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC52Tests14packageIsWired4TestfMp_16Z3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLyyYaYbKF0eabcfghij10_7__localfL1_L_yyScA_pSgYiYaYbKFfA_', symObjAddr: 0x1A4, symBinAddr: 0x18F4, symSize: 0x14 }
+  - { offset: 0x8AE, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests14packageIsWiredyyF', symObjAddr: 0x4CC, symBinAddr: 0x1C1C, symSize: 0x384 }
+  - { offset: 0x8DF, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests14packageIsWiredyyFSbSS_SSyXEtXEfU0_', symObjAddr: 0xBB4, symBinAddr: 0x2304, symSize: 0x84 }
+  - { offset: 0x915, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests14packageIsWiredyyFSSyXEfu1_', symObjAddr: 0xC38, symBinAddr: 0x2388, symSize: 0x2C }
+  - { offset: 0x92C, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests14packageIsWiredyyFSay7Testing7CommentVGyXEfu2_', symObjAddr: 0xC64, symBinAddr: 0x23B4, symSize: 0x30 }
+  - { offset: 0x944, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC60Tests14packageIsWired4TestfMp_24generator3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LL7Testing4TestVyYaYbF', symObjAddr: 0x850, symBinAddr: 0x1FA0, symSize: 0x78 }
+  - { offset: 0x961, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC60Tests14packageIsWired4TestfMp_24generator3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LL7Testing4TestVyYaYbFTY0_', symObjAddr: 0x8C8, symBinAddr: 0x2018, symSize: 0x1AC }
+  - { offset: 0x97E, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC59Tests14packageIsWired4TestfMp_23accessor3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLySbSv_S2VSgSutXCvpfiSbSv_SVADSutcfU_', symObjAddr: 0xA74, symBinAddr: 0x21C4, symSize: 0x6C }
+  - { offset: 0x9D0, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC59Tests14packageIsWired4TestfMp_23accessor3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLySbSv_S2VSgSutXCvpfiSbSv_SVADSutcfU_To', symObjAddr: 0xAE0, symBinAddr: 0x2230, symSize: 0x18 }
+  - { offset: 0x9E7, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC59Tests14packageIsWired4TestfMp_23accessor3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLySbSv_S2VSgSutXCvau', symObjAddr: 0xAF8, symBinAddr: 0x2248, symSize: 0xC }
+  - { offset: 0xA04, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests04$s18abC68Tests14packageIsWired4TestfMp_32testContentRecord3757756f9b9a7fdfMu_33_6543E8FB9B57C122E164403F88055362LLs6UInt32V4kind_AE9reserved1SbSv_S2VSgSutXCSg8accessorSu7contextSu9reserved2tvau', symObjAddr: 0xB04, symBinAddr: 0x2254, symSize: 0xC }
+  - { offset: 0xA50, size: 0x8, addend: 0x0, symName: '_$ss6ResultOyyts5Error_pGWOh', symObjAddr: 0xD14, symBinAddr: 0x23E4, symSize: 0x34 }
+  - { offset: 0xA63, size: 0x8, addend: 0x0, symName: '_$ss6ResultOyyts5Error_pGWOe', symObjAddr: 0xD48, symBinAddr: 0x2418, symSize: 0x30 }
+  - { offset: 0xA76, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests0078$s18PatataTubeKitTests14packageIsWired4TestfMp_19__$3757756f9b9a7fdfMu__gfIIGeOMa', symObjAddr: 0xD78, symBinAddr: 0x2448, symSize: 0x14 }
+  - { offset: 0xAC1, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests0078$s18PatataTubeKitTests14packageIsWired4TestfMp_19__$3757756f9b9a7fdfMu__gfIIGeO19__testContentRecords6UInt32V4kind_AF9reserved1SbSv_S2VSgSutXCSg8accessorSu7contextSu9reserved2tvgZ', symObjAddr: 0xB10, symBinAddr: 0x2260, symSize: 0x40 }
+  - { offset: 0xAE7, size: 0x8, addend: 0x0, symName: '_$s18PatataTubeKitTests0078$s18PatataTubeKitTests14packageIsWired4TestfMp_19__$3757756f9b9a7fdfMu__gfIIGeO7Testing28__TestContentRecordContainerAadEP06__testgH0s6UInt32V4kind_AI9reserved1SbSv_S2VSgSutXCSg8accessorSu7contextSu9reserved2tvgZTW', symObjAddr: 0xB50, symBinAddr: 0x22A0, symSize: 0x64 }
+...

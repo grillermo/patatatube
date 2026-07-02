@@ -1,0 +1,112 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "PackageStructure": ["<PackageStructure>"]
+  "PatataTubeKit-arm64-apple-macosx15.0-debug.module": ["<PatataTubeKit-arm64-apple-macosx15.0-debug.module>"]
+  "PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.module": ["<PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.module>"]
+  "PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.test": ["<PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.test>"]
+  "PatataTubeKitTests-arm64-apple-macosx15.0-debug.module": ["<PatataTubeKitTests-arm64-apple-macosx15.0-debug.module>"]
+  "main": ["<PatataTubeKit-arm64-apple-macosx15.0-debug.module>"]
+  "test": ["<PatataTubeKit-arm64-apple-macosx15.0-debug.module>","<PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.test>","<PatataTubeKitTests-arm64-apple-macosx15.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/grillermo/c/patatatube/ios/PatataTubeKit/Sources/PatataTubeKit/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/grillermo/c/patatatube/ios/PatataTubeKit/Tests/PatataTubeKitTests/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+commands:
+  "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/grillermo/c/patatatube/ios/PatataTubeKit/Sources/PatataTubeKit/PatataTubeKit.swift"]
+    outputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/sources"]
+    description: "Write auxiliary file /Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/sources"
+
+  "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.derived/runner.swift"]
+    outputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/sources"]
+    description: "Write auxiliary file /Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/sources"
+
+  "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.derived/runner.swift":
+    tool: test-entry-point-tool
+    inputs: []
+    outputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.derived/runner.swift"]
+
+  "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/PatataTubeKit.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/runner.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/ScaffoldTests.swift.o"]
+    outputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.product/Objects.LinkFileList"
+
+  "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/grillermo/c/patatatube/ios/PatataTubeKit/Tests/PatataTubeKitTests/ScaffoldTests.swift"]
+    outputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/sources"]
+    description: "Write auxiliary file /Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/sources"
+
+  "/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"]
+    outputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+
+  "<PatataTubeKit-arm64-apple-macosx15.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/PatataTubeKit.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKit.swiftmodule"]
+    outputs: ["<PatataTubeKit-arm64-apple-macosx15.0-debug.module>"]
+
+  "<PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/runner.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKitPackageTests.swiftmodule"]
+    outputs: ["<PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.module>"]
+
+  "<PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.test>":
+    tool: phony
+    inputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.xctest/Contents/MacOS/PatataTubeKitPackageTests"]
+    outputs: ["<PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.test>"]
+
+  "<PatataTubeKitTests-arm64-apple-macosx15.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/ScaffoldTests.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKitTests.swiftmodule"]
+    outputs: ["<PatataTubeKitTests-arm64-apple-macosx15.0-debug.module>"]
+
+  "C.PatataTubeKit-arm64-apple-macosx15.0-debug.module":
+    tool: shell
+    inputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/Sources/PatataTubeKit/PatataTubeKit.swift","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/sources"]
+    outputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/PatataTubeKit.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKit.swiftmodule"]
+    description: "Compiling Swift Module 'PatataTubeKit' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","PatataTubeKit","-emit-dependencies","-emit-module","-emit-module-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKit.swiftmodule","-output-file-map","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/sources","-I","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j8","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/include/PatataTubeKit-Swift.h","-swift-version","6","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","patatatubekit"]
+
+  "C.PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.module":
+    tool: shell
+    inputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.derived/runner.swift","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKitTests.swiftmodule","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/sources"]
+    outputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/runner.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKitPackageTests.swiftmodule"]
+    description: "Compiling Swift Module 'PatataTubeKitPackageTests' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","PatataTubeKitPackageTests","-emit-dependencies","-emit-module","-emit-module-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKitPackageTests.swiftmodule","-output-file-map","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/sources","-I","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-Xfrontend","-enable-cross-import-overlays","-j8","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/include/PatataTubeKitPackageTests-Swift.h","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","patatatubekit"]
+
+  "C.PatataTubeKitPackageTests-arm64-apple-macosx15.0-debug.test":
+    tool: shell
+    inputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKit.build/PatataTubeKit.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.build/runner.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/ScaffoldTests.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.product/Objects.LinkFileList"]
+    outputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.xctest/Contents/MacOS/PatataTubeKitPackageTests"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.xctest/Contents/MacOS/PatataTubeKitPackageTests"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-L","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug","-o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.xctest/Contents/MacOS/PatataTubeKitPackageTests","-module-name","PatataTubeKitPackageTests","-Xlinker","-no_warn_duplicate_libraries","-Xlinker","-bundle","-Xlinker","-rpath","-Xlinker","@loader_path/../../../","@/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitPackageTests.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx14.0","-Xlinker","-add_ast_path","-Xlinker","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKit.swiftmodule","-Xlinker","-add_ast_path","-Xlinker","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKitPackageTests.swiftmodule","-Xlinker","-add_ast_path","-Xlinker","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKitTests.swiftmodule","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g"]
+
+  "C.PatataTubeKitTests-arm64-apple-macosx15.0-debug.module":
+    tool: shell
+    inputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/Tests/PatataTubeKitTests/ScaffoldTests.swift","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKit.swiftmodule","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/sources"]
+    outputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/ScaffoldTests.swift.o","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKitTests.swiftmodule"]
+    description: "Compiling Swift Module 'PatataTubeKitTests' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","PatataTubeKitTests","-emit-dependencies","-emit-module","-emit-module-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules/PatataTubeKitTests.swiftmodule","-output-file-map","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/PatataTubeKitTests.build/sources","-I","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-Xfrontend","-enable-cross-import-overlays","-j8","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/grillermo/c/patatatube/ios/PatataTubeKit/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-swift-version","6","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","patatatubekit"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/grillermo/c/patatatube/ios/PatataTubeKit/Sources/PatataTubeKit/","/Users/grillermo/c/patatatube/ios/PatataTubeKit/Tests/PatataTubeKitTests/","/Users/grillermo/c/patatatube/ios/PatataTubeKit/Package.swift","/Users/grillermo/c/patatatube/ios/PatataTubeKit/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+
