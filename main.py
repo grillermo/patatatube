@@ -100,6 +100,10 @@ class UploadRequest(BaseModel):
     url: str
 
 
+class MoveRequest(BaseModel):
+    direction: str
+
+
 def _print_bad_request_details(request: Request, body: UploadRequest):
     print("400 Bad Request details:", flush=True)
     print(f"  method={request.method}", flush=True)
@@ -421,6 +425,13 @@ async def api_videos(classification: str | None = None):
         classification = None
     videos = db.get_all_videos(classification)
     return [serialize_video(v) for v in videos]
+
+
+@app.post("/api/videos/{video_id}/move")
+async def api_move_video(video_id: int, body: MoveRequest, request: Request):
+    _check_token(request)
+    ok = services.apply_move(video_id, body.direction)
+    return {"ok": ok}
 
 
 @app.get("/", response_class=HTMLResponse)

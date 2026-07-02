@@ -491,3 +491,36 @@ def test_api_classifications_lists_all(client):
     assert resp.json() == {
         "classifications": ["children", "adults", "education", "entertainment"]
     }
+
+
+def test_api_move_requires_token(client):
+    import db
+    vid = db.add_video("https://twitter.com/x/status/1")
+    resp = client.post(f"/api/videos/{vid}/move", json={"direction": "up"})
+    assert resp.status_code == 401
+
+
+def test_api_move_swaps_and_returns_ok(client):
+    import db
+    first = db.add_video("https://twitter.com/x/status/1")
+    second = db.add_video("https://twitter.com/x/status/2")
+    resp = client.post(
+        f"/api/videos/{second}/move",
+        json={"direction": "down"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    assert db.get_video(first)["position"] > db.get_video(second)["position"]
+
+
+def test_api_move_invalid_direction_returns_not_ok(client):
+    import db
+    vid = db.add_video("https://twitter.com/x/status/1")
+    resp = client.post(
+        f"/api/videos/{vid}/move",
+        json={"direction": "sideways"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": False}
