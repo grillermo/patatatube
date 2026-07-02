@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from setproctitle import setproctitle
 
 import db
+import services
 from db import CLASSIFICATIONS
 from downloader import download_video
 from views.templates import SPLASH_STARTUP_IMAGES, build_videos_page
@@ -396,15 +397,14 @@ async def manifest():
 
 @app.post("/videos/{video_id}/move")
 async def move_video_endpoint(video_id: int, direction: str = Form(...), classification: str | None = Form(default=None)):
-    db.move_video(video_id, direction)
+    services.apply_move(video_id, direction)
     redirect_url = f"/?classification={classification}" if classification else "/"
     return RedirectResponse(url=redirect_url, status_code=303)
 
 
 @app.post("/videos/{video_id}/classify")
 async def classify_video_endpoint(video_id: int, classification: str = Form(...), current_classification: str | None = Form(default=None)):
-    if classification in CLASSIFICATIONS:
-        db.set_video_classification(video_id, classification)
+    services.apply_classification(video_id, classification)
     redirect_url = f"/?classification={current_classification}" if current_classification else "/"
     return RedirectResponse(url=redirect_url, status_code=303)
 
