@@ -109,7 +109,7 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
             player = f"""
             <div class="video-wrap">
               <div class="name-overlay">{name_text}</div>
-              <video id="v{v['id']}" controls playsinline webkit-playsinline preload="auto"
+              <video id="v{v['id']}" controls playsinline webkit-playsinline preload="none"
                      style="width:100%;border-radius:8px;background:#000;"
                      onloadedmetadata="this.currentTime=0">
                 <source src="/videos/{v['id']}/stream" type="video/mp4">
@@ -221,14 +221,6 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
 var activePreloadController = null;
 var activePreloadVideoId = null;
 var completedPreloads = new Set();
-
-function reloadUnreadyVideos(){{
-  document.querySelectorAll('video[id]').forEach(function(v){{
-    if(v.readyState === 0 || v.error) {{
-      try {{ v.load(); }} catch (_err) {{}}
-    }}
-  }});
-}}
 
 function stopAllPreloads(){{
   if(!activePreloadController) return;
@@ -349,14 +341,9 @@ document.querySelectorAll('video[id]').forEach(function(v){{
   }});
 }});
 
-window.addEventListener('pageshow', reloadUnreadyVideos);
 window.addEventListener('pagehide', stopAllPreloads);
 document.addEventListener('visibilitychange', function(){{
-  if(document.hidden) {{
-    stopAllPreloads();
-    return;
-  }}
-  reloadUnreadyVideos();
+  if(document.hidden) stopAllPreloads();
 }});
 </script>
 </body>
