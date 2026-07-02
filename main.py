@@ -104,6 +104,10 @@ class MoveRequest(BaseModel):
     direction: str
 
 
+class ClassifyRequest(BaseModel):
+    classification: str
+
+
 def _print_bad_request_details(request: Request, body: UploadRequest):
     print("400 Bad Request details:", flush=True)
     print(f"  method={request.method}", flush=True)
@@ -431,6 +435,13 @@ async def api_videos(classification: str | None = None):
 async def api_move_video(video_id: int, body: MoveRequest, request: Request):
     _check_token(request)
     ok = services.apply_move(video_id, body.direction)
+    return {"ok": ok}
+
+
+@app.post("/api/videos/{video_id}/classify")
+async def api_classify_video(video_id: int, body: ClassifyRequest, request: Request):
+    _check_token(request)
+    ok = services.apply_classification(video_id, body.classification)
     return {"ok": ok}
 
 
