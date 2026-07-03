@@ -14,14 +14,6 @@ struct PatataTubeApp: App {
     }
 }
 
-// Temporary placeholder replaced in Task 9.
 struct RootView: View {
-    @EnvironmentObject var model: AppModel
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("PatataTube").font(.largeTitle)
-            Text(model.credentials.baseURL?.absoluteString ?? "No server configured")
-                .foregroundStyle(.secondary)
-        }
-    }
+    var body: some View { VideoGridView() }
 }
