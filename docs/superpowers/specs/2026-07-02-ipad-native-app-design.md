@@ -20,10 +20,9 @@ SSR form endpoints now call `services.py`. JSON endpoints added to `main.py`:
 
 61 tests pass. PWA untouched.
 
-### iOS SwiftUI App — NOT STARTED
+### iOS SwiftUI App — COMPLETE (2026-07-02)
 
-Plan 2 was being written when context was cleared. Start fresh from the spec.
-Next step: write `docs/superpowers/plans/2026-07-02-ios-swiftui-app.md` then execute it.
+Two-part project: pure-Swift SPM package `PatataTubeKit` (models, APIClient, CredentialStore, CacheManager, VideoStore, Swift Testing) + thin Xcode app `PatataTube` (SwiftUI views, AVKit playback, app wiring).
 
 ## Goal
 
@@ -152,14 +151,14 @@ Layers, each independently testable:
 
 ## Feature parity checklist (vs web)
 
-- [ ] Grid with preview thumbnails
-- [ ] Classification filter (children/adults/education/entertainment)
-- [ ] Fullscreen playback
-- [ ] Exit fullscreen when video ends
-- [ ] Reorder up/down
-- [ ] Set classification
-- [ ] Upload by URL (Bearer token)
-- [ ] Offline playback of cached videos (new capability beyond web)
+- [x] Grid with preview thumbnails
+- [x] Classification filter (children/adults/education/entertainment)
+- [x] Fullscreen playback
+- [x] Exit fullscreen when video ends
+- [x] Reorder up/down
+- [x] Set classification
+- [x] Upload by URL (Bearer token)
+- [x] Offline playback of cached videos (new capability beyond web)
 
 ## Testing
 
