@@ -4,7 +4,7 @@
 > 
 > Commit range: `9b17a4b..8809b84`
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build a native SwiftUI iPad app alongside the existing web PWA that consumes the server JSON API, reaches feature parity with the web UI, and caches videos locally for offline playback.
 
@@ -43,7 +43,7 @@
 - Consumes: nothing.
 - Produces: a buildable/testable package named `PatataTubeKit` with a `PatataTubeKitTests` target; establishes that `swift test` runs in `ios/PatataTubeKit/`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 // ios/PatataTubeKit/Tests/PatataTubeKitTests/ScaffoldTests.swift
@@ -55,7 +55,7 @@ import Testing
 }
 ```
 
-- [ ] **Step 2: Create `Package.swift`**
+- [x] **Step 2: Create `Package.swift`**
 
 ```swift
 // swift-tools-version: 6.0
@@ -74,12 +74,12 @@ let package = Package(
 )
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `cd ios/PatataTubeKit && swift test`
 Expected: FAIL — compile error, `PatataTubeKit.marker` / type `PatataTubeKit` not found.
 
-- [ ] **Step 4: Write minimal implementation**
+- [x] **Step 4: Write minimal implementation**
 
 ```swift
 // ios/PatataTubeKit/Sources/PatataTubeKit/PatataTubeKit.swift
@@ -88,12 +88,12 @@ public enum PatataTubeKit {
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `cd ios/PatataTubeKit && swift test`
 Expected: PASS (1 test).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ios/PatataTubeKit
@@ -116,7 +116,7 @@ git commit -m "feat(ios): scaffold PatataTubeKit SPM package"
   - `func withClassification(_ c: String) -> Video` (internal helper for optimistic updates).
   - Decoding uses `JSONDecoder.keyDecodingStrategy = .convertFromSnakeCase`, so server `preview_url`→`previewUrl`, `source_key`→`sourceKey`, `error_msg`→`errorMsg`, `stream_path`→`streamPath`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 // ios/PatataTubeKit/Tests/PatataTubeKitTests/VideoTests.swift
@@ -163,12 +163,12 @@ private let sampleJSON = """
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd ios/PatataTubeKit && swift test --filter VideoTests`
 Expected: FAIL — `Video` type not found.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```swift
 // ios/PatataTubeKit/Sources/PatataTubeKit/Video.swift
@@ -202,12 +202,12 @@ public struct Video: Codable, Identifiable, Equatable, Sendable {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd ios/PatataTubeKit && swift test --filter VideoTests`
 Expected: PASS (2 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ios/PatataTubeKit
@@ -229,7 +229,7 @@ git commit -m "feat(ios): add Video model with snake_case decoding"
   - `public final class InMemoryCredentialStore: CredentialStore` (used by tests and previews).
   - `public final class KeychainCredentialStore: CredentialStore` (real impl: base URL in `UserDefaults`, token in Keychain). Not unit-tested (requires entitlements); manually verified in Task 9.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 // ios/PatataTubeKit/Tests/PatataTubeKitTests/CredentialStoreTests.swift
@@ -249,12 +249,12 @@ import Foundation
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd ios/PatataTubeKit && swift test --filter CredentialStoreTests`
 Expected: FAIL — `CredentialStore` / `InMemoryCredentialStore` not found.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```swift
 // ios/PatataTubeKit/Sources/PatataTubeKit/CredentialStore.swift
@@ -318,12 +318,12 @@ public final class KeychainCredentialStore: CredentialStore {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd ios/PatataTubeKit && swift test --filter CredentialStoreTests`
 Expected: PASS (1 test).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ios/PatataTubeKit
@@ -348,7 +348,7 @@ git commit -m "feat(ios): add CredentialStore protocol + keychain/in-memory impl
   - This task implements `videos(classification:)` and `classifications()`. Write methods land in Task 5.
   - Test helper `MockURLProtocol` + `func mockSession() -> URLSession`.
 
-- [ ] **Step 1: Write the mock helper**
+- [x] **Step 1: Write the mock helper**
 
 ```swift
 // ios/PatataTubeKit/Tests/PatataTubeKitTests/MockURLProtocol.swift
@@ -389,7 +389,7 @@ func jsonResponse(_ url: URL, status: Int = 200) -> HTTPURLResponse {
 }
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 ```swift
 // ios/PatataTubeKit/Tests/PatataTubeKitTests/APIClientReadTests.swift
@@ -452,12 +452,12 @@ private func makeClient() -> APIClient {
 }
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `cd ios/PatataTubeKit && swift test --filter APIClientReadTests`
 Expected: FAIL — `APIClient` / `APIError` / `VideoAPI` not found.
 
-- [ ] **Step 4: Write minimal implementation**
+- [x] **Step 4: Write minimal implementation**
 
 ```swift
 // ios/PatataTubeKit/Sources/PatataTubeKit/APIClient.swift
@@ -544,12 +544,12 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `cd ios/PatataTubeKit && swift test --filter APIClientReadTests`
 Expected: PASS (5 tests). All prior tests still green: `cd ios/PatataTubeKit && swift test`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ios/PatataTubeKit
@@ -568,7 +568,7 @@ git commit -m "feat(ios): add APIClient read endpoints + URLProtocol test harnes
 - Consumes: `APIClient` scaffold + `VideoAPI` (Task 4).
 - Produces: working `move(id:direction:) -> Bool`, `classify(id:classification:) -> Bool`, `upload(url:) -> Int`. All send `POST` with `Content-Type: application/json` and `Authorization: Bearer <token>`; throw `APIError.notConfigured` when token missing/empty.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 // ios/PatataTubeKit/Tests/PatataTubeKitTests/APIClientWriteTests.swift
@@ -647,12 +647,12 @@ extension URLRequest {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd ios/PatataTubeKit && swift test --filter APIClientWriteTests`
 Expected: FAIL / crash — write methods still `fatalError`.
 
-- [ ] **Step 3: Write minimal implementation** — replace the three `fatalError` stubs in `APIClient.swift`
+- [x] **Step 3: Write minimal implementation** — replace the three `fatalError` stubs in `APIClient.swift`
 
 ```swift
     public func move(id: Int, direction: String) async throws -> Bool {
@@ -690,12 +690,12 @@ Expected: FAIL / crash — write methods still `fatalError`.
     }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd ios/PatataTubeKit && swift test --filter APIClientWriteTests`
 Expected: PASS (4 tests). Full suite: `cd ios/PatataTubeKit && swift test`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ios/PatataTubeKit
@@ -716,7 +716,7 @@ git commit -m "feat(ios): add APIClient move/classify/upload write endpoints"
   - `public enum CacheState: Equatable, Sendable { case notCached; case downloading(Double); case cached }`
   - `public final class CacheManager` — `init(root: URL? = nil, session: URLSession = .shared)`; `func localURL(for id: Int) -> URL`; `func state(for id: Int) -> CacheState`; `func download(id: Int, from remote: URL) async throws`. Default `root` = `<Caches>/videos`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 // ios/PatataTubeKit/Tests/PatataTubeKitTests/CacheManagerTests.swift
@@ -760,12 +760,12 @@ private func tempRoot() -> URL {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd ios/PatataTubeKit && swift test --filter CacheManagerTests`
 Expected: FAIL — `CacheManager` / `CacheState` not found.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```swift
 // ios/PatataTubeKit/Sources/PatataTubeKit/CacheManager.swift
@@ -819,12 +819,12 @@ public final class CacheManager: @unchecked Sendable {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd ios/PatataTubeKit && swift test --filter CacheManagerTests`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ios/PatataTubeKit
@@ -846,7 +846,7 @@ git commit -m "feat(ios): add CacheManager for offline mp4 download"
   - `@Published public private(set) var videos: [Video]`, `@Published public var filter: String?`, `@Published public private(set) var isLoading: Bool`, `@Published public var errorText: String?`.
   - `func load() async`, `func classify(id: Int, to: String) async` (optimistic + revert on `ok==false`/throw), `func move(id: Int, direction: String) async` (refetch on success), `func upload(url: String) async` (refetch after).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```swift
 // ios/PatataTubeKit/Tests/PatataTubeKitTests/VideoStoreTests.swift
@@ -928,12 +928,12 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd ios/PatataTubeKit && swift test --filter VideoStoreTests`
 Expected: FAIL — `VideoStore` not found.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```swift
 // ios/PatataTubeKit/Sources/PatataTubeKit/VideoStore.swift
@@ -995,12 +995,12 @@ public final class VideoStore: ObservableObject {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd ios/PatataTubeKit && swift test --filter VideoStoreTests`
 Expected: PASS (5 tests). Full suite green: `cd ios/PatataTubeKit && swift test`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ios/PatataTubeKit
@@ -1024,12 +1024,12 @@ git commit -m "feat(ios): add VideoStore with optimistic classify/move/upload"
 
 **Note:** This task's deliverable is a *compiling, launchable* app shell — verified by `xcodebuild ... build`, not `swift test`. TDD does not apply to the SwiftUI view layer; verification is a successful build + manual launch.
 
-- [ ] **Step 1: Install xcodegen (once)**
+- [x] **Step 1: Install xcodegen (once)**
 
 Run: `which xcodegen || brew install xcodegen`
 Expected: prints a path or installs it.
 
-- [ ] **Step 2: Create `ios/PatataTube/project.yml`**
+- [x] **Step 2: Create `ios/PatataTube/project.yml`**
 
 ```yaml
 name: PatataTube
@@ -1060,7 +1060,7 @@ targets:
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
 ```
 
-- [ ] **Step 3: Create `ios/.gitignore`**
+- [x] **Step 3: Create `ios/.gitignore`**
 
 ```gitignore
 PatataTube/PatataTube.xcodeproj/
@@ -1069,7 +1069,7 @@ xcuserdata/
 *.xcworkspace/xcuserdata/
 ```
 
-- [ ] **Step 4: Create `AppModel.swift`**
+- [x] **Step 4: Create `AppModel.swift`**
 
 ```swift
 // ios/PatataTube/Sources/AppModel.swift
@@ -1109,7 +1109,7 @@ final class AppModel: ObservableObject {
 }
 ```
 
-- [ ] **Step 5: Create `SettingsView.swift`**
+- [x] **Step 5: Create `SettingsView.swift`**
 
 ```swift
 // ios/PatataTube/Sources/SettingsView.swift
@@ -1153,7 +1153,7 @@ struct SettingsView: View {
 }
 ```
 
-- [ ] **Step 6: Create `PatataTubeApp.swift`**
+- [x] **Step 6: Create `PatataTubeApp.swift`**
 
 ```swift
 // ios/PatataTube/Sources/PatataTubeApp.swift
@@ -1185,7 +1185,7 @@ struct RootView: View {
 }
 ```
 
-- [ ] **Step 7: Generate the project and build**
+- [x] **Step 7: Generate the project and build**
 
 ```bash
 cd ios/PatataTube && xcodegen generate
@@ -1195,7 +1195,7 @@ xcodebuild -project PatataTube.xcodeproj -scheme PatataTube \
 
 Expected: `** BUILD SUCCEEDED **`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add ios/PatataTube/project.yml ios/PatataTube/Sources ios/.gitignore
@@ -1215,7 +1215,7 @@ git commit -m "feat(ios): scaffold PatataTube app with settings + app model"
 - Consumes: `AppModel`, `VideoStore`, `CacheManager`, `Video` (`PatataTubeKit`).
 - Produces: `VideoGridView` (grid + classification filter tabs + toolbar buttons for Settings/Upload) and `VideoCell` (thumbnail, download button, reorder/classify menu). Verified by build + manual run.
 
-- [ ] **Step 1: Create `VideoCell.swift`**
+- [x] **Step 1: Create `VideoCell.swift`**
 
 ```swift
 // ios/PatataTube/Sources/VideoCell.swift
@@ -1289,7 +1289,7 @@ struct VideoCell: View {
 }
 ```
 
-- [ ] **Step 2: Create `VideoGridView.swift`**
+- [x] **Step 2: Create `VideoGridView.swift`**
 
 ```swift
 // ios/PatataTube/Sources/VideoGridView.swift
@@ -1388,7 +1388,7 @@ struct VideoGridView: View {
 }
 ```
 
-- [ ] **Step 3: Replace `RootView` in `PatataTubeApp.swift`**
+- [x] **Step 3: Replace `RootView` in `PatataTubeApp.swift`**
 
 Replace the temporary `RootView` struct with:
 
@@ -1398,7 +1398,7 @@ struct RootView: View {
 }
 ```
 
-- [ ] **Step 4: Regenerate + build**
+- [x] **Step 4: Regenerate + build**
 
 ```bash
 cd ios/PatataTube && xcodegen generate
@@ -1416,7 +1416,7 @@ struct UploadView: View { var body: some View { Text("Upload") } }
 struct VideoPlayerView: View { let video: Video; var body: some View { Text(video.title ?? "") } }
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ios/PatataTube/Sources
@@ -1438,13 +1438,13 @@ git commit -m "feat(ios): add video grid with filter tabs, classify, reorder, do
   - `VideoPlayerView` — `AVPlayer` fullscreen; plays local cached file when `CacheManager.state(for:) == .cached`, else streams from `streamURL`; auto-dismisses on playback end (parity: "exit fullscreen when video ends").
   - `UploadView` — paste URL → `store.upload(url:)` → dismiss.
 
-- [ ] **Step 1: Delete the temporary stubs**
+- [x] **Step 1: Delete the temporary stubs**
 
 ```bash
 rm ios/PatataTube/Sources/Stubs.swift
 ```
 
-- [ ] **Step 2: Create `VideoPlayerView.swift`**
+- [x] **Step 2: Create `VideoPlayerView.swift`**
 
 ```swift
 // ios/PatataTube/Sources/VideoPlayerView.swift
@@ -1501,7 +1501,7 @@ struct VideoPlayerView: View {
 }
 ```
 
-- [ ] **Step 3: Create `UploadView.swift`**
+- [x] **Step 3: Create `UploadView.swift`**
 
 ```swift
 // ios/PatataTube/Sources/UploadView.swift
@@ -1544,7 +1544,7 @@ struct UploadView: View {
 }
 ```
 
-- [ ] **Step 4: Regenerate + build**
+- [x] **Step 4: Regenerate + build**
 
 ```bash
 cd ios/PatataTube && xcodegen generate
@@ -1554,7 +1554,7 @@ xcodebuild -project PatataTube.xcodeproj -scheme PatataTube \
 
 Expected: `** BUILD SUCCEEDED **`.
 
-- [ ] **Step 5: Manual verification (simulator)**
+- [x] **Step 5: Manual verification (simulator)**
 
 Run: `xcodebuild -project PatataTube.xcodeproj -scheme PatataTube -destination 'platform=iOS Simulator,name=iPad Pro 11-inch' build` (or launch via Xcode). Then, against a running server (`./serve`), verify the feature-parity checklist:
 - Grid shows thumbnails; filter tabs switch classification.
@@ -1563,7 +1563,7 @@ Run: `xcodebuild -project PatataTube.xcodeproj -scheme PatataTube -destination '
 - `+` → paste URL → the list refetches after upload.
 - Download button on a cell → after completion, replay works with the server stopped (offline).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ios/PatataTube/Sources
@@ -1583,15 +1583,15 @@ git commit -m "feat(ios): add fullscreen player (exit-on-end) and upload view"
 - Consumes: nothing.
 - Produces: updated progress/status so a future session sees the app as done.
 
-- [ ] **Step 1: Update the spec progress section**
+- [x] **Step 1: Update the spec progress section**
 
 In `docs/superpowers/specs/2026-07-02-ipad-native-app-design.md`, change the `### iOS SwiftUI App — NOT STARTED` block to `— COMPLETE (2026-07-02)` with a one-line summary of the `ios/PatataTubeKit` + `ios/PatataTube` structure, and tick every box in the "Feature parity checklist".
 
-- [ ] **Step 2: Mark this plan complete**
+- [x] **Step 2: Mark this plan complete**
 
 Add a `> **STATUS: COMPLETE**` line under this plan's header with the commit range.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/superpowers
