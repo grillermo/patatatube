@@ -1,0 +1,26 @@
+name: PatataTube
+options:
+  bundleIdPrefix: com.patatatube
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  PatataTubeKit:
+    path: ../PatataTubeKit
+targets:
+  PatataTube:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Sources
+    dependencies:
+      - package: PatataTubeKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.patatatube.app
+        TARGETED_DEVICE_FAMILY: "2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        SWIFT_VERSION: "6.0"
+        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
