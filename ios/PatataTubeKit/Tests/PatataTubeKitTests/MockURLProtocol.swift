@@ -33,3 +33,22 @@ func jsonResponse(_ url: URL, status: Int = 200) -> HTTPURLResponse {
     HTTPURLResponse(url: url, statusCode: status, httpVersion: nil,
                     headerFields: ["Content-Type": "application/json"])!
 }
+
+extension URLRequest {
+    func httpBodyData() -> Data {
+        if let body = httpBody { return body }
+        guard let stream = httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufSize = 4096
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
+        defer { buffer.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buffer, maxLength: bufSize)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
+    }
+}

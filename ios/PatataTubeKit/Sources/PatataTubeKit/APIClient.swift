@@ -68,14 +68,37 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         }
     }
 
-    // Write methods implemented in Task 5.
     public func move(id: Int, direction: String) async throws -> Bool {
-        fatalError("implemented in Task 5")
+        try await postOK("api/videos/\(id)/move", body: ["direction": direction])
     }
+
     public func classify(id: Int, classification: String) async throws -> Bool {
-        fatalError("implemented in Task 5")
+        try await postOK("api/videos/\(id)/classify", body: ["classification": classification])
     }
+
     public func upload(url: String) async throws -> Int {
-        fatalError("implemented in Task 5")
+        let data = try await authedPost("upload", body: ["url": url])
+        struct Result: Decodable { let id: Int }
+        do { return try JSONDecoder().decode(Result.self, from: data).id }
+        catch { throw APIError.decoding(String(describing: error)) }
+    }
+
+    private func postOK(_ path: String, body: [String: String]) async throws -> Bool {
+        let data = try await authedPost(path, body: body)
+        struct Result: Decodable { let ok: Bool }
+        do { return try JSONDecoder().decode(Result.self, from: data).ok }
+        catch { throw APIError.decoding(String(describing: error)) }
+    }
+
+    private func authedPost(_ path: String, body: [String: String]) async throws -> Data {
+        guard let token = store.token, !token.isEmpty else { throw APIError.notConfigured }
+        var request = URLRequest(url: try base().appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response)
+        return data
     }
 }
