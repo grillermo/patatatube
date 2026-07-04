@@ -18,7 +18,9 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
+                        .onChange(of: model.baseURLText) { invalidateTest() }
                     SecureField("Upload token", text: $model.tokenText)
+                        .onChange(of: model.tokenText) { invalidateTest() }
                     Button {
                         testConnection()
                     } label: {
@@ -50,7 +52,11 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { model.saveSettings(); dismiss() }
+                    Button("Done") {
+                        model.saveSettings()
+                        if testOK { Task { await model.store.load() } }
+                        dismiss()
+                    }
                 }
             }
         }
@@ -79,5 +85,12 @@ struct SettingsView: View {
             }
             testing = false
         }
+    }
+
+    /// Editing the server fields invalidates a prior successful test so "Done"
+    /// only reloads when the shown values were the ones actually tested.
+    private func invalidateTest() {
+        testOK = false
+        testResult = nil
     }
 }
