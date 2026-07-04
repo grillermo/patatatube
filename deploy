@@ -1,0 +1,185 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# deploy
+#
+# One-shot release of the PatataTube iOS app to its AltStore source.
+#
+# AltStore (on the iPad) polls a "source" — a JSON manifest — and auto-installs
+# newer versions of apps listed in it. This script publishes a new version end
+# to end:
+#
+#   1. bump MARKETING_VERSION (+ build number) in ios/PatataTube/project.yml
+#   2. build a fresh .ipa from source            (ios/ipa_builder.rb)
+#   3. create a GitHub Release and upload the .ipa as an asset (its host)
+#   4. regenerate ios/apps.json — the AltStore source manifest — pointing at
+#      the new release asset, with real size + sha256
+#   5. commit the bump + manifest and push to GitHub
+#
+# AltStore then sees the bumped version in the raw manifest and updates the app
+# on the iPad automatically (this is separate from AltServer's 7-day re-sign,
+# which keeps the *current* build alive; this ships *new code*).
+#
+# Usage:
+#   ./deploy                 # bump patch  (1.0.0 -> 1.0.1)
+#   ./deploy patch|minor|major
+#   ./deploy 1.4.2           # set an explicit version
+#
+# The AltStore source URL to add on the iPad is printed at the end (and lives
+# in ios/altstore.md).
+
+require_relative "ios/ipa_builder"
+require "digest"
+require "json"
+require "time"
+
+B = IpaBuilder # build helpers (step/run/die/colors) live here
+
+APP_NAME     = IpaBuilder::APP_NAME
+PROJECT_YML  = IpaBuilder::PROJECT_YML
+APPS_JSON    = File.join(__dir__, "ios", "apps.json")
+BUNDLE_ID    = "com.patatatube.app"
+SOURCE_ID    = "com.patatatube.source"
+MANIFEST_REL = "ios/apps.json"
+ICON_REL     = "apple-touch-icon.png"
+
+# --- repo / remote -----------------------------------------------------------
+
+B.die("no gh CLI on PATH (brew install gh)") if `which gh`.empty?
+B.die("gh not authenticated (run: gh auth login)") unless system("gh auth status >/dev/null 2>&1")
+
+REPO = `gh repo view --json nameWithOwner -q .nameWithOwner`.strip
+B.die("could not determine GitHub repo (gh repo view failed)") if REPO.empty?
+
+BRANCH = `git rev-parse --abbrev-ref HEAD`.strip
+DEFAULT_BRANCH = `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.strip
+unless BRANCH == DEFAULT_BRANCH
+  B.die("on branch '#{BRANCH}', not default '#{DEFAULT_BRANCH}'. " \
+        "The source manifest raw URL tracks '#{DEFAULT_BRANCH}'; switch branches first.")
+end
+
+RAW_BASE      = "https://raw.githubusercontent.com/#{REPO}/#{DEFAULT_BRANCH}"
+RELEASE_BASE  = "https://github.com/#{REPO}/releases/download"
+MANIFEST_URL  = "#{RAW_BASE}/#{MANIFEST_REL}"
+ICON_URL      = "#{RAW_BASE}/#{ICON_REL}"
+MIN_OS        = File.read(PROJECT_YML)[/^\s*iOS:\s*"?([\d.]+)"?/, 1] || "17.0"
+
+# --- version bump ------------------------------------------------------------
+
+def bump(current, arg)
+  return arg if arg =~ /\A\d+\.\d+\.\d+\z/ # explicit version
+
+  major, minor, patch = current.split(".").map(&:to_i)
+  case arg
+  when "major" then "#{major + 1}.0.0"
+  when "minor" then "#{major}.#{minor + 1}.0"
+  when "patch", nil then "#{major}.#{minor}.#{patch + 1}"
+  else B.die("bad argument '#{arg}' (use patch|minor|major or an X.Y.Z version)")
+  end
+end
+
+current  = B.marketing_version
+version  = bump(current, ARGV[0])
+tag      = "v#{version}"
+asset    = "#{APP_NAME}-#{version}.ipa"
+download = "#{RELEASE_BASE}/#{tag}/#{asset}"
+
+if `git tag -l #{tag}`.strip == tag || !`gh release view #{tag} 2>/dev/null`.empty?
+  B.die("release #{tag} already exists — bump to a new version")
+end
+
+yml   = File.read(PROJECT_YML)
+build = (yml[/^\s*CURRENT_PROJECT_VERSION:\s*"?(\d+)"?/, 1] || "0").to_i + 1
+yml   = yml.sub(/^(\s*MARKETING_VERSION:\s*)"?[\d.]+"?/, "\\1\"#{version}\"")
+yml   = yml.sub(/^(\s*CURRENT_PROJECT_VERSION:\s*)"?\d+"?/, "\\1\"#{build}\"")
+File.write(PROJECT_YML, yml)
+
+puts B.bold("\n==> Releasing #{APP_NAME} #{current} -> #{version} (build #{build}) to #{REPO}")
+
+# --- build -------------------------------------------------------------------
+
+ipa      = B.build                      # tmp .ipa, dir owned by us to clean up
+work     = File.dirname(ipa)
+released = File.join(work, asset)
+File.rename(ipa, released)
+
+size   = File.size(released)
+sha256 = Digest::SHA256.file(released).hexdigest
+puts B.green("    #{asset} — #{(size / 1_048_576.0).round(1)} MB  sha256:#{sha256[0, 12]}…")
+
+# --- source manifest (ios/apps.json) ----------------------------------------
+
+B.step "Updating AltStore source manifest (#{MANIFEST_REL})"
+
+manifest =
+  if File.exist?(APPS_JSON)
+    JSON.parse(File.read(APPS_JSON)) rescue {}
+  else
+    {}
+  end
+
+app = (manifest["apps"] || []).find { |a| a["bundleIdentifier"] == BUNDLE_ID } || {}
+history = app["versions"] || []
+
+new_version = {
+  "version"              => version,
+  "buildVersion"         => build.to_s,
+  "date"                 => Time.now.utc.iso8601,
+  "localizedDescription" => "Release #{version}.",
+  "downloadURL"          => download,
+  "size"                 => size,
+  "sha256"               => sha256,
+  "minOSVersion"         => MIN_OS,
+}
+history.reject! { |v| v["version"] == version }
+history.unshift(new_version)
+
+app.merge!(
+  "name"                 => APP_NAME,
+  "bundleIdentifier"     => BUNDLE_ID,
+  "developerName"        => REPO.split("/").first,
+  "subtitle"             => "Self-hosted watch-later for videos.",
+  "localizedDescription" => app["localizedDescription"] ||
+    "PatataTube — a self-hosted watch-later. Browse, classify and play the " \
+    "videos your PatataTube server has downloaded, with offline caching.",
+  "iconURL"              => ICON_URL,
+  "tintColor"            => "1E88E5",
+  "screenshotURLs"       => app["screenshotURLs"] || [],
+  "versions"             => history,
+  # Legacy top-level fields for older AltStore builds that predate `versions`.
+  "version"              => version,
+  "versionDate"          => new_version["date"],
+  "versionDescription"   => new_version["localizedDescription"],
+  "downloadURL"          => download,
+  "size"                 => size,
+)
+
+source = {
+  "name"       => "PatataTube",
+  "identifier" => SOURCE_ID,
+  "sourceURL"  => MANIFEST_URL,
+  "apps"       => [app],
+  "news"       => [],
+}
+File.write(APPS_JSON, JSON.pretty_generate(source) + "\n")
+
+# --- commit, push, release ---------------------------------------------------
+
+B.step "Committing + pushing"
+B.run("git add #{PROJECT_YML} #{APPS_JSON}", chdir: __dir__)
+B.run("git commit -m 'Release iOS #{tag}'", chdir: __dir__)
+B.run("git push github #{DEFAULT_BRANCH}", chdir: __dir__)
+
+B.step "Creating GitHub release #{tag} + uploading .ipa"
+B.run(
+  "gh release create #{tag} #{released.inspect} " \
+  "--title #{tag.inspect} --notes 'PatataTube iOS #{version}'",
+  chdir: __dir__
+)
+
+FileUtils.remove_entry(work)
+
+puts B.green("\n✓ Published #{APP_NAME} #{version}")
+puts "  Source URL (add once in AltStore -> Sources -> + ):"
+puts B.bold("    #{MANIFEST_URL}")
+puts "  Already added? AltStore auto-updates on its next background refresh."

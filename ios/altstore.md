@@ -2,10 +2,39 @@
 
 Sideload the app onto your iPad without an Apple Developer account, with AltStore keeping the signature refreshed automatically in the background.
 
-## How this works
+## Two kinds of "automatic"
 
-- Free Apple ID signing expires every **7 days**. AltStore re-signs and reinstalls the app automatically before it expires — but only if **AltServer is running on your Mac** and the iPad can reach it (USB or same Wi-Fi network).
-- No cable needed after initial setup, as long as Wi-Fi sync is paired once.
+1. **Re-signing** — free Apple ID signing expires every **7 days**. AltStore re-signs and reinstalls the *current* build automatically before it expires — but only if **AltServer is running on your Mac** and the iPad can reach it (USB or same Wi-Fi). This keeps the installed binary alive; it does not ship new code.
+2. **Updates (new code)** — this repo is also an **AltStore source**: a JSON manifest AltStore polls in the background. When `./deploy` publishes a newer version, AltStore installs it on the iPad automatically, no cable, no rebuild-by-hand.
+
+Set up the source once (below), then just run `./deploy` whenever you change app code.
+
+## Publishing a new version — `./deploy`
+
+From the repo root:
+
+```bash
+./deploy                 # bump patch (1.0.0 -> 1.0.1)
+./deploy minor           # or: major / patch
+./deploy 1.4.2           # or an explicit version
+```
+
+`./deploy` bumps the version in `ios/PatataTube/project.yml`, builds a fresh `.ipa`, creates a **GitHub Release** hosting that `.ipa`, regenerates `ios/apps.json` (the source manifest) to point at it, then commits and pushes. Requirements: `xcodegen`, full Xcode, and an authenticated `gh` CLI (`gh auth login`).
+
+## Add the source on the iPad (one time)
+
+1. In the AltStore app: **Sources** tab → **+** (top-right) → paste the source URL:
+
+   ```
+   https://raw.githubusercontent.com/grillermo/patatatube/main/ios/apps.json
+   ```
+
+2. Add it, then open **PatataTube** from that source and install once.
+3. From then on, each `./deploy` shows up as an available update — AltStore installs it on its next background refresh (or pull-to-refresh **My Apps** to force it). AltServer must be reachable (see below), same as re-signing.
+
+> `ios/apps.json` doesn't exist until the first `./deploy` runs — deploy generates it. Run `./deploy` once before adding the source.
+
+The rest of this doc covers the AltServer + AltStore install that both mechanisms depend on, plus the fully manual `.ipa` path (`ruby ios/refresh-ipa.rb`) if you'd rather sideload by hand.
 
 ## 1. Install AltServer on your Mac
 
