@@ -1,0 +1,35 @@
+{
+  "name": "PatataTube",
+  "identifier": "com.patatatube.source",
+  "sourceURL": "https://raw.githubusercontent.com/grillermo/patatatube/main/ios/apps.json",
+  "apps": [
+    {
+      "name": "PatataTube",
+      "bundleIdentifier": "com.patatatube.app",
+      "developerName": "grillermo",
+      "subtitle": "Self-hosted watch-later for videos.",
+      "localizedDescription": "PatataTube — a self-hosted watch-later. Browse, classify and play the videos your PatataTube server has downloaded, with offline caching.",
+      "iconURL": "https://raw.githubusercontent.com/grillermo/patatatube/main/apple-touch-icon.png",
+      "tintColor": "1E88E5",
+      "screenshotURLs": [],
+      "versions": [
+        {
+          "version": "1.0.1",
+          "buildVersion": "2",
+          "date": "2026-07-04T17:38:49Z",
+          "localizedDescription": "Release 1.0.1.",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.0.1/PatataTube-1.0.1.ipa",
+          "size": 132258,
+          "sha256": "5c75e12acbc7a75f238cda46bc8f8d1e5793d474fd8223d9b8d4f1a5a25d4924",
+          "minOSVersion": "17.0"
+        }
+      ],
+      "version": "1.0.1",
+      "versionDate": "2026-07-04T17:38:49Z",
+      "versionDescription": "Release 1.0.1.",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.0.1/PatataTube-1.0.1.ipa",
+      "size": 132258
+    }
+  ],
+  "news": []
+}
