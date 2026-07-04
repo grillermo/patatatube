@@ -16,6 +16,10 @@ struct VideoPlayerView: View {
                 VideoPlayer(player: player)
                     .ignoresSafeArea()
                     .onAppear { player.play() }
+                Color.clear
+                    .contentShape(Rectangle())
+                    .ignoresSafeArea()
+                    .onTapGesture { dismiss() }
             } else {
                 ProgressView().tint(.white)
             }
