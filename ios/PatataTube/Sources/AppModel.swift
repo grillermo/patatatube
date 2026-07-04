@@ -8,6 +8,7 @@ final class AppModel: ObservableObject {
     let credentials: CredentialStore
     let cache: CacheManager
     let store: VideoStore
+    let api: APIClient
 
     @Published var baseURLText: String
     @Published var tokenText: String
@@ -17,6 +18,7 @@ final class AppModel: ObservableObject {
         let api = APIClient(store: credentials)
         self.credentials = credentials
         self.cache = CacheManager()
+        self.api = api
         self.store = VideoStore(api: api)
         self.baseURLText = credentials.baseURL?.absoluteString ?? ""
         self.tokenText = credentials.token ?? ""

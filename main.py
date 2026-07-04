@@ -191,6 +191,12 @@ def _classify_url(raw_url: str) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/check-auth")
+async def check_auth(request: Request):
+    _check_token(request)
+    return {"ok": True}
+
+
 @app.post("/upload", status_code=202)
 async def upload(body: UploadRequest, request: Request, background_tasks: BackgroundTasks):
     _check_token(request)

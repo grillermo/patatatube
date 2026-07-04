@@ -48,10 +48,16 @@ In Xcode:
 1. Plug in the iPad (or just pick it as a build destination — doesn't need to stay plugged in for this step).
 2. Scheme `PatataTube` → destination: your iPad (not simulator, not "Any iOS Device" for a quick local build — but "Any iOS Device (arm64)" works for archiving).
 3. **Product → Archive**.
-4. In the Organizer window that opens: **Distribute App → Development → Export**.
-5. Choose a folder — this produces `PatataTube.ipa`.
 
-No paid Apple Developer account required — AltStore re-signs the .ipa itself using the free Apple ID from step 2.
+Do **not** use **Distribute App → Development → Export** — on a free Apple ID that path fails with *"Team (Personal Team) is not enrolled in the Apple Developer Program"*. That export flow requires paid enrollment. Instead, package the `.app` into an `.ipa` by hand — AltStore re-signs it anyway, so it doesn't need to be signed for distribution here:
+
+4. In the Organizer window, right-click your archive → **Show in Finder**.
+5. Right-click the `.xcarchive` → **Show Package Contents** → navigate to `Products/Applications/`. You'll find `PatataTube.app`.
+6. Copy `PatataTube.app` into a work folder.
+7. In that folder, create a directory named exactly `Payload` (capital P) and move `PatataTube.app` inside it.
+8. Zip the `Payload` folder, then rename `Payload.zip` → `PatataTube.ipa`.
+
+No paid Apple Developer account required — AltStore re-signs the `.ipa` itself using the free Apple ID from step 2.
 
 ## 5. Sideload the .ipa
 

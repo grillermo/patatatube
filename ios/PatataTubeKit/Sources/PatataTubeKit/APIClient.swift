@@ -83,6 +83,17 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         catch { throw APIError.decoding(String(describing: error)) }
     }
 
+    /// Verifies the configured base URL + token against the server's `/check-auth`.
+    /// Returns `true` on 2xx, throws `APIError` on missing config or bad status.
+    public func checkAuth() async throws -> Bool {
+        guard let token = store.token, !token.isEmpty else { throw APIError.notConfigured }
+        var request = URLRequest(url: try base().appendingPathComponent("check-auth"))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (_, response) = try await session.data(for: request)
+        try Self.check(response)
+        return true
+    }
+
     private func postOK(_ path: String, body: [String: String]) async throws -> Bool {
         let data = try await authedPost(path, body: body)
         struct Result: Decodable { let ok: Bool }
