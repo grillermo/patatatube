@@ -17,6 +17,8 @@ targets:
       - package: PatataTubeKit
     settings:
       base:
+        DEVELOPMENT_TEAM: Q3WS4MWCW3
+        CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: com.patatatube.app
         TARGETED_DEVICE_FAMILY: "2"
         GENERATE_INFOPLIST_FILE: YES
