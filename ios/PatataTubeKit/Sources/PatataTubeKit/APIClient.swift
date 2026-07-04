@@ -12,6 +12,7 @@ public protocol VideoAPI: Sendable {
     func move(id: Int, direction: String) async throws -> Bool
     func classify(id: Int, classification: String) async throws -> Bool
     func upload(url: String) async throws -> Int
+    func delete(id: Int) async throws -> Bool
 }
 
 public final class APIClient: VideoAPI, @unchecked Sendable {
@@ -74,6 +75,10 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
 
     public func classify(id: Int, classification: String) async throws -> Bool {
         try await postOK("api/videos/\(id)/classify", body: ["classification": classification])
+    }
+
+    public func delete(id: Int) async throws -> Bool {
+        try await postOK("api/video/\(id)/delete", body: [:])
     }
 
     public func upload(url: String) async throws -> Int {

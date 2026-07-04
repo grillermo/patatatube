@@ -30,6 +30,12 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         return classifyResult
     }
     func upload(url: String) async throws -> Int { uploadId }
+    var deleteResult = true
+    private(set) var deletedIds: [Int] = []
+    func delete(id: Int) async throws -> Bool {
+        deletedIds.append(id)
+        return deleteResult
+    }
 }
 
 @MainActor @Test func loadPopulatesVideos() async {
@@ -119,6 +125,15 @@ private func tempCache() -> VideoListCache {
     await store.bootLoad()
     #expect(store.videos.map(\.id) == [9])
     #expect(store.errorText == nil)
+}
+
+@MainActor @Test func deleteCallsApiThenRefetches() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api)
+    await store.load()          // loadCount == 1
+    await store.delete(id: 1)   // delete -> reload
+    #expect(api.deletedIds == [1])
+    #expect(api.loadCount == 2)
 }
 
 @MainActor @Test func moveRefetchesOnSuccess() async {

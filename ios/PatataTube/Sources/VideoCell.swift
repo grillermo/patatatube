@@ -13,6 +13,9 @@ struct VideoCell: View {
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onClassify: (String) -> Void
+    let onDelete: () -> Void
+
+    @State private var confirmingDelete = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -48,6 +51,8 @@ struct VideoCell: View {
                     ForEach(classifications, id: \.self) { c in
                         Button(c) { onClassify(c) }
                     }
+                    Divider()
+                    Button("Delete video", role: .destructive) { confirmingDelete = true }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -56,6 +61,10 @@ struct VideoCell: View {
         .padding(8)
         .background(.background.secondary)
         .cornerRadius(12)
+        .confirmationDialog("Delete this video?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { onDelete() }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 
     /// Cached local preview wins so it renders while offline; fall back to remote.

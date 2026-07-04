@@ -28,7 +28,8 @@ struct VideoGridView: View {
                             onDownload: { download(video) },
                             onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
                             onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
-                            onClassify: { c in Task { await store.classify(id: video.id, to: c) } }
+                            onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
+                            onDelete: { Task { await store.delete(id: video.id) } }
                         )
                     }
                 }

@@ -64,6 +64,16 @@ public final class VideoStore: ObservableObject {
         }
     }
 
+    /// Deletes on the server, then refreshes the list (and cache) from the API.
+    public func delete(id: Int) async {
+        do {
+            _ = try await api.delete(id: id)
+            await load()
+        } catch {
+            errorText = String(describing: error)
+        }
+    }
+
     public func upload(url: String) async {
         do {
             _ = try await api.upload(url: url)

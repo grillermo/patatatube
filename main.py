@@ -451,6 +451,17 @@ async def api_classify_video(video_id: int, body: ClassifyRequest, request: Requ
     return {"ok": ok}
 
 
+@app.post("/api/video/{video_id}/delete")
+async def api_delete_video(video_id: int, request: Request):
+    _check_token(request)
+    video = db.get_video(video_id)
+    if video:
+        if video.get("filename"):
+            (VIDEOS_DIR / video["filename"]).unlink(missing_ok=True)
+        db.delete_video(video_id)
+    return {"ok": True}
+
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/videos", response_class=HTMLResponse)
 async def videos_page(classification: str | None = None):

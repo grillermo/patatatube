@@ -558,3 +558,28 @@ def test_api_classify_invalid_returns_not_ok(client):
     assert resp.status_code == 200
     assert resp.json() == {"ok": False}
     assert db.get_video(vid)["classification"] == "children"
+
+
+def test_api_delete_requires_token(client):
+    import db
+    vid = db.add_video("https://twitter.com/x/status/1")
+    resp = client.post(f"/api/video/{vid}/delete")
+    assert resp.status_code == 401
+    assert db.get_video(vid) is not None
+
+
+def test_api_delete_removes_row_and_file(client):
+    import main
+    import db
+    vid = db.add_video("https://twitter.com/x/status/1")
+    db.update_video(vid, status="done", filename=f"{vid}.mp4")
+    path = main.VIDEOS_DIR / f"{vid}.mp4"
+    path.write_bytes(b"data")
+    resp = client.post(
+        f"/api/video/{vid}/delete",
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    assert db.get_video(vid) is None
+    assert not path.exists()
