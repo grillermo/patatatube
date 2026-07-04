@@ -39,7 +39,8 @@ struct SettingsView: View {
                         Task {
                             for video in model.store.videos {
                                 if let url = model.streamURL(for: video) {
-                                    try? await model.cache.download(id: video.id, from: url)
+                                    let preview = video.previewUrl.flatMap(URL.init(string:))
+                                    try? await model.cache.download(id: video.id, from: url, preview: preview)
                                 }
                             }
                         }

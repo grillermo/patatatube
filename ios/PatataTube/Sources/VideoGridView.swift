@@ -22,6 +22,7 @@ struct VideoGridView: View {
                         VideoCell(
                             video: video,
                             cacheState: model.cache.state(for: video.id),
+                            cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
                             classifications: classifications,
                             onPlay: { playing = video },
                             onDownload: { download(video) },
@@ -80,7 +81,8 @@ struct VideoGridView: View {
 
     private func download(_ video: Video) {
         guard let url = model.streamURL(for: video) else { return }
-        Task { try? await model.cache.download(id: video.id, from: url) }
+        let preview = video.previewUrl.flatMap(URL.init(string:))
+        Task { try? await model.cache.download(id: video.id, from: url, preview: preview) }
     }
 
     private func errorBanner(_ text: String) -> some View {

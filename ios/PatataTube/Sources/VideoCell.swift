@@ -5,6 +5,8 @@ import PatataTubeKit
 struct VideoCell: View {
     let video: Video
     let cacheState: CacheState
+    /// Local file URL of the cached preview image, when the video is cached offline.
+    var cachedPreviewURL: URL? = nil
     let classifications: [String]
     let onPlay: () -> Void
     let onDownload: () -> Void
@@ -18,7 +20,7 @@ struct VideoCell: View {
                 ZStack {
                     Rectangle().fill(.secondary.opacity(0.2))
                         .aspectRatio(16.0/9.0, contentMode: .fit)
-                    if let preview = video.previewUrl, let url = URL(string: preview) {
+                    if let url = previewURL {
                         AsyncImage(url: url) { image in
                             image.resizable().scaledToFill()
                         } placeholder: { ProgressView() }
@@ -54,6 +56,11 @@ struct VideoCell: View {
         .padding(8)
         .background(.background.secondary)
         .cornerRadius(12)
+    }
+
+    /// Cached local preview wins so it renders while offline; fall back to remote.
+    private var previewURL: URL? {
+        cachedPreviewURL ?? video.previewUrl.flatMap(URL.init(string:))
     }
 
     @ViewBuilder private var downloadButton: some View {

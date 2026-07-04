@@ -25,6 +25,14 @@ public final class CacheManager: @unchecked Sendable {
         root.appendingPathComponent("\(id).mp4")
     }
 
+    /// Local file URL of a cached preview image, or nil if none is cached.
+    public func cachedPreviewURL(for id: Int) -> URL? {
+        let prefix = "\(id).preview."
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        guard let name = contents.first(where: { $0.hasPrefix(prefix) }) else { return nil }
+        return root.appendingPathComponent(name)
+    }
+
     public func state(for id: Int) -> CacheState {
         if fileManager.fileExists(atPath: localURL(for: id).path) { return .cached }
         return lock.withLock {
@@ -32,7 +40,7 @@ public final class CacheManager: @unchecked Sendable {
         }
     }
 
-    public func download(id: Int, from remote: URL) async throws {
+    public func download(id: Int, from remote: URL, preview: URL? = nil) async throws {
         lock.withLock { inFlight[id] = 0 }
         do {
             let (tempURL, response) = try await session.download(from: remote)
@@ -48,5 +56,20 @@ public final class CacheManager: @unchecked Sendable {
             lock.withLock { inFlight[id] = nil }
             throw error
         }
+        // Best-effort: a missing preview must not fail the cached video.
+        if let preview { try? await cachePreview(id: id, from: preview) }
+    }
+
+    private func cachePreview(id: Int, from remote: URL) async throws {
+        let (data, response) = try await session.data(from: remote)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw APIError.badStatus(http.statusCode)
+        }
+        let ext = remote.pathExtension.lowercased()
+        let safeExt = (1...4).contains(ext.count) && ext.allSatisfy(\.isLetter) ? ext : "jpg"
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let destination = root.appendingPathComponent("\(id).preview.\(safeExt)")
+        try? fileManager.removeItem(at: destination)
+        try data.write(to: destination)
     }
 }
