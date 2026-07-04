@@ -9,13 +9,17 @@ struct VideoCell: View {
     var cachedPreviewURL: URL? = nil
     let classifications: [String]
     let onPlay: () -> Void
-    let onDownload: () -> Void
+    let onDownload: () async -> Void
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onClassify: (String) -> Void
     let onDelete: () -> Void
 
     @State private var confirmingDelete = false
+    /// Tracks the button's live transition: idle → loading → done, layered over `cacheState`.
+    @State private var downloadPhase: DownloadPhase = .idle
+
+    private enum DownloadPhase { case idle, loading, done }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -72,14 +76,30 @@ struct VideoCell: View {
         cachedPreviewURL ?? video.previewUrl.flatMap(URL.init(string:))
     }
 
+    /// Local phase wins during the live tap→download→done transition; otherwise trust the parent.
+    private var effectiveState: CacheState {
+        switch downloadPhase {
+        case .loading: return .downloading(0)
+        case .done: return .cached
+        case .idle: return cacheState
+        }
+    }
+
     @ViewBuilder private var downloadButton: some View {
-        switch cacheState {
+        switch effectiveState {
         case .cached:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .downloading(let p):
-            ProgressView(value: p)
+                .transition(.scale.combined(with: .opacity))
+        case .downloading:
+            ProgressView().controlSize(.small)
         case .notCached:
-            Button(action: onDownload) { Image(systemName: "arrow.down.circle") }
+            Button {
+                Task {
+                    withAnimation { downloadPhase = .loading }
+                    await onDownload()
+                    withAnimation { downloadPhase = .done }
+                }
+            } label: { Image(systemName: "arrow.down.circle") }
         }
     }
 }

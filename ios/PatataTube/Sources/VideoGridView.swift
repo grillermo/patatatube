@@ -25,7 +25,7 @@ struct VideoGridView: View {
                             cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
                             classifications: classifications,
                             onPlay: { playing = video },
-                            onDownload: { download(video) },
+                            onDownload: { await download(video) },
                             onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
                             onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
                             onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
@@ -80,10 +80,10 @@ struct VideoGridView: View {
         await store.bootLoad()
     }
 
-    private func download(_ video: Video) {
+    private func download(_ video: Video) async {
         guard let url = model.streamURL(for: video) else { return }
         let preview = video.previewUrl.flatMap(URL.init(string:))
-        Task { try? await model.cache.download(id: video.id, from: url, preview: preview) }
+        try? await model.cache.download(id: video.id, from: url, preview: preview)
     }
 
     private func errorBanner(_ text: String) -> some View {
