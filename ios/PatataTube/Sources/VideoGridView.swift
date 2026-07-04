@@ -75,7 +75,7 @@ struct VideoGridView: View {
     private func initialLoad() async {
         let api = APIClient(store: model.credentials)
         if let list = try? await api.classifications() { classifications = list }
-        await store.load()
+        await store.bootLoad()
     }
 
     private func download(_ video: Video) {

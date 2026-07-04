@@ -9,17 +9,36 @@ public final class VideoStore: ObservableObject {
     @Published public var errorText: String?
 
     private let api: VideoAPI
+    private let cache: VideoListCaching?
 
-    public init(api: VideoAPI) { self.api = api }
+    public init(api: VideoAPI, cache: VideoListCaching? = nil) {
+        self.api = api
+        self.cache = cache
+    }
+
+    /// Boot path: show cached videos instantly if present, then refresh from network.
+    /// With no cache, falls back to a plain network load.
+    public func bootLoad() async {
+        if let cached = cache?.load(classification: filter), !cached.isEmpty {
+            videos = cached
+        }
+        await load()
+    }
 
     public func load() async {
         isLoading = true
         errorText = nil
         defer { isLoading = false }
         do {
-            videos = try await api.videos(classification: filter)
+            let fetched = try await api.videos(classification: filter)
+            videos = fetched
+            cache?.save(fetched, classification: filter)
         } catch {
-            errorText = String(describing: error)
+            if let cached = cache?.load(classification: filter) {
+                videos = cached
+            } else {
+                errorText = String(describing: error)
+            }
         }
     }
 

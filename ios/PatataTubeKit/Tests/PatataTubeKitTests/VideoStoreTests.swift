@@ -14,10 +14,12 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     var moveResult = true
     var uploadId = 100
     var throwOnClassify = false
+    var throwOnVideos = false
     private(set) var loadCount = 0
 
     func videos(classification: String?) async throws -> [Video] {
         loadCount += 1
+        if throwOnVideos { throw APIError.badStatus(503) }
         if let c = classification { return videosToReturn.filter { $0.classification == c } }
         return videosToReturn
     }
@@ -65,6 +67,58 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     await store.classify(id: 1, to: "adults")
     #expect(store.videos[0].classification == "children")
     #expect(store.errorText != nil)
+}
+
+private func tempCache() -> VideoListCache {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("vlc-\(UUID().uuidString)")
+    return VideoListCache(root: dir)
+}
+
+@MainActor @Test func loadSavesResponseToCache() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache)
+    await store.load()
+    #expect(cache.load(classification: nil)?.count == 2)
+}
+
+@MainActor @Test func loadFallsBackToCacheWhenNetworkFails() async {
+    let cache = tempCache()
+    cache.save([makeVideo(id: 9)], classification: nil)
+    let api = FakeAPI(); api.throwOnVideos = true
+    let store = VideoStore(api: api, cache: cache)
+    await store.load()
+    #expect(store.videos.map(\.id) == [9])
+    #expect(store.errorText == nil)
+}
+
+@MainActor @Test func loadSetsErrorWhenNetworkFailsAndNoCache() async {
+    let api = FakeAPI(); api.throwOnVideos = true
+    let store = VideoStore(api: api, cache: tempCache())
+    await store.load()
+    #expect(store.videos.isEmpty)
+    #expect(store.errorText != nil)
+}
+
+@MainActor @Test func bootLoadShowsCacheThenRefreshes() async {
+    let cache = tempCache()
+    cache.save([makeVideo(id: 9)], classification: nil)
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
+    let store = VideoStore(api: api, cache: cache)
+    await store.bootLoad()
+    #expect(api.loadCount == 1)               // did hit network to refresh
+    #expect(store.videos.map(\.id) == [1, 2]) // ended on fresh data
+}
+
+@MainActor @Test func bootLoadServesCacheOffline() async {
+    let cache = tempCache()
+    cache.save([makeVideo(id: 9)], classification: nil)
+    let api = FakeAPI(); api.throwOnVideos = true
+    let store = VideoStore(api: api, cache: cache)
+    await store.bootLoad()
+    #expect(store.videos.map(\.id) == [9])
+    #expect(store.errorText == nil)
 }
 
 @MainActor @Test func moveRefetchesOnSuccess() async {

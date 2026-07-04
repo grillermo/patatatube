@@ -19,7 +19,7 @@ final class AppModel: ObservableObject {
         self.credentials = credentials
         self.cache = CacheManager()
         self.api = api
-        self.store = VideoStore(api: api)
+        self.store = VideoStore(api: api, cache: VideoListCache())
         self.baseURLText = credentials.baseURL?.absoluteString ?? ""
         self.tokenText = credentials.token ?? ""
     }
