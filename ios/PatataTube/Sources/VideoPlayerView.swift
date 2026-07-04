@@ -19,7 +19,12 @@ struct VideoPlayerView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .ignoresSafeArea()
-                    .onTapGesture { dismiss() }
+                    .gesture(
+                        DragGesture(minimumDistance: 30)
+                            .onEnded { value in
+                                if value.translation.height > 80 { dismiss() }
+                            }
+                    )
             } else {
                 ProgressView().tint(.white)
             }
