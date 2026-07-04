@@ -3,15 +3,16 @@
 
 # refresh-ipa.rb
 #
-# Automates the boring parts of producing a fresh PatataTube .ipa for AltStore
-# and drops it in iCloud Downloads. Delegates the one step that needs a human in
-# Xcode (Product -> Archive, which needs interactive free-Apple-ID signing).
+# Produces a fresh PatataTube .ipa for AltStore and drops it in iCloud
+# Downloads — fully unattended. AltStore re-signs the .ipa on-device, so the
+# archive is built with automatic (free Apple ID) signing baked into project.yml
+# (DEVELOPMENT_TEAM / CODE_SIGN_STYLE); no Distribute step is needed.
 #
-# Flow:
-#   1. xcodegen generate            (auto)
-#   2. YOU: Product -> Archive       (manual, in Xcode)
-#   3. extract .app from newest .xcarchive, package into .ipa  (auto)
-#   4. copy .ipa to iCloud Downloads (auto)
+# Flow (all automatic):
+#   1. xcodegen generate
+#   2. xcodebuild ... archive   (headless, generic/platform=iOS)
+#   3. extract .app from the archive, package into .ipa
+#   4. copy .ipa to iCloud Downloads
 #
 # Usage: ruby ios/refresh-ipa.rb
 
@@ -20,10 +21,11 @@ require "shellwords"
 require "tmpdir"
 require "time"
 
-APP_NAME     = "PatataTube"
-PROJECT_DIR  = File.join(__dir__, APP_NAME)                     # ios/PatataTube
-ARCHIVES_DIR = File.expand_path("~/Library/Developer/Xcode/Archives")
-DEST_DIR     = File.expand_path(
+APP_NAME    = "PatataTube"
+SCHEME      = "PatataTube"
+PROJECT_DIR = File.join(__dir__, APP_NAME)                     # ios/PatataTube
+PROJECT     = "#{APP_NAME}.xcodeproj"
+DEST_DIR    = File.expand_path(
   "~/Library/Mobile Documents/com~apple~CloudDocs/Downloads"
 )
 
@@ -44,10 +46,15 @@ def run(cmd, chdir:)
   system(cmd, chdir: chdir) or die("command failed: #{cmd}")
 end
 
-# Newest *.xcarchive for this app, or nil.
-def latest_archive
-  Dir.glob(File.join(ARCHIVES_DIR, "*", "#{APP_NAME}*.xcarchive"))
-     .max_by { |p| File.mtime(p) }
+# xcodebuild needs a full Xcode, not the Command Line Tools. Honour an existing
+# DEVELOPER_DIR, otherwise point at the newest /Applications/Xcode*.app.
+def resolve_developer_dir
+  env = ENV["DEVELOPER_DIR"]
+  return env if env && Dir.exist?(env)
+
+  xcode = Dir.glob("/Applications/Xcode*.app").max
+  die("no Xcode.app found; install Xcode or set DEVELOPER_DIR") unless xcode
+  File.join(xcode, "Contents", "Developer")
 end
 
 # --- preflight -------------------------------------------------------------
@@ -56,56 +63,40 @@ die("no xcodegen on PATH (brew install xcodegen)") if `which xcodegen`.empty?
 die("project dir not found: #{PROJECT_DIR}") unless Dir.exist?(PROJECT_DIR)
 FileUtils.mkdir_p(DEST_DIR)
 
+ENV["DEVELOPER_DIR"] = resolve_developer_dir
+puts "    DEVELOPER_DIR=#{ENV['DEVELOPER_DIR']}"
+
 # --- 1. regenerate the Xcode project --------------------------------------
 
 step "Regenerating Xcode project (xcodegen)"
 run("xcodegen generate", chdir: PROJECT_DIR)
 
-# Remember the newest archive *before* you touch Xcode, so we can detect the
-# new one you're about to create.
-archive_before = latest_archive
-before_mtime   = archive_before ? File.mtime(archive_before) : Time.at(0)
+# --- 2. archive (headless) ------------------------------------------------
 
-# --- 2. delegate the archive step -----------------------------------------
+work    = Dir.mktmpdir("#{APP_NAME}-ipa-")
+archive = File.join(work, "#{APP_NAME}.xcarchive")
 
-step "Manual step: create the archive in Xcode"
-puts <<~INSTRUCTIONS
-    Xcode is about to open. Then:
-      1. Scheme #{bold(APP_NAME)} -> destination: #{bold("Any iOS Device (arm64)")}.
-      2. #{bold("Product -> Archive")}.
-      3. Wait for the Organizer window to appear (archive done).
-
-    Do #{bold("NOT")} click "Distribute App" — free Apple ID can't. This script
-    packages the .ipa for you once the archive exists.
-INSTRUCTIONS
-
-run("open #{APP_NAME}.xcodeproj", chdir: PROJECT_DIR)
-
-print yellow("\nPress ENTER once the archive has finished building... ")
-$stdin.gets
-
-# --- 3. locate the fresh archive ------------------------------------------
-
-step "Locating the new archive"
-archive = latest_archive
-die("no #{APP_NAME} archive found under #{ARCHIVES_DIR}") unless archive
-
-if File.mtime(archive) <= before_mtime
-  puts yellow("    Warning: newest archive isn't newer than before you started:")
-  puts yellow("      #{archive}")
-  puts yellow("    (Archive may have failed, or you didn't archive.)")
-  print yellow("    Use it anyway? [y/N] ")
-  die("aborted — no fresh archive") unless $stdin.gets.strip.casecmp?("y")
-end
-puts green("    Using: #{archive}")
+step "Archiving (xcodebuild)"
+run(
+  "xcodebuild " \
+  "-project #{Shellwords.escape(PROJECT)} " \
+  "-scheme #{Shellwords.escape(SCHEME)} " \
+  "-configuration Release " \
+  "-destination 'generic/platform=iOS' " \
+  "-archivePath #{Shellwords.escape(archive)} " \
+  "-allowProvisioningUpdates " \
+  "archive",
+  chdir: PROJECT_DIR
+)
+die("archive not produced: #{archive}") unless Dir.exist?(archive)
+puts green("    Built: #{archive}")
 
 app_path = File.join(archive, "Products", "Applications", "#{APP_NAME}.app")
 die("no #{APP_NAME}.app inside archive: #{app_path}") unless Dir.exist?(app_path)
 
-# --- 4. package into an .ipa ----------------------------------------------
+# --- 3. package into an .ipa ----------------------------------------------
 
 step "Packaging .ipa"
-work    = Dir.mktmpdir("#{APP_NAME}-ipa-")
 payload = File.join(work, "Payload")
 FileUtils.mkdir_p(payload)
 FileUtils.cp_r(app_path, payload)   # Payload/PatataTube.app
@@ -119,7 +110,7 @@ run(
   chdir: work
 )
 
-# --- 5. copy to iCloud Downloads ------------------------------------------
+# --- 4. copy to iCloud Downloads ------------------------------------------
 
 step "Copying to iCloud Downloads"
 stamp     = Time.now.strftime("%Y%m%d-%H%M%S")

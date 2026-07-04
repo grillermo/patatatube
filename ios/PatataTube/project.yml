@@ -26,3 +26,10 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         SWIFT_VERSION: "6.0"
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
+schemes:
+  PatataTube:
+    build:
+      targets:
+        PatataTube: all
+    archive:
+      config: Release
