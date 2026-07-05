@@ -4,16 +4,22 @@ import Combine
 @MainActor
 public final class VideoStore: ObservableObject {
     @Published public private(set) var videos: [Video] = []
-    @Published public var filter: String?
+    @Published public var filter: String? {
+        didSet { defaults.set(filter, forKey: Self.filterKey) }
+    }
     @Published public private(set) var isLoading = false
     @Published public var errorText: String?
 
     private let api: VideoAPI
     private let cache: VideoListCaching?
+    private let defaults: UserDefaults
+    private static let filterKey = "selectedClassification"
 
-    public init(api: VideoAPI, cache: VideoListCaching? = nil) {
+    public init(api: VideoAPI, cache: VideoListCaching? = nil, defaults: UserDefaults = .standard) {
         self.api = api
         self.cache = cache
+        self.defaults = defaults
+        self.filter = defaults.string(forKey: Self.filterKey)
     }
 
     /// Boot path: show cached videos instantly if present, then refresh from network.
