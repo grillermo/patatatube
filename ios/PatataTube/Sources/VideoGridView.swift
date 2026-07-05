@@ -11,11 +11,11 @@ struct VideoGridView: View {
     @State private var showUpload = false
     @State private var playing: Video?
 
-    // Grid cell size, adjustable via pinch/spread. Persisted across launches.
+    // Grid cell size, adjustable via +/- buttons. Persisted across launches.
     @AppStorage("gridCellSize") private var cellSize: Double = 220
-    @State private var gestureBaseSize: Double = 220
     private let minCellSize: Double = 120
     private let maxCellSize: Double = 420
+    private let cellSizeStep: Double = 50
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: cellSize), spacing: 16)]
@@ -43,21 +43,20 @@ struct VideoGridView: View {
                 }
                 .padding()
             }
-            .gesture(
-                MagnifyGesture()
-                    .onChanged { value in
-                        let proposed = gestureBaseSize * value.magnification
-                        cellSize = min(max(proposed, minCellSize), maxCellSize)
-                    }
-                    .onEnded { _ in gestureBaseSize = cellSize }
-            )
-            .onAppear { gestureBaseSize = cellSize }
             .navigationTitle("PatataTube")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showSettings = true } label: { Image(systemName: "gear") }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        cellSize = max(cellSize - cellSizeStep, minCellSize)
+                    } label: { Image(systemName: "minus.magnifyingglass") }
+                    .disabled(cellSize <= minCellSize)
+                    Button {
+                        cellSize = min(cellSize + cellSizeStep, maxCellSize)
+                    } label: { Image(systemName: "plus.magnifyingglass") }
+                    .disabled(cellSize >= maxCellSize)
                     Button { showUpload = true } label: { Image(systemName: "plus") }
                 }
             }
