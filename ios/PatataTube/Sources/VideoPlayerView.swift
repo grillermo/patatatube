@@ -28,16 +28,6 @@ struct VideoPlayerView: View {
             } else {
                 ProgressView().tint(.white)
             }
-            VStack {
-                HStack {
-                    Spacer()
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 32)).foregroundStyle(.white.opacity(0.8))
-                    }.padding()
-                }
-                Spacer()
-            }
         }
         .task { setup() }
         .onDisappear { player?.pause() }
