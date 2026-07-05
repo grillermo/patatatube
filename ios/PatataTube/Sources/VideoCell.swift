@@ -39,11 +39,18 @@ struct VideoCell: View {
                     }
                     Image(systemName: "play.circle.fill")
                         .font(.system(size: 40)).foregroundStyle(.white.opacity(0.9))
+                    VStack {
+                        Text(video.title ?? video.url)
+                            .font(.subheadline).lineLimit(1)
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(.black)
+                        Spacer()
+                    }
                 }
             }
             .buttonStyle(.plain)
-
-            Text(video.title ?? video.url).font(.subheadline).lineLimit(1)
 
             HStack {
                 downloadButton
