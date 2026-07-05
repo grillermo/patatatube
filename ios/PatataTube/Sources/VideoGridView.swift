@@ -11,7 +11,15 @@ struct VideoGridView: View {
     @State private var showUpload = false
     @State private var playing: Video?
 
-    private let columns = [GridItem(.adaptive(minimum: 220), spacing: 16)]
+    // Grid cell size, adjustable via pinch/spread. Persisted across launches.
+    @AppStorage("gridCellSize") private var cellSize: Double = 220
+    @State private var gestureBaseSize: Double = 220
+    private let minCellSize: Double = 120
+    private let maxCellSize: Double = 420
+
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: cellSize), spacing: 16)]
+    }
 
     var body: some View {
         NavigationStack {
@@ -35,6 +43,15 @@ struct VideoGridView: View {
                 }
                 .padding()
             }
+            .gesture(
+                MagnifyGesture()
+                    .onChanged { value in
+                        let proposed = gestureBaseSize * value.magnification
+                        cellSize = min(max(proposed, minCellSize), maxCellSize)
+                    }
+                    .onEnded { _ in gestureBaseSize = cellSize }
+            )
+            .onAppear { gestureBaseSize = cellSize }
             .navigationTitle("PatataTube")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
