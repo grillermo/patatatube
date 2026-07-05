@@ -1,6 +1,7 @@
 ---
 name: deploy-ios
 description: Deploy, ship, or release the PatataTube iOS app. Commits all pending git changes, pushes to the remote, then runs ./deploy to bump the version, build the .ipa, cut a GitHub Release and update the AltStore source. Use when asked to deploy iOS, ship the app, release a new version, or publish to AltStore.
+model: haiku
 ---
 
 # deploy-ios
