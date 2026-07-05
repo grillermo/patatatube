@@ -25,28 +25,16 @@ struct VideoCell: View {
         VStack(alignment: .leading, spacing: 6) {
             Button(action: onPlay) {
                 ZStack {
-                    Rectangle().fill(.secondary.opacity(0.2))
+                    Rectangle().fill(.black)
                         .aspectRatio(16.0/9.0, contentMode: .fit)
-                    if let url = previewURL {
-                        AsyncImage(url: url) { image in
-                            image.resizable().scaledToFill()
-                        } placeholder: { ProgressView() }
-                        .clipped()
-                    }
+                    Text(video.title ?? video.url)
+                        .font(.subheadline)
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12)
                     if video.status != "completed" {
                         Text(video.status).font(.caption).padding(4)
                             .background(.thinMaterial).cornerRadius(4)
-                    }
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 40)).foregroundStyle(.white.opacity(0.9))
-                    VStack {
-                        Text(video.title ?? video.url)
-                            .font(.subheadline).lineLimit(1)
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(.black)
-                        Spacer()
                     }
                 }
             }
@@ -76,11 +64,6 @@ struct VideoCell: View {
             Button("Delete", role: .destructive) { onDelete() }
             Button("Cancel", role: .cancel) {}
         }
-    }
-
-    /// Cached local preview wins so it renders while offline; fall back to remote.
-    private var previewURL: URL? {
-        cachedPreviewURL ?? video.previewUrl.flatMap(URL.init(string:))
     }
 
     /// Local phase wins during the live tap→download→done transition; otherwise trust the parent.
