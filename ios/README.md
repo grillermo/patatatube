@@ -2,6 +2,47 @@
 
 SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo root `main.py`).
 
+## Features
+
+### Video grid
+- Backend-driven grid of video previews, populated from the JSON API
+- Video title shown as an overlay on the preview (on a black background in each cell)
+- Filter tabs — all / children / adults / education / entertainment; tapping one reloads the grid filtered to that category
+- Selected category persists across app launches
+- Adjustable grid cell size via +/- zoom buttons (originally a pinch/spread gesture, since replaced)
+- Pull-to-refresh
+- Red error banner at the bottom when the server is unreachable
+
+### Playback
+- Tap a cell to open a fullscreen player that autoplays
+- Auto-dismisses on end of video
+- Tap to dismiss
+- Pull-down-to-dismiss gesture (the close "X" was removed in favor of gestures)
+
+### Per-video actions
+- Reorder with up/down controls
+- Classify — move a video to a different category
+- Delete videos
+- Download a single video for offline playback, with visual feedback on the download button
+
+### Offline / caching
+- Downloaded MP4s stream from a local cache (works with no network to the server)
+- The videos JSON API response is cached so the grid loads offline
+- Video previews are cached too
+- "Cache all videos" action in Settings downloads every visible video
+
+### Upload
+- Add a video by pasting a Twitter/X or YouTube URL; it appears in the grid once the backend finishes processing
+- Requires a valid upload token (backend returns 401 otherwise)
+
+### Settings & connection
+- Configurable base URL and upload token
+- "Test connection" to verify server reachability
+- Optimistic UI: classify/move/upload reflect immediately, then reconcile with the server
+
+### App shell
+- App icon and launch splash generated from SVG
+
 ## Prereqs
 
 - Xcode 26+ (tested w/ Xcode 26.3)
