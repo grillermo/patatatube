@@ -32,10 +32,6 @@ struct VideoCell: View {
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 12)
-                    if video.status != "completed" {
-                        Text(video.status).font(.caption).padding(4)
-                            .background(.thinMaterial).cornerRadius(4)
-                    }
                 }
             }
             .buttonStyle(.plain)
