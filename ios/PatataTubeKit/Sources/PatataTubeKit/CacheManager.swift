@@ -15,10 +15,16 @@ public final class CacheManager: @unchecked Sendable {
 
     public init(root: URL? = nil, session: URLSession = .shared) {
         self.root = root ?? FileManager.default
-            .urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("videos")
         self.session = session
         try? fileManager.createDirectory(at: self.root, withIntermediateDirectories: true)
+        // Visible in the Files app (Documents), but keep it out of iCloud/device
+        // backups — these MP4s are re-downloadable, not user data.
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var dir = self.root
+        try? dir.setResourceValues(values)
     }
 
     public func localURL(for id: Int) -> URL {
