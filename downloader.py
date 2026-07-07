@@ -129,6 +129,7 @@ def _probe_media(input_path: Path) -> dict:
         "-v",
         "error",
         "-show_streams",
+        "-show_format",
         "-print_format",
         "json",
         str(input_path),
