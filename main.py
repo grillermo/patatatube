@@ -98,6 +98,20 @@ def _check_token(request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _check_token_or_query(request: Request):
+    """Bearer auth with a ?token= fallback for HTML <video> tags, which can't send headers."""
+    token = os.getenv("UPLOAD_TOKEN", "")
+    if not token:
+        raise HTTPException(status_code=503, detail="Upload not configured")
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer ") and secrets.compare_digest(auth[7:], token):
+        return
+    query_token = request.query_params.get("token", "")
+    if query_token and secrets.compare_digest(query_token, token):
+        return
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 class UploadRequest(BaseModel):
     url: str
 
@@ -308,16 +322,26 @@ async def _iter_file_range(file_path: Path, start: int = 0, byte_count: int | No
 
 @app.get("/videos/{video_id}/stream")
 async def stream_video(video_id: int, request: Request):
+    _check_token_or_query(request)
     video = db.get_video(video_id)
-    if not video or video["status"] != "done" or not video["filename"]:
+    if not video or video.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Video not found or not ready")
 
-    file_path = VIDEOS_DIR / video["filename"]
+    if video.get("source") == "library":
+        if video["status"] != "done":
+            raise HTTPException(status_code=409, detail="Video not prepared yet")
+        file_path = Path(video["converted_path"] or video["source_path"])
+        mime = "video/mp4"
+    else:
+        if video["status"] != "done" or not video["filename"]:
+            raise HTTPException(status_code=404, detail="Video not found or not ready")
+        file_path = VIDEOS_DIR / video["filename"]
+        mime = _guess_mime(video["filename"])
+
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Video file missing")
 
     file_size = file_path.stat().st_size
-    mime = _guess_mime(video["filename"])
     range_header = request.headers.get("Range")
 
     if range_header:

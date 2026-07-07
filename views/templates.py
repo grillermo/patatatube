@@ -1,3 +1,4 @@
+import os
 from html import escape
 
 # filename, CSS device width, CSS device height, pixel ratio, orientation
@@ -111,7 +112,7 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
               <div class="name-overlay">{name_text}</div>
               <video id="v{v['id']}" controls playsinline webkit-playsinline preload="none"
                      onloadedmetadata="this.currentTime=0">
-                <source src="/videos/{v['id']}/stream" type="video/mp4">
+                <source src="/videos/{v['id']}/stream?token={escape(os.getenv('UPLOAD_TOKEN', ''))}" type="video/mp4">
               </video>
             </div>"""
         elif v["status"] == "error":

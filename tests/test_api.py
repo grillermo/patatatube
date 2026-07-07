@@ -136,13 +136,13 @@ def test_upload_reuses_completed_youtube_video(client, monkeypatch):
     assert queued == []
 
 def test_stream_not_found(client):
-    resp = client.get("/videos/999/stream")
+    resp = client.get("/videos/999/stream", headers=AUTH)
     assert resp.status_code == 404
 
 def test_stream_not_done(client):
     import db
     vid_id = db.add_video("https://twitter.com/x/status/1")
-    resp = client.get(f"/videos/{vid_id}/stream")
+    resp = client.get(f"/videos/{vid_id}/stream", headers=AUTH)
     assert resp.status_code == 404
 
 def test_stream_returns_video(client):
@@ -155,7 +155,7 @@ def test_stream_returns_video(client):
     try:
         vid_id = db.add_video("https://twitter.com/x/status/1")
         db.update_video(vid_id, status="done", filename="1.mp4")
-        resp = client.get(f"/videos/{vid_id}/stream")
+        resp = client.get(f"/videos/{vid_id}/stream", headers=AUTH)
         assert resp.status_code in (200, 206)
         assert b"FAKEVIDEOCONTENT" in resp.content
         assert resp.headers["cache-control"] == "public, max-age=31536000, immutable"
@@ -173,7 +173,7 @@ def test_stream_returns_requested_byte_range(client):
     try:
         vid_id = db.add_video("https://twitter.com/x/status/1")
         db.update_video(vid_id, status="done", filename="1.mp4")
-        resp = client.get(f"/videos/{vid_id}/stream", headers={"Range": "bytes=4-7"})
+        resp = client.get(f"/videos/{vid_id}/stream", headers={**AUTH, "Range": "bytes=4-7"})
         assert resp.status_code == 206
         assert resp.content == b"4567"
         assert resp.headers["content-range"] == "bytes 4-7/10"
@@ -194,7 +194,7 @@ def test_stream_supports_suffix_byte_range(client):
     try:
         vid_id = db.add_video("https://twitter.com/x/status/1")
         db.update_video(vid_id, status="done", filename="1.mp4")
-        resp = client.get(f"/videos/{vid_id}/stream", headers={"Range": "bytes=-4"})
+        resp = client.get(f"/videos/{vid_id}/stream", headers={**AUTH, "Range": "bytes=-4"})
         assert resp.status_code == 206
         assert resp.content == b"6789"
         assert resp.headers["content-range"] == "bytes 6-9/10"
@@ -212,7 +212,7 @@ def test_stream_clamps_range_end(client):
     try:
         vid_id = db.add_video("https://twitter.com/x/status/1")
         db.update_video(vid_id, status="done", filename="1.mp4")
-        resp = client.get(f"/videos/{vid_id}/stream", headers={"Range": "bytes=4-99"})
+        resp = client.get(f"/videos/{vid_id}/stream", headers={**AUTH, "Range": "bytes=4-99"})
         assert resp.status_code == 206
         assert resp.content == b"456789"
         assert resp.headers["content-range"] == "bytes 4-9/10"
@@ -230,7 +230,7 @@ def test_stream_rejects_unsatisfiable_range(client):
     try:
         vid_id = db.add_video("https://twitter.com/x/status/1")
         db.update_video(vid_id, status="done", filename="1.mp4")
-        resp = client.get(f"/videos/{vid_id}/stream", headers={"Range": "bytes=20-30"})
+        resp = client.get(f"/videos/{vid_id}/stream", headers={**AUTH, "Range": "bytes=20-30"})
         assert resp.status_code == 416
         assert resp.headers["content-range"] == "bytes */10"
     finally:
@@ -379,7 +379,7 @@ def test_videos_page_shows_youtube_video_directly(client):
     resp = client.get("/videos")
     assert resp.status_code == 200
     assert f'<video id="v{vid_id}" controls playsinline webkit-playsinline preload="none"' in resp.text
-    assert f'<source src="/videos/{vid_id}/stream" type="video/mp4">' in resp.text
+    assert f'<source src="/videos/{vid_id}/stream?token=test-secret" type="video/mp4">' in resp.text
     assert 'class="preview-button"' not in resp.text
 
 
@@ -760,3 +760,60 @@ def test_get_single_video_tombstoned_is_404(client, tmp_path):
     db.tombstone_video(vid)
     resp = client.get(f"/api/videos/{vid}", headers=AUTH)
     assert resp.status_code == 404
+
+
+def make_done_download_video(tmp_path):
+    """A completed download row whose mp4 exists under videos/."""
+    import db
+    from pathlib import Path
+    vid = db.add_video("https://twitter.com/x/status/55", platform="twitter")
+    Path("videos").mkdir(exist_ok=True)
+    f = Path("videos") / f"{vid}.mp4"
+    f.write_bytes(b"\x00" * 100)
+    db.update_video(vid, "done", filename=f"{vid}.mp4")
+    return vid, f
+
+
+def test_stream_requires_token(client, tmp_path):
+    vid, f = make_done_download_video(tmp_path)
+    try:
+        assert client.get(f"/videos/{vid}/stream").status_code == 401
+        assert client.get(f"/videos/{vid}/stream", headers=AUTH).status_code == 200
+        assert client.get(f"/videos/{vid}/stream?token=test-secret").status_code == 200
+        assert client.get(f"/videos/{vid}/stream?token=wrong").status_code == 401
+    finally:
+        f.unlink(missing_ok=True)
+
+
+def test_stream_library_serves_converted_copy(client, tmp_path):
+    import db
+    vid, src = make_library_row(tmp_path)
+    converted = tmp_path / "ep.mp4"
+    converted.write_bytes(b"converted-bytes")
+    db.set_library_state(vid, "done", converted_path=str(converted))
+    resp = client.get(f"/videos/{vid}/stream", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.content == b"converted-bytes"
+
+
+def test_stream_library_passthrough_serves_original(client, tmp_path):
+    import db
+    vid, src = make_library_row(tmp_path, name="ep.mp4")
+    db.set_library_state(vid, "done")  # passthrough: no converted_path
+    resp = client.get(f"/videos/{vid}/stream", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.content == b"fake"
+
+
+def test_stream_unprepared_library_is_409(client, tmp_path):
+    vid, _ = make_library_row(tmp_path)
+    assert client.get(f"/videos/{vid}/stream", headers=AUTH).status_code == 409
+
+
+def test_ssr_page_appends_stream_token(client, tmp_path):
+    vid, f = make_done_download_video(tmp_path)
+    try:
+        html = client.get("/videos").text
+        assert f"/videos/{vid}/stream?token=test-secret" in html
+    finally:
+        f.unlink(missing_ok=True)
