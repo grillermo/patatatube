@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-CLASSIFICATIONS = ["children", "adults", "education", "entertainment"]
+CLASSIFICATIONS = ["children", "adults", "education", "tv", "movies"]
 
 
 def _conn():
@@ -41,6 +41,29 @@ def init_db():
             conn.execute("ALTER TABLE videos ADD COLUMN position INTEGER")
         if "classification" not in columns:
             conn.execute("ALTER TABLE videos ADD COLUMN classification TEXT NOT NULL DEFAULT 'children'")
+        if "source" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN source TEXT NOT NULL DEFAULT 'download'")
+        if "source_path" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN source_path TEXT")
+        if "converted_path" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN converted_path TEXT")
+        if "show_title" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN show_title TEXT")
+        if "season" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN season INTEGER")
+        if "episode" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN episode INTEGER")
+        if "summary" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN summary TEXT")
+        if "plex_rating_key" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN plex_rating_key TEXT")
+        if "show_rating_key" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN show_rating_key TEXT")
+        if "deleted_at" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN deleted_at TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_source_path ON videos(source_path)"
+        )
         _backfill_youtube_preview_urls(conn)
         _backfill_positions(conn)
         _delete_error_videos(conn)
@@ -114,12 +137,13 @@ def get_all_videos(classification: str | None = None) -> list[dict]:
     with _conn() as conn:
         if classification:
             rows = conn.execute(
-                "SELECT * FROM videos WHERE classification = ? ORDER BY position DESC, created_at DESC",
+                "SELECT * FROM videos WHERE deleted_at IS NULL AND classification = ?"
+                " ORDER BY position DESC, created_at DESC",
                 (classification,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM videos ORDER BY position DESC, created_at DESC"
+                "SELECT * FROM videos WHERE deleted_at IS NULL ORDER BY position DESC, created_at DESC"
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -227,4 +251,101 @@ def _backfill_youtube_preview_urls(conn: sqlite3.Connection) -> int:
         conn.execute("UPDATE videos SET preview_url = ? WHERE id = ?", (preview_url, row["id"]))
         updated += 1
     return updated
+
+
+def upsert_library_video(item: dict) -> tuple[int, str]:
+    """Insert or update a library row keyed on source_path.
+
+    Returns (video_id, status) with status in {"created", "updated", "tombstoned"}.
+    Tombstoned rows are left untouched so a rescan never resurrects a delete.
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT id, deleted_at FROM videos WHERE source_path = ?",
+            (item["source_path"],),
+        ).fetchone()
+        if row:
+            if row["deleted_at"]:
+                return row["id"], "tombstoned"
+            conn.execute(
+                """
+                UPDATE videos
+                SET title = ?, classification = ?, show_title = ?, season = ?,
+                    episode = ?, summary = ?, plex_rating_key = ?, show_rating_key = ?
+                WHERE id = ?
+                """,
+                (
+                    item.get("title"),
+                    item["classification"],
+                    item.get("show_title"),
+                    item.get("season"),
+                    item.get("episode"),
+                    item.get("summary"),
+                    item.get("plex_rating_key"),
+                    item.get("show_rating_key"),
+                    row["id"],
+                ),
+            )
+            return row["id"], "updated"
+
+        next_position = (conn.execute("SELECT MAX(position) FROM videos").fetchone()[0] or 0) + 1
+        cur = conn.execute(
+            """
+            INSERT INTO videos (
+                url, title, status, classification, source, source_path,
+                show_title, season, episode, summary, plex_rating_key,
+                show_rating_key, created_at, position
+            )
+            VALUES (?, ?, 'unconverted', ?, 'library', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item["source_path"],
+                item.get("title"),
+                item["classification"],
+                item["source_path"],
+                item.get("show_title"),
+                item.get("season"),
+                item.get("episode"),
+                item.get("summary"),
+                item.get("plex_rating_key"),
+                item.get("show_rating_key"),
+                datetime.now(timezone.utc).isoformat(),
+                next_position,
+            ),
+        )
+        return cur.lastrowid, "created"
+
+
+def tombstone_video(video_id: int) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE videos SET deleted_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), video_id),
+        )
+
+
+def get_converted_paths() -> set[str]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT converted_path FROM videos WHERE converted_path IS NOT NULL"
+        ).fetchall()
+        return {r["converted_path"] for r in rows}
+
+
+def set_library_state(
+    video_id: int,
+    status: str,
+    converted_path: str | None = None,
+    error_msg: str | None = None,
+) -> None:
+    """Status updates for library rows. Unlike update_video, never deletes the row."""
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE videos
+            SET status = ?, converted_path = COALESCE(?, converted_path), error_msg = ?
+            WHERE id = ?
+            """,
+            (status, converted_path, error_msg, video_id),
+        )
 

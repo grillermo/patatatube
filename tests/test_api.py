@@ -489,7 +489,7 @@ def test_api_classifications_lists_all(client):
     resp = client.get("/api/classifications")
     assert resp.status_code == 200
     assert resp.json() == {
-        "classifications": ["children", "adults", "education", "entertainment"]
+        "classifications": ["children", "adults", "education", "tv", "movies"]
     }
 
 
