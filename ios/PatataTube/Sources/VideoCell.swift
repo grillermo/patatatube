@@ -61,6 +61,9 @@ struct VideoCell: View {
                     Button("Delete video", role: .destructive) { confirmingDelete = true }
                 } label: {
                     Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 30))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
             }
         }
@@ -86,9 +89,12 @@ struct VideoCell: View {
         switch effectiveState {
         case .cached:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                .font(.system(size: 30))
+                .frame(width: 44, height: 44)
                 .transition(.scale.combined(with: .opacity))
         case .downloading:
-            ProgressView().controlSize(.small)
+            ProgressView().controlSize(.regular)
+                .frame(width: 44, height: 44)
         case .notCached:
             Button {
                 Task {
@@ -96,7 +102,12 @@ struct VideoCell: View {
                     let ok = await onDownload()
                     withAnimation { downloadPhase = ok ? .done : .idle }
                 }
-            } label: { Image(systemName: "arrow.down.circle") }
+            } label: {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 30))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
         }
     }
 }
