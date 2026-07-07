@@ -62,6 +62,7 @@ def test_fetch_library_items(monkeypatch):
         "summary": "Neo-Tokyo.",
         "plex_rating_key": "42",
         "show_rating_key": None,
+        "added_at": None,
     }
 
     ep = next(i for i in items if i["classification"] == "tv")
@@ -75,6 +76,7 @@ def test_fetch_library_items(monkeypatch):
         "summary": "Carmy retrains the crew.",
         "plex_rating_key": "1264",
         "show_rating_key": "1262",
+        "added_at": None,
     }
 
 

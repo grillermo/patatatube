@@ -70,6 +70,7 @@ def init_db():
         )
         _backfill_youtube_preview_urls(conn)
         _backfill_positions(conn)
+        _backfill_library_added_at(conn)
         _delete_error_videos(conn)
 
 
@@ -84,6 +85,41 @@ def _backfill_positions(conn: sqlite3.Connection) -> int:
     for offset, row in enumerate(rows):
         conn.execute("UPDATE videos SET position = ? WHERE id = ?", (start + offset + 1, row["id"]))
     return len(rows)
+
+
+# Positions assigned by scan order are small sequential ints; positions derived
+# from an "added" timestamp are unix seconds (~1.7e9). This threshold tells the
+# two apart so the backfill only rewrites rows still on scan-order positions,
+# making it idempotent across restarts.
+_ADDED_AT_POSITION_FLOOR = 1_000_000_000
+
+
+def _backfill_library_added_at(conn: sqlite3.Connection) -> int:
+    """Reset legacy library rows to sort by real file 'added' time.
+
+    Old rows carry created_at = scan time and position = scan order, so they
+    surface in the wrong order. Rewrite both from the source file's mtime (the
+    best 'added' signal available without hitting Plex here). A later Plex
+    rescan refines these from addedAt. Idempotent via _ADDED_AT_POSITION_FLOOR.
+    """
+    rows = conn.execute(
+        "SELECT id, source_path FROM videos "
+        "WHERE source = 'library' AND source_path IS NOT NULL "
+        "AND (position IS NULL OR position < ?)",
+        (_ADDED_AT_POSITION_FLOOR,),
+    ).fetchall()
+    changed = 0
+    for row in rows:
+        try:
+            mtime = int(Path(row["source_path"]).stat().st_mtime)
+        except OSError:
+            continue
+        conn.execute(
+            "UPDATE videos SET position = ?, created_at = ? WHERE id = ?",
+            (mtime, datetime.fromtimestamp(mtime, timezone.utc).isoformat(), row["id"]),
+        )
+        changed += 1
+    return changed
 
 
 def _delete_error_videos(conn: sqlite3.Connection) -> int:
@@ -268,6 +304,18 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
             "SELECT id, deleted_at FROM videos WHERE source_path = ?",
             (item["source_path"],),
         ).fetchone()
+        # The real "added to library" instant: Plex addedAt (unix seconds), with a
+        # filesystem-mtime fallback supplied by the scanner. Both created_at and
+        # position are derived from it so the standard "position DESC, created_at DESC"
+        # ordering surfaces the newest-added library items first.
+        added_at = item.get("added_at")
+        if added_at:
+            created_at = datetime.fromtimestamp(int(added_at), timezone.utc).isoformat()
+            position = int(added_at)
+        else:
+            created_at = datetime.now(timezone.utc).isoformat()
+            position = None
+
         if row:
             if row["deleted_at"]:
                 return row["id"], "tombstoned"
@@ -275,7 +323,9 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
                 """
                 UPDATE videos
                 SET title = ?, classification = ?, show_title = ?, season = ?,
-                    episode = ?, summary = ?, plex_rating_key = ?, show_rating_key = ?
+                    episode = ?, summary = ?, plex_rating_key = ?, show_rating_key = ?,
+                    created_at = COALESCE(?, created_at),
+                    position = COALESCE(?, position)
                 WHERE id = ?
                 """,
                 (
@@ -287,12 +337,15 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
                     item.get("summary"),
                     item.get("plex_rating_key"),
                     item.get("show_rating_key"),
+                    created_at if added_at else None,
+                    position,
                     row["id"],
                 ),
             )
             return row["id"], "updated"
 
-        next_position = (conn.execute("SELECT MAX(position) FROM videos").fetchone()[0] or 0) + 1
+        if position is None:
+            position = (conn.execute("SELECT MAX(position) FROM videos").fetchone()[0] or 0) + 1
         cur = conn.execute(
             """
             INSERT INTO videos (
@@ -313,8 +366,8 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
                 item.get("summary"),
                 item.get("plex_rating_key"),
                 item.get("show_rating_key"),
-                datetime.now(timezone.utc).isoformat(),
-                next_position,
+                created_at,
+                position,
             ),
         )
         return cur.lastrowid, "created"

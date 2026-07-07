@@ -145,6 +145,11 @@ def scan_library() -> dict:
         if path in converted or not Path(path).exists():
             skipped += 1
             continue
+        if not item.get("added_at"):
+            try:
+                item["added_at"] = int(Path(path).stat().st_mtime)
+            except OSError:
+                item["added_at"] = None
         _, status = db.upsert_library_video(item)
         if status == "created":
             added += 1

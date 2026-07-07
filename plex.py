@@ -67,6 +67,7 @@ def _movie_item(meta: dict) -> dict | None:
         "summary": meta.get("summary"),
         "plex_rating_key": str(meta["ratingKey"]),
         "show_rating_key": None,
+        "added_at": meta.get("addedAt"),
     }
 
 
@@ -86,6 +87,7 @@ def _episode_item(meta: dict) -> dict | None:
         "show_rating_key": (
             str(meta["grandparentRatingKey"]) if meta.get("grandparentRatingKey") else None
         ),
+        "added_at": meta.get("addedAt"),
     }
 
 

@@ -171,3 +171,39 @@ def test_set_library_state_and_converted_paths(fresh_db):
     db.set_library_state(vid, "unconverted", error_msg="boom")
     row = db.get_video(vid)
     assert row["status"] == "unconverted" and row["error_msg"] == "boom"
+
+
+def test_upsert_library_video_uses_added_at_for_position(fresh_db):
+    import db
+    item = {**LIB_ITEM, "added_at": 1_700_000_000}
+    vid, _ = db.upsert_library_video(item)
+    row = db.get_video(vid)
+    assert row["position"] == 1_700_000_000
+    assert row["created_at"].startswith("2023-11-14")
+
+
+def test_library_videos_sorted_newest_added_first(fresh_db):
+    import db
+    older, _ = db.upsert_library_video(
+        {**LIB_ITEM, "source_path": "/m/old.mkv", "added_at": 1_600_000_000})
+    newer, _ = db.upsert_library_video(
+        {**LIB_ITEM, "source_path": "/m/new.mkv", "added_at": 1_700_000_000})
+    ordered = [v["id"] for v in db.get_all_videos()]
+    assert ordered.index(newer) < ordered.index(older)
+
+
+def test_backfill_library_added_at_rewrites_legacy_rows(fresh_db, tmp_path):
+    import db
+    f = tmp_path / "clip.mkv"
+    f.write_bytes(b"x")
+    import os
+    os.utime(f, (1_650_000_000, 1_650_000_000))
+    # Legacy row: created via scan order (no added_at) -> small position.
+    vid, _ = db.upsert_library_video({**LIB_ITEM, "source_path": str(f)})
+    assert db.get_video(vid)["position"] < db._ADDED_AT_POSITION_FLOOR
+    with db._conn() as conn:
+        assert db._backfill_library_added_at(conn) == 1
+    assert db.get_video(vid)["position"] == 1_650_000_000
+    # Idempotent: unix-scale positions are left untouched on a second pass.
+    with db._conn() as conn:
+        assert db._backfill_library_added_at(conn) == 0
