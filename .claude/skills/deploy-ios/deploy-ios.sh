@@ -42,6 +42,23 @@ default="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"
 fail() { printf '\033[31m✗ %s\033[0m\n' "$1" >&2; exit 1; }
 ok()   { printf '\033[32m✓ %s\033[0m\n' "$1"; }
 
+use_full_xcode() {
+  if xcodebuild -version >/dev/null 2>&1; then
+    ok "xcodebuild is available"
+    return
+  fi
+
+  local xcode_app="${XCODE_APP:-/Applications/Xcode.app}"
+  local developer_dir="$xcode_app/Contents/Developer"
+
+  [ -d "$developer_dir" ] || fail "xcodebuild requires full Xcode; install Xcode.app or set XCODE_APP"
+
+  export DEVELOPER_DIR="$developer_dir"
+  xcodebuild -version >/dev/null 2>&1 || fail "xcodebuild failed with DEVELOPER_DIR=$DEVELOPER_DIR"
+
+  ok "using full Xcode at $DEVELOPER_DIR"
+}
+
 command -v gh >/dev/null 2>&1 || fail "gh CLI not on PATH (brew install gh)"
 gh auth status >/dev/null 2>&1 || fail "gh not authenticated (gh auth login)"
 ok "gh authenticated"
@@ -54,6 +71,11 @@ ok "on default branch '$branch'"
 
 [ -x "$root/deploy" ] || fail "$root/deploy missing or not executable"
 ok "./deploy is executable"
+
+command -v xcodegen >/dev/null 2>&1 || fail "xcodegen missing; install with: brew install xcodegen"
+ok "xcodegen is available"
+
+use_full_xcode
 
 echo "--- pending changes ---"
 git status --short
