@@ -23,6 +23,13 @@ def serialize_video(video: dict) -> dict:
         "show_preview_url": None,
     }
     if source == "library":
+        # `url` holds the raw filesystem source_path for library rows (see
+        # db.upsert_library_video) — never expose that to API consumers.
+        # Redact to "" rather than None: the iOS client's Video.url is a
+        # non-optional String, and a null would break JSON decoding of the
+        # whole /api/videos response. Playback/display use stream_path and
+        # title instead, so an empty url is never read for library rows.
+        data["url"] = ""
         data["preview_url"] = f"/videos/{video['id']}/preview"
         if video.get("show_rating_key"):
             data["show_preview_url"] = f"/videos/{video['id']}/preview?kind=show"

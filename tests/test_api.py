@@ -366,6 +366,20 @@ def test_videos_page_shows_youtube_title(client):
     assert "Saved YouTube Title" in resp.text
 
 
+def test_videos_page_shows_library_title_not_filesystem_path(client, tmp_path):
+    import db
+
+    vid_id, src = make_library_row(tmp_path)
+    db.set_library_state(vid_id, "done", converted_path=str(tmp_path / "ep.mp4"))
+    resp = client.get("/videos")
+    assert resp.status_code == 200
+    # LIB_ITEM_API's title is "System" — must appear as the rendered card
+    # title, not merely as a substring of unrelated page chrome (e.g. the
+    # CSS "-apple-system" font stack, which also contains "System").
+    assert '<div class="name-overlay">System</div>' in resp.text
+    assert str(src) not in resp.text
+
+
 def test_videos_page_shows_youtube_video_directly(client):
     import db
 

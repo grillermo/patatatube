@@ -102,7 +102,8 @@ def _classification_menu(video_id: int, current_cls: str | None, classifications
 def build_videos_page(videos: list[dict], classifications: list[str], current_classification: str | None) -> str:
     cards = []
     for v in videos:
-        title = escape(v["title"]) if v.get("platform") == "youtube" and v.get("title") else None
+        has_named_title = v.get("platform") == "youtube" or v.get("source") == "library"
+        title = escape(v["title"]) if has_named_title and v.get("title") else None
         cls_menu = _classification_menu(v["id"], v.get("classification"), classifications, current_classification)
 
         if v["status"] == "done":

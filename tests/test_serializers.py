@@ -67,6 +67,7 @@ def test_serialize_library_episode():
     assert data["preview_url"] == "/videos/7/preview"
     assert data["show_preview_url"] == "/videos/7/preview?kind=show"
     assert data["stream_path"] == "/videos/7/stream"
+    assert data["url"] == ""
 
 
 def test_serialize_download_row_defaults():
@@ -74,3 +75,32 @@ def test_serialize_download_row_defaults():
     data = serialize_video(row)
     assert data["source"] == "download"
     assert data["show_title"] is None and data["show_preview_url"] is None
+
+
+def test_serialize_library_video_redacts_source_path_from_url():
+    """`url` holds the raw filesystem source_path for library rows (db.upsert_library_video).
+
+    It must never reach API consumers verbatim: redact it. We use "" rather
+    than None because the iOS client's Video.url is a non-optional String —
+    a null would break decoding of the whole /api/videos response.
+    """
+    row = {
+        "id": 9,
+        "url": "/Volumes/Media/media/tv/The.Bear.S01/The.Bear.S01E01.mkv",
+        "title": "System",
+        "status": "unconverted",
+        "source": "library",
+    }
+    data = serialize_video(row)
+    assert data["url"] == ""
+    assert data["url"] is not None
+
+
+def test_serialize_download_video_keeps_url_unchanged():
+    row = {
+        "id": 2,
+        "url": "https://twitter.com/x/status/123",
+        "status": "done",
+    }
+    data = serialize_video(row)
+    assert data["url"] == "https://twitter.com/x/status/123"
