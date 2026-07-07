@@ -1,6 +1,10 @@
 import Foundation
 import Combine
 
+public enum PrepareError: Error, Equatable {
+    case conversionFailed(String)
+}
+
 @MainActor
 public final class VideoStore: ObservableObject {
     @Published public private(set) var videos: [Video] = []
@@ -86,6 +90,34 @@ public final class VideoStore: ObservableObject {
             await load()
         } catch {
             errorText = String(describing: error)
+        }
+    }
+
+    /// Scan the server-side Plex library, then reload the list.
+    /// A failed scan surfaces in errorText but still refreshes the list.
+    public func refreshLibrary() async {
+        do {
+            _ = try await api.scanLibrary()
+        } catch {
+            errorText = String(describing: error)
+        }
+        await load()
+    }
+
+    /// Kicks off server-side conversion (if needed) and polls until the video
+    /// is streamable. Throws PrepareError when the server reports a failed conversion.
+    public func ensureReady(id: Int, pollIntervalSeconds: Double = 2.0) async throws -> Video {
+        let status = try await api.prepare(id: id)
+        if status == "done" {
+            return try await api.video(id: id)
+        }
+        while true {
+            let video = try await api.video(id: id)
+            if video.status == "done" { return video }
+            if let message = video.errorMsg, !message.isEmpty {
+                throw PrepareError.conversionFailed(message)
+            }
+            try await Task.sleep(nanoseconds: UInt64(pollIntervalSeconds * 1_000_000_000))
         }
     }
 }

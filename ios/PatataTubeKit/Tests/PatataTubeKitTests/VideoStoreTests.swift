@@ -2,10 +2,11 @@ import Testing
 import Foundation
 @testable import PatataTubeKit
 
-private func makeVideo(id: Int, classification: String = "children") -> Video {
+private func makeVideo(id: Int, classification: String = "children", status: String = "completed",
+                        errorMsg: String? = nil) -> Video {
     Video(id: id, url: "u\(id)", title: "t\(id)", platform: nil, sourceKey: nil,
           previewUrl: nil, classification: classification, position: id,
-          status: "completed", errorMsg: nil, streamPath: "/videos/\(id)/stream")
+          status: status, errorMsg: errorMsg, streamPath: "/videos/\(id)/stream")
 }
 
 private final class FakeAPI: VideoAPI, @unchecked Sendable {
@@ -36,9 +37,23 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         deletedIds.append(id)
         return deleteResult
     }
-    func scanLibrary() async throws -> ScanResult { ScanResult(added: 0, updated: 0, skipped: 0) }
-    func prepare(id: Int) async throws -> String { "done" }
-    func video(id: Int) async throws -> Video { makeVideo(id: id) }
+    var scanResult = ScanResult(added: 0, updated: 0, skipped: 0)
+    var throwOnScan = false
+    private(set) var scanCalls = 0
+    var prepareResult = "done"
+    var videoResults: [Video] = []
+    private(set) var videoCalls = 0
+
+    func scanLibrary() async throws -> ScanResult {
+        scanCalls += 1
+        if throwOnScan { throw APIError.badStatus(500) }
+        return scanResult
+    }
+    func prepare(id: Int) async throws -> String { prepareResult }
+    func video(id: Int) async throws -> Video {
+        videoCalls += 1
+        return videoResults.isEmpty ? makeVideo(id: id) : videoResults[min(videoCalls, videoResults.count) - 1]
+    }
     func imageData(path: String) async throws -> Data { Data() }
 }
 
@@ -146,4 +161,68 @@ private func tempCache() -> VideoListCache {
     await store.load()          // loadCount == 1
     await store.move(id: 1, direction: "up")  // success -> reload
     #expect(api.loadCount == 2)
+}
+
+@MainActor @Test func refreshLibraryScansThenReloads() async {
+    let api = FakeAPI()
+    api.scanResult = ScanResult(added: 2, updated: 0, skipped: 1)
+    api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api)
+    await store.refreshLibrary()
+    #expect(api.scanCalls == 1)
+    #expect(store.videos.map(\.id) == [1])
+}
+
+@MainActor @Test func refreshLibraryToleratesScanFailureButStillReloads() async {
+    // A scan failure must not prevent the subsequent list reload from running:
+    // the video list still ends up fresh even though the scan call itself errored.
+    let api = FakeAPI()
+    api.throwOnScan = true
+    api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api)
+    await store.refreshLibrary()
+    #expect(api.scanCalls == 1)
+    #expect(api.loadCount == 1)
+    #expect(store.videos.map(\.id) == [1])
+}
+
+@MainActor @Test func ensureReadyPollsUntilDone() async throws {
+    let api = FakeAPI()
+    api.prepareResult = "converting"
+    api.videoResults = [
+        makeVideo(id: 7, status: "converting"),
+        makeVideo(id: 7, status: "converting"),
+        makeVideo(id: 7, status: "done"),
+    ]
+    let store = VideoStore(api: api)
+    let ready = try await store.ensureReady(id: 7, pollIntervalSeconds: 0.01)
+    #expect(ready.status == "done")
+    #expect(api.videoCalls == 3)
+}
+
+@MainActor @Test func ensureReadyShortCircuitsWhenAlreadyDoneAfterPrepare() async throws {
+    let api = FakeAPI()
+    api.prepareResult = "done"
+    api.videoResults = [makeVideo(id: 7, status: "done")]
+    let store = VideoStore(api: api)
+    let ready = try await store.ensureReady(id: 7, pollIntervalSeconds: 0.01)
+    #expect(ready.status == "done")
+    #expect(api.videoCalls == 1)
+}
+
+@MainActor @Test func ensureReadyThrowsOnConversionError() async {
+    let api = FakeAPI()
+    api.prepareResult = "converting"
+    api.videoResults = [
+        makeVideo(id: 7, status: "unconverted", errorMsg: "ffmpeg exploded"),
+    ]
+    let store = VideoStore(api: api)
+    do {
+        _ = try await store.ensureReady(id: 7, pollIntervalSeconds: 0.01)
+        Issue.record("expected throw")
+    } catch let error as PrepareError {
+        #expect(error == .conversionFailed("ffmpeg exploded"))
+    } catch {
+        Issue.record("wrong error: \(error)")
+    }
 }
