@@ -39,3 +39,38 @@ private let sampleJSON = """
     #expect(updated.id == 1)
     #expect(updated.status == "completed")
 }
+
+@Test func testDecodesLibraryFields() throws {
+    let json = """
+    {"id": 7, "url": "/vol/ep.mkv", "title": "System", "platform": null,
+     "source_key": null, "preview_url": "/videos/7/preview",
+     "classification": "tv", "position": 3, "status": "unconverted",
+     "error_msg": null, "stream_path": "/videos/7/stream",
+     "source": "library", "show_title": "The Bear", "season": 1,
+     "episode": 1, "summary": "Carmy.", "show_preview_url": "/videos/7/preview?kind=show"}
+    """.data(using: .utf8)!
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let video = try decoder.decode(Video.self, from: json)
+    #expect(video.source == "library")
+    #expect(video.isLibrary == true)
+    #expect(video.showTitle == "The Bear")
+    #expect(video.season == 1)
+    #expect(video.episode == 1)
+    #expect(video.summary == "Carmy.")
+    #expect(video.showPreviewUrl == "/videos/7/preview?kind=show")
+}
+
+@Test func testDecodesLegacyPayloadWithoutLibraryFields() throws {
+    let json = """
+    {"id": 1, "url": "https://x.com/s/1", "title": null, "platform": "twitter",
+     "source_key": null, "preview_url": null, "classification": "children",
+     "position": 1, "status": "done", "error_msg": null,
+     "stream_path": "/videos/1/stream"}
+    """.data(using: .utf8)!
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let video = try decoder.decode(Video.self, from: json)
+    #expect(video.source == nil)
+    #expect(video.isLibrary == false)
+}
