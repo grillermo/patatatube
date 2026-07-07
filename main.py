@@ -508,6 +508,15 @@ async def api_prepare_video(video_id: int, request: Request, background_tasks: B
         db.set_library_state(video_id, "unconverted", error_msg=f"source file missing: {source}")
         raise HTTPException(status_code=404, detail="Source file missing")
 
+    # Write "converting" now, before the first await, so a second concurrent
+    # request for this same video reads "converting" on its own db.get_video
+    # call above and takes the no-op 202 early-return instead of racing
+    # through to a second probe + queued background task. (Not airtight
+    # against two requests reading the old status in the exact same instant
+    # before either writes, but this closes the practical window between
+    # overlapping requests a few milliseconds apart.)
+    db.set_library_state(video_id, "converting")
+
     try:
         plan = await asyncio.to_thread(lambda: library.plan_conversion(library.probe_source(source)))
     except Exception as exc:  # ffprobe failure
@@ -518,7 +527,6 @@ async def api_prepare_video(video_id: int, request: Request, background_tasks: B
         db.set_library_state(video_id, "done")
         return {"status": "done"}
 
-    db.set_library_state(video_id, "converting")
     background_tasks.add_task(library.convert_library_video, video_id)
     return JSONResponse({"status": "converting"}, status_code=202)
 

@@ -717,3 +717,46 @@ def test_prepare_download_row_is_400(client, monkeypatch):
     up = client.post("/upload", json={"url": "https://twitter.com/x/status/9"}, headers=AUTH)
     resp = client.post(f"/api/videos/{up.json()['id']}/prepare", headers=AUTH)
     assert resp.status_code == 400
+
+
+def test_prepare_while_done_is_noop_200(client, tmp_path, monkeypatch):
+    import db
+    vid, _ = make_library_row(tmp_path)
+    db.set_library_state(vid, "done")
+    called = []
+    monkeypatch.setattr("main.library.convert_library_video", lambda v: called.append(v))
+    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "done"}
+    assert called == []
+
+
+def test_prepare_missing_source_is_404(client, tmp_path):
+    import db
+    vid, src = make_library_row(tmp_path)
+    src.unlink()
+    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
+    assert resp.status_code == 404
+    assert "missing" in db.get_video(vid)["error_msg"]
+
+
+def test_prepare_probe_failure_is_500(client, tmp_path, monkeypatch):
+    import db
+    import library
+    vid, _ = make_library_row(tmp_path)
+
+    def boom(p):
+        raise RuntimeError("ffprobe exploded")
+
+    monkeypatch.setattr(library, "probe_source", boom)
+    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
+    assert resp.status_code == 500
+    assert "ffprobe exploded" in db.get_video(vid)["error_msg"]
+
+
+def test_get_single_video_tombstoned_is_404(client, tmp_path):
+    import db
+    vid, _ = make_library_row(tmp_path)
+    db.tombstone_video(vid)
+    resp = client.get(f"/api/videos/{vid}", headers=AUTH)
+    assert resp.status_code == 404
