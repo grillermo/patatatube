@@ -58,7 +58,7 @@ Conversion reuses the downloader's ffmpeg machinery (`_probe_media`, `_normalize
 
 **Probe first.** `ffprobe -show_streams -show_format -print_format json` on the source decides one of three outcomes:
 
-1. **Passthrough (no ffmpeg run):** container is mp4/mov **and** video is h264, or hevc tagged `hvc1`, **and** audio is aac/ac3/eac3 (or absent) → mark `done`, stream the original directly. No copy written.
+1. **Passthrough (no ffmpeg run):** container is mp4/mov **and** video is h264, or hevc tagged `hvc1`, **and** width ≤ 2266 px, **and** audio is aac/ac3/eac3 (or absent) → mark `done`, stream the original directly. No copy written.
 2. **Remux (`-c copy`, seconds, no quality loss):** codecs are iOS-playable but the container is not (mkv/avi/m4v), or an incompatible stream needs swapping. Expected for most of the 578 mkv files.
 3. **Transcode:** only streams that fail the codec policy below are re-encoded; compliant streams are still copied.
 
@@ -71,10 +71,12 @@ ffmpeg -hide_banner -loglevel error -y -i <source>
   -movflags +faststart <sibling>.mp4
 ```
 
-**Video policy** — extends the downloader's current h264-only copy rule:
-- `h264` → `-c:v copy -tag:v avc1`
-- `hevc` (incl. 10-bit `yuv420p10le`) → `-c:v copy -tag:v hvc1` — **new**; iPads (A10X+) play HEVC Main10 natively, so no re-encode
-- anything else → `-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -profile:v high -tag:v avc1`
+**Video policy** — extends the downloader's current h264-only copy rule. Target device is the iPad mini (6th gen): 2266×1488 Liquid Retina, A15. Resolution above the panel's long edge is wasted bits, so output is capped at **2266 px wide**:
+- width ≤ 2266 and `h264` → `-c:v copy -tag:v avc1`
+- width ≤ 2266 and `hevc` (incl. 10-bit `yuv420p10le`) → `-c:v copy -tag:v hvc1` — **new**; the A15 plays HEVC Main10 natively, so no re-encode
+- width > 2266 (4K/2160p sources) or any other codec → `-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -profile:v high -tag:v avc1 -vf "scale='min(2266,iw)':-2"` (downscale to fit the panel, never upscale; `-2` keeps even height)
+
+1080p content (the bulk of the library) is untouched by the cap — it copies bit-exact.
 
 **Audio policy** — extends the downloader's current aac-stereo-only copy rule:
 - `aac`, `ac3`, `eac3` → `-c:a copy` (iOS plays AC3/EAC3 multichannel natively) — **new**
@@ -119,7 +121,7 @@ Deleting a library video sets `deleted_at`, removes `converted_path` if present,
 - **pytest** (existing `client` fixture pattern — reload `db` then `main` after env setup):
   - scan: upsert, tombstone skipping, converted-file self-exclusion, missing-file handling (Plex fetcher monkeypatched).
   - prepare: state machine incl. compatible-mp4 passthrough (ffprobe mocked), idempotency, failure → `unconverted` + `error_msg`.
-  - codec policy: probe result → expected ffmpeg args (h264 copy/avc1, hevc copy/hvc1, other → libx264; aac/ac3/eac3 copy, other → aac stereo; passthrough vs remux vs transcode decision).
+  - codec policy: probe result → expected ffmpeg args (h264 copy/avc1, hevc copy/hvc1, other → libx264; aac/ac3/eac3 copy, other → aac stereo; >2266 px wide → downscale re-encode; passthrough vs remux vs transcode decision).
   - stream: path resolution for download vs library rows; 409 for non-`done` library rows; 401 without token, accepted via Bearer header and via `?token=` query parameter.
   - delete: tombstone semantics, original never removed.
 - **iOS**: `swift build` on PatataTubeKit; manual test checklist additions in `ios/README.md` (refresh, shows→episodes navigation, preparing overlay, offline caching of a library episode).
