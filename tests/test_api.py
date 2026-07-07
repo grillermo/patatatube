@@ -785,6 +785,26 @@ def test_stream_requires_token(client, tmp_path):
         f.unlink(missing_ok=True)
 
 
+def test_stream_rejects_wrong_bearer_token(client, tmp_path):
+    vid, f = make_done_download_video(tmp_path)
+    try:
+        resp = client.get(f"/videos/{vid}/stream", headers={"Authorization": "Bearer wrong-token"})
+        assert resp.status_code == 401
+    finally:
+        f.unlink(missing_ok=True)
+
+
+def test_stream_tombstoned_library_row_is_404(client, tmp_path):
+    import db
+    vid, src = make_library_row(tmp_path)
+    converted = tmp_path / "ep.mp4"
+    converted.write_bytes(b"converted-bytes")
+    db.set_library_state(vid, "done", converted_path=str(converted))
+    db.tombstone_video(vid)
+    resp = client.get(f"/videos/{vid}/stream", headers=AUTH)
+    assert resp.status_code == 404
+
+
 def test_stream_library_serves_converted_copy(client, tmp_path):
     import db
     vid, src = make_library_row(tmp_path)
