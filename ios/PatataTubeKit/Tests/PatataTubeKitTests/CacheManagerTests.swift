@@ -27,10 +27,10 @@ private final class MockDownloadProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-private func mockDownloadSession() -> URLSession {
+private func mockDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [MockDownloadProtocol.self]
-    return URLSession(configuration: config)
+    return config
 }
 
 private func tempRoot() -> URL {
@@ -42,13 +42,13 @@ private func tempRoot() -> URL {
 struct CacheManagerTests {
 
     @Test func localURLUsesIdAndMp4() {
-        let manager = CacheManager(root: tempRoot(), session: mockDownloadSession())
+        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
         #expect(manager.localURL(for: 5).lastPathComponent == "5.mp4")
     }
 
     @Test func stateIsNotCachedThenCachedAfterDownload() async throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, session: mockDownloadSession())
+        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
         #expect(manager.state(for: 11) == .notCached)
 
         MockDownloadProtocol.handler = { req in
@@ -59,11 +59,12 @@ struct CacheManagerTests {
         #expect(manager.state(for: 11) == .cached)
         let saved = try Data(contentsOf: manager.localURL(for: 11))
         #expect(saved == Data([0x00, 0x01, 0x02, 0x03]))
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("11.resume").path))
     }
 
     @Test func downloadAlsoCachesPreview() async throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, session: mockDownloadSession())
+        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
         #expect(manager.cachedPreviewURL(for: 12) == nil)
 
         MockDownloadProtocol.handler = { req in
@@ -83,7 +84,7 @@ struct CacheManagerTests {
 
     @Test func previewFailureStillCachesVideo() async throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, session: mockDownloadSession())
+        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
         MockDownloadProtocol.handler = { req in
             if req.url!.host == "img.test" { throw URLError(.timedOut) }
             return (jsonResponse(req.url!), Data([0x09]))
@@ -98,7 +99,7 @@ struct CacheManagerTests {
     }
 
     @Test func downloadThrowsOnBadStatus() async {
-        let manager = CacheManager(root: tempRoot(), session: mockDownloadSession())
+        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
         MockDownloadProtocol.handler = { req in (jsonResponse(req.url!, status: 404), Data()) }
         await #expect(throws: APIError.badStatus(404)) {
             try await manager.download(id: 1, from: URL(string: "https://srv.test/x")!)
@@ -114,7 +115,7 @@ struct CacheManagerTests {
             return (response, Data("video".utf8))
         }
         let root = tempRoot()
-        let manager = CacheManager(root: root, session: mockDownloadSession())
+        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
         try await manager.download(id: 7,
                                    from: URL(string: "https://example.test/videos/7/stream")!,
                                    preview: URL(string: "https://example.test/videos/7/preview")!,

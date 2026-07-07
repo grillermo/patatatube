@@ -99,6 +99,7 @@ On first launch grid is empty / errors — need server config:
 - **Reorder**: use up/down controls on cell → move video, confirm grid order updates
 - **Classify**: use classify control on cell → pick new classification, confirm video moves/reflects under new filter tab
 - **Download/cache**: tap download on a cell → check cache state changes (icon/indicator); play same video again → should stream from local cache (test by killing network access to server and replaying)
+- **Resume download**: start downloading a large video, kill network access before it finishes, restore network, then tap download again → progress should resume instead of restarting from 0%
 - **Cache all**: Settings → "Cache all videos" → downloads every visible video
 - **Upload**: tap + (top-right) → paste video URL → Add → new video appears in grid after processing
 - **Error banner**: point Base URL at unreachable host → red error banner appears at bottom of grid
