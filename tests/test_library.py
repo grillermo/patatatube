@@ -97,3 +97,117 @@ def test_no_video_stream_raises_error():
     p = {"streams": [{"codec_type": "audio", "codec_name": "aac"}], "format": {"format_name": "mov,mp4"}}
     with pytest.raises(RuntimeError, match="No video stream"):
         library.plan_conversion(p)
+
+
+import importlib
+
+
+@pytest.fixture()
+def fresh_db(monkeypatch, tmp_path):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
+    import db
+    importlib.reload(db)
+    db.init_db()
+    yield
+
+
+def lib_row(tmp_path, name="ep.mkv"):
+    import db
+    src = tmp_path / name
+    src.write_bytes(b"fake")
+    vid, _ = db.upsert_library_video({
+        "source_path": str(src),
+        "title": "Ep",
+        "classification": "tv",
+        "show_title": "Show",
+        "season": 1,
+        "episode": 1,
+        "summary": None,
+        "plex_rating_key": "1",
+        "show_rating_key": "2",
+    })
+    return vid, src
+
+
+def test_convert_passthrough_marks_done_no_copy(fresh_db, tmp_path, monkeypatch):
+    import db
+    vid, src = lib_row(tmp_path, "ep.mp4")
+    monkeypatch.setattr(library, "probe_source", lambda p: probe(
+        container="mov,mp4,m4a,3gp,3g2,mj2", vcodec="h264", acodec="aac"))
+    library.convert_library_video(vid)
+    row = db.get_video(vid)
+    assert row["status"] == "done" and row["converted_path"] is None
+
+
+def test_convert_runs_ffmpeg_and_records_sibling(fresh_db, tmp_path, monkeypatch):
+    import db
+    vid, src = lib_row(tmp_path)
+    monkeypatch.setattr(library, "probe_source", lambda p: probe())
+    calls = []
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"converted")  # ffmpeg output file
+
+    monkeypatch.setattr(library, "_run_ffmpeg", fake_run)
+    library.convert_library_video(vid)
+    row = db.get_video(vid)
+    assert row["status"] == "done"
+    assert row["converted_path"] == str(tmp_path / "ep.mp4")
+    assert (tmp_path / "ep.mp4").read_bytes() == b"converted"
+    cmd = calls[0]
+    assert "-c:v" in cmd and "copy" in cmd and "+faststart" in cmd
+    assert cmd[-1].startswith(str(tmp_path / "."))  # hidden temp file, atomic replace
+
+
+def test_convert_failure_returns_to_unconverted(fresh_db, tmp_path, monkeypatch):
+    import db
+    vid, src = lib_row(tmp_path)
+    monkeypatch.setattr(library, "probe_source", lambda p: probe())
+
+    def boom(cmd):
+        raise RuntimeError("ffmpeg exploded")
+
+    monkeypatch.setattr(library, "_run_ffmpeg", boom)
+    library.convert_library_video(vid)
+    row = db.get_video(vid)
+    assert row["status"] == "unconverted"
+    assert "ffmpeg exploded" in row["error_msg"]
+    assert not (tmp_path / "ep.mp4").exists()
+
+
+def test_convert_missing_source(fresh_db, tmp_path):
+    import db
+    vid, src = lib_row(tmp_path)
+    src.unlink()
+    library.convert_library_video(vid)
+    row = db.get_video(vid)
+    assert row["status"] == "unconverted" and "missing" in row["error_msg"]
+
+
+def test_scan_library(fresh_db, tmp_path, monkeypatch):
+    import db
+    import plex
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    gone = tmp_path / "gone.mkv"  # never created
+    converted = tmp_path / "b.mp4"
+    converted.write_bytes(b"x")
+
+    def item(path):
+        return {"source_path": str(path), "title": path.stem, "classification": "movies",
+                "show_title": None, "season": None, "episode": None, "summary": None,
+                "plex_rating_key": "1", "show_rating_key": None}
+
+    monkeypatch.setattr(plex, "fetch_library_items",
+                        lambda: [item(src), item(gone), item(converted)])
+    # b.mp4 is a prior conversion output of some row: must be self-excluded
+    vid, _ = db.upsert_library_video(item(tmp_path / "b.mkv"))
+    (tmp_path / "b.mkv").write_bytes(b"x")
+    db.set_library_state(vid, "done", converted_path=str(converted))
+
+    result = library.scan_library()
+    assert result == {"added": 1, "updated": 0, "skipped": 2}
+
+    result = library.scan_library()
+    assert result == {"added": 0, "updated": 1, "skipped": 2}
