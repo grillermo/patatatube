@@ -77,7 +77,6 @@ struct VideoGridView: View {
                     Button { showUpload = true } label: { Image(systemName: "plus") }
                 }
             }
-            }
             .refreshable { await store.load() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
@@ -104,6 +103,7 @@ struct VideoGridView: View {
                 }
             }
         }
+    }
     private var filterTabs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
