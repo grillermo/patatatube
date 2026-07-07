@@ -17,6 +17,8 @@ from pydantic import BaseModel
 from setproctitle import setproctitle
 
 import db
+import library
+import plex
 import services
 from db import CLASSIFICATIONS
 from downloader import download_video
@@ -456,10 +458,26 @@ async def api_delete_video(video_id: int, request: Request):
     _check_token(request)
     video = db.get_video(video_id)
     if video:
-        if video.get("filename"):
-            (VIDEOS_DIR / video["filename"]).unlink(missing_ok=True)
-        db.delete_video(video_id)
+        if video.get("source") == "library":
+            if video.get("converted_path"):
+                Path(video["converted_path"]).unlink(missing_ok=True)
+            db.tombstone_video(video_id)
+        else:
+            if video.get("filename"):
+                (VIDEOS_DIR / video["filename"]).unlink(missing_ok=True)
+            db.delete_video(video_id)
     return {"ok": True}
+
+
+@app.post("/api/library/scan")
+async def api_library_scan(request: Request):
+    _check_token(request)
+    if not os.getenv("PLEX_TOKEN"):
+        raise HTTPException(status_code=503, detail="Plex not configured (set PLEX_TOKEN)")
+    try:
+        return await asyncio.to_thread(library.scan_library)
+    except plex.PlexError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.get("/", response_class=HTMLResponse)

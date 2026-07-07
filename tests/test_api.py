@@ -583,3 +583,73 @@ def test_api_delete_removes_row_and_file(client):
     assert resp.json() == {"ok": True}
     assert db.get_video(vid) is None
     assert not path.exists()
+
+
+AUTH = {"Authorization": "Bearer test-secret"}
+
+LIB_ITEM_API = {
+    "source_path": None,  # filled per-test with tmp file
+    "title": "System", "classification": "tv", "show_title": "The Bear",
+    "season": 1, "episode": 1, "summary": "Carmy.",
+    "plex_rating_key": "1264", "show_rating_key": "1262",
+}
+
+
+def make_library_row(tmp_path, name="ep.mkv"):
+    import db
+    src = tmp_path / name
+    src.write_bytes(b"fake")
+    vid, _ = db.upsert_library_video({**LIB_ITEM_API, "source_path": str(src)})
+    return vid, src
+
+
+def test_scan_requires_token(client):
+    assert client.post("/api/library/scan").status_code == 401
+
+
+def test_scan_without_plex_token_is_503(client, monkeypatch):
+    monkeypatch.delenv("PLEX_TOKEN", raising=False)
+    resp = client.post("/api/library/scan", headers=AUTH)
+    assert resp.status_code == 503
+
+
+def test_scan_success(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("PLEX_TOKEN", "plex-token")
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    import plex
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [
+        {**LIB_ITEM_API, "source_path": str(src)},
+    ])
+    resp = client.post("/api/library/scan", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json() == {"added": 1, "updated": 0, "skipped": 0}
+
+    videos = client.get("/api/videos").json()
+    lib = [v for v in videos if v["source"] == "library"]
+    assert len(lib) == 1 and lib[0]["status"] == "unconverted"
+
+
+def test_scan_plex_down_is_502(client, monkeypatch):
+    monkeypatch.setenv("PLEX_TOKEN", "plex-token")
+    import plex
+    def boom():
+        raise plex.PlexError("connection refused")
+    monkeypatch.setattr(plex, "fetch_library_items", boom)
+    resp = client.post("/api/library/scan", headers=AUTH)
+    assert resp.status_code == 502
+
+
+def test_delete_library_video_tombstones(client, tmp_path):
+    import db
+    vid, src = make_library_row(tmp_path)
+    converted = tmp_path / "ep.mp4"
+    converted.write_bytes(b"converted")
+    db.set_library_state(vid, "done", converted_path=str(converted))
+
+    resp = client.post(f"/api/video/{vid}/delete", headers=AUTH)
+    assert resp.status_code == 200
+    assert src.exists()                     # original never touched
+    assert not converted.exists()           # our copy removed
+    assert db.get_video(vid)["deleted_at"] is not None
+    assert vid not in [v["id"] for v in client.get("/api/videos").json()]
