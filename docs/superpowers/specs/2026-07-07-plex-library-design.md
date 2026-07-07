@@ -48,8 +48,9 @@ Library rows: `unconverted` → `converting` → `done`. On conversion failure t
 - **`GET /api/videos/{id}`** (token-gated) — single-video JSON, used by the app to poll during conversion.
 - **`GET /videos/{id}/preview`** (token-gated) — proxies the Plex thumbnail for the row's `plex_rating_key`, caching the image on disk; `?kind=show` proxies the show poster via `show_rating_key`. The Plex token never reaches the client. Library previews come **only** from Plex — no ffmpeg thumbnailing.
 
-All new endpoints require `Authorization: Bearer <UPLOAD_TOKEN>` via the existing `_check_token` helper (same env token as uploads; no new auth mechanism).
-- **Stream endpoint** (`GET /videos/{id}/stream`) — resolves the file per row: download rows → `videos/{id}.mp4` as today; library rows → `converted_path` if set, else `source_path` (compatible-mp4 passthrough). Library row not `done` → 409.
+- **Stream endpoint** (`GET /videos/{id}/stream`) — now token-gated (previously open). Resolves the file per row: download rows → `videos/{id}.mp4` as today; library rows → `converted_path` if set, else `source_path` (compatible-mp4 passthrough). Library row not `done` → 409.
+
+All new endpoints, plus the stream endpoint, require `Authorization: Bearer <UPLOAD_TOKEN>` via the existing `_check_token` helper (same env token as uploads; no new auth mechanism). Because HTML `<video>` tags cannot send request headers, the stream endpoint also accepts the token as a `?token=` query parameter so the existing PWA page keeps playing videos (the SSR template appends it).
 
 ### Conversion output naming
 
@@ -70,6 +71,7 @@ Deleting a library video sets `deleted_at`, removes `converted_path` if present,
 - **Movies** — reuse the existing grid (`VideoGridView` / `VideoCell`) under the `movies` classification. No new UI.
 - **TV** — new `ShowsView`: grid of shows built client-side by grouping videos on `showTitle`; poster from `show_preview_url`. Tap → `EpisodesView`: one section per season, rows showing `E{n} — title`, thumbnail, one-line summary.
 - **Preview loading** — preview endpoints are token-gated, so thumbnails cannot be loaded with plain `AsyncImage(url:)`; image requests must attach the `Authorization: Bearer` header (fetch via `URLSession` in `APIClient`, as other authenticated calls do).
+- **Playback auth** — the stream endpoint is now token-gated: `AVURLAsset` must be created with the `AVURLAssetHTTPHeaderFieldsKey` option carrying the `Authorization: Bearer` header, and `CacheManager` downloads must attach the same header.
 - **Play / download flow** — `status == done` → play/cache exactly as today. Otherwise call `prepare`, poll `GET /api/videos/{id}` every 2 s with a "Preparing…" overlay, then play or hand off to `CacheManager`. The same gate applies before offline download.
 - **Errors** — `error_msg` present → alert with a retry action (retry = call `prepare` again).
 
@@ -84,6 +86,6 @@ Deleting a library video sets `deleted_at`, removes `converted_path` if present,
 - **pytest** (existing `client` fixture pattern — reload `db` then `main` after env setup):
   - scan: upsert, tombstone skipping, converted-file self-exclusion, missing-file handling (Plex fetcher monkeypatched).
   - prepare: state machine incl. compatible-mp4 passthrough (ffprobe mocked), idempotency, failure → `unconverted` + `error_msg`.
-  - stream: path resolution for download vs library rows; 409 for non-`done` library rows.
+  - stream: path resolution for download vs library rows; 409 for non-`done` library rows; 401 without token, accepted via Bearer header and via `?token=` query parameter.
   - delete: tombstone semantics, original never removed.
 - **iOS**: `swift build` on PatataTubeKit; manual test checklist additions in `ios/README.md` (refresh, shows→episodes navigation, preparing overlay, offline caching of a library episode).
