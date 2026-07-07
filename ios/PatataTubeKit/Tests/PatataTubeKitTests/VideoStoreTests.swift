@@ -186,6 +186,32 @@ private func tempCache() -> VideoListCache {
     #expect(store.videos.map(\.id) == [1])
 }
 
+@MainActor @Test func refreshLibraryPreservesScanErrorWhenLoadSucceeds() async {
+    // scanLibrary() fails, but the subsequent load() fetch succeeds -- the scan
+    // failure message must still surface in errorText rather than being wiped
+    // out by load()'s unconditional `errorText = nil` reset.
+    let api = FakeAPI()
+    api.throwOnScan = true
+    api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api)
+    await store.refreshLibrary()
+    #expect(store.videos.map(\.id) == [1])
+    #expect(store.errorText != nil)
+    #expect(store.errorText?.contains("500") == true)
+}
+
+@MainActor @Test func refreshLibraryLoadErrorTakesPrecedenceOverScanSuccess() async {
+    // scanLibrary() succeeds but the subsequent load() fetch fails -- errorText
+    // should reflect the load failure, not stale state from the (successful) scan.
+    let api = FakeAPI()
+    api.throwOnScan = false
+    api.throwOnVideos = true
+    let store = VideoStore(api: api)
+    await store.refreshLibrary()
+    #expect(store.errorText != nil)
+    #expect(store.errorText?.contains("503") == true)
+}
+
 @MainActor @Test func ensureReadyPollsUntilDone() async throws {
     let api = FakeAPI()
     api.prepareResult = "converting"

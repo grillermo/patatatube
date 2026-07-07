@@ -96,12 +96,19 @@ public final class VideoStore: ObservableObject {
     /// Scan the server-side Plex library, then reload the list.
     /// A failed scan surfaces in errorText but still refreshes the list.
     public func refreshLibrary() async {
+        var scanErrorText: String?
         do {
             _ = try await api.scanLibrary()
         } catch {
-            errorText = String(describing: error)
+            scanErrorText = String(describing: error)
         }
         await load()
+        // If the scan failed but load() itself succeeded (errorText is nil),
+        // restore the scan failure so it still surfaces to the user. If load()
+        // failed too, its error is more relevant and takes precedence.
+        if let scanErrorText, errorText == nil {
+            errorText = scanErrorText
+        }
     }
 
     /// Kicks off server-side conversion (if needed) and polls until the video
