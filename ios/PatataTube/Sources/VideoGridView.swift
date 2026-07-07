@@ -63,7 +63,8 @@ struct VideoGridView: View {
                     Button {
                         cellSize = min(cellSize + cellSizeStep, maxCellSize)
                     } label: { Image(systemName: "plus.magnifyingglass") }
-                    .disabled(cellSize >= maxCellSize)
+                .disabled(cellSize >= maxCellSize)
+            }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         Task { await store.refreshLibrary() }
@@ -75,6 +76,7 @@ struct VideoGridView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showUpload = true } label: { Image(systemName: "plus") }
                 }
+            }
             }
             .refreshable { await store.load() }
             .sheet(isPresented: $showSettings) { SettingsView() }
@@ -99,8 +101,6 @@ struct VideoGridView: View {
                 }
             }
         }
-    }
-
     private var filterTabs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
