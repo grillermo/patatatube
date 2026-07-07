@@ -304,7 +304,12 @@ def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
     return start, min(end, file_size - 1)
 
 
-async def _iter_file_range(file_path: Path, start: int = 0, byte_count: int | None = None) -> AsyncIterator[bytes]:
+async def _iter_file_range(
+    file_path: Path,
+    start: int = 0,
+    byte_count: int | None = None,
+    completion_title: str | None = None,
+) -> AsyncIterator[bytes]:
     async with _video_stream_slots:
         async with await anyio.open_file(file_path, "rb") as f:
             if start:
@@ -319,6 +324,12 @@ async def _iter_file_range(file_path: Path, start: int = 0, byte_count: int | No
                 if remaining is not None:
                     remaining -= len(chunk)
                 yield chunk
+
+    # Reached here only if the whole requested range was streamed without the
+    # client disconnecting. When it was the final byte of the file, the video
+    # finished downloading to the client.
+    if completion_title is not None:
+        print(f"video {completion_title} uploaded", flush=True)
 
 
 @app.get("/videos/{video_id}/preview")
@@ -374,9 +385,15 @@ async def stream_video(video_id: int, request: Request):
     if range_header:
         start, end = _parse_byte_range(range_header, file_size)
         chunk_size = end - start + 1
+        is_last = end == file_size - 1
 
         return StreamingResponse(
-            _iter_file_range(file_path, start, chunk_size),
+            _iter_file_range(
+                file_path,
+                start,
+                chunk_size,
+                completion_title=video.get("title") if is_last else None,
+            ),
             status_code=206,
             media_type=mime,
             headers={
@@ -388,7 +405,7 @@ async def stream_video(video_id: int, request: Request):
         )
 
     return StreamingResponse(
-        _iter_file_range(file_path),
+        _iter_file_range(file_path, completion_title=video.get("title")),
         media_type=mime,
         headers={
             "Accept-Ranges": "bytes",
