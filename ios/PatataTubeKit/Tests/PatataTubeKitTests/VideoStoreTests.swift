@@ -36,6 +36,10 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         deletedIds.append(id)
         return deleteResult
     }
+    func scanLibrary() async throws -> ScanResult { ScanResult(added: 0, updated: 0, skipped: 0) }
+    func prepare(id: Int) async throws -> String { "done" }
+    func video(id: Int) async throws -> Video { makeVideo(id: id) }
+    func imageData(path: String) async throws -> Data { Data() }
 }
 
 @MainActor @Test func loadPopulatesVideos() async {
