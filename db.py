@@ -7,8 +7,12 @@ CLASSIFICATIONS = ["children", "adults", "education", "tv", "movies"]
 
 
 def _conn():
-    conn = sqlite3.connect(os.getenv("DB_PATH", "data/watch_later.sqlite"), timeout=5)
+    conn = sqlite3.connect(os.getenv("DB_PATH", "data/watch_later.sqlite"), timeout=30)
     conn.row_factory = sqlite3.Row
+    # WAL lets multiple worker processes read while one writes, instead of
+    # locking the whole DB. busy_timeout waits out brief write contention.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 

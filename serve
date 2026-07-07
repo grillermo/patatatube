@@ -1,14 +1,27 @@
 #!/bin/bash
-python3.13 python_env/bin/uvicorn main:app \
+# Production: multiple worker processes for higher throughput.
+#   WEB_CONCURRENCY=4 ./serve   # override worker count (default 2)
+# Development: DEV=1 ./serve     # single process + hot reload (workers ignored)
+
+if [ "$DEV" = "1" ]; then
+  exec python3.13 python_env/bin/uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 3050 \
+    --reload \
+    --reload-dir . \
+    --reload-include '*.py' \
+    --reload-exclude '.git/*' \
+    --reload-exclude '.venv/*' \
+    --reload-exclude 'python_env/*' \
+    --reload-exclude 'videos/*' \
+    --reload-exclude 'assets/splash/*' \
+    --proxy-headers \
+    --forwarded-allow-ips='*'
+fi
+
+exec python3.13 python_env/bin/uvicorn main:app \
   --host 0.0.0.0 \
   --port 3050 \
-  --reload \
-  --reload-dir . \
-  --reload-include '*.py' \
-  --reload-exclude '.git/*' \
-  --reload-exclude '.venv/*' \
-  --reload-exclude 'python_env/*' \
-  --reload-exclude 'videos/*' \
-  --reload-exclude 'assets/splash/*' \
+  --workers "${WEB_CONCURRENCY:-2}" \
   --proxy-headers \
   --forwarded-allow-ips='*'
