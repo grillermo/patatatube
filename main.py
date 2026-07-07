@@ -480,6 +480,49 @@ async def api_library_scan(request: Request):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.get("/api/videos/{video_id}")
+async def api_video(video_id: int, request: Request):
+    _check_token(request)
+    video = db.get_video(video_id)
+    if not video or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Video not found")
+    return serialize_video(video)
+
+
+@app.post("/api/videos/{video_id}/prepare")
+async def api_prepare_video(video_id: int, request: Request, background_tasks: BackgroundTasks):
+    _check_token(request)
+    video = db.get_video(video_id)
+    if not video or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.get("source") != "library":
+        raise HTTPException(status_code=400, detail="Only library videos need preparing")
+
+    if video["status"] == "done":
+        return {"status": "done"}
+    if video["status"] == "converting":
+        return JSONResponse({"status": "converting"}, status_code=202)
+
+    source = Path(video["source_path"])
+    if not source.exists():
+        db.set_library_state(video_id, "unconverted", error_msg=f"source file missing: {source}")
+        raise HTTPException(status_code=404, detail="Source file missing")
+
+    try:
+        plan = await asyncio.to_thread(lambda: library.plan_conversion(library.probe_source(source)))
+    except Exception as exc:  # ffprobe failure
+        db.set_library_state(video_id, "unconverted", error_msg=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if plan.passthrough:
+        db.set_library_state(video_id, "done")
+        return {"status": "done"}
+
+    db.set_library_state(video_id, "converting")
+    background_tasks.add_task(library.convert_library_video, video_id)
+    return JSONResponse({"status": "converting"}, status_code=202)
+
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/videos", response_class=HTMLResponse)
 async def videos_page(classification: str | None = None):

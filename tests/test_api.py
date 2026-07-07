@@ -653,3 +653,67 @@ def test_delete_library_video_tombstones(client, tmp_path):
     assert not converted.exists()           # our copy removed
     assert db.get_video(vid)["deleted_at"] is not None
     assert vid not in [v["id"] for v in client.get("/api/videos").json()]
+
+
+def test_get_single_video(client, tmp_path):
+    vid, _ = make_library_row(tmp_path)
+    assert client.get(f"/api/videos/{vid}").status_code == 401
+    resp = client.get(f"/api/videos/{vid}", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["id"] == vid
+    assert client.get("/api/videos/99999", headers=AUTH).status_code == 404
+
+
+def test_prepare_passthrough_returns_done(client, tmp_path, monkeypatch):
+    import library
+    vid, _ = make_library_row(tmp_path, name="ep.mp4")
+    monkeypatch.setattr(library, "probe_source", lambda p: {
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920,
+             "codec_tag_string": "avc1"},
+            {"codec_type": "audio", "codec_name": "aac", "channels": 2},
+        ],
+        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
+    })
+    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "done"}
+    import db
+    assert db.get_video(vid)["status"] == "done"
+
+
+def test_prepare_queues_conversion(client, tmp_path, monkeypatch):
+    import library
+    vid, _ = make_library_row(tmp_path)
+    monkeypatch.setattr(library, "probe_source", lambda p: {
+        "streams": [{"codec_type": "video", "codec_name": "hevc", "width": 1920,
+                     "codec_tag_string": "[0][0][0][0]"}],
+        "format": {"format_name": "matroska,webm"},
+    })
+    converted = []
+    monkeypatch.setattr("main.library.convert_library_video",
+                        lambda video_id: converted.append(video_id))
+    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
+    assert resp.status_code == 202
+    assert resp.json() == {"status": "converting"}
+    assert converted == [vid]  # TestClient runs background tasks before returning
+    import db
+    assert db.get_video(vid)["status"] == "converting"
+
+
+def test_prepare_while_converting_is_noop_202(client, tmp_path, monkeypatch):
+    import db
+    vid, _ = make_library_row(tmp_path)
+    db.set_library_state(vid, "converting")
+    called = []
+    monkeypatch.setattr("main.library.convert_library_video", lambda v: called.append(v))
+    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
+    assert resp.status_code == 202 and called == []
+
+
+def test_prepare_download_row_is_400(client, monkeypatch):
+    import db
+    monkeypatch.setattr("main.download_video", lambda *a, **kw: None)
+    up = client.post("/upload", json={"url": "https://twitter.com/x/status/9"}, headers=AUTH)
+    resp = client.post(f"/api/videos/{up.json()['id']}/prepare", headers=AUTH)
+    assert resp.status_code == 400
