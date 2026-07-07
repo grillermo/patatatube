@@ -104,6 +104,17 @@ On first launch grid is empty / errors — need server config:
 - **Error banner**: point Base URL at unreachable host → red error banner appears at bottom of grid
 - **Missing token**: clear upload token in Settings, try Add Video → upload should fail (401 from backend)
 
+### Plex library
+
+- [ ] Settings has valid base URL + token; tap the refresh (↻) toolbar button — spinner shows, then movie/TV items appear.
+- [ ] "movies" tab shows the movie grid with Plex posters.
+- [ ] "tv" tab shows one card per show with poster + episode count; tapping opens seasons → episodes with thumbs and summaries.
+- [ ] Playing an unprepared mkv episode shows "Preparing…", then plays (remux takes seconds).
+- [ ] Playing an already-compatible mp4 movie starts without any conversion wait.
+- [ ] Downloading an unprepared episode prepares first, then caches; airplane mode playback works from cache.
+- [ ] Delete on a library video removes it from the list; the original file on /Volumes/Media is untouched; a later refresh does not resurrect it.
+- [ ] A conversion failure (e.g. unplug the Media volume mid-convert) shows an error and the episode can be retried.
+
 ## Notes
 
 - No unit/UI test target yet — this is the only verification path.
