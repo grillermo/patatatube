@@ -109,7 +109,7 @@ On first launch grid is empty / errors — need server config:
 - [ ] Settings has valid base URL + token; tap the refresh (↻) toolbar button — spinner shows, then movie/TV items appear.
 - [ ] "movies" tab shows the movie grid with Plex posters.
 - [ ] "tv" tab shows one card per show with poster + episode count; tapping opens seasons → episodes with thumbs and summaries.
-- [ ] Playing an unprepared mkv episode shows "Preparing…", then plays (remux takes seconds).
+- [ ] Playing an unprepared mkv episode (from the pushed episode list) shows "Preparing…" over the episode list and blocks further taps (e.g. double-tapping Play does not fire a second prepare), then plays (remux takes seconds).
 - [ ] Playing an already-compatible mp4 movie starts without any conversion wait.
 - [ ] Downloading an unprepared episode prepares first, then caches; airplane mode playback works from cache.
 - [ ] Delete on a library video removes it from the list; the original file on /Volumes/Media is untouched; a later refresh does not resurrect it.

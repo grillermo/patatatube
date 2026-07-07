@@ -63,8 +63,8 @@ struct VideoGridView: View {
                     Button {
                         cellSize = min(cellSize + cellSizeStep, maxCellSize)
                     } label: { Image(systemName: "plus.magnifyingglass") }
-                .disabled(cellSize >= maxCellSize)
-            }
+                    .disabled(cellSize >= maxCellSize)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         Task { await store.refreshLibrary() }
@@ -86,18 +86,21 @@ struct VideoGridView: View {
             }
             .task { await initialLoad() }
             .overlay { if let error = store.errorText { errorBanner(error) } }
-            .overlay {
-                if preparing {
-                    ZStack {
-                        Color.black.opacity(0.4).ignoresSafeArea()
-                        VStack(spacing: 12) {
-                            ProgressView()
-                            Text("Preparing…").foregroundStyle(.white)
-                        }
-                        .padding(24)
-                        .background(.thinMaterial)
-                        .cornerRadius(12)
+        }
+        // Attached to the NavigationStack itself (not the root ScrollView) so it renders
+        // above any pushed destination (e.g. EpisodesView), where taps must also be
+        // blocked while a TV episode is being prepared server-side.
+        .overlay {
+            if preparing {
+                ZStack {
+                    Color.black.opacity(0.4).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Preparing…").foregroundStyle(.white)
                     }
+                    .padding(24)
+                    .background(.thinMaterial)
+                    .cornerRadius(12)
                 }
             }
         }
