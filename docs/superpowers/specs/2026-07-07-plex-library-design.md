@@ -45,8 +45,10 @@ Library rows: `unconverted` → `converting` → `done`. On conversion failure t
 
 - **`POST /api/library/scan`** (token-gated) — Fetches Plex sections (movies, TV) via `PLEX_URL` (default `http://localhost:32400`) + `PLEX_TOKEN` (env, required for scan). Upserts rows keyed on `source_path`; verifies each file exists on disk; skips tombstoned paths; skips any file path matching an existing row's `converted_path` (self-exclusion so our own outputs are never indexed). Metadata only — no ffmpeg. Synchronous, returns `{"added": n, "updated": n, "skipped": n}` in seconds. The client then re-fetches `/api/videos`.
 - **`POST /api/videos/{id}/prepare`** (token-gated, idempotent) — If `done`, returns 200. Otherwise ffprobe the source: if it is already an iOS-compatible mp4 (h264 + aac/eac3 in mp4 container), mark `done` with no copy — the stream endpoint serves the original directly (most of the 560 mp4s play instantly). Otherwise set `converting`, run a BackgroundTask that remuxes/transcodes via the existing `_normalize_media_for_ios` pipeline and return 202. Concurrent prepares for the same row are a no-op while `converting`.
-- **`GET /api/videos/{id}`** — single-video JSON, used by the app to poll during conversion. Unauthenticated, consistent with `GET /api/videos`.
-- **`GET /videos/{id}/preview`** — proxies the Plex thumbnail for the row's `plex_rating_key`, caching the image on disk; `?kind=show` proxies the show poster via `show_rating_key`. The Plex token never reaches the client. Library previews come **only** from Plex — no ffmpeg thumbnailing.
+- **`GET /api/videos/{id}`** (token-gated) — single-video JSON, used by the app to poll during conversion.
+- **`GET /videos/{id}/preview`** (token-gated) — proxies the Plex thumbnail for the row's `plex_rating_key`, caching the image on disk; `?kind=show` proxies the show poster via `show_rating_key`. The Plex token never reaches the client. Library previews come **only** from Plex — no ffmpeg thumbnailing.
+
+All new endpoints require `Authorization: Bearer <UPLOAD_TOKEN>` via the existing `_check_token` helper (same env token as uploads; no new auth mechanism).
 - **Stream endpoint** (`GET /videos/{id}/stream`) — resolves the file per row: download rows → `videos/{id}.mp4` as today; library rows → `converted_path` if set, else `source_path` (compatible-mp4 passthrough). Library row not `done` → 409.
 
 ### Conversion output naming
@@ -67,6 +69,7 @@ Deleting a library video sets `deleted_at`, removes `converted_path` if present,
 - **Refresh button** — toolbar button on the main view: `POST /api/library/scan`, spinner while running, then the existing list reload.
 - **Movies** — reuse the existing grid (`VideoGridView` / `VideoCell`) under the `movies` classification. No new UI.
 - **TV** — new `ShowsView`: grid of shows built client-side by grouping videos on `showTitle`; poster from `show_preview_url`. Tap → `EpisodesView`: one section per season, rows showing `E{n} — title`, thumbnail, one-line summary.
+- **Preview loading** — preview endpoints are token-gated, so thumbnails cannot be loaded with plain `AsyncImage(url:)`; image requests must attach the `Authorization: Bearer` header (fetch via `URLSession` in `APIClient`, as other authenticated calls do).
 - **Play / download flow** — `status == done` → play/cache exactly as today. Otherwise call `prepare`, poll `GET /api/videos/{id}` every 2 s with a "Preparing…" overlay, then play or hand off to `CacheManager`. The same gate applies before offline download.
 - **Errors** — `error_msg` present → alert with a retry action (retry = call `prepare` again).
 
