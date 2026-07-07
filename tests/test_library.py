@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 import library
 
 
@@ -81,3 +83,17 @@ def test_conversion_target_collision_falls_back(tmp_path):
     other.touch()
     (tmp_path / "film.mp4").touch()  # pre-existing sibling from another release
     assert library.conversion_target(other) == tmp_path / "film.ios.mp4"
+
+
+def test_width_exactly_2266_passthrough():
+    """Width exactly at IPAD_MAX_WIDTH boundary should passthrough when conditions met."""
+    p = probe(container="mov,mp4,m4a,3gp,3g2,mj2", vcodec="h264", acodec="aac", width=2266)
+    plan = library.plan_conversion(p)
+    assert plan.passthrough
+
+
+def test_no_video_stream_raises_error():
+    """Probe with no video stream should raise RuntimeError."""
+    p = {"streams": [{"codec_type": "audio", "codec_name": "aac"}], "format": {"format_name": "mov,mp4"}}
+    with pytest.raises(RuntimeError, match="No video stream"):
+        library.plan_conversion(p)
