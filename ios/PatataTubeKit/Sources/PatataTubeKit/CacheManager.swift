@@ -40,10 +40,15 @@ public final class CacheManager: @unchecked Sendable {
         }
     }
 
-    public func download(id: Int, from remote: URL, preview: URL? = nil) async throws {
+    public func download(id: Int, from remote: URL, preview: URL? = nil,
+                         bearerToken: String? = nil) async throws {
         lock.withLock { inFlight[id] = 0 }
         do {
-            let (tempURL, response) = try await session.download(from: remote)
+            var request = URLRequest(url: remote)
+            if let bearerToken {
+                request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+            }
+            let (tempURL, response) = try await session.download(for: request)
             lock.withLock { inFlight[id] = nil }
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 throw APIError.badStatus(http.statusCode)
@@ -57,11 +62,15 @@ public final class CacheManager: @unchecked Sendable {
             throw error
         }
         // Best-effort: a missing preview must not fail the cached video.
-        if let preview { try? await cachePreview(id: id, from: preview) }
+        if let preview { try? await cachePreview(id: id, from: preview, bearerToken: bearerToken) }
     }
 
-    private func cachePreview(id: Int, from remote: URL) async throws {
-        let (data, response) = try await session.data(from: remote)
+    private func cachePreview(id: Int, from remote: URL, bearerToken: String? = nil) async throws {
+        var request = URLRequest(url: remote)
+        if let bearerToken {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw APIError.badStatus(http.statusCode)
         }

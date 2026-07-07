@@ -104,4 +104,21 @@ struct CacheManagerTests {
             try await manager.download(id: 1, from: URL(string: "https://srv.test/x")!)
         }
     }
+
+    @Test func testDownloadSendsBearerToken() async throws {
+        var seenAuth: [String?] = []
+        MockDownloadProtocol.handler = { request in
+            seenAuth.append(request.value(forHTTPHeaderField: "Authorization"))
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200,
+                                           httpVersion: nil, headerFields: nil)!
+            return (response, Data("video".utf8))
+        }
+        let root = tempRoot()
+        let manager = CacheManager(root: root, session: mockDownloadSession())
+        try await manager.download(id: 7,
+                                   from: URL(string: "https://example.test/videos/7/stream")!,
+                                   preview: URL(string: "https://example.test/videos/7/preview")!,
+                                   bearerToken: "secret")
+        #expect(seenAuth == ["Bearer secret", "Bearer secret"])
+    }
 }
