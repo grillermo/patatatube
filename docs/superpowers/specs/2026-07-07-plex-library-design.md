@@ -44,13 +44,46 @@ Library rows: `unconverted` → `converting` → `done`. On conversion failure t
 ### Endpoints
 
 - **`POST /api/library/scan`** (token-gated) — Fetches Plex sections (movies, TV) via `PLEX_URL` (default `http://localhost:32400`) + `PLEX_TOKEN` (env, required for scan). Upserts rows keyed on `source_path`; verifies each file exists on disk; skips tombstoned paths; skips any file path matching an existing row's `converted_path` (self-exclusion so our own outputs are never indexed). Metadata only — no ffmpeg. Synchronous, returns `{"added": n, "updated": n, "skipped": n}` in seconds. The client then re-fetches `/api/videos`.
-- **`POST /api/videos/{id}/prepare`** (token-gated, idempotent) — If `done`, returns 200. Otherwise ffprobe the source: if it is already an iOS-compatible mp4 (h264 + aac/eac3 in mp4 container), mark `done` with no copy — the stream endpoint serves the original directly (most of the 560 mp4s play instantly). Otherwise set `converting`, run a BackgroundTask that remuxes/transcodes via the existing `_normalize_media_for_ios` pipeline and return 202. Concurrent prepares for the same row are a no-op while `converting`.
+- **`POST /api/videos/{id}/prepare`** (token-gated, idempotent) — If `done`, returns 200. Otherwise ffprobe the source and follow the conversion pipeline below: passthrough → mark `done` with no copy (most of the 560 mp4s play instantly); else set `converting`, run the remux/transcode as a BackgroundTask and return 202. Concurrent prepares for the same row are a no-op while `converting`.
 - **`GET /api/videos/{id}`** (token-gated) — single-video JSON, used by the app to poll during conversion.
 - **`GET /videos/{id}/preview`** (token-gated) — proxies the Plex thumbnail for the row's `plex_rating_key`, caching the image on disk; `?kind=show` proxies the show poster via `show_rating_key`. The Plex token never reaches the client. Library previews come **only** from Plex — no ffmpeg thumbnailing.
 
 - **Stream endpoint** (`GET /videos/{id}/stream`) — now token-gated (previously open). Resolves the file per row: download rows → `videos/{id}.mp4` as today; library rows → `converted_path` if set, else `source_path` (compatible-mp4 passthrough). Library row not `done` → 409.
 
 All new endpoints, plus the stream endpoint, require `Authorization: Bearer <UPLOAD_TOKEN>` via the existing `_check_token` helper (same env token as uploads; no new auth mechanism). Because HTML `<video>` tags cannot send request headers, the stream endpoint also accepts the token as a `?token=` query parameter so the existing PWA page keeps playing videos (the SSR template appends it).
+
+### Conversion pipeline (ffmpeg)
+
+Conversion reuses the downloader's ffmpeg machinery (`_probe_media`, `_normalize_media_for_ios`), generalized for the library case. Binaries stay env-overridable (`FFMPEG_BIN`, `FFPROBE_BIN`).
+
+**Probe first.** `ffprobe -show_streams -show_format -print_format json` on the source decides one of three outcomes:
+
+1. **Passthrough (no ffmpeg run):** container is mp4/mov **and** video is h264, or hevc tagged `hvc1`, **and** audio is aac/ac3/eac3 (or absent) → mark `done`, stream the original directly. No copy written.
+2. **Remux (`-c copy`, seconds, no quality loss):** codecs are iOS-playable but the container is not (mkv/avi/m4v), or an incompatible stream needs swapping. Expected for most of the 578 mkv files.
+3. **Transcode:** only streams that fail the codec policy below are re-encoded; compliant streams are still copied.
+
+**Command shape** (as in the downloader today):
+
+```
+ffmpeg -hide_banner -loglevel error -y -i <source>
+  -map 0:v:0 -map 0:a:0? -sn -dn
+  <video args> <audio args>
+  -movflags +faststart <sibling>.mp4
+```
+
+**Video policy** — extends the downloader's current h264-only copy rule:
+- `h264` → `-c:v copy -tag:v avc1`
+- `hevc` (incl. 10-bit `yuv420p10le`) → `-c:v copy -tag:v hvc1` — **new**; iPads (A10X+) play HEVC Main10 natively, so no re-encode
+- anything else → `-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -profile:v high -tag:v avc1`
+
+**Audio policy** — extends the downloader's current aac-stereo-only copy rule:
+- `aac`, `ac3`, `eac3` → `-c:a copy` (iOS plays AC3/EAC3 multichannel natively) — **new**
+- anything else (dts, opus, vorbis, flac, …) → `-c:a aac -b:a 128k -ac 2`
+- no audio stream → `-an`
+
+Subtitle and data streams are dropped (`-sn -dn`), as today. Only the first video and first audio stream are mapped. ffmpeg writes to a temp file first and the result is moved to the sibling `.mp4` path only on success, so a killed/failed conversion never leaves a half-written file the scanner or Plex could pick up.
+
+The downloader path keeps its existing (stricter) policy for now; the codec policy tables above apply to library conversions. Implementation should factor `_video_codec_args` / `_audio_codec_args` to take a policy rather than duplicating the ffmpeg invocation.
 
 ### Conversion output naming
 
@@ -86,6 +119,7 @@ Deleting a library video sets `deleted_at`, removes `converted_path` if present,
 - **pytest** (existing `client` fixture pattern — reload `db` then `main` after env setup):
   - scan: upsert, tombstone skipping, converted-file self-exclusion, missing-file handling (Plex fetcher monkeypatched).
   - prepare: state machine incl. compatible-mp4 passthrough (ffprobe mocked), idempotency, failure → `unconverted` + `error_msg`.
+  - codec policy: probe result → expected ffmpeg args (h264 copy/avc1, hevc copy/hvc1, other → libx264; aac/ac3/eac3 copy, other → aac stereo; passthrough vs remux vs transcode decision).
   - stream: path resolution for download vs library rows; 409 for non-`done` library rows; 401 without token, accepted via Bearer header and via `?token=` query parameter.
   - delete: tombstone semantics, original never removed.
 - **iOS**: `swift build` on PatataTubeKit; manual test checklist additions in `ios/README.md` (refresh, shows→episodes navigation, preparing overlay, offline caching of a library episode).
