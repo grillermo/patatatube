@@ -32,6 +32,16 @@ struct VideoCell: View {
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 12)
+                    if video.previewUrl != nil || cachedPreviewURL != nil {
+                        AuthedImage(path: video.previewUrl, localFileURL: cachedPreviewURL)
+                            .clipped()
+                    }
+                    if video.status != "done" {
+                        Text(video.status).font(.caption).padding(4)
+                            .background(.thinMaterial).cornerRadius(4)
+                    }
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 40)).foregroundStyle(.white.opacity(0.9))
                 }
             }
             .buttonStyle(.plain)

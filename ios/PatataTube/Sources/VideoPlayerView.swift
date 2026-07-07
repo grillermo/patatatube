@@ -52,14 +52,18 @@ struct VideoPlayerView: View {
     private var backdropOpacity: Double { max(1 - dragOffset / 400, 0.4) }
 
     private func setup() {
-        let url: URL?
+        let player: AVPlayer
         if model.cache.state(for: video.id) == .cached {
-            url = model.cache.localURL(for: video.id)
+            player = AVPlayer(url: model.cache.localURL(for: video.id))
         } else {
-            url = model.streamURL(for: video)
+            guard let url = model.streamURL(for: video) else { return }
+            var options: [String: Any] = [:]
+            if let token = model.credentials.token {
+                options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(token)"]
+            }
+            let asset = AVURLAsset(url: url, options: options)
+            player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
         }
-        guard let url else { return }
-        let player = AVPlayer(url: url)
         self.player = player
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,

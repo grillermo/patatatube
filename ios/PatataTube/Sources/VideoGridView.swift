@@ -6,10 +6,11 @@ struct VideoGridView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
 
-    @State private var classifications: [String] = ["children", "adults", "education", "entertainment"]
+    @State private var classifications: [String] = ["children", "adults", "education", "tv", "movies"]
     @State private var showSettings = false
     @State private var showUpload = false
     @State private var playing: Video?
+    @State private var preparing = false
 
     // Grid cell size, adjustable via +/- buttons. Persisted across launches.
     @AppStorage("gridCellSize") private var cellSize: Double = 220
@@ -25,23 +26,29 @@ struct VideoGridView: View {
         NavigationStack {
             ScrollView {
                 filterTabs
-                LazyVGrid(columns: columns, spacing: 16) {
-                    ForEach(store.videos) { video in
-                        VideoCell(
-                            video: video,
-                            cacheState: model.cache.state(for: video.id),
-                            cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
-                            classifications: classifications,
-                            onPlay: { playing = video },
-                            onDownload: { await download(video) },
-                            onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
-                            onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
-                            onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
-                            onDelete: { Task { await store.delete(id: video.id) } }
-                        )
+                if store.filter == "tv" {
+                    ShowsView(videos: store.videos,
+                              onPlay: { play($0) },
+                              onDownload: { download($0) })
+                } else {
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(store.videos) { video in
+                            VideoCell(
+                                video: video,
+                                cacheState: model.cache.state(for: video.id),
+                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
+                                classifications: classifications,
+                                onPlay: { play(video) },
+                                onDownload: { download(video) },
+                                onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
+                                onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
+                                onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
+                                onDelete: { Task { await store.delete(id: video.id) } }
+                            )
+                        }
                     }
+                    .padding()
                 }
-                .padding()
             }
             .navigationTitle("PatataTube")
             .toolbar {
@@ -57,6 +64,15 @@ struct VideoGridView: View {
                         cellSize = min(cellSize + cellSizeStep, maxCellSize)
                     } label: { Image(systemName: "plus.magnifyingglass") }
                     .disabled(cellSize >= maxCellSize)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await store.refreshLibrary() }
+                    } label: {
+                        if store.isLoading { ProgressView() }
+                        else { Image(systemName: "arrow.clockwise") }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { showUpload = true } label: { Image(systemName: "plus") }
                 }
             }
@@ -68,6 +84,20 @@ struct VideoGridView: View {
             }
             .task { await initialLoad() }
             .overlay { if let error = store.errorText { errorBanner(error) } }
+            .overlay {
+                if preparing {
+                    ZStack {
+                        Color.black.opacity(0.4).ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text("Preparing…").foregroundStyle(.white)
+                        }
+                        .padding(24)
+                        .background(.thinMaterial)
+                        .cornerRadius(12)
+                    }
+                }
+            }
         }
     }
 
@@ -96,10 +126,41 @@ struct VideoGridView: View {
         await store.bootLoad()
     }
 
-    private func download(_ video: Video) async {
-        guard let url = model.streamURL(for: video) else { return }
-        let preview = video.previewUrl.flatMap(URL.init(string:))
-        try? await model.cache.download(id: video.id, from: url, preview: preview)
+    private func play(_ video: Video) {
+        guard video.isLibrary, video.status != "done" else {
+            playing = video
+            return
+        }
+        preparing = true
+        Task {
+            defer { preparing = false }
+            do {
+                playing = try await store.ensureReady(id: video.id)
+            } catch {
+                store.errorText = String(describing: error)
+            }
+        }
+    }
+
+    private func download(_ video: Video) {
+        Task {
+            var target = video
+            if video.isLibrary, video.status != "done" {
+                preparing = true
+                defer { preparing = false }
+                do { target = try await store.ensureReady(id: video.id) }
+                catch { store.errorText = String(describing: error); return }
+            }
+            guard let url = model.streamURL(for: target) else { return }
+            let preview: URL?
+            if let p = target.previewUrl {
+                preview = p.hasPrefix("http") ? URL(string: p)
+                    : model.credentials.baseURL?.appendingPathComponent(
+                        p.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            } else { preview = nil }
+            try? await model.cache.download(id: target.id, from: url, preview: preview,
+                                            bearerToken: model.credentials.token)
+        }
     }
 
     private func errorBanner(_ text: String) -> some View {
