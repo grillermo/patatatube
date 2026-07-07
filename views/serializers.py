@@ -22,6 +22,17 @@ def serialize_video(video: dict) -> dict:
         "summary": video.get("summary"),
         "show_preview_url": None,
     }
+    if video.get("versions") is not None:
+        data["chosen_version_id"] = video.get("chosen_version_id")
+        data["versions"] = [
+            {
+                "id": version["id"],
+                "label": version.get("label"),
+                "status": version["status"],
+                "is_chosen": bool(version.get("is_chosen")),
+            }
+            for version in video.get("versions", [])
+        ]
     if source == "library":
         # `url` holds the raw filesystem source_path for library rows (see
         # db.upsert_library_video) — never expose that to API consumers.

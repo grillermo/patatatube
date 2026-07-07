@@ -63,6 +63,7 @@ def test_fetch_library_items(monkeypatch):
         "plex_rating_key": "42",
         "show_rating_key": None,
         "added_at": None,
+        "versions": [{"source_path": "/Volumes/Media/media/movies/Akira/Akira.mkv", "label": "Version 1"}],
     }
 
     ep = next(i for i in items if i["classification"] == "tv")
@@ -77,7 +78,33 @@ def test_fetch_library_items(monkeypatch):
         "plex_rating_key": "1264",
         "show_rating_key": "1262",
         "added_at": None,
+        "versions": [{"source_path": "/Volumes/Media/media/tv/The.Bear/S01E01.mkv", "label": "Version 1"}],
     }
+
+
+def test_movie_item_parses_multiple_versions():
+    item = plex._movie_item(
+        {
+            "ratingKey": "42",
+            "title": "Akira",
+            "Media": [
+                {
+                    "videoResolution": "1080",
+                    "Part": [{"file": "/Volumes/Media/media/movies/Akira/Akira.1080p.mkv"}],
+                },
+                {
+                    "videoResolution": "4k",
+                    "Part": [{"file": "/Volumes/Media/media/movies/Akira/Akira.4k.mkv"}],
+                },
+            ],
+        }
+    )
+
+    assert item["source_path"] == "/Volumes/Media/media/movies/Akira/Akira.1080p.mkv"
+    assert item["versions"] == [
+        {"source_path": "/Volumes/Media/media/movies/Akira/Akira.1080p.mkv", "label": "1080p"},
+        {"source_path": "/Volumes/Media/media/movies/Akira/Akira.4k.mkv", "label": "4K"},
+    ]
 
 
 def test_item_without_file_is_skipped(monkeypatch):

@@ -3,10 +3,12 @@ import Foundation
 @testable import PatataTubeKit
 
 private func makeVideo(id: Int, classification: String = "children", status: String = "completed",
-                        errorMsg: String? = nil) -> Video {
+                       errorMsg: String? = nil, chosenVersionId: Int? = nil,
+                       versions: [VideoVersion] = []) -> Video {
     Video(id: id, url: "u\(id)", title: "t\(id)", platform: nil, sourceKey: nil,
           previewUrl: nil, classification: classification, position: id,
-          status: status, errorMsg: errorMsg, streamPath: "/videos/\(id)/stream")
+          status: status, errorMsg: errorMsg, streamPath: "/videos/\(id)/stream",
+          chosenVersionId: chosenVersionId, versions: versions)
 }
 
 private final class FakeAPI: VideoAPI, @unchecked Sendable {
@@ -40,6 +42,8 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     var scanResult = ScanResult(added: 0, updated: 0, skipped: 0)
     var throwOnScan = false
     private(set) var scanCalls = 0
+    var chooseVersionResult = true
+    private(set) var chosenVersions: [(id: Int, versionId: Int)] = []
     var prepareResult = "done"
     var videoResults: [Video] = []
     private(set) var videoCalls = 0
@@ -49,12 +53,78 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         if throwOnScan { throw APIError.badStatus(500) }
         return scanResult
     }
+    func chooseVersion(id: Int, versionId: Int) async throws -> Bool {
+        chosenVersions.append((id, versionId))
+        return chooseVersionResult
+    }
     func prepare(id: Int) async throws -> String { prepareResult }
     func video(id: Int) async throws -> Video {
         videoCalls += 1
         return videoResults.isEmpty ? makeVideo(id: id) : videoResults[min(videoCalls, videoResults.count) - 1]
     }
     func imageData(path: String) async throws -> Data { Data() }
+}
+
+@Test func videoDecodesVersionsAndDefaultsMissingVersions() throws {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+    let data = Data("""
+    {
+      "id": 7,
+      "url": "",
+      "title": "A",
+      "platform": null,
+      "source_key": null,
+      "preview_url": null,
+      "classification": "movies",
+      "position": 1,
+      "status": "done",
+      "error_msg": null,
+      "stream_path": "/videos/7/stream",
+      "source": "library",
+      "chosen_version_id": 20,
+      "versions": [
+        {"id": 20, "label": "1080p", "status": "done", "is_chosen": true},
+        {"id": 21, "label": "4K", "status": "unconverted", "is_chosen": false}
+      ]
+    }
+    """.utf8)
+
+    let video = try decoder.decode(Video.self, from: data)
+    #expect(video.chosenVersionId == 20)
+    #expect(video.versions == [
+        VideoVersion(id: 20, label: "1080p", status: "done", isChosen: true),
+        VideoVersion(id: 21, label: "4K", status: "unconverted", isChosen: false),
+    ])
+
+    let legacy = Data("""
+    {
+      "id": 1,
+      "url": "u",
+      "title": null,
+      "platform": null,
+      "source_key": null,
+      "preview_url": null,
+      "classification": "children",
+      "position": 1,
+      "status": "done",
+      "error_msg": null,
+      "stream_path": "/videos/1/stream",
+      "source": null
+    }
+    """.utf8)
+    let oldVideo = try decoder.decode(Video.self, from: legacy)
+    #expect(oldVideo.chosenVersionId == nil)
+    #expect(oldVideo.versions.isEmpty)
+}
+
+@Test func cacheLocalURLUsesVersionIdWhenPresent() {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let cache = CacheManager(root: root)
+
+    #expect(cache.localURL(for: 7).lastPathComponent == "7.mp4")
+    #expect(cache.localURL(for: 7, versionId: 20).lastPathComponent == "7.v20.mp4")
 }
 
 @MainActor @Test func loadPopulatesVideos() async {
@@ -92,6 +162,47 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     await store.classify(id: 1, to: "adults")
     #expect(store.videos[0].classification == "children")
     #expect(store.errorText != nil)
+}
+
+@MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async {
+    let versions = [
+        VideoVersion(id: 10, label: "1080p", status: "done", isChosen: true),
+        VideoVersion(id: 11, label: "4K", status: "unconverted", isChosen: false),
+    ]
+    let api = FakeAPI()
+    api.videosToReturn = [
+        makeVideo(id: 1, classification: "movies", chosenVersionId: 10, versions: versions)
+    ]
+    let store = VideoStore(api: api)
+    await store.load()
+
+    await store.chooseVersion(id: 1, versionId: 11)
+
+    #expect(api.chosenVersions.count == 1)
+    #expect(api.chosenVersions[0].id == 1)
+    #expect(api.chosenVersions[0].versionId == 11)
+    #expect(store.videos[0].chosenVersionId == 11)
+    #expect(store.videos[0].status == "unconverted")
+    #expect(store.videos[0].versions.map(\.isChosen) == [false, true])
+}
+
+@MainActor @Test func chooseVersionRevertsOnFailure() async {
+    let versions = [
+        VideoVersion(id: 10, label: "1080p", status: "done", isChosen: true),
+        VideoVersion(id: 11, label: "4K", status: "unconverted", isChosen: false),
+    ]
+    let api = FakeAPI()
+    api.videosToReturn = [
+        makeVideo(id: 1, classification: "movies", chosenVersionId: 10, versions: versions)
+    ]
+    api.chooseVersionResult = false
+    let store = VideoStore(api: api)
+    await store.load()
+
+    await store.chooseVersion(id: 1, versionId: 11)
+
+    #expect(store.videos[0].chosenVersionId == 10)
+    #expect(store.videos[0].versions.map(\.isChosen) == [true, false])
 }
 
 private func tempCache() -> VideoListCache {

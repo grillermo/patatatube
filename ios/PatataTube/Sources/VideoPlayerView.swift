@@ -53,8 +53,8 @@ struct VideoPlayerView: View {
 
     private func setup() {
         let player: AVPlayer
-        if model.cache.state(for: video.id) == .cached {
-            player = AVPlayer(url: model.cache.localURL(for: video.id))
+        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
+            player = AVPlayer(url: model.cache.localURL(for: video.id, versionId: video.chosenVersionId))
         } else {
             guard let url = model.streamURL(for: video) else { return }
             var options: [String: Any] = [:]

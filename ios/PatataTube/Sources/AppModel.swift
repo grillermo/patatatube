@@ -32,6 +32,13 @@ final class AppModel: ObservableObject {
     /// Absolute stream/download URL for a video's `streamPath`.
     func streamURL(for video: Video) -> URL? {
         guard let base = credentials.baseURL else { return nil }
-        return base.appendingPathComponent(video.streamPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        let path = video.streamPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let url = base.appendingPathComponent(path)
+        guard let versionId = video.chosenVersionId,
+              var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "version_id", value: "\(versionId)")]
+        return comps.url
     }
 }

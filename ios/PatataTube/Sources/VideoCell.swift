@@ -14,6 +14,7 @@ struct VideoCell: View {
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onClassify: (String) -> Void
+    let onChooseVersion: (Int) -> Void
     let onDelete: () -> Void
 
     @State private var confirmingDelete = false
@@ -50,6 +51,19 @@ struct VideoCell: View {
             HStack {
                 downloadButton
                 Spacer()
+                if video.versions.count > 1 {
+                    Picker("Version", selection: Binding(
+                        get: { video.chosenVersionId ?? video.versions.first?.id ?? 0 },
+                        set: { onChooseVersion($0) }
+                    )) {
+                        ForEach(video.versions) { version in
+                            Text(version.label ?? "Version \(version.id)")
+                                .tag(version.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
                 Menu {
                     Button("Move up") { onMoveUp() }
                     Button("Move down") { onMoveDown() }
@@ -73,6 +87,9 @@ struct VideoCell: View {
         .confirmationDialog("Delete this video?", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { onDelete() }
             Button("Cancel", role: .cancel) {}
+        }
+        .onChange(of: video.chosenVersionId) { _, _ in
+            downloadPhase = .idle
         }
     }
 

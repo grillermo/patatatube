@@ -11,9 +11,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var session: URLSession!
     private let fileManager = FileManager.default
     private let lock = NSLock()
-    private var inFlight: [Int: Double] = [:]
-    private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
-    private var idByTask: [Int: Int] = [:]
+    private var inFlight: [String: Double] = [:]
+    private var continuations: [String: CheckedContinuation<URL, Error>] = [:]
+    private var idByTask: [Int: String] = [:]
     private var completedResults: [Int: Result<URL, Error>] = [:]
 
     public init(root: URL? = nil, configuration: URLSessionConfiguration = .default) {
@@ -31,8 +31,8 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         try? dir.setResourceValues(values)
     }
 
-    public func localURL(for id: Int) -> URL {
-        root.appendingPathComponent("\(id).mp4")
+    public func localURL(for id: Int, versionId: Int? = nil) -> URL {
+        root.appendingPathComponent(filename(videoId: id, versionId: versionId))
     }
 
     /// Local file URL of a cached preview image, or nil if none is cached.
@@ -43,16 +43,17 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         return root.appendingPathComponent(name)
     }
 
-    public func state(for id: Int) -> CacheState {
-        if fileManager.fileExists(atPath: localURL(for: id).path) { return .cached }
+    public func state(for id: Int, versionId: Int? = nil) -> CacheState {
+        let key = cacheKey(videoId: id, versionId: versionId)
+        if fileManager.fileExists(atPath: localURL(for: id, versionId: versionId).path) { return .cached }
         return lock.withLock {
-            inFlight[id].map { .downloading($0) } ?? .notCached
+            inFlight[key].map { .downloading($0) } ?? .notCached
         }
     }
 
-    public func download(id: Int, from remote: URL, preview: URL? = nil,
+    public func download(id: Int, versionId: Int? = nil, from remote: URL, preview: URL? = nil,
                          bearerToken: String? = nil) async throws {
-        try await downloadVideo(id: id, from: remote, bearerToken: bearerToken)
+        _ = try await downloadVideo(id: id, versionId: versionId, from: remote, bearerToken: bearerToken)
         // Best-effort: a missing preview must not fail the cached video.
         if let preview { try? await cachePreview(id: id, from: preview, bearerToken: bearerToken) }
     }
@@ -61,20 +62,20 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                            didWriteData bytesWritten: Int64,
                            totalBytesWritten: Int64,
                            totalBytesExpectedToWrite: Int64) {
-        guard let id = lock.withLock({ idByTask[downloadTask.taskIdentifier] }) else { return }
+        guard let key = lock.withLock({ idByTask[downloadTask.taskIdentifier] }) else { return }
         let progress: Double
         if totalBytesExpectedToWrite > 0 {
             progress = min(max(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite), 0), 1)
         } else {
             progress = 0
         }
-        lock.withLock { inFlight[id] = progress }
+        lock.withLock { inFlight[key] = progress }
     }
 
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                            didFinishDownloadingTo location: URL) {
         let taskIdentifier = downloadTask.taskIdentifier
-        guard let id = lock.withLock({ idByTask[taskIdentifier] }) else { return }
+        guard let key = lock.withLock({ idByTask[taskIdentifier] }) else { return }
 
         let result: Result<URL, Error>
         if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -82,10 +83,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         } else {
             do {
                 try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-                let destination = localURL(for: id)
+                let destination = localURL(for: videoId(from: key), versionId: versionId(from: key))
                 try? fileManager.removeItem(at: destination)
                 try fileManager.moveItem(at: location, to: destination)
-                try? fileManager.removeItem(at: resumeURL(for: id))
+                try? fileManager.removeItem(at: resumeURL(for: key))
                 result = .success(destination)
             } catch {
                 result = .failure(error)
@@ -98,36 +99,37 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     public func urlSession(_ session: URLSession, task: URLSessionTask,
                            didCompleteWithError error: Error?) {
         let taskIdentifier = task.taskIdentifier
-        guard let id = lock.withLock({ idByTask[taskIdentifier] }) else { return }
+        guard let key = lock.withLock({ idByTask[taskIdentifier] }) else { return }
 
         if let error {
-            persistResumeData(from: error, for: id)
-            finish(id: id, taskIdentifier: taskIdentifier, result: .failure(error))
+            persistResumeData(from: error, for: key)
+            finish(key: key, taskIdentifier: taskIdentifier, result: .failure(error))
             return
         }
 
         let result = lock.withLock {
             completedResults[taskIdentifier] ?? .failure(URLError(.unknown))
         }
-        finish(id: id, taskIdentifier: taskIdentifier, result: result)
+        finish(key: key, taskIdentifier: taskIdentifier, result: result)
     }
 
-    private func downloadVideo(id: Int, from remote: URL,
+    private func downloadVideo(id: Int, versionId: Int? = nil, from remote: URL,
                                bearerToken: String? = nil) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            let task = downloadTask(id: id, from: remote, bearerToken: bearerToken)
+        let key = cacheKey(videoId: id, versionId: versionId)
+        return try await withCheckedThrowingContinuation { continuation in
+            let task = downloadTask(key: key, from: remote, bearerToken: bearerToken)
             lock.withLock {
-                inFlight[id] = 0
-                continuations[id] = continuation
-                idByTask[task.taskIdentifier] = id
+                inFlight[key] = 0
+                continuations[key] = continuation
+                idByTask[task.taskIdentifier] = key
             }
             task.resume()
         }
     }
 
-    private func downloadTask(id: Int, from remote: URL,
+    private func downloadTask(key: String, from remote: URL,
                               bearerToken: String? = nil) -> URLSessionDownloadTask {
-        if let resumeData = try? Data(contentsOf: resumeURL(for: id)), !resumeData.isEmpty {
+        if let resumeData = try? Data(contentsOf: resumeURL(for: key)), !resumeData.isEmpty {
             return session.downloadTask(withResumeData: resumeData)
         }
 
@@ -138,12 +140,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         return session.downloadTask(with: request)
     }
 
-    private func finish(id: Int, taskIdentifier: Int, result: Result<URL, Error>) {
+    private func finish(key: String, taskIdentifier: Int, result: Result<URL, Error>) {
         let continuation = lock.withLock {
-            inFlight[id] = nil
+            inFlight[key] = nil
             idByTask[taskIdentifier] = nil
             completedResults[taskIdentifier] = nil
-            return continuations.removeValue(forKey: id)
+            return continuations.removeValue(forKey: key)
         }
 
         switch result {
@@ -154,17 +156,41 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
     }
 
-    private func persistResumeData(from error: Error, for id: Int) {
+    private func persistResumeData(from error: Error, for key: String) {
         let userInfo = (error as NSError).userInfo
         guard let data = userInfo[NSURLSessionDownloadTaskResumeData] as? Data, !data.isEmpty else {
             return
         }
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        try? data.write(to: resumeURL(for: id), options: .atomic)
+        try? data.write(to: resumeURL(for: key), options: .atomic)
     }
 
-    private func resumeURL(for id: Int) -> URL {
-        root.appendingPathComponent("\(id).resume")
+    private func resumeURL(for key: String) -> URL {
+        root.appendingPathComponent("\(key).resume")
+    }
+
+    private func filename(videoId: Int, versionId: Int?) -> String {
+        if let versionId {
+            return "\(videoId).v\(versionId).mp4"
+        }
+        return "\(videoId).mp4"
+    }
+
+    private func cacheKey(videoId: Int, versionId: Int?) -> String {
+        if let versionId {
+            return "\(videoId):\(versionId)"
+        }
+        return "\(videoId)"
+    }
+
+    private func videoId(from key: String) -> Int {
+        Int(key.split(separator: ":").first ?? "") ?? 0
+    }
+
+    private func versionId(from key: String) -> Int? {
+        let parts = key.split(separator: ":")
+        guard parts.count == 2 else { return nil }
+        return Int(parts[1])
     }
 
     private func cachePreview(id: Int, from remote: URL, bearerToken: String? = nil) async throws {

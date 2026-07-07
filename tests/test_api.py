@@ -678,6 +678,84 @@ def test_get_single_video(client, tmp_path):
     assert client.get("/api/videos/99999", headers=AUTH).status_code == 404
 
 
+def make_versioned_movie(tmp_path):
+    import db
+
+    src_1080 = tmp_path / "movie.1080p.mkv"
+    src_4k = tmp_path / "movie.4k.mkv"
+    src_1080.write_bytes(b"1080-bytes")
+    src_4k.write_bytes(b"4k-bytes")
+    vid, _ = db.upsert_library_video(
+        {
+            **LIB_ITEM_API,
+            "source_path": str(src_1080),
+            "title": "Movie",
+            "classification": "movies",
+            "show_title": None,
+            "season": None,
+            "episode": None,
+            "plex_rating_key": "4242",
+            "show_rating_key": None,
+            "versions": [
+                {"source_path": str(src_1080), "label": "1080p"},
+                {"source_path": str(src_4k), "label": "4K"},
+            ],
+        }
+    )
+    return vid, src_1080, src_4k
+
+
+def test_api_video_serializes_versions(client, tmp_path):
+    import db
+
+    vid, _, _ = make_versioned_movie(tmp_path)
+    versions = db.get_video_versions(vid)
+    assert db.set_chosen_version(vid, versions[1]["id"]) is True
+
+    resp = client.get(f"/api/videos/{vid}", headers=AUTH)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["chosen_version_id"] == versions[1]["id"]
+    assert data["versions"] == [
+        {"id": versions[0]["id"], "label": "1080p", "status": "unconverted", "is_chosen": False},
+        {"id": versions[1]["id"], "label": "4K", "status": "unconverted", "is_chosen": True},
+    ]
+
+
+def test_choose_version_endpoint_updates_selection(client, tmp_path):
+    import db
+
+    vid, _, _ = make_versioned_movie(tmp_path)
+    versions = db.get_video_versions(vid)
+
+    resp = client.post(
+        f"/api/videos/{vid}/version",
+        json={"version_id": versions[1]["id"]},
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    assert db.get_video(vid)["chosen_version_id"] == versions[1]["id"]
+
+
+def test_stream_library_supports_version_override(client, tmp_path):
+    import db
+
+    vid, _, src_4k = make_versioned_movie(tmp_path)
+    versions = db.get_video_versions(vid)
+    db.set_library_state(vid, "done", version_id=versions[1]["id"])
+
+    resp = client.get(
+        f"/videos/{vid}/stream?version_id={versions[1]['id']}",
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    assert resp.content == src_4k.read_bytes()
+
+
 def test_prepare_passthrough_returns_done(client, tmp_path, monkeypatch):
     import library
     vid, _ = make_library_row(tmp_path, name="ep.mp4")

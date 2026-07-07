@@ -46,11 +46,30 @@ def _get_json(path: str, params: dict | None = None) -> dict:
 
 
 def _part_file(meta: dict) -> str | None:
+    versions = _part_versions(meta)
+    if versions:
+        return versions[0]["source_path"]
+    return None
+
+
+def _version_label(media: dict, index: int) -> str:
+    resolution = str(media.get("videoResolution") or "").lower()
+    if resolution in ("4k", "2160"):
+        return "4K"
+    if resolution.isdigit():
+        return f"{resolution}p"
+    return media.get("title") or f"Version {index + 1}"
+
+
+def _part_versions(meta: dict) -> list[dict]:
+    versions = []
     for media in meta.get("Media") or []:
+        label = _version_label(media, len(versions))
         for part in media.get("Part") or []:
             if part.get("file"):
-                return part["file"]
-    return None
+                versions.append({"source_path": part["file"], "label": label})
+                break
+    return versions
 
 
 def _movie_item(meta: dict) -> dict | None:
@@ -68,6 +87,7 @@ def _movie_item(meta: dict) -> dict | None:
         "plex_rating_key": str(meta["ratingKey"]),
         "show_rating_key": None,
         "added_at": meta.get("addedAt"),
+        "versions": _part_versions(meta),
     }
 
 
@@ -88,6 +108,7 @@ def _episode_item(meta: dict) -> dict | None:
             str(meta["grandparentRatingKey"]) if meta.get("grandparentRatingKey") else None
         ),
         "added_at": meta.get("addedAt"),
+        "versions": _part_versions(meta),
     }
 
 

@@ -37,7 +37,7 @@ struct EpisodesView: View {
                 }
             }
             Spacer()
-            switch model.cache.state(for: episode.id) {
+            switch model.cache.state(for: episode.id, versionId: episode.chosenVersionId) {
             case .cached:
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
             case .downloading(let p):

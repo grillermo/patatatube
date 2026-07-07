@@ -13,3 +13,7 @@ def apply_classification(video_id: int, classification: str) -> bool:
         return False
     db.set_video_classification(video_id, classification)
     return True
+
+
+def choose_version(video_id: int, version_id: int) -> bool:
+    return db.set_chosen_version(video_id, version_id)

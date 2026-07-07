@@ -21,6 +21,7 @@ public protocol VideoAPI: Sendable {
     func classifications() async throws -> [String]
     func move(id: Int, direction: String) async throws -> Bool
     func classify(id: Int, classification: String) async throws -> Bool
+    func chooseVersion(id: Int, versionId: Int) async throws -> Bool
     func upload(url: String) async throws -> Int
     func delete(id: Int) async throws -> Bool
     func scanLibrary() async throws -> ScanResult
@@ -91,6 +92,10 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         try await postOK("api/videos/\(id)/classify", body: ["classification": classification])
     }
 
+    public func chooseVersion(id: Int, versionId: Int) async throws -> Bool {
+        try await postOK("api/videos/\(id)/version", body: ["version_id": versionId])
+    }
+
     public func delete(id: Int) async throws -> Bool {
         try await postOK("api/video/\(id)/delete", body: [:])
     }
@@ -143,7 +148,7 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         return true
     }
 
-    private func postOK(_ path: String, body: [String: String]) async throws -> Bool {
+    private func postOK(_ path: String, body: [String: Any]) async throws -> Bool {
         let data = try await authedPost(path, body: body)
         struct Result: Decodable { let ok: Bool }
         do { return try JSONDecoder().decode(Result.self, from: data).ok }
@@ -163,7 +168,7 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         return data
     }
 
-    private func authedPost(_ path: String, body: [String: String]) async throws -> Data {
+    private func authedPost(_ path: String, body: [String: Any]) async throws -> Data {
         guard let token = store.token, !token.isEmpty else { throw APIError.notConfigured }
         var request = URLRequest(url: try base().appendingPathComponent(path))
         request.httpMethod = "POST"

@@ -197,7 +197,7 @@ def test_scan_library(fresh_db, tmp_path, monkeypatch):
     def item(path):
         return {"source_path": str(path), "title": path.stem, "classification": "movies",
                 "show_title": None, "season": None, "episode": None, "summary": None,
-                "plex_rating_key": "1", "show_rating_key": None}
+                "plex_rating_key": path.stem, "show_rating_key": None}
 
     monkeypatch.setattr(plex, "fetch_library_items",
                         lambda: [item(src), item(gone), item(converted)])
@@ -211,3 +211,39 @@ def test_scan_library(fresh_db, tmp_path, monkeypatch):
 
     result = library.scan_library()
     assert result == {"added": 0, "updated": 1, "skipped": 2}
+
+
+def test_scan_library_filters_versions_per_file(fresh_db, tmp_path, monkeypatch):
+    import db
+    import plex
+    real = tmp_path / "1080.mkv"
+    real.write_bytes(b"x")
+    converted = tmp_path / "1080.mp4"  # our own conversion output, must be excluded
+    converted.write_bytes(b"x")
+    missing = tmp_path / "4k.mkv"       # never created, must be excluded
+
+    item = {
+        "source_path": str(converted), "title": "Akira", "classification": "movies",
+        "show_title": None, "season": None, "episode": None, "summary": None,
+        "plex_rating_key": "42", "show_rating_key": None,
+        "versions": [
+            {"source_path": str(converted), "label": "1080p (converted)"},
+            {"source_path": str(real), "label": "1080p"},
+            {"source_path": str(missing), "label": "4K"},
+        ],
+    }
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+    # Register `converted` as a prior conversion output so it lands in get_converted_paths.
+    seed_src = tmp_path / "seed.mkv"
+    seed_src.write_bytes(b"x")
+    vid0, _ = db.upsert_library_video(
+        {"source_path": str(seed_src), "title": "seed", "classification": "movies",
+         "show_title": None, "season": None, "episode": None, "summary": None,
+         "plex_rating_key": "seed", "show_rating_key": None})
+    db.set_library_state(vid0, "done", converted_path=str(converted))
+
+    result = library.scan_library()
+    assert result["added"] == 1
+    movie = next(v for v in db.get_all_videos("movies") if v["plex_rating_key"] == "42")
+    paths = [v["source_path"] for v in db.get_video_versions(movie["id"])]
+    assert paths == [str(real)]  # converted sibling + missing file both dropped

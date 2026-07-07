@@ -34,7 +34,20 @@ extension APIClientTests {
             #expect(status == "converting")
         }
 
-        @Test func fetchSingleVideo() async throws {
+    @Test func chooseVersion() async throws {
+        MockURLProtocol.handler = { req in
+            #expect(req.url?.path == "/api/videos/7/version")
+            #expect(req.httpMethod == "POST")
+            let body = try JSONSerialization.jsonObject(with: req.httpBodyData()) as? [String: Int]
+            #expect(body?["version_id"] == 20)
+            return (jsonResponse(req.url!), #"{"ok": true}"#.data(using: .utf8)!)
+        }
+
+        let ok = try await makeClient().chooseVersion(id: 7, versionId: 20)
+        #expect(ok)
+    }
+
+    @Test func fetchSingleVideo() async throws {
             MockURLProtocol.handler = { req in
                 #expect(req.url?.path == "/api/videos/7")
                 #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer secret")

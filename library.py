@@ -102,8 +102,11 @@ def convert_library_video(video_id: int) -> None:
     video = db.get_video(video_id)
     if not video or video.get("source") != "library":
         return
+    version = db.get_video_version(video_id)
+    if not version:
+        return
 
-    source = Path(video["source_path"])
+    source = Path(version["source_path"])
     tmp = None
     try:
         if not source.exists():
@@ -111,7 +114,7 @@ def convert_library_video(video_id: int) -> None:
 
         plan = plan_conversion(probe_source(source))
         if plan.passthrough:
-            db.set_library_state(video_id, "done")
+            db.set_library_state(video_id, "done", version_id=version["id"])
             return
 
         target = conversion_target(source)
@@ -128,28 +131,50 @@ def convert_library_video(video_id: int) -> None:
         ]
         _run_ffmpeg(cmd)
         os.replace(tmp, target)
-        db.set_library_state(video_id, "done", converted_path=str(target))
-    except Exception as exc:  # noqa: BLE001 — background task, must not raise
+        db.set_library_state(video_id, "done", converted_path=str(target), version_id=version["id"])
+    except Exception as exc:  # noqa: BLE001 - background task, must not raise
         if tmp is not None:
             Path(tmp).unlink(missing_ok=True)
-        db.set_library_state(video_id, "unconverted", error_msg=str(exc))
+        db.set_library_state(video_id, "unconverted", error_msg=str(exc), version_id=version["id"])
 
 
 def scan_library() -> dict:
-    """Upsert every Plex library item into the videos table. Metadata only, no ffmpeg."""
+    """Upsert every Plex library item into the videos table. Metadata only, no ffmpeg.
+
+    Versions are filtered per file: our own converted siblings (in
+    get_converted_paths) and versions whose files are missing are dropped, so a
+    rescan never re-imports a converted output as a selectable version. An item
+    with no surviving version is skipped.
+    """
     items = plex.fetch_library_items()
     converted = db.get_converted_paths()
     added = updated = skipped = 0
     for item in items:
-        path = item["source_path"]
-        if path in converted or not Path(path).exists():
+        raw_versions = item.get("versions") or (
+            [{"source_path": item["source_path"], "label": "Version 1"}]
+            if item.get("source_path")
+            else []
+        )
+        versions = [
+            v
+            for v in raw_versions
+            if v.get("source_path")
+            and v["source_path"] not in converted
+            and Path(v["source_path"]).exists()
+        ]
+        if not versions:
             skipped += 1
             continue
+
+        item = {**item, "versions": versions, "source_path": versions[0]["source_path"]}
         if not item.get("added_at"):
-            try:
-                item["added_at"] = int(Path(path).stat().st_mtime)
-            except OSError:
-                item["added_at"] = None
+            mtimes = []
+            for v in versions:
+                try:
+                    mtimes.append(int(Path(v["source_path"]).stat().st_mtime))
+                except OSError:
+                    pass
+            item["added_at"] = min(mtimes) if mtimes else None
         _, status = db.upsert_library_video(item)
         if status == "created":
             added += 1

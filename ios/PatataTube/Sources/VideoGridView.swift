@@ -33,20 +33,21 @@ struct VideoGridView: View {
                               onDownload: { v in Task { await download(v) } })
                 } else {
                     LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(store.videos) { video in
-                            VideoCell(
-                                video: video,
-                                cacheState: model.cache.state(for: video.id),
-                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
-                                classifications: classifications,
-                                onPlay: { play(video) },
-                                onDownload: { await download(video) },
-                                onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
-                                onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
-                                onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
-                                onDelete: { Task { await store.delete(id: video.id) } }
-                            )
-                        }
+                ForEach(store.videos) { video in
+                    VideoCell(
+                        video: video,
+                        cacheState: model.cache.state(for: video.id, versionId: video.chosenVersionId),
+                        cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
+                        classifications: classifications,
+                        onPlay: { play(video) },
+                        onDownload: { await download(video) },
+                        onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
+                        onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
+                        onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
+                        onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
+                        onDelete: { Task { await store.delete(id: video.id) } }
+                    )
+                }
                     }
                     .padding()
                 }
@@ -141,7 +142,7 @@ struct VideoGridView: View {
         // Already downloaded to device: play the local file directly, no network.
         // ensureReady() would hit /prepare and fail offline (-1009) even though
         // the cached MP4 is ready to play. VideoPlayerView plays from cache too.
-        if model.cache.state(for: video.id) == .cached {
+        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
             playing = video
             return
         }
@@ -182,7 +183,7 @@ struct VideoGridView: View {
                     p.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
         } else { preview = nil }
         do {
-            try await model.cache.download(id: target.id, from: url, preview: preview,
+            try await model.cache.download(id: target.id, versionId: target.chosenVersionId, from: url, preview: preview,
                                            bearerToken: model.credentials.token)
             return true
         } catch {
@@ -195,7 +196,7 @@ struct VideoGridView: View {
     private func downloadAll() async {
         downloadingAll = true
         defer { downloadingAll = false }
-        for video in store.videos where model.cache.state(for: video.id) == .notCached {
+        for video in store.videos where model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached {
             await download(video)
         }
     }

@@ -65,12 +65,32 @@ def init_db():
             conn.execute("ALTER TABLE videos ADD COLUMN show_rating_key TEXT")
         if "deleted_at" not in columns:
             conn.execute("ALTER TABLE videos ADD COLUMN deleted_at TEXT")
+        if "chosen_version_id" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN chosen_version_id INTEGER")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS video_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id INTEGER NOT NULL,
+                source_path TEXT NOT NULL,
+                label TEXT,
+                status TEXT NOT NULL DEFAULT 'unconverted',
+                converted_path TEXT,
+                error_msg TEXT,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(video_id, source_path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_video_versions_video_id ON video_versions(video_id);
+            """
+        )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_source_path ON videos(source_path)"
         )
         _backfill_youtube_preview_urls(conn)
         _backfill_positions(conn)
         _backfill_library_added_at(conn)
+        _backfill_video_versions(conn)
         _delete_error_videos(conn)
 
 
@@ -135,6 +155,57 @@ def _delete_error_videos(conn: sqlite3.Connection) -> int:
     return len(error_ids)
 
 
+def _backfill_video_versions(conn: sqlite3.Connection) -> int:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM videos
+        WHERE source = 'library'
+          AND source_path IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM video_versions WHERE video_versions.video_id = videos.id
+          )
+        """
+    ).fetchall()
+    changed = 0
+    for row in rows:
+        cur = conn.execute(
+            """
+            INSERT INTO video_versions (
+                video_id, source_path, label, status, converted_path, error_msg, position
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 0)
+            """,
+            (
+                row["id"],
+                row["source_path"],
+                "Version 1",
+                row["status"] or "unconverted",
+                row["converted_path"],
+                row["error_msg"],
+            ),
+        )
+        conn.execute(
+            "UPDATE videos SET chosen_version_id = COALESCE(chosen_version_id, ?) WHERE id = ?",
+            (cur.lastrowid, row["id"]),
+        )
+        changed += 1
+
+    for row in conn.execute(
+        """
+        SELECT id
+        FROM videos
+        WHERE source = 'library'
+          AND chosen_version_id IS NULL
+          AND EXISTS (SELECT 1 FROM video_versions WHERE video_versions.video_id = videos.id)
+        """
+    ).fetchall():
+        _ensure_chosen_version(conn, row["id"])
+        changed += 1
+
+    return changed
+
+
 def add_video(
     url: str,
     platform: str | None = None,
@@ -159,17 +230,156 @@ def add_video(
                 next_position,
             ),
         )
-        return cur.lastrowid
+    return cur.lastrowid
+
+
+def _video_with_versions(conn: sqlite3.Connection, row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    video = dict(row)
+    if video.get("source") == "library":
+        video["versions"] = _get_video_versions(conn, video["id"])
+    return video
+
+
+def _get_video_versions(conn: sqlite3.Connection, video_id: int) -> list[dict]:
+    chosen = conn.execute(
+        "SELECT chosen_version_id FROM videos WHERE id = ?",
+        (video_id,),
+    ).fetchone()
+    chosen_id = chosen["chosen_version_id"] if chosen else None
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM video_versions
+        WHERE video_id = ?
+        ORDER BY position ASC, id ASC
+        """,
+        (video_id,),
+    ).fetchall()
+    versions = [dict(row) for row in rows]
+    for version in versions:
+        version["is_chosen"] = version["id"] == chosen_id
+    return versions
+
+
+def get_video_versions(video_id: int) -> list[dict]:
+    with _conn() as conn:
+        return _get_video_versions(conn, video_id)
+
+
+def get_video_version(video_id: int, version_id: int | None = None) -> dict | None:
+    with _conn() as conn:
+        if version_id is None:
+            version_id = _ensure_chosen_version(conn, video_id)
+            if version_id is None:
+                return None
+        row = conn.execute(
+            """
+            SELECT *
+            FROM video_versions
+            WHERE video_id = ? AND id = ?
+            """,
+            (video_id, version_id),
+        ).fetchone()
+        if not row:
+            return None
+        version = dict(row)
+        video = conn.execute("SELECT chosen_version_id FROM videos WHERE id = ?", (video_id,)).fetchone()
+        version["is_chosen"] = bool(video and video["chosen_version_id"] == version["id"])
+        return version
+
+
+def _sync_video_from_chosen(conn: sqlite3.Connection, video_id: int) -> None:
+    row = conn.execute(
+        """
+        SELECT source_path, converted_path, status, error_msg
+        FROM video_versions
+        WHERE id = (SELECT chosen_version_id FROM videos WHERE id = ?)
+          AND video_id = ?
+        """,
+        (video_id, video_id),
+    ).fetchone()
+    if not row:
+        return
+    conn.execute(
+        """
+        UPDATE videos
+        SET source_path = ?,
+            converted_path = ?,
+            status = ?,
+            error_msg = ?
+        WHERE id = ?
+        """,
+        (row["source_path"], row["converted_path"], row["status"], row["error_msg"], video_id),
+    )
+
+
+def _ensure_chosen_version(conn: sqlite3.Connection, video_id: int) -> int | None:
+    current = conn.execute(
+        """
+        SELECT chosen_version_id
+        FROM videos
+        WHERE id = ?
+        """,
+        (video_id,),
+    ).fetchone()
+    if current and current["chosen_version_id"]:
+        exists = conn.execute(
+            """
+            SELECT 1
+            FROM video_versions
+            WHERE video_id = ? AND id = ?
+            """,
+            (video_id, current["chosen_version_id"]),
+        ).fetchone()
+        if exists:
+            _sync_video_from_chosen(conn, video_id)
+            return current["chosen_version_id"]
+
+    row = conn.execute(
+        """
+        SELECT id
+        FROM video_versions
+        WHERE video_id = ?
+        ORDER BY position ASC, id ASC
+        LIMIT 1
+        """,
+        (video_id,),
+    ).fetchone()
+    if not row:
+        return None
+    conn.execute("UPDATE videos SET chosen_version_id = ? WHERE id = ?", (row["id"], video_id))
+    _sync_video_from_chosen(conn, video_id)
+    return row["id"]
+
+
+def set_chosen_version(video_id: int, version_id: int) -> bool:
+    with _conn() as conn:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM video_versions
+            WHERE video_id = ? AND id = ?
+            """,
+            (video_id, version_id),
+        ).fetchone()
+        if not row:
+            return False
+        conn.execute("UPDATE videos SET chosen_version_id = ? WHERE id = ?", (version_id, video_id))
+        _sync_video_from_chosen(conn, video_id)
+        return True
 
 
 def get_video(video_id: int) -> dict | None:
     with _conn() as conn:
         row = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
-        return dict(row) if row else None
+        return _video_with_versions(conn, row)
 
 
 def delete_video(video_id: int):
     with _conn() as conn:
+        conn.execute("DELETE FROM video_versions WHERE video_id = ?", (video_id,))
         conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
 
 
@@ -185,7 +395,7 @@ def get_all_videos(classification: str | None = None) -> list[dict]:
             rows = conn.execute(
                 "SELECT * FROM videos WHERE deleted_at IS NULL ORDER BY position DESC, created_at DESC"
             ).fetchall()
-        return [dict(r) for r in rows]
+    return [_video_with_versions(conn, r) for r in rows]
 
 
 def set_video_classification(video_id: int, classification: str) -> None:
@@ -293,17 +503,80 @@ def _backfill_youtube_preview_urls(conn: sqlite3.Connection) -> int:
     return updated
 
 
-def upsert_library_video(item: dict) -> tuple[int, str]:
-    """Insert or update a library row keyed on source_path.
+def _incoming_versions(item: dict) -> list[dict]:
+    versions = item.get("versions") or [
+        {"source_path": item["source_path"], "label": "Version 1"}
+    ]
+    return [
+        {
+            "source_path": version["source_path"],
+            "label": version.get("label") or f"Version {index + 1}",
+            "position": index,
+        }
+        for index, version in enumerate(versions)
+        if version.get("source_path")
+    ]
 
-    Returns (video_id, status) with status in {"created", "updated", "tombstoned"}.
-    Tombstoned rows are left untouched so a rescan never resurrects a delete.
-    """
-    with _conn() as conn:
+
+def _sync_versions(conn: sqlite3.Connection, video_id: int, item: dict) -> None:
+    incoming = _incoming_versions(item)
+    if not incoming:
+        conn.execute("DELETE FROM video_versions WHERE video_id = ?", (video_id,))
+        _ensure_chosen_version(conn, video_id)
+        return
+
+    keep = []
+    for version in incoming:
         row = conn.execute(
-            "SELECT id, deleted_at FROM videos WHERE source_path = ?",
-            (item["source_path"],),
+            """
+            SELECT id
+            FROM video_versions
+            WHERE video_id = ? AND source_path = ?
+            """,
+            (video_id, version["source_path"]),
         ).fetchone()
+        if row:
+            keep.append(row["id"])
+            conn.execute(
+                """
+                UPDATE video_versions
+                SET label = ?, position = ?
+                WHERE id = ?
+                """,
+                (version["label"], version["position"], row["id"]),
+            )
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO video_versions (video_id, source_path, label, position)
+                VALUES (?, ?, ?, ?)
+                """,
+                (video_id, version["source_path"], version["label"], version["position"]),
+            )
+            keep.append(cur.lastrowid)
+
+    placeholders = ",".join("?" for _ in keep)
+    conn.execute(
+        f"DELETE FROM video_versions WHERE video_id = ? AND id NOT IN ({placeholders})",
+        (video_id, *keep),
+    )
+    _ensure_chosen_version(conn, video_id)
+
+
+def upsert_library_video(item: dict) -> tuple[int, str]:
+    """Insert or update a library row keyed on Plex rating key when available."""
+    with _conn() as conn:
+        if item.get("plex_rating_key"):
+            row = conn.execute(
+                "SELECT id, deleted_at FROM videos WHERE plex_rating_key = ?",
+                (item["plex_rating_key"],),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id, deleted_at FROM videos WHERE source_path = ?",
+                (item["source_path"],),
+            ).fetchone()
+
         # The real "added to library" instant: Plex addedAt (unix seconds), with a
         # filesystem-mtime fallback supplied by the scanner. Both created_at and
         # position are derived from it so the standard "position DESC, created_at DESC"
@@ -322,13 +595,14 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
             conn.execute(
                 """
                 UPDATE videos
-                SET title = ?, classification = ?, show_title = ?, season = ?,
+                SET url = ?, title = ?, classification = ?, show_title = ?, season = ?,
                     episode = ?, summary = ?, plex_rating_key = ?, show_rating_key = ?,
                     created_at = COALESCE(?, created_at),
                     position = COALESCE(?, position)
                 WHERE id = ?
                 """,
                 (
+                    item["source_path"],
                     item.get("title"),
                     item["classification"],
                     item.get("show_title"),
@@ -342,6 +616,7 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
                     row["id"],
                 ),
             )
+            _sync_versions(conn, row["id"], item)
             return row["id"], "updated"
 
         if position is None:
@@ -370,6 +645,7 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
                 position,
             ),
         )
+        _sync_versions(conn, cur.lastrowid, item)
         return cur.lastrowid, "created"
 
 
@@ -384,7 +660,16 @@ def tombstone_video(video_id: int) -> None:
 def get_converted_paths() -> set[str]:
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT converted_path FROM videos WHERE converted_path IS NOT NULL"
+            """
+            SELECT converted_path FROM video_versions WHERE converted_path IS NOT NULL
+            UNION
+            SELECT converted_path
+            FROM videos
+            WHERE converted_path IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM video_versions WHERE video_versions.video_id = videos.id
+              )
+            """
         ).fetchall()
         return {r["converted_path"] for r in rows}
 
@@ -394,9 +679,37 @@ def set_library_state(
     status: str,
     converted_path: str | None = None,
     error_msg: str | None = None,
+    version_id: int | None = None,
 ) -> None:
     """Status updates for library rows. Unlike update_video, never deletes the row."""
     with _conn() as conn:
+        video = conn.execute("SELECT source FROM videos WHERE id = ?", (video_id,)).fetchone()
+        if video and video["source"] == "library":
+            if version_id is None:
+                version_id = _ensure_chosen_version(conn, video_id)
+            if version_id is not None:
+                conn.execute(
+                    """
+                    UPDATE video_versions
+                    SET status = ?,
+                        converted_path = COALESCE(?, converted_path),
+                        error_msg = ?
+                    WHERE video_id = ? AND id = ?
+                    """,
+                    (status, converted_path, error_msg, video_id, version_id),
+                )
+                if error_msg and status == "unconverted":
+                    conn.execute(
+                        """
+                        UPDATE video_versions
+                        SET converted_path = NULL
+                        WHERE video_id = ? AND id = ?
+                        """,
+                        (video_id, version_id),
+                    )
+                _sync_video_from_chosen(conn, video_id)
+                return
+
         conn.execute(
             """
             UPDATE videos
@@ -405,4 +718,3 @@ def set_library_state(
             """,
             (status, converted_path, error_msg, video_id),
         )
-

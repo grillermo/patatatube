@@ -65,6 +65,19 @@ public final class VideoStore: ObservableObject {
         }
     }
 
+    public func chooseVersion(id: Int, versionId: Int) async {
+        guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
+        let previous = videos[index]
+        videos[index] = videos[index].withChosenVersion(versionId)
+        do {
+            let ok = try await api.chooseVersion(id: id, versionId: versionId)
+            if !ok { videos[index] = previous }
+        } catch {
+            videos[index] = previous
+            errorText = String(describing: error)
+        }
+    }
+
     public func move(id: Int, direction: String) async {
         do {
             let ok = try await api.move(id: id, direction: direction)

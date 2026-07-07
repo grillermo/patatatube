@@ -125,6 +125,10 @@ class ClassifyRequest(BaseModel):
     classification: str
 
 
+class VersionRequest(BaseModel):
+    version_id: int
+
+
 def _print_bad_request_details(request: Request, body: UploadRequest):
     print("400 Bad Request details:", flush=True)
     print(f"  method={request.method}", flush=True)
@@ -366,10 +370,18 @@ async def stream_video(video_id: int, request: Request):
         raise HTTPException(status_code=404, detail="Video not found or not ready")
 
     if video.get("source") == "library":
-        if video["status"] != "done":
+        requested_version = request.query_params.get("version_id")
+        try:
+            version_id = int(requested_version) if requested_version else None
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Version not found")
+        version = db.get_video_version(video_id, version_id)
+        if not version:
+            raise HTTPException(status_code=404, detail="Version not found")
+        if version["status"] != "done":
             raise HTTPException(status_code=409, detail="Video not prepared yet")
-        file_path = Path(video["converted_path"] or video["source_path"])
-        mime = "video/mp4"
+        file_path = Path(version["converted_path"] or version["source_path"])
+        mime = _guess_mime(file_path.name)
     else:
         if video["status"] != "done" or not video["filename"]:
             raise HTTPException(status_code=404, detail="Video not found or not ready")
@@ -494,6 +506,13 @@ async def classify_video_endpoint(video_id: int, classification: str = Form(...)
     return RedirectResponse(url=redirect_url, status_code=303)
 
 
+@app.post("/videos/{video_id}/version")
+async def choose_video_version_endpoint(video_id: int, version_id: int = Form(...), classification: str | None = Form(default=None)):
+    services.choose_version(video_id, version_id)
+    redirect_url = f"/?classification={classification}" if classification else "/"
+    return RedirectResponse(url=redirect_url, status_code=303)
+
+
 @app.get("/api/classifications")
 async def api_classifications():
     return {"classifications": CLASSIFICATIONS}
@@ -521,12 +540,22 @@ async def api_classify_video(video_id: int, body: ClassifyRequest, request: Requ
     return {"ok": ok}
 
 
+@app.post("/api/videos/{video_id}/version")
+async def api_choose_video_version(video_id: int, body: VersionRequest, request: Request):
+    _check_token(request)
+    ok = services.choose_version(video_id, body.version_id)
+    return {"ok": ok}
+
+
 @app.post("/api/video/{video_id}/delete")
 async def api_delete_video(video_id: int, request: Request):
     _check_token(request)
     video = db.get_video(video_id)
     if video:
         if video.get("source") == "library":
+            for version in video.get("versions", []):
+                if version.get("converted_path"):
+                    Path(version["converted_path"]).unlink(missing_ok=True)
             if video.get("converted_path"):
                 Path(video["converted_path"]).unlink(missing_ok=True)
             db.tombstone_video(video_id)
@@ -566,14 +595,17 @@ async def api_prepare_video(video_id: int, request: Request, background_tasks: B
     if video.get("source") != "library":
         raise HTTPException(status_code=400, detail="Only library videos need preparing")
 
-    if video["status"] == "done":
+    version = db.get_video_version(video_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if version["status"] == "done":
         return {"status": "done"}
-    if video["status"] == "converting":
+    if version["status"] == "converting":
         return JSONResponse({"status": "converting"}, status_code=202)
 
-    source = Path(video["source_path"])
+    source = Path(version["source_path"])
     if not source.exists():
-        db.set_library_state(video_id, "unconverted", error_msg=f"source file missing: {source}")
+        db.set_library_state(video_id, "unconverted", error_msg=f"source file missing: {source}", version_id=version["id"])
         raise HTTPException(status_code=404, detail="Source file missing")
 
     # Write "converting" now, before the first await, so a second concurrent
@@ -583,16 +615,16 @@ async def api_prepare_video(video_id: int, request: Request, background_tasks: B
     # against two requests reading the old status in the exact same instant
     # before either writes, but this closes the practical window between
     # overlapping requests a few milliseconds apart.)
-    db.set_library_state(video_id, "converting")
+    db.set_library_state(video_id, "converting", version_id=version["id"])
 
     try:
         plan = await asyncio.to_thread(lambda: library.plan_conversion(library.probe_source(source)))
     except Exception as exc:  # ffprobe failure
-        db.set_library_state(video_id, "unconverted", error_msg=str(exc))
+        db.set_library_state(video_id, "unconverted", error_msg=str(exc), version_id=version["id"])
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     if plan.passthrough:
-        db.set_library_state(video_id, "done")
+        db.set_library_state(video_id, "done", version_id=version["id"])
         return {"status": "done"}
 
     background_tasks.add_task(library.convert_library_video, video_id)

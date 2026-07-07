@@ -185,9 +185,9 @@ def test_upsert_library_video_uses_added_at_for_position(fresh_db):
 def test_library_videos_sorted_newest_added_first(fresh_db):
     import db
     older, _ = db.upsert_library_video(
-        {**LIB_ITEM, "source_path": "/m/old.mkv", "added_at": 1_600_000_000})
+        {**LIB_ITEM, "source_path": "/m/old.mkv", "plex_rating_key": "old", "added_at": 1_600_000_000})
     newer, _ = db.upsert_library_video(
-        {**LIB_ITEM, "source_path": "/m/new.mkv", "added_at": 1_700_000_000})
+        {**LIB_ITEM, "source_path": "/m/new.mkv", "plex_rating_key": "new", "added_at": 1_700_000_000})
     ordered = [v["id"] for v in db.get_all_videos()]
     assert ordered.index(newer) < ordered.index(older)
 
@@ -207,3 +207,125 @@ def test_backfill_library_added_at_rewrites_legacy_rows(fresh_db, tmp_path):
     # Idempotent: unix-scale positions are left untouched on a second pass.
     with db._conn() as conn:
         assert db._backfill_library_added_at(conn) == 0
+
+
+def _versioned_movie_item(rating_key="42", versions=None):
+    return {
+        "source_path": "/m/1080.mkv",
+        "title": "Akira",
+        "classification": "movies",
+        "show_title": None,
+        "season": None,
+        "episode": None,
+        "summary": "Neo-Tokyo.",
+        "plex_rating_key": rating_key,
+        "show_rating_key": None,
+        "versions": versions
+        or [
+            {"source_path": "/m/1080.mkv", "label": "1080p"},
+            {"source_path": "/m/4k.mkv", "label": "4K"},
+        ],
+    }
+
+
+def test_video_versions_table_and_chosen_column_exist(fresh_db):
+    import db
+
+    with db._conn() as conn:
+        video_columns = {row["name"] for row in conn.execute("PRAGMA table_info(videos)")}
+        version_columns = {row["name"] for row in conn.execute("PRAGMA table_info(video_versions)")}
+
+    assert "chosen_version_id" in video_columns
+    assert {
+        "id",
+        "video_id",
+        "source_path",
+        "label",
+        "status",
+        "converted_path",
+        "error_msg",
+        "position",
+    } <= version_columns
+
+
+def test_backfill_creates_one_version_per_library_row(fresh_db):
+    import db
+
+    with db._conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO videos (
+                url, title, status, classification, source, source_path,
+                converted_path, plex_rating_key, created_at, position
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "/m/a.mkv",
+                "A",
+                "done",
+                "movies",
+                "library",
+                "/m/a.mkv",
+                "/m/a.mp4",
+                "42",
+                "2026-01-01T00:00:00+00:00",
+                1,
+            ),
+        )
+
+    db.init_db()
+    video = db.get_all_videos("movies")[0]
+    versions = db.get_video_versions(video["id"])
+
+    assert video["chosen_version_id"] == versions[0]["id"]
+    assert versions[0]["source_path"] == "/m/a.mkv"
+    assert versions[0]["converted_path"] == "/m/a.mp4"
+    assert versions[0]["status"] == "done"
+
+
+def test_version_helpers_update_chosen_version_and_paths(fresh_db):
+    import db
+
+    video_id, status = db.upsert_library_video(_versioned_movie_item())
+    assert status == "created"
+    versions = db.get_video_versions(video_id)
+    assert [v["label"] for v in versions] == ["1080p", "4K"]
+    assert versions[0]["is_chosen"] is True
+    assert versions[1]["is_chosen"] is False
+
+    assert db.set_chosen_version(video_id, versions[1]["id"]) is True
+    assert db.set_chosen_version(video_id, 9999) is False
+    chosen = db.get_video(video_id)
+    assert chosen["chosen_version_id"] == versions[1]["id"]
+    assert chosen["source_path"] == "/m/4k.mkv"
+
+    db.set_library_state(video_id, "done", converted_path="/m/4k.mp4")
+    refreshed = db.get_video_versions(video_id)
+    converted = next(v for v in refreshed if v["label"] == "4K")
+    assert converted["converted_path"] == "/m/4k.mp4"
+    assert db.get_converted_paths() == {"/m/4k.mp4"}
+
+
+def test_upsert_library_video_syncs_versions_by_rating_key(fresh_db):
+    import db
+
+    video_id, status = db.upsert_library_video(_versioned_movie_item())
+    assert status == "created"
+    versions = db.get_video_versions(video_id)
+    assert db.set_chosen_version(video_id, versions[1]["id"]) is True
+
+    video_id2, status2 = db.upsert_library_video(
+        _versioned_movie_item(
+            versions=[
+                {"source_path": "/m/1080.mkv", "label": "1080p"},
+                {"source_path": "/m/4k.mkv", "label": "4K Remux"},
+            ]
+        )
+    )
+
+    assert video_id2 == video_id
+    assert status2 == "updated"
+    refreshed = db.get_video_versions(video_id)
+    assert [v["label"] for v in refreshed] == ["1080p", "4K Remux"]
+    assert next(v for v in refreshed if v["source_path"] == "/m/4k.mkv")["is_chosen"] is True
