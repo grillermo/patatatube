@@ -42,7 +42,8 @@ struct SettingsView: View {
                             for video in model.store.videos {
                                 if let url = model.streamURL(for: video) {
                                     let preview = video.previewUrl.flatMap(URL.init(string:))
-                                    try? await model.cache.download(id: video.id, from: url, preview: preview)
+                                    try? await model.cache.download(id: video.id, from: url, preview: preview,
+                                                                    bearerToken: model.credentials.token)
                                 }
                             }
                         }

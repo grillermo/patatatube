@@ -9,7 +9,8 @@ struct VideoCell: View {
     var cachedPreviewURL: URL? = nil
     let classifications: [String]
     let onPlay: () -> Void
-    let onDownload: () async -> Void
+    /// Returns true only when the MP4 actually cached, so we don't paint a false checkmark.
+    let onDownload: () async -> Bool
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onClassify: (String) -> Void
@@ -92,8 +93,8 @@ struct VideoCell: View {
             Button {
                 Task {
                     withAnimation { downloadPhase = .loading }
-                    await onDownload()
-                    withAnimation { downloadPhase = .done }
+                    let ok = await onDownload()
+                    withAnimation { downloadPhase = ok ? .done : .idle }
                 }
             } label: { Image(systemName: "arrow.down.circle") }
         }

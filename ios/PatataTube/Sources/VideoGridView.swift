@@ -29,7 +29,7 @@ struct VideoGridView: View {
                 if store.filter == "tv" {
                     ShowsView(videos: store.videos,
                               onPlay: { play($0) },
-                              onDownload: { download($0) })
+                              onDownload: { v in Task { await download(v) } })
                 } else {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(store.videos) { video in
@@ -39,7 +39,7 @@ struct VideoGridView: View {
                                 cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
                                 classifications: classifications,
                                 onPlay: { play(video) },
-                                onDownload: { download(video) },
+                                onDownload: { await download(video) },
                                 onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
                                 onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
                                 onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
@@ -152,24 +152,34 @@ struct VideoGridView: View {
         }
     }
 
-    private func download(_ video: Video) {
-        Task {
-            var target = video
-            if video.isLibrary, video.status != "done" {
-                preparing = true
-                defer { preparing = false }
-                do { target = try await store.ensureReady(id: video.id) }
-                catch { store.errorText = String(describing: error); return }
-            }
-            guard let url = model.streamURL(for: target) else { return }
-            let preview: URL?
-            if let p = target.previewUrl {
-                preview = p.hasPrefix("http") ? URL(string: p)
-                    : model.credentials.baseURL?.appendingPathComponent(
-                        p.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
-            } else { preview = nil }
-            try? await model.cache.download(id: target.id, from: url, preview: preview,
-                                            bearerToken: model.credentials.token)
+    /// Downloads a video for offline playback. Returns true only when the MP4
+    /// actually landed on disk, so the caller's checkmark reflects reality.
+    @discardableResult
+    private func download(_ video: Video) async -> Bool {
+        var target = video
+        if video.isLibrary, video.status != "done" {
+            preparing = true
+            defer { preparing = false }
+            do { target = try await store.ensureReady(id: video.id) }
+            catch { store.errorText = String(describing: error); return false }
+        }
+        guard let url = model.streamURL(for: target) else {
+            store.errorText = "No server URL configured"
+            return false
+        }
+        let preview: URL?
+        if let p = target.previewUrl {
+            preview = p.hasPrefix("http") ? URL(string: p)
+                : model.credentials.baseURL?.appendingPathComponent(
+                    p.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        } else { preview = nil }
+        do {
+            try await model.cache.download(id: target.id, from: url, preview: preview,
+                                           bearerToken: model.credentials.token)
+            return true
+        } catch {
+            store.errorText = "Download failed: \(error)"
+            return false
         }
     }
 
