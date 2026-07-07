@@ -2,7 +2,8 @@
 
 
 def serialize_video(video: dict) -> dict:
-    return {
+    source = video.get("source") or "download"
+    data = {
         "id": video["id"],
         "url": video["url"],
         "title": video.get("title"),
@@ -14,4 +15,15 @@ def serialize_video(video: dict) -> dict:
         "status": video["status"],
         "error_msg": video.get("error_msg"),
         "stream_path": f"/videos/{video['id']}/stream",
+        "source": source,
+        "show_title": video.get("show_title"),
+        "season": video.get("season"),
+        "episode": video.get("episode"),
+        "summary": video.get("summary"),
+        "show_preview_url": None,
     }
+    if source == "library":
+        data["preview_url"] = f"/videos/{video['id']}/preview"
+        if video.get("show_rating_key"):
+            data["show_preview_url"] = f"/videos/{video['id']}/preview?kind=show"
+    return data
