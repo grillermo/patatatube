@@ -11,6 +11,7 @@ struct VideoGridView: View {
     @State private var showUpload = false
     @State private var playing: Video?
     @State private var preparing = false
+    @State private var downloadingAll = false
 
     // Grid cell size, adjustable via +/- buttons. Persisted across launches.
     @AppStorage("gridCellSize") private var cellSize: Double = 220
@@ -56,6 +57,13 @@ struct VideoGridView: View {
                     Button { showSettings = true } label: { Image(systemName: "gear") }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        Task { await downloadAll() }
+                    } label: {
+                        if downloadingAll { ProgressView() }
+                        else { Image(systemName: "arrow.down.circle") }
+                    }
+                    .disabled(downloadingAll)
                     Button {
                         cellSize = max(cellSize - cellSizeStep, minCellSize)
                     } label: { Image(systemName: "minus.magnifyingglass") }
@@ -180,6 +188,15 @@ struct VideoGridView: View {
         } catch {
             store.errorText = "Download failed: \(error)"
             return false
+        }
+    }
+
+    /// Downloads every not-yet-cached video currently in view (respects the active filter).
+    private func downloadAll() async {
+        downloadingAll = true
+        defer { downloadingAll = false }
+        for video in store.videos where model.cache.state(for: video.id) == .notCached {
+            await download(video)
         }
     }
 
