@@ -837,3 +837,36 @@ def test_ssr_page_appends_stream_token(client, tmp_path):
         assert f"/videos/{vid}/stream?token=test-secret" in html
     finally:
         f.unlink(missing_ok=True)
+
+
+def test_preview_proxies_and_caches(client, tmp_path, monkeypatch):
+    import plex
+    vid, _ = make_library_row(tmp_path)
+    calls = []
+
+    def fake_thumb(rating_key):
+        calls.append(rating_key)
+        return b"jpegbytes"
+
+    monkeypatch.setattr(plex, "fetch_thumb", fake_thumb)
+    monkeypatch.setattr("main.PREVIEWS_DIR", tmp_path / "previews")
+
+    assert client.get(f"/videos/{vid}/preview").status_code == 401
+
+    resp = client.get(f"/videos/{vid}/preview", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.content == b"jpegbytes"
+    assert resp.headers["content-type"] == "image/jpeg"
+    assert calls == ["1264"]
+
+    resp = client.get(f"/videos/{vid}/preview", headers=AUTH)  # served from disk cache
+    assert resp.status_code == 200 and calls == ["1264"]
+
+    resp = client.get(f"/videos/{vid}/preview?kind=show", headers=AUTH)
+    assert resp.status_code == 200 and calls == ["1264", "1262"]
+
+
+def test_preview_404_for_download_rows(client, monkeypatch):
+    import db
+    vid = db.add_video("https://twitter.com/x/status/77", platform="twitter")
+    assert client.get(f"/videos/{vid}/preview", headers=AUTH).status_code == 404

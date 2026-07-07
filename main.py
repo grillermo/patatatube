@@ -29,6 +29,7 @@ load_dotenv()
 
 PROCESS_NAME = "[PatataTube]"
 VIDEOS_DIR = Path("videos")
+PREVIEWS_DIR = Path("data/previews")
 VIDEO_CHUNK_SIZE = 64 * 1024
 DEFAULT_VIDEO_STREAM_LIMIT = 16
 VIDEO_CACHE_CONTROL = "public, max-age=31536000, immutable"
@@ -318,6 +319,32 @@ async def _iter_file_range(file_path: Path, start: int = 0, byte_count: int | No
                 if remaining is not None:
                     remaining -= len(chunk)
                 yield chunk
+
+
+@app.get("/videos/{video_id}/preview")
+async def video_preview(video_id: int, request: Request, kind: str = "item"):
+    _check_token_or_query(request)
+    video = db.get_video(video_id)
+    if not video or video.get("source") != "library" or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="No preview")
+    rating_key = video.get("show_rating_key") if kind == "show" else video.get("plex_rating_key")
+    if not rating_key:
+        raise HTTPException(status_code=404, detail="No preview")
+
+    cache_file = PREVIEWS_DIR / f"{rating_key}.jpg"
+    if not cache_file.exists():
+        try:
+            content = await asyncio.to_thread(plex.fetch_thumb, rating_key)
+        except plex.PlexError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+        cache_file.write_bytes(content)
+
+    return Response(
+        content=cache_file.read_bytes(),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/videos/{video_id}/stream")
