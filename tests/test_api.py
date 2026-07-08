@@ -41,7 +41,7 @@ def test_upload_missing_url(client):
 def test_upload_success(client, monkeypatch):
     # Patch background task so it doesn't actually download
     queued = []
-    monkeypatch.setattr("main.download_video", lambda *a, **kw: queued.append((a, kw)))
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: queued.append((a, kw)))
     resp = client.post(
         "/upload",
         json={"url": "https://twitter.com/x/status/123"},
@@ -56,7 +56,7 @@ def test_upload_success(client, monkeypatch):
 
 def test_upload_youtube_success(client, monkeypatch):
     queued = []
-    monkeypatch.setattr("main.download_video", lambda *a, **kw: queued.append((a, kw)))
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: queued.append((a, kw)))
     resp = client.post(
         "/upload",
         json={"url": "https://youtu.be/dQw4w9WgXcQ"},
@@ -77,7 +77,7 @@ def test_upload_youtube_success(client, monkeypatch):
 
 def test_upload_youtube_strips_non_video_query_params(client, monkeypatch):
     queued = []
-    monkeypatch.setattr("main.download_video", lambda *a, **kw: queued.append((a, kw)))
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: queued.append((a, kw)))
     resp = client.post(
         "/upload",
         json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123&t=60&foo=bar"},
@@ -103,7 +103,7 @@ def test_upload_youtube_strips_non_video_query_params(client, monkeypatch):
     ],
 )
 def test_upload_rejects_invalid_or_unsupported_urls(client, monkeypatch, url):
-    monkeypatch.setattr("main.download_video", lambda *a, **kw: None)
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: None)
     resp = client.post(
         "/upload",
         json={"url": url},
@@ -114,7 +114,7 @@ def test_upload_rejects_invalid_or_unsupported_urls(client, monkeypatch, url):
 
 def test_upload_reuses_completed_youtube_video(client, monkeypatch):
     queued = []
-    monkeypatch.setattr("main.download_video", lambda *a, **kw: queued.append((a, kw)))
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: queued.append((a, kw)))
 
     import db
 
@@ -241,10 +241,11 @@ def test_stream_rejects_unsatisfiable_range(client):
 async def test_stream_iterator_limits_concurrent_open_files(tmp_path, monkeypatch):
     import asyncio
     import main
+    import router
 
     fake_video = tmp_path / "video.mp4"
     fake_video.write_bytes(b"abcdef")
-    real_open_file = main.anyio.open_file
+    real_open_file = router.anyio.open_file
     open_calls = 0
 
     async def counting_open_file(*args, **kwargs):
@@ -252,11 +253,11 @@ async def test_stream_iterator_limits_concurrent_open_files(tmp_path, monkeypatc
         open_calls += 1
         return await real_open_file(*args, **kwargs)
 
-    monkeypatch.setattr(main.anyio, "open_file", counting_open_file)
-    monkeypatch.setattr(main, "_video_stream_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(router.anyio, "open_file", counting_open_file)
+    monkeypatch.setattr(router, "_video_stream_slots", asyncio.Semaphore(1))
 
-    first = main._iter_file_range(fake_video, 0, 3)
-    second = main._iter_file_range(fake_video, 3, 3)
+    first = router._iter_file_range(fake_video, 0, 3)
+    second = router._iter_file_range(fake_video, 3, 3)
     second_read = None
 
     try:
@@ -281,8 +282,9 @@ def test_favicon_uses_cached_bytes_when_open_would_fail(client, monkeypatch):
     import builtins
     import errno
     import main
+    import router
 
-    assert main._static_asset_cache["favicon.ico"]
+    assert router._static_asset_cache["favicon.ico"]
 
     real_open = builtins.open
 
@@ -295,7 +297,7 @@ def test_favicon_uses_cached_bytes_when_open_would_fail(client, monkeypatch):
 
     resp = client.get("/favicon.ico")
     assert resp.status_code == 200
-    assert resp.content == main._static_asset_cache["favicon.ico"]
+    assert resp.content == router._static_asset_cache["favicon.ico"]
 
 
 def test_progress_endpoint_removed(client):
@@ -410,15 +412,16 @@ def test_videos_page_uses_inline_ios_playback_recovery(client):
 def test_videos_page_references_all_splash_startup_assets(client):
     from pathlib import Path
     import main
+    import router
 
     splash_files = {
         p.name
         for p in Path("assets/splash").iterdir()
-        if p.is_file() and p.suffix.lower() in main.SPLASH_MIME_TYPES
+        if p.is_file() and p.suffix.lower() in router.SPLASH_MIME_TYPES
     }
-    startup_files = {image[0] for image in main.SPLASH_STARTUP_IMAGES}
+    startup_files = {image[0] for image in router.SPLASH_STARTUP_IMAGES}
 
-    assert splash_files == startup_files | {main.SPLASH_ICON}
+    assert splash_files == startup_files | {router.SPLASH_ICON}
 
     resp = client.get("/videos")
     assert resp.status_code == 200
@@ -439,12 +442,13 @@ def test_videos_page_references_all_splash_startup_assets(client):
 
 def test_manifest_references_splash_icon(client):
     import main
+    import router
 
     resp = client.get("/manifest.webmanifest")
     assert resp.status_code == 200
     icons = resp.json()["icons"]
     assert {
-        "src": f"/assets/splash/{main.SPLASH_ICON}",
+        "src": f"/assets/splash/{router.SPLASH_ICON}",
         "sizes": "512x512",
         "type": "image/png",
         "purpose": "any maskable",
@@ -584,10 +588,11 @@ def test_api_delete_requires_token(client):
 
 def test_api_delete_removes_row_and_file(client):
     import main
+    import router
     import db
     vid = db.add_video("https://twitter.com/x/status/1")
     db.update_video(vid, status="done", filename=f"{vid}.mp4")
-    path = main.VIDEOS_DIR / f"{vid}.mp4"
+    path = router.VIDEOS_DIR / f"{vid}.mp4"
     path.write_bytes(b"data")
     resp = client.post(
         f"/api/video/{vid}/delete",
@@ -783,7 +788,7 @@ def test_prepare_queues_conversion(client, tmp_path, monkeypatch):
         "format": {"format_name": "matroska,webm"},
     })
     converted = []
-    monkeypatch.setattr("main.library.convert_library_video",
+    monkeypatch.setattr("router.library.convert_library_video",
                         lambda video_id: converted.append(video_id))
     resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
     assert resp.status_code == 202
@@ -798,14 +803,14 @@ def test_prepare_while_converting_is_noop_202(client, tmp_path, monkeypatch):
     vid, _ = make_library_row(tmp_path)
     db.set_library_state(vid, "converting")
     called = []
-    monkeypatch.setattr("main.library.convert_library_video", lambda v: called.append(v))
+    monkeypatch.setattr("router.library.convert_library_video", lambda v: called.append(v))
     resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
     assert resp.status_code == 202 and called == []
 
 
 def test_prepare_download_row_is_400(client, monkeypatch):
     import db
-    monkeypatch.setattr("main.download_video", lambda *a, **kw: None)
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: None)
     up = client.post("/upload", json={"url": "https://twitter.com/x/status/9"}, headers=AUTH)
     resp = client.post(f"/api/videos/{up.json()['id']}/prepare", headers=AUTH)
     assert resp.status_code == 400
@@ -816,7 +821,7 @@ def test_prepare_while_done_is_noop_200(client, tmp_path, monkeypatch):
     vid, _ = make_library_row(tmp_path)
     db.set_library_state(vid, "done")
     called = []
-    monkeypatch.setattr("main.library.convert_library_video", lambda v: called.append(v))
+    monkeypatch.setattr("router.library.convert_library_video", lambda v: called.append(v))
     resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
     assert resp.status_code == 200
     assert resp.json() == {"status": "done"}
@@ -941,7 +946,7 @@ def test_preview_proxies_and_caches(client, tmp_path, monkeypatch):
         return b"jpegbytes"
 
     monkeypatch.setattr(plex, "fetch_thumb", fake_thumb)
-    monkeypatch.setattr("main.PREVIEWS_DIR", tmp_path / "previews")
+    monkeypatch.setattr("router.PREVIEWS_DIR", tmp_path / "previews")
 
     assert client.get(f"/videos/{vid}/preview").status_code == 401
 
