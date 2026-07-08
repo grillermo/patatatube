@@ -27,9 +27,36 @@ private final class MockDownloadProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+// Sends a response + partial body but never finishes, so a download stays
+// in-flight until the task is explicitly cancelled.
+private final class HangingDownloadProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Length": "1000000"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data([0x00, 0x01]))
+        // Intentionally never call urlProtocolDidFinishLoading.
+    }
+
+    override func stopLoading() {}
+}
+
 private func mockDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [MockDownloadProtocol.self]
+    return config
+}
+
+private func hangingDownloadConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [HangingDownloadProtocol.self]
     return config
 }
 
@@ -104,6 +131,24 @@ struct CacheManagerTests {
         await #expect(throws: APIError.badStatus(404)) {
             try await manager.download(id: 1, from: URL(string: "https://srv.test/x")!)
         }
+    }
+
+    @Test func cancelThrowsAndReturnsToNotCached() async {
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: hangingDownloadConfig())
+
+        let task = Task {
+            try await manager.download(id: 21, from: URL(string: "https://srv.test/videos/21/stream")!)
+        }
+
+        // Let the download start and register as in-flight before cancelling.
+        while manager.state(for: 21) == .notCached { await Task.yield() }
+
+        manager.cancel(id: 21)
+
+        await #expect(throws: Error.self) { try await task.value }
+        #expect(manager.state(for: 21) == .notCached)
+        #expect(!FileManager.default.fileExists(atPath: manager.localURL(for: 21).path))
     }
 
     @Test func testDownloadSendsBearerToken() async throws {

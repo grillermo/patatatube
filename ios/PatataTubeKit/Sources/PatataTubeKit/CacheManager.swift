@@ -14,6 +14,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var inFlight: [String: Double] = [:]
     private var continuations: [String: CheckedContinuation<URL, Error>] = [:]
     private var idByTask: [Int: String] = [:]
+    private var tasksByKey: [String: URLSessionDownloadTask] = [:]
     private var completedResults: [Int: Result<URL, Error>] = [:]
 
     public init(root: URL? = nil, configuration: URLSessionConfiguration = .default) {
@@ -56,6 +57,15 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         _ = try await downloadVideo(id: id, versionId: versionId, from: remote, bearerToken: bearerToken)
         // Best-effort: a missing preview must not fail the cached video.
         if let preview { try? await cachePreview(id: id, from: preview, bearerToken: bearerToken) }
+    }
+
+    /// Cancels an in-flight download for this id/version. The awaiting
+    /// `download` call throws; `state(for:)` returns to `.notCached`.
+    /// Explicit cancel restarts from scratch - it does not persist resume data.
+    public func cancel(id: Int, versionId: Int? = nil) {
+        let key = cacheKey(videoId: id, versionId: versionId)
+        let task = lock.withLock { tasksByKey[key] }
+        task?.cancel()
     }
 
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
@@ -122,6 +132,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 inFlight[key] = 0
                 continuations[key] = continuation
                 idByTask[task.taskIdentifier] = key
+                tasksByKey[key] = task
             }
             task.resume()
         }
@@ -145,6 +156,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             inFlight[key] = nil
             idByTask[taskIdentifier] = nil
             completedResults[taskIdentifier] = nil
+            tasksByKey[key] = nil
             return continuations.removeValue(forKey: key)
         }
 
