@@ -268,6 +268,27 @@ def get_video_versions(video_id: int) -> list[dict]:
         return _get_video_versions(conn, video_id)
 
 
+def get_version_labels(source_paths: list[str]) -> dict[str, str]:
+    """Map source_path -> stored label for the given paths (only non-empty labels).
+
+    Used by the scan path as an idempotency guard: if every version of a movie
+    already has a stored label, we reuse them and skip the LLM relabel call.
+    """
+    if not source_paths:
+        return {}
+    placeholders = ",".join("?" for _ in source_paths)
+    with _conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT source_path, label
+            FROM video_versions
+            WHERE source_path IN ({placeholders})
+            """,
+            source_paths,
+        ).fetchall()
+    return {row["source_path"]: row["label"] for row in rows if (row["label"] or "").strip()}
+
+
 def get_video_version(video_id: int, version_id: int | None = None) -> dict | None:
     with _conn() as conn:
         if version_id is None:

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import db
 import plex
+import version_namer
 from downloader import _probe_media
 
 # iPad mini 6th gen panel long edge; wider sources get downscaled.
@@ -138,6 +139,26 @@ def convert_library_video(video_id: int) -> None:
         db.set_library_state(video_id, "unconverted", error_msg=str(exc), version_id=version["id"])
 
 
+def _relabel_versions(versions: list[dict]) -> None:
+    """Give a multi-version movie human-distinguishable labels via the LLM, in place.
+
+    Single-version items keep their simple resolution label. Idempotent: if every
+    version's source_path already has a stored label, reuse it instead of re-billing
+    the LLM (and re-risking its hard-fail) on each rescan.
+    """
+    if len(versions) < 2:
+        return
+    source_paths = [v["source_path"] for v in versions]
+    existing = db.get_version_labels(source_paths)
+    if all(path in existing for path in source_paths):
+        for v in versions:
+            v["label"] = existing[v["source_path"]]
+        return
+    labels = version_namer.label_versions([Path(p).name for p in source_paths])
+    for v, label in zip(versions, labels):
+        v["label"] = label
+
+
 def scan_library() -> dict:
     """Upsert every Plex library item into the videos table. Metadata only, no ffmpeg.
 
@@ -166,6 +187,7 @@ def scan_library() -> dict:
             skipped += 1
             continue
 
+        _relabel_versions(versions)
         item = {**item, "versions": versions, "source_path": versions[0]["source_path"]}
         if not item.get("added_at"):
             mtimes = []
