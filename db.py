@@ -16,6 +16,18 @@ def _conn():
     return conn
 
 
+def _add_column(conn: sqlite3.Connection, ddl: str) -> None:
+    # Multiple uvicorn worker processes run init_db() concurrently at boot
+    # against the same DB file, so a "check columns, then ALTER" guard can
+    # still race between two workers. Catch the duplicate-column error
+    # instead of relying on the pre-check alone.
+    try:
+        conn.execute(ddl)
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e):
+            raise
+
+
 def init_db():
     Path(os.getenv("DB_PATH", "data/watch_later.db")).parent.mkdir(parents=True, exist_ok=True)
     with _conn() as conn:
@@ -34,39 +46,39 @@ def init_db():
         """)
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()}
         if "platform" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN platform TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN platform TEXT")
         if "source_key" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN source_key TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN source_key TEXT")
         if "title" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN title TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN title TEXT")
         if "preview_url" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN preview_url TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN preview_url TEXT")
         if "position" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN position INTEGER")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN position INTEGER")
         if "classification" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN classification TEXT NOT NULL DEFAULT 'children'")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN classification TEXT NOT NULL DEFAULT 'children'")
         if "source" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN source TEXT NOT NULL DEFAULT 'download'")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN source TEXT NOT NULL DEFAULT 'download'")
         if "source_path" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN source_path TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN source_path TEXT")
         if "converted_path" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN converted_path TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN converted_path TEXT")
         if "show_title" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN show_title TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN show_title TEXT")
         if "season" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN season INTEGER")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN season INTEGER")
         if "episode" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN episode INTEGER")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN episode INTEGER")
         if "summary" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN summary TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN summary TEXT")
         if "plex_rating_key" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN plex_rating_key TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN plex_rating_key TEXT")
         if "show_rating_key" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN show_rating_key TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN show_rating_key TEXT")
         if "deleted_at" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN deleted_at TEXT")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN deleted_at TEXT")
         if "chosen_version_id" not in columns:
-            conn.execute("ALTER TABLE videos ADD COLUMN chosen_version_id INTEGER")
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN chosen_version_id INTEGER")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS video_versions (
