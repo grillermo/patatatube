@@ -24,8 +24,8 @@ Let a user upload a video file directly from disk on `videos_page`, instead of o
 Mirrors `download_video`'s shape and failure handling:
 
 ```python
-async def process_uploaded_video(video_id: int):
     video = db.get_video(video_id)
+async def process_uploaded_video(video_id: int):
     if not video:
         raise ValueError(f"Unknown video id: {video_id}")
     db.update_video(video_id, status="downloading")

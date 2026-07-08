@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-CLASSIFICATIONS = ["children", "adults", "education", "tv", "movies"]
+CLASSIFICATIONS = ["children", "adults", "anabel", "tv", "movies"]
 
 
 def _conn():

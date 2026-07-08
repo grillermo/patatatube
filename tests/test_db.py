@@ -117,7 +117,7 @@ LIB_ITEM = {
 
 def test_classifications_updated():
     import db
-    assert db.CLASSIFICATIONS == ["children", "adults", "education", "tv", "movies"]
+    assert db.CLASSIFICATIONS == ["children", "adults", "anabel", "tv", "movies"]
 
 
 def test_upsert_library_video_creates_row(fresh_db):
