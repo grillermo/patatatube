@@ -6,6 +6,9 @@ options:
 packages:
   PatataTubeKit:
     path: ../PatataTubeKit
+  Capture:
+    url: https://github.com/bitdriftlabs/capture-ios.git
+    from: "0.23.5"
 targets:
   PatataTube:
     type: application
@@ -15,6 +18,8 @@ targets:
       - Sources
     dependencies:
       - package: PatataTubeKit
+      - package: Capture
+        product: Capture
     settings:
       base:
         DEVELOPMENT_TEAM: Q3WS4MWCW3
