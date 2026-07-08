@@ -13,6 +13,13 @@ struct VideoGridView: View {
     @State private var preparing = false
     @State private var downloadingAll = false
 
+    // Search: text updates immediately for the field, but filtering only
+    // applies 0.5s after the user stops typing (debounce), to avoid
+    // re-filtering the grid on every keystroke.
+    @State private var searchText = ""
+    @State private var activeSearch = ""
+    @State private var searchDebounceTask: Task<Void, Never>?
+
     // Grid cell size, adjustable via +/- buttons. Persisted across launches.
     @AppStorage("gridCellSize") private var cellSize: Double = 220
     private let minCellSize: Double = 120
@@ -23,17 +30,28 @@ struct VideoGridView: View {
         [GridItem(.adaptive(minimum: cellSize), spacing: 16)]
     }
 
+    private var filteredVideos: [Video] {
+        guard !activeSearch.isEmpty else { return store.videos }
+        let query = activeSearch.lowercased()
+        return store.videos.filter { video in
+            if let title = video.title, title.lowercased().contains(query) { return true }
+            if let showTitle = video.showTitle, showTitle.lowercased().contains(query) { return true }
+            if video.versions.contains(where: { ($0.label ?? "").lowercased().contains(query) }) { return true }
+            return false
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 filterTabs
                 if store.filter == "tv" {
-                    ShowsView(videos: store.videos,
+                    ShowsView(videos: filteredVideos,
                               onPlay: { play($0) },
                               onDownload: { v in Task { await download(v) } })
                 } else {
                     LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(store.videos) { video in
+                        ForEach(filteredVideos) { video in
                             let cache = model.cache
                             let videoId = video.id
                             let versionId = video.chosenVersionId
@@ -58,6 +76,15 @@ struct VideoGridView: View {
                 }
             }
             .navigationTitle("PatataTube")
+            .searchable(text: $searchText, prompt: "Search videos")
+            .onChange(of: searchText) { _, newValue in
+                searchDebounceTask?.cancel()
+                searchDebounceTask = Task {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    guard !Task.isCancelled else { return }
+                    activeSearch = newValue
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showSettings = true } label: { Image(systemName: "gear") }
