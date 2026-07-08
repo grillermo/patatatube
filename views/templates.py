@@ -182,7 +182,7 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
   .title{{font-size:1.15em;color:#eee;margin-bottom:4px;word-break:break-word}}
   video{{display:block;width:100%;height:100%;object-fit:contain}}
   .video-wrap{{position:relative;aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden}}
-  .name-overlay{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;font-size:1.6em;font-weight:600;color:#eee;background:#000;border-radius:8px;pointer-events:none;word-break:break-word}}
+  .name-overlay{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;font-size:1.6em;font-weight:600;color:#eee;background:#000;border-radius:8px;cursor:pointer;word-break:break-word}}
   .video-wrap.is-playing .name-overlay{{display:none}}
   .move{{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}}
   .move form{{margin:0}}
@@ -320,6 +320,13 @@ function enterFullscreen(v){{
 
 document.querySelectorAll('video[id]').forEach(function(v){{
   var wrap = v.closest('.video-wrap');
+  var overlay = wrap ? wrap.querySelector('.name-overlay') : null;
+  if(overlay){{
+    overlay.addEventListener('click', function(){{
+      var p = v.play();
+      if(p && typeof p.catch === 'function') p.catch(function(){{}});
+    }});
+  }}
   v.addEventListener('play', function(){{
     if(wrap) wrap.classList.add('is-playing');
     pauseOtherVideos(v);
