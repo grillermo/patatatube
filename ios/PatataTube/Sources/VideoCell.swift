@@ -5,12 +5,14 @@ import PatataTubeKit
 struct VideoCell: View {
     let video: Video
     let cacheState: CacheState
+    let currentCacheState: @Sendable () -> CacheState
     /// Local file URL of the cached preview image, when the video is cached offline.
     var cachedPreviewURL: URL? = nil
     let classifications: [String]
     let onPlay: () -> Void
     /// Returns true only when the MP4 actually cached, so we don't paint a false checkmark.
     let onDownload: () async -> Bool
+    let onCancel: () -> Void
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onClassify: (String) -> Void
@@ -20,6 +22,9 @@ struct VideoCell: View {
     @State private var confirmingDelete = false
     /// Tracks the button's live transition: idle → loading → done, layered over `cacheState`.
     @State private var downloadPhase: DownloadPhase = .idle
+    /// Live download fraction (0...1), polled from the cache while downloading.
+    @State private var progress: Double = 0
+    @State private var observedCacheState: CacheState?
 
     private enum DownloadPhase { case idle, loading, done }
 
@@ -88,18 +93,37 @@ struct VideoCell: View {
             Button("Delete", role: .destructive) { onDelete() }
             Button("Cancel", role: .cancel) {}
         }
+        .task(id: downloadPollKey) {
+            await pollCacheState()
+        }
+        .onChange(of: cacheState) { _, newState in
+            updateObservedCacheState(newState)
+        }
         .onChange(of: video.chosenVersionId) { _, _ in
             downloadPhase = .idle
+            observedCacheState = nil
+            progress = 0
         }
     }
 
     /// Local phase wins during the live tap→download→done transition; otherwise trust the parent.
     private var effectiveState: CacheState {
+        let observedState = observedCacheState ?? cacheState
         switch downloadPhase {
-        case .loading: return .downloading(0)
+        case .loading:
+            if case .downloading = observedState { return observedState }
+            return .downloading(progress)
         case .done: return .cached
-        case .idle: return cacheState
+        case .idle: return observedState
         }
+    }
+
+    private var downloadPollKey: String {
+        "\(video.id):\(video.chosenVersionId ?? -1)"
+    }
+
+    private var clampedProgress: Double {
+        min(max(progress, 0), 1)
     }
 
     @ViewBuilder private var downloadButton: some View {
@@ -110,20 +134,78 @@ struct VideoCell: View {
                 .frame(width: 44, height: 44)
                 .transition(.scale.combined(with: .opacity))
         case .downloading:
-            ProgressView().controlSize(.regular)
+            Button {
+                onCancel()
+                withAnimation {
+                    downloadPhase = .idle
+                    observedCacheState = .notCached
+                    progress = 0
+                }
+            } label: {
+                ZStack {
+                    Circle()
+                        .stroke(Color.gray.opacity(0.25), lineWidth: 4)
+                    Circle()
+                        .trim(from: 0, to: clampedProgress)
+                        .stroke(
+                            Color.accentColor,
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear(duration: 0.15), value: clampedProgress)
+                }
+                .frame(width: 30, height: 30)
                 .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         case .notCached:
             Button {
                 Task {
-                    withAnimation { downloadPhase = .loading }
+                    withAnimation {
+                        downloadPhase = .loading
+                        observedCacheState = .downloading(0)
+                        progress = 0
+                    }
                     let ok = await onDownload()
-                    withAnimation { downloadPhase = ok ? .done : .idle }
+                    withAnimation {
+                        downloadPhase = ok ? .done : .idle
+                        observedCacheState = ok ? .cached : .notCached
+                        progress = ok ? 1 : 0
+                    }
                 }
             } label: {
                 Image(systemName: "arrow.down.circle")
                     .font(.system(size: 30))
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
+            }
+        }
+    }
+
+    private func pollCacheState() async {
+        while !Task.isCancelled {
+            let state = currentCacheState()
+            updateObservedCacheState(state)
+
+            if case .downloading = state {
+                try? await Task.sleep(for: .milliseconds(150))
+            } else {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    private func updateObservedCacheState(_ state: CacheState) {
+        observedCacheState = state
+        switch state {
+        case .downloading(let p):
+            progress = p
+        case .cached:
+            progress = 1
+        case .notCached:
+            if downloadPhase == .idle {
+                progress = 0
             }
         }
     }

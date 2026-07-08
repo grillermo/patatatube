@@ -33,21 +33,26 @@ struct VideoGridView: View {
                               onDownload: { v in Task { await download(v) } })
                 } else {
                     LazyVGrid(columns: columns, spacing: 16) {
-                ForEach(store.videos) { video in
-                    VideoCell(
-                        video: video,
-                        cacheState: model.cache.state(for: video.id, versionId: video.chosenVersionId),
-                        cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
-                        classifications: classifications,
-                        onPlay: { play(video) },
-                        onDownload: { await download(video) },
-                        onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
-                        onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
-                        onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
-                        onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
-                        onDelete: { Task { await store.delete(id: video.id) } }
-                    )
-                }
+                        ForEach(store.videos) { video in
+                            let cache = model.cache
+                            let videoId = video.id
+                            let versionId = video.chosenVersionId
+                            VideoCell(
+                                video: video,
+                                cacheState: cache.state(for: videoId, versionId: versionId),
+                                currentCacheState: { cache.state(for: videoId, versionId: versionId) },
+                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
+                                classifications: classifications,
+                                onPlay: { play(video) },
+                                onDownload: { await download(video) },
+                                onCancel: { cache.cancel(id: videoId, versionId: versionId) },
+                                onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
+                                onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
+                                onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
+                                onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
+                                onDelete: { Task { await store.delete(id: video.id) } }
+                            )
+                        }
                     }
                     .padding()
                 }
@@ -187,9 +192,18 @@ struct VideoGridView: View {
                                            bearerToken: model.credentials.token)
             return true
         } catch {
+            if isCancellation(error) { return false }
             store.errorText = "Download failed: \(error)"
             return false
         }
+    }
+
+    private func isCancellation(_ error: Error) -> Bool {
+        if let urlError = error as? URLError, urlError.code == .cancelled {
+            return true
+        }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
     /// Downloads every not-yet-cached video currently in view (respects the active filter).
