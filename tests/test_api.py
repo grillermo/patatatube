@@ -962,3 +962,98 @@ def test_preview_404_for_download_rows(client, monkeypatch):
     import db
     vid = db.add_video("https://twitter.com/x/status/77", platform="twitter")
     assert client.get(f"/videos/{vid}/preview", headers=AUTH).status_code == 404
+
+
+# --- HLS subtitle routes ---------------------------------------------------
+
+
+def _seed_done_download(status_num="900", filename="900.mp4"):
+    import db
+    from pathlib import Path
+
+    p = Path("videos") / filename
+    p.parent.mkdir(exist_ok=True)
+    p.write_bytes(b"FAKEMP4")
+    vid = db.add_video(f"https://twitter.com/x/status/{status_num}")
+    db.update_video(vid, status="done", filename=filename)
+    return vid, p
+
+
+def _fake_build(video_id, source_path, *a, **k):
+    """Stand in for ffmpeg packaging: lay down a full HLS tree on disk."""
+    import hls
+
+    out = hls.hls_dir_for(video_id)
+    (out / "subtitles").mkdir(parents=True, exist_ok=True)
+    (out / "master.m3u8").write_text(
+        "#EXTM3U\n#EXT-X-INDEPENDENT-SEGMENTS\n"
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",LANGUAGE="en",NAME="English",'
+        'DEFAULT=YES,AUTOSELECT=YES,FORCED=NO,URI="subtitles/en.m3u8"\n'
+        '#EXT-X-STREAM-INF:BANDWIDTH=1500000,SUBTITLES="subs"\nvideo.m3u8\n'
+    )
+    (out / "video.m3u8").write_text("#EXTM3U\n")
+    (out / "segment_00000.m4s").write_bytes(b"SEG")
+    (out / "subtitles" / "en.m3u8").write_text("#EXTM3U\n")
+    (out / "subtitles" / "en.vtt").write_text("WEBVTT\n")
+
+
+def test_hls_master_requires_auth(client):
+    resp = client.get("/videos/1/hls/master.m3u8")
+    assert resp.status_code == 401
+
+
+def test_hls_master_404_for_missing_video(client):
+    resp = client.get("/videos/999/hls/master.m3u8", headers=AUTH)
+    assert resp.status_code == 404
+
+
+def test_hls_master_409_when_source_not_ready(client):
+    import db
+
+    vid = db.add_video("https://twitter.com/x/status/901")  # queued, no file
+    resp = client.get(f"/videos/{vid}/hls/master.m3u8", headers=AUTH)
+    assert resp.status_code == 409
+
+
+def test_hls_master_prepares_then_serves_tree(client, monkeypatch, tmp_path):
+    import hls
+
+    monkeypatch.setattr(hls, "HLS_DIR", tmp_path / "hls")
+    monkeypatch.setattr(hls, "build_hls_package", _fake_build)
+    vid, p = _seed_done_download()
+    try:
+        # First hit: source ready but no package -> schedules prep, 409.
+        first = client.get(f"/videos/{vid}/hls/master.m3u8", headers=AUTH)
+        assert first.status_code == 409
+
+        # Background prep has now run (TestClient runs tasks post-response).
+        master = client.get(f"/videos/{vid}/hls/master.m3u8", headers=AUTH)
+        assert master.status_code == 200
+        assert master.headers["content-type"].startswith("application/vnd.apple.mpegurl")
+        assert "TYPE=SUBTITLES" in master.text
+
+        assert client.get(f"/videos/{vid}/hls/video.m3u8", headers=AUTH).status_code == 200
+        seg = client.get(f"/videos/{vid}/hls/segment_00000.m4s", headers=AUTH)
+        assert seg.status_code == 200
+        assert client.get(f"/videos/{vid}/hls/subtitles/en.m3u8", headers=AUTH).status_code == 200
+
+        vtt = client.get(f"/videos/{vid}/hls/subtitles/en.vtt", headers=AUTH)
+        assert vtt.status_code == 200
+        assert vtt.headers["content-type"].startswith("text/vtt")
+    finally:
+        p.unlink(missing_ok=True)
+
+
+def test_hls_rejects_path_traversal(client, monkeypatch, tmp_path):
+    import hls
+
+    monkeypatch.setattr(hls, "HLS_DIR", tmp_path / "hls")
+    vid, p = _seed_done_download(status_num="902", filename="902.mp4")
+    try:
+        resp = client.get(f"/videos/{vid}/hls/../../secret", headers=AUTH)
+        # httpx normalizes ../ in the client, so hit the encoded form too.
+        assert resp.status_code in (404, 409)
+        resp2 = client.get(f"/videos/{vid}/hls/%2e%2e%2f%2e%2e%2fsecret", headers=AUTH)
+        assert resp2.status_code == 404
+    finally:
+        p.unlink(missing_ok=True)

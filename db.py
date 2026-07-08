@@ -79,6 +79,8 @@ def init_db():
             _add_column(conn, "ALTER TABLE videos ADD COLUMN deleted_at TEXT")
         if "chosen_version_id" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN chosen_version_id INTEGER")
+        if "hls_status" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN hls_status TEXT NOT NULL DEFAULT 'none'")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS video_versions (
@@ -434,6 +436,12 @@ def get_all_videos(classification: str | None = None) -> list[dict]:
 def set_video_classification(video_id: int, classification: str) -> None:
     with _conn() as conn:
         conn.execute("UPDATE videos SET classification = ? WHERE id = ?", (classification, video_id))
+
+
+def set_hls_status(video_id: int, status: str) -> None:
+    """Track HLS package readiness: 'none' | 'converting' | 'done'."""
+    with _conn() as conn:
+        conn.execute("UPDATE videos SET hls_status = ? WHERE id = ?", (status, video_id))
 
 
 def move_video(video_id: int, direction: str) -> bool:

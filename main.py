@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from setproctitle import setproctitle
 
 import db
+import hls
 import library
 import plex
 import services
@@ -427,6 +428,68 @@ async def stream_video(video_id: int, request: Request):
     )
 
 
+def _resolve_hls_source(video: dict, request: Request) -> Path:
+    """Resolve the on-disk source for HLS exactly as /videos/{id}/stream does.
+
+    Raises 409 when the resolved source is not ready (there is no 'completed'
+    status: download rows gate on video status 'done', library rows on the
+    chosen version's status 'done').
+    """
+    if video.get("source") == "library":
+        requested_version = request.query_params.get("version_id")
+        try:
+            version_id = int(requested_version) if requested_version else None
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Version not found")
+        version = db.get_video_version(video["id"], version_id)
+        if not version:
+            raise HTTPException(status_code=404, detail="Version not found")
+        if version["status"] != "done":
+            raise HTTPException(status_code=409, detail="Video not prepared yet")
+        return Path(version["converted_path"] or version["source_path"])
+
+    if video["status"] != "done" or not video["filename"]:
+        raise HTTPException(status_code=409, detail="Video not ready")
+    return VIDEOS_DIR / video["filename"]
+
+
+@app.get("/videos/{video_id}/hls/{asset_path:path}")
+async def hls_asset(
+    video_id: int, asset_path: str, request: Request, background_tasks: BackgroundTasks
+):
+    _check_token_or_query(request)
+    video = db.get_video(video_id)
+    if not video or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    source = _resolve_hls_source(video, request)
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="Source file missing")
+
+    target = hls.safe_asset_path(video_id, asset_path)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if target.exists():
+        media_type = hls.HLS_CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        return FileResponse(target, media_type=media_type)
+
+    # Nothing on disk yet. Only the master request triggers packaging; segment
+    # and subtitle requests before readiness are simply 404. Packaging runs off
+    # the event loop and the client polls the master URL until it is 200.
+    #
+    # Return a real 409 Response (not raise): FastAPI only runs the injected
+    # BackgroundTasks when the endpoint *returns* a response — a raised
+    # HTTPException drops them, so the prep task would never fire.
+    if asset_path == "master.m3u8":
+        if video.get("hls_status") != "converting":
+            db.set_hls_status(video_id, "converting")
+            background_tasks.add_task(hls.prepare, video_id, str(source))
+        return JSONResponse({"detail": "HLS preparing"}, status_code=409)
+
+    raise HTTPException(status_code=404, detail="Not found")
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return _static_asset_response("favicon.ico")
@@ -583,6 +646,23 @@ async def api_video(video_id: int, request: Request):
     video = db.get_video(video_id)
     if not video or video.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Video not found")
+    # Single-row detail: a filesystem probe for sidecar subtitles is fine here
+    # (unlike the list endpoint, which must stay allocation-cheap per row).
+    if video.get("source") == "library":
+        version = db.get_video_version(video_id)
+        if version and version.get("source_path"):
+            video = {
+                **video,
+                "subtitle_tracks": [
+                    {
+                        "language": track.language,
+                        "name": track.name,
+                        "default": track.default,
+                        "forced": track.forced,
+                    }
+                    for track in hls.discover_subtitles(version["source_path"])
+                ],
+            }
     return serialize_video(video)
 
 

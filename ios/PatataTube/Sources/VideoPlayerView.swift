@@ -54,20 +54,31 @@ struct VideoPlayerView: View {
     private func setup() {
         let player: AVPlayer
         if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
+            // Offline MP4 wins: instant, no network. (HLS offline is a later phase.)
             player = AVPlayer(url: model.cache.localURL(for: video.id, versionId: video.chosenVersionId))
+        } else if let hlsURL = model.hlsURL(for: video) {
+            // Remote HLS exposes native subtitle tracks in the AVKit controls.
+            player = AVPlayer(playerItem: AVPlayerItem(asset: authedAsset(url: hlsURL)))
+        } else if let url = model.streamURL(for: video) {
+            // Direct MP4 fallback for rows without an HLS package.
+            player = AVPlayer(playerItem: AVPlayerItem(asset: authedAsset(url: url)))
         } else {
-            guard let url = model.streamURL(for: video) else { return }
-            var options: [String: Any] = [:]
-            if let token = model.credentials.token {
-                options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(token)"]
-            }
-            let asset = AVURLAsset(url: url, options: options)
-            player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            return
         }
         self.player = player
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem, queue: .main
         ) { _ in dismiss() }
+    }
+
+    /// AVURLAsset carrying the bearer token; AVPlayer reuses these headers for
+    /// the HLS playlist, segment, and subtitle sub-requests on the same asset.
+    private func authedAsset(url: URL) -> AVURLAsset {
+        var options: [String: Any] = [:]
+        if let token = model.credentials.token {
+            options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(token)"]
+        }
+        return AVURLAsset(url: url, options: options)
     }
 }

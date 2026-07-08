@@ -49,6 +49,39 @@ struct APIClientTests {
             #expect(list == ["children", "adults"])
         }
 
+        @Test func decodesHlsAndSubtitleMetadata() async throws {
+            MockURLProtocol.handler = { req in
+                let body = """
+                [{"id":1,"url":"u","title":"t","platform":null,"source_key":null,
+                  "preview_url":null,"classification":"children","position":1,
+                  "status":"done","error_msg":null,"stream_path":"/videos/1/stream",
+                  "hls_path":"/videos/1/hls/master.m3u8",
+                  "subtitle_tracks":[{"language":"en","name":"English","default":true,"forced":false}]}]
+                """.data(using: .utf8)!
+                return (jsonResponse(req.url!), body)
+            }
+            let videos = try await makeClient().videos(classification: nil)
+            #expect(videos[0].hlsPath == "/videos/1/hls/master.m3u8")
+            #expect(videos[0].subtitleTracks.count == 1)
+            #expect(videos[0].subtitleTracks[0].language == "en")
+            #expect(videos[0].subtitleTracks[0].name == "English")
+            #expect(videos[0].subtitleTracks[0].default == true)
+        }
+
+        @Test func decodesVideoWithoutHlsFields() async throws {
+            MockURLProtocol.handler = { req in
+                let body = """
+                [{"id":2,"url":"u","title":null,"platform":null,"source_key":null,
+                  "preview_url":null,"classification":"children","position":1,
+                  "status":"done","error_msg":null,"stream_path":"/videos/2/stream"}]
+                """.data(using: .utf8)!
+                return (jsonResponse(req.url!), body)
+            }
+            let videos = try await makeClient().videos(classification: nil)
+            #expect(videos[0].hlsPath == nil)
+            #expect(videos[0].subtitleTracks.isEmpty)
+        }
+
         @Test func throwsOnBadStatus() async {
             MockURLProtocol.handler = { req in (jsonResponse(req.url!, status: 500), Data()) }
             await #expect(throws: APIError.badStatus(500)) {

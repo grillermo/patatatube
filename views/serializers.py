@@ -1,6 +1,19 @@
 """Canonical video presenter shared by the SSR page and the JSON API."""
 
 
+def _hls_ready(video: dict) -> bool:
+    """Whether an HLS package can be served for this row.
+
+    Download rows are ready once status is 'done'; library rows once a version
+    has converted. Pure check — never touches the filesystem, because this runs
+    once per row in the list endpoint.
+    """
+    if (video.get("source") or "download") == "library":
+        versions = video.get("versions") or []
+        return any(v.get("status") == "done" for v in versions) or bool(video.get("converted_path"))
+    return video.get("status") == "done"
+
+
 def serialize_video(video: dict) -> dict:
     source = video.get("source") or "download"
     data = {
@@ -21,7 +34,12 @@ def serialize_video(video: dict) -> dict:
         "episode": video.get("episode"),
         "summary": video.get("summary"),
         "show_preview_url": None,
+        # Sidecar subtitles only exist for library rows; callers that have
+        # discovered them inject `subtitle_tracks`. Download rows are always [].
+        "subtitle_tracks": video.get("subtitle_tracks") or [],
     }
+    if _hls_ready(video):
+        data["hls_path"] = f"/videos/{video['id']}/hls/master.m3u8"
     if video.get("versions") is not None:
         data["chosen_version_id"] = video.get("chosen_version_id")
         data["versions"] = [

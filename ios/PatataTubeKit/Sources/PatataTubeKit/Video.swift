@@ -12,6 +12,20 @@ public struct VideoVersion: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+public struct SubtitleTrack: Codable, Equatable, Sendable {
+    public let language: String
+    public let name: String
+    public let `default`: Bool
+    public let forced: Bool
+
+    public init(language: String, name: String, default: Bool, forced: Bool) {
+        self.language = language
+        self.name = name
+        self.`default` = `default`
+        self.forced = forced
+    }
+}
+
 public struct Video: Codable, Identifiable, Equatable, Sendable {
     public let id: Int
     public let url: String
@@ -32,11 +46,13 @@ public struct Video: Codable, Identifiable, Equatable, Sendable {
     public let showPreviewUrl: String?
     public let chosenVersionId: Int?
     public let versions: [VideoVersion]
+    public let hlsPath: String?
+    public let subtitleTracks: [SubtitleTrack]
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, platform, sourceKey, previewUrl, classification, position
         case status, errorMsg, streamPath, source, showTitle, season, episode, summary
-        case showPreviewUrl, chosenVersionId, versions
+        case showPreviewUrl, chosenVersionId, versions, hlsPath, subtitleTracks
     }
 
     public var isLibrary: Bool { source == "library" }
@@ -46,7 +62,8 @@ public struct Video: Codable, Identifiable, Equatable, Sendable {
             position: Int?, status: String, errorMsg: String?, streamPath: String,
             source: String? = nil, showTitle: String? = nil, season: Int? = nil,
             episode: Int? = nil, summary: String? = nil, showPreviewUrl: String? = nil,
-            chosenVersionId: Int? = nil, versions: [VideoVersion] = []) {
+            chosenVersionId: Int? = nil, versions: [VideoVersion] = [],
+            hlsPath: String? = nil, subtitleTracks: [SubtitleTrack] = []) {
         self.id = id; self.url = url; self.title = title; self.platform = platform
         self.sourceKey = sourceKey; self.previewUrl = previewUrl
         self.classification = classification; self.position = position
@@ -54,6 +71,7 @@ public struct Video: Codable, Identifiable, Equatable, Sendable {
         self.source = source; self.showTitle = showTitle; self.season = season
         self.episode = episode; self.summary = summary; self.showPreviewUrl = showPreviewUrl
         self.chosenVersionId = chosenVersionId; self.versions = versions
+        self.hlsPath = hlsPath; self.subtitleTracks = subtitleTracks
     }
 
     public init(from decoder: Decoder) throws {
@@ -77,6 +95,8 @@ public struct Video: Codable, Identifiable, Equatable, Sendable {
         self.showPreviewUrl = try c.decodeIfPresent(String.self, forKey: .showPreviewUrl)
         self.chosenVersionId = try c.decodeIfPresent(Int.self, forKey: .chosenVersionId)
         self.versions = try c.decodeIfPresent([VideoVersion].self, forKey: .versions) ?? []
+        self.hlsPath = try c.decodeIfPresent(String.self, forKey: .hlsPath)
+        self.subtitleTracks = try c.decodeIfPresent([SubtitleTrack].self, forKey: .subtitleTracks) ?? []
     }
 
     func withClassification(_ c: String) -> Video {
@@ -85,7 +105,8 @@ public struct Video: Codable, Identifiable, Equatable, Sendable {
             status: status, errorMsg: errorMsg, streamPath: streamPath,
             source: source, showTitle: showTitle, season: season,
             episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
-            chosenVersionId: chosenVersionId, versions: versions)
+            chosenVersionId: chosenVersionId, versions: versions,
+            hlsPath: hlsPath, subtitleTracks: subtitleTracks)
     }
 
     func withChosenVersion(_ versionId: Int) -> Video {
@@ -98,6 +119,7 @@ public struct Video: Codable, Identifiable, Equatable, Sendable {
               chosenVersionId: versionId,
               versions: versions.map {
                   VideoVersion(id: $0.id, label: $0.label, status: $0.status, isChosen: $0.id == versionId)
-              })
+              },
+              hlsPath: hlsPath, subtitleTracks: subtitleTracks)
     }
 }

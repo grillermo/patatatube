@@ -31,8 +31,18 @@ final class AppModel: ObservableObject {
 
     /// Absolute stream/download URL for a video's `streamPath`.
     func streamURL(for video: Video) -> URL? {
+        return absoluteURL(for: video, path: video.streamPath)
+    }
+
+    /// HLS master playlist URL, or nil when the server did not advertise one.
+    func hlsURL(for video: Video) -> URL? {
+        guard let hlsPath = video.hlsPath, !hlsPath.isEmpty else { return nil }
+        return absoluteURL(for: video, path: hlsPath)
+    }
+
+    private func absoluteURL(for video: Video, path rawPath: String) -> URL? {
         guard let base = credentials.baseURL else { return nil }
-        let path = video.streamPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let path = rawPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let url = base.appendingPathComponent(path)
         guard let versionId = video.chosenVersionId,
               var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else {

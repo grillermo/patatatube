@@ -34,7 +34,33 @@ def test_serialize_video_full_shape():
         "episode": None,
         "summary": None,
         "show_preview_url": None,
+        "subtitle_tracks": [],
+        "hls_path": "/videos/7/hls/master.m3u8",
     }
+
+
+def test_done_download_row_exposes_hls_path():
+    row = {"id": 4, "url": "https://x.com/s/1", "status": "done"}
+    data = serialize_video(row)
+    assert data["hls_path"] == "/videos/4/hls/master.m3u8"
+    assert data["subtitle_tracks"] == []
+
+
+def test_unready_row_omits_hls_path():
+    row = {"id": 5, "url": "https://x.com/s/1", "status": "queued"}
+    data = serialize_video(row)
+    assert "hls_path" not in data
+
+
+def test_injected_subtitle_tracks_are_passed_through():
+    row = {
+        "id": 8, "url": "/vol/tv/ep.mkv", "status": "done", "source": "library",
+        "converted_path": "/vol/tv/ep.mp4",
+        "subtitle_tracks": [{"language": "en", "name": "English", "default": True, "forced": False}],
+    }
+    data = serialize_video(row)
+    assert data["subtitle_tracks"][0]["language"] == "en"
+    assert data["hls_path"] == "/videos/8/hls/master.m3u8"
 
 
 def test_serialize_video_defaults_classification_and_omits_internal_fields():
