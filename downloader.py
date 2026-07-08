@@ -49,6 +49,23 @@ async def download_video(video_id: int):
         db.delete_video(video_id)
 
 
+async def process_uploaded_video(video_id: int):
+    video = db.get_video(video_id)
+    if not video:
+        raise ValueError(f"Unknown video id: {video_id}")
+
+    db.update_video(video_id, status="downloading")
+    tmp_path = Path(video["url"])
+    try:
+        dest_name = await _store_ios_compatible_video(video_id, tmp_path)
+        db.update_video(video_id, status="done", filename=dest_name)
+    except Exception as exc:
+        logger.warning("Upload processing failed; deleting video row %s: %s", video_id, exc)
+        db.delete_video(video_id)
+        with suppress(FileNotFoundError):
+            tmp_path.unlink()
+
+
 async def _download_twitter(video_id: int, url: str) -> str:
     downloaded_path = await pybalt_download(url)
     downloaded_path = Path(downloaded_path)

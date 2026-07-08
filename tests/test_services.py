@@ -16,9 +16,10 @@ def fresh_db(monkeypatch, tmp_path):
 
 def test_apply_classification_accepts_valid(fresh_db):
     db, services = fresh_db
+    target_classification = next(cls for cls in db.CLASSIFICATIONS if cls != "children")
     vid = db.add_video("https://twitter.com/x/status/1")
-    assert services.apply_classification(vid, "education") is True
-    assert db.get_video(vid)["classification"] == "education"
+    assert services.apply_classification(vid, target_classification) is True
+    assert db.get_video(vid)["classification"] == target_classification
 
 
 def test_apply_classification_rejects_invalid(fresh_db):

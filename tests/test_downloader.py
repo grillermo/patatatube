@@ -208,3 +208,50 @@ def test_ios_normalization_remuxes_safe_h264_aac(monkeypatch, downloader_env, tm
         assert ffmpeg_cmd[ffmpeg_cmd.index("-movflags") + 1] == "+faststart"
     finally:
         output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_process_uploaded_video_success(monkeypatch, downloader_env, tmp_path):
+    db, downloader, videos_dir = downloader_env
+    tmp_upload = tmp_path / "upload123.mp4"
+    tmp_upload.write_bytes(b"uploaded-bytes")
+    video_id = db.add_video(str(tmp_upload), platform="upload", title="My Video")
+
+    async def fake_normalize(path):
+        return Path(path)
+
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    await downloader.process_uploaded_video(video_id)
+
+    video = db.get_video(video_id)
+    assert video["status"] == "done"
+    assert video["filename"] == f"{video_id}.mp4"
+    assert (videos_dir / f"{video_id}.mp4").exists()
+    assert not tmp_upload.exists()
+
+
+@pytest.mark.asyncio
+async def test_process_uploaded_video_failure_deletes_row_and_tmpfile(monkeypatch, downloader_env, tmp_path):
+    db, downloader, _videos_dir = downloader_env
+    tmp_upload = tmp_path / "bad.mp4"
+    tmp_upload.write_bytes(b"not-a-real-video")
+    video_id = db.add_video(str(tmp_upload), platform="upload", title="Bad Video")
+
+    async def fake_normalize(path):
+        raise RuntimeError("ffmpeg failed while normalizing video")
+
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    await downloader.process_uploaded_video(video_id)
+
+    assert db.get_video(video_id) is None
+    assert not tmp_upload.exists()
+
+
+@pytest.mark.asyncio
+async def test_process_uploaded_video_unknown_id_raises(downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+
+    with pytest.raises(ValueError):
+        await downloader.process_uploaded_video(99999)

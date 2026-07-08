@@ -1,4 +1,6 @@
+import json
 import os
+import re
 from html import escape
 
 # filename, CSS device width, CSS device height, pixel ratio, orientation
@@ -102,7 +104,7 @@ def _classification_menu(video_id: int, current_cls: str | None, classifications
 def build_videos_page(videos: list[dict], classifications: list[str], current_classification: str | None) -> str:
     cards = []
     for v in videos:
-        has_named_title = v.get("platform") == "youtube" or v.get("source") == "library"
+        has_named_title = v.get("platform") in ("youtube", "upload") or v.get("source") == "library"
         title = escape(v["title"]) if has_named_title and v.get("title") else None
         cls_menu = _classification_menu(v["id"], v.get("classification"), classifications, current_classification)
 
@@ -122,11 +124,21 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
             player = f'<p style="color:#aaa;font-size:0.85em">Video is {v["status"]}…</p>'
 
         page_cls_input = f'<input type="hidden" name="classification" value="{escape(current_classification or "")}">'
+        download_link = ""
+        if v["status"] == "done":
+            download_url = f"/videos/{v['id']}/stream?token={escape(os.getenv('UPLOAD_TOKEN', ''), quote=True)}"
+            raw_name = v.get("title") or f"video_{v['id']}"
+            safe_name = re.sub(r'[\\/:*?"<>|]', "_", raw_name).strip() or f"video_{v['id']}"
+            download_link = (
+                f'<a class="download-btn" href="{download_url}" '
+                f'download="{escape(safe_name, quote=True)}.mp4" aria-label="Download video">&#8681;</a>'
+            )
         cards.append(f"""
         <div class="card">
           {cls_menu}
           {player}
           <div class="move">
+            {download_link}
             <form method="post" action="/videos/{v['id']}/move">
               <input type="hidden" name="direction" value="up">
               {page_cls_input}
@@ -142,12 +154,33 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
 
     cards_html = "\n".join(cards) if cards else '<p style="color:#aaa;text-align:center">No videos yet.</p>'
     splash_links = _splash_startup_links()
+    upload_cls_options = "".join(
+        f'<option value="{escape(cls, quote=True)}">{escape(cls)}</option>'
+        for cls in classifications
+    )
 
     nav_links = []
     for cls in classifications:
         active_cls = " active" if cls == current_classification else ""
         nav_links.append(f'<a href="/?classification={escape(cls, quote=True)}" class="nav-link{active_cls}">{escape(cls)}</a>')
     nav_html = f'<nav class="nav">{"".join(nav_links)}</nav>'
+    upload_modal_html = f"""
+<button type="button" id="upload-fab" aria-label="Upload video" onclick="document.getElementById('upload-dialog').showModal()">+</button>
+<dialog id="upload-dialog">
+  <form id="upload-form">
+    <h3>Upload video</h3>
+    <input type="file" id="upload-file-input" accept="video/*" required>
+    <select id="upload-classification">
+      {upload_cls_options}
+    </select>
+    <p id="upload-error" style="display:none;color:#f66;font-size:0.85em"></p>
+    <div class="dialog-actions">
+      <button type="button" onclick="document.getElementById('upload-dialog').close()">Cancel</button>
+      <button type="submit">Upload</button>
+    </div>
+  </form>
+</dialog>"""
+    upload_token_json = json.dumps(os.getenv("UPLOAD_TOKEN", ""))
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -163,6 +196,7 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 {splash_links}
 <link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/assets/vendor/nprogress.css">
 <style>
   *{{box-sizing:border-box;margin:0;padding:0}}
   body{{background:#111;color:#eee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:12px;padding-top:calc(12px + env(safe-area-inset-top));padding-bottom:calc(12px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));}}
@@ -188,6 +222,8 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
   .move form{{margin:0}}
   .move button{{background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:6px;padding:6px 12px;font-size:1em;cursor:pointer}}
   .move button:active{{background:#3a3a3a}}
+  .download-btn{{background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:6px;padding:6px 12px;font-size:1em;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;margin-right:auto}}
+  .download-btn:active{{background:#3a3a3a}}
   .menu{{position:absolute;top:10px;right:10px;z-index:10}}
   .menu>summary{{list-style:none;cursor:pointer;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:6px;padding:2px 9px;font-size:1.3em;color:#eee;user-select:none;-webkit-user-select:none}}
   .menu>summary::-webkit-details-marker{{display:none}}
@@ -197,9 +233,22 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
   .menu-dropdown form:last-child .menu-btn{{border-bottom:none}}
   .menu-btn:hover{{background:#3a3a3a}}
   .menu-btn.active-cls{{color:#4a9eff}}
+  #upload-fab{{position:fixed;top:calc(12px + env(safe-area-inset-top));right:calc(12px + env(safe-area-inset-right));z-index:30;width:40px;height:40px;border-radius:50%;background:#4a9eff;color:#fff;border:none;font-size:1.4em;line-height:1;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.4)}}
+  #upload-fab:active{{background:#3a8eef}}
+  dialog#upload-dialog{{background:#1e1e1e;color:#eee;border:1px solid #3a3a3a;border-radius:8px;padding:16px;max-width:340px;width:90vw}}
+  dialog#upload-dialog::backdrop{{background:rgba(0,0,0,0.6)}}
+  dialog#upload-dialog h3{{margin-bottom:12px;font-size:1.1em}}
+  dialog#upload-dialog input[type=file]{{width:100%;margin-bottom:12px;color:#eee}}
+  dialog#upload-dialog select{{width:100%;padding:8px;margin-bottom:12px;background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:6px}}
+  .dialog-actions{{display:flex;justify-content:flex-end;gap:8px}}
+  .dialog-actions button{{padding:8px 16px;border-radius:6px;border:1px solid #3a3a3a;background:#2a2a2a;color:#eee;cursor:pointer;font-size:0.9em}}
+  .dialog-actions button[type=submit]{{background:#4a9eff;border-color:#4a9eff}}
+  #nprogress .bar{{background:#4a9eff}}
 </style>
 </head>
 <body>
+<script src="/assets/vendor/nprogress.js"></script>
+{upload_modal_html}
 <script>
 (function(){{
   var params=new URLSearchParams(window.location.search);
@@ -351,6 +400,48 @@ document.querySelectorAll('video[id]').forEach(function(v){{
 window.addEventListener('pagehide', stopAllPreloads);
 document.addEventListener('visibilitychange', function(){{
   if(document.hidden) stopAllPreloads();
+}});
+</script>
+<script>
+var UPLOAD_TOKEN = {upload_token_json};
+document.getElementById('upload-form').addEventListener('submit', function(e){{
+  e.preventDefault();
+  var fileInput = document.getElementById('upload-file-input');
+  var clsSelect = document.getElementById('upload-classification');
+  var errorEl = document.getElementById('upload-error');
+  var file = fileInput.files[0];
+  if(!file) return;
+
+  errorEl.style.display = 'none';
+  var formData = new FormData();
+  formData.append('file', file);
+  formData.append('classification', clsSelect.value);
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/upload/file');
+  xhr.setRequestHeader('Authorization', 'Bearer ' + UPLOAD_TOKEN);
+  NProgress.start();
+  xhr.upload.onprogress = function(evt){{
+    if(evt.lengthComputable){{
+      NProgress.set(evt.loaded / evt.total);
+    }}
+  }};
+  xhr.onload = function(){{
+    NProgress.done();
+    if(xhr.status === 202){{
+      document.getElementById('upload-dialog').close();
+      window.location.reload();
+    }} else {{
+      errorEl.textContent = 'Upload failed (' + xhr.status + ')';
+      errorEl.style.display = 'block';
+    }}
+  }};
+  xhr.onerror = function(){{
+    NProgress.done();
+    errorEl.textContent = 'Upload failed - network error';
+    errorEl.style.display = 'block';
+  }};
+  xhr.send(formData);
 }});
 </script>
 </body>

@@ -1,6 +1,7 @@
 # tests/test_api.py
 import pytest
 import importlib
+from pathlib import Path
 from fastapi.testclient import TestClient
 
 
@@ -52,6 +53,52 @@ def test_upload_success(client, monkeypatch):
     assert "id" in data
     assert data["status"] == "queued"
     assert queued == [((data["id"],), {})]
+
+
+def test_upload_file_missing_token(client):
+    resp = client.post(
+        "/upload/file",
+        files={"file": ("video.mp4", b"bytes", "video/mp4")},
+        data={"classification": "children"},
+    )
+    assert resp.status_code == 401
+
+
+def test_upload_file_invalid_classification(client):
+    resp = client.post(
+        "/upload/file",
+        files={"file": ("video.mp4", b"bytes", "video/mp4")},
+        data={"classification": "not-a-real-one"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 400
+
+
+def test_upload_file_success(client, monkeypatch):
+    import db
+
+    queued = []
+    monkeypatch.setattr("router.process_uploaded_video", lambda *a, **kw: queued.append((a, kw)), raising=False)
+    classification = db.CLASSIFICATIONS[0]
+
+    resp = client.post(
+        "/upload/file",
+        files={"file": ("my video.mp4", b"fake-video-bytes", "video/mp4")},
+        data={"classification": classification},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "queued"
+    assert queued == [((data["id"],), {})]
+
+    video = db.get_video(data["id"])
+    assert video["platform"] == "upload"
+    assert video["title"] == "my video"
+    assert video["classification"] == classification
+    assert Path(video["url"]).exists()
+    assert Path(video["url"]).read_bytes() == b"fake-video-bytes"
 
 
 def test_upload_youtube_success(client, monkeypatch):
@@ -312,6 +359,39 @@ def test_videos_page_returns_html(client):
     assert "text/html" in resp.headers["content-type"]
 
 
+def test_videos_page_has_upload_button_and_dialog(client):
+    resp = client.get("/videos")
+    assert resp.status_code == 200
+    assert 'id="upload-fab"' in resp.text
+    assert 'id="upload-dialog"' in resp.text
+    assert 'id="upload-form"' in resp.text
+    assert '<option value="children">children</option>' in resp.text
+    assert '<option value="tv">tv</option>' in resp.text
+
+
+def test_videos_page_loads_vendored_nprogress(client):
+    resp = client.get("/videos")
+    assert "/assets/vendor/nprogress.js" in resp.text
+    assert "/assets/vendor/nprogress.css" in resp.text
+
+
+def test_videos_page_exposes_upload_token_for_xhr(client):
+    resp = client.get("/videos")
+    assert 'var UPLOAD_TOKEN = "test-secret";' in resp.text
+
+
+def test_upload_platform_video_shows_filename_title_not_tmp_path(client):
+    import db
+
+    video_id = db.add_video("/private/tmp/tmpabc123.mp4", platform="upload", title="Birthday Clip")
+    db.update_video(video_id, status="done", filename=f"{video_id}.mp4")
+
+    resp = client.get("/videos")
+
+    assert "Birthday Clip" in resp.text
+    assert "tmpabc123" not in resp.text
+
+
 def test_root_page_returns_html(client):
     resp = client.get("/")
     assert resp.status_code == 200
@@ -461,6 +541,28 @@ def test_splash_asset_serves_png_files(client):
     assert resp.headers["content-type"] == "image/png"
 
 
+def test_vendor_asset_serves_nprogress_js(client):
+    resp = client.get("/assets/vendor/nprogress.js")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/javascript"
+
+
+def test_vendor_asset_serves_nprogress_css(client):
+    resp = client.get("/assets/vendor/nprogress.css")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/css; charset=utf-8"
+
+
+def test_vendor_asset_404_for_unknown_file(client):
+    resp = client.get("/assets/vendor/does-not-exist.js")
+    assert resp.status_code == 404
+
+
+def test_vendor_asset_rejects_path_traversal(client):
+    resp = client.get("/assets/vendor/..%2Fmain.py")
+    assert resp.status_code == 404
+
+
 def test_api_videos_returns_serialized_list(client):
     import db
     vid = db.add_video(
@@ -485,11 +587,12 @@ def test_api_videos_returns_serialized_list(client):
 
 def test_api_videos_filters_by_classification(client):
     import db
+    target_classification = next(cls for cls in db.CLASSIFICATIONS if cls != "children")
     a = db.add_video("https://twitter.com/x/status/1")
     b = db.add_video("https://twitter.com/x/status/2")
-    db.set_video_classification(a, "education")
+    db.set_video_classification(a, target_classification)
     db.set_video_classification(b, "children")
-    resp = client.get("/api/videos", params={"classification": "education"})
+    resp = client.get("/api/videos", params={"classification": target_classification})
     assert resp.status_code == 200
     ids = {v["id"] for v in resp.json()}
     assert a in ids and b not in ids
@@ -504,11 +607,11 @@ def test_api_videos_ignores_unknown_classification(client):
 
 
 def test_api_classifications_lists_all(client):
+    import db
+
     resp = client.get("/api/classifications")
     assert resp.status_code == 200
-    assert resp.json() == {
-        "classifications": ["children", "adults", "education", "tv", "movies"]
-    }
+    assert resp.json() == {"classifications": db.CLASSIFICATIONS}
 
 
 def test_api_move_requires_token(client):
@@ -547,21 +650,22 @@ def test_api_move_invalid_direction_returns_not_ok(client):
 def test_api_classify_requires_token(client):
     import db
     vid = db.add_video("https://twitter.com/x/status/1")
-    resp = client.post(f"/api/videos/{vid}/classify", json={"classification": "education"})
+    resp = client.post(f"/api/videos/{vid}/classify", json={"classification": "children"})
     assert resp.status_code == 401
 
 
 def test_api_classify_sets_and_returns_ok(client):
     import db
+    target_classification = next(cls for cls in db.CLASSIFICATIONS if cls != "children")
     vid = db.add_video("https://twitter.com/x/status/1")
     resp = client.post(
         f"/api/videos/{vid}/classify",
-        json={"classification": "education"},
+        json={"classification": target_classification},
         headers={"Authorization": "Bearer test-secret"},
     )
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
-    assert db.get_video(vid)["classification"] == "education"
+    assert db.get_video(vid)["classification"] == target_classification
 
 
 def test_api_classify_invalid_returns_not_ok(client):

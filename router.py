@@ -2,12 +2,13 @@ import asyncio
 import os
 import re
 import secrets
+import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import anyio
-from fastapi import APIRouter, Form, HTTPException, Request, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -17,7 +18,7 @@ import library
 import plex
 import services
 from db import CLASSIFICATIONS
-from downloader import download_video
+from downloader import download_video, process_uploaded_video
 from views.serializers import serialize_video
 from views.templates import SPLASH_STARTUP_IMAGES, build_videos_page
 
@@ -34,6 +35,11 @@ SPLASH_MIME_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
+}
+VENDOR_DIR = Path("assets/vendor")
+VENDOR_MIME_TYPES = {
+    ".js": "application/javascript",
+    ".css": "text/css",
 }
 
 ROOT_STATIC_ASSETS = {
@@ -207,6 +213,31 @@ async def upload(body: UploadRequest, request: Request, background_tasks: Backgr
         preview_url=_youtube_preview_url(source["source_key"]) if source["platform"] == "youtube" else None,
     )
     background_tasks.add_task(download_video, video_id)
+    return {"id": video_id, "status": "queued"}
+
+
+@router.post("/upload/file", status_code=202)
+async def upload_file(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    classification: str = Form(...),
+):
+    _check_token(request)
+    if classification not in CLASSIFICATIONS:
+        raise HTTPException(status_code=400, detail="Invalid classification")
+
+    suffix = Path(file.filename or "").suffix or ".mp4"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp_path = Path(tmp.name)
+        while chunk := await file.read(1024 * 1024):
+            tmp.write(chunk)
+    await file.close()
+
+    title = Path(file.filename or "").stem or None
+    video_id = db.add_video(str(tmp_path), platform="upload", title=title)
+    services.apply_classification(video_id, classification)
+    background_tasks.add_task(process_uploaded_video, video_id)
     return {"id": video_id, "status": "queued"}
 
 
@@ -483,6 +514,18 @@ async def splash_asset(filename: str):
         raise HTTPException(status_code=404, detail="Not found")
     target = SPLASH_DIR / safe_name
     media_type = SPLASH_MIME_TYPES.get(target.suffix.lower())
+    if not target.exists() or media_type is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(target, media_type=media_type)
+
+
+@router.get("/assets/vendor/{filename}", include_in_schema=False)
+async def vendor_asset(filename: str):
+    safe_name = Path(filename).name
+    if safe_name != filename:
+        raise HTTPException(status_code=404, detail="Not found")
+    target = VENDOR_DIR / safe_name
+    media_type = VENDOR_MIME_TYPES.get(target.suffix.lower())
     if not target.exists() or media_type is None:
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(target, media_type=media_type)

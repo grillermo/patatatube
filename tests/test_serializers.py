@@ -130,3 +130,18 @@ def test_serialize_download_video_keeps_url_unchanged():
     }
     data = serialize_video(row)
     assert data["url"] == "https://twitter.com/x/status/123"
+
+
+def test_serialize_upload_video_redacts_tmp_path_from_url():
+    row = {
+        "id": 12,
+        "url": "/tmp/tmpabc123.mp4",
+        "title": "My Upload",
+        "platform": "upload",
+        "status": "queued",
+        "classification": "children",
+    }
+    data = serialize_video(row)
+    assert data["url"] == ""
+    assert data["title"] == "My Upload"
+    assert data["platform"] == "upload"

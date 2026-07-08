@@ -62,4 +62,8 @@ def serialize_video(video: dict) -> dict:
         data["preview_url"] = f"/videos/{video['id']}/preview"
         if video.get("show_rating_key"):
             data["show_preview_url"] = f"/videos/{video['id']}/preview?kind=show"
+    if video.get("platform") == "upload":
+        # `url` temporarily holds the local upload path until the background
+        # processor moves it into videos/{id}.mp4. Treat it like library paths.
+        data["url"] = ""
     return data
