@@ -7,3 +7,4 @@ __pycache__/
 python_env/
 .DS_Store
 docs/
+.tokensave/
