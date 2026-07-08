@@ -94,6 +94,23 @@ def test_master_omits_subtitle_group_when_no_tracks(tmp_path):
     assert 'SUBTITLES="subs"' not in master
 
 
+def test_same_language_tracks_get_distinct_files(tmp_path):
+    # Latin American + European Spanish both map to 'es'; keys must not collide.
+    (tmp_path / "la.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nHola\n")
+    (tmp_path / "eu.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nHola\n")
+    tracks = [
+        SubtitleTrack(tmp_path / "la.srt", "es", "Spanish (Latin American)", "srt", default=False),
+        SubtitleTrack(tmp_path / "eu.srt", "es", "Spanish (European)", "srt", default=False),
+    ]
+    pkg = hls.build_hls_package(6, tmp_path / "movie.mp4", tmp_path / "hls",
+                                probe=COMPAT_PROBE, subtitles=tracks, run_ffmpeg=_capture([]))
+    subs = sorted(p.name for p in (pkg.out_dir / "subtitles").glob("*.vtt"))
+    assert subs == ["es-2.vtt", "es.vtt"]
+    master = pkg.master_path.read_text(encoding="utf-8")
+    assert 'URI="subtitles/es.m3u8"' in master
+    assert 'URI="subtitles/es-2.m3u8"' in master
+
+
 def test_subtitle_media_playlist_is_vod(tmp_path):
     track = SubtitleTrack(source_path=tmp_path / "movie.en.srt", language="en",
                           name="English", format="srt", default=True)

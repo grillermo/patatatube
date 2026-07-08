@@ -17,7 +17,12 @@ from pathlib import Path
 
 import db
 from library import plan_conversion, probe_source
-from subtitles import SubtitleTrack, convert_to_webvtt, discover_subtitles
+from subtitles import (
+    SubtitleTrack,
+    UnsupportedSubtitleError,
+    convert_to_webvtt,
+    discover_subtitles,
+)
 
 HLS_DIR = Path(os.getenv("HLS_DIR", "data/hls"))
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
@@ -134,18 +139,37 @@ def _subtitle_media_playlist(duration: float, vtt_name: str) -> str:
     )
 
 
-def _master_playlist(probe: dict, tracks: list[SubtitleTrack]) -> str:
-    lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"]
+def _subtitle_keys(tracks: list[SubtitleTrack]) -> list[str]:
+    """Unique on-disk key per track. Multiple tracks can share a language
+    (e.g. Latin American + European Spanish both 'es'), so key by language
+    with a numeric suffix on collision to avoid clobbering playlist files."""
+    keys: list[str] = []
+    used: dict[str, int] = {}
     for track in tracks:
+        base = track.language or "und"
+        count = used.get(base, 0)
+        used[base] = count + 1
+        keys.append(base if count == 0 else f"{base}-{count + 1}")
+    return keys
+
+
+def _escape_attr(value: str) -> str:
+    # Playlist quoted-string attributes cannot contain a double quote.
+    return value.replace('"', "'")
+
+
+def _master_playlist(probe: dict, tracks: list[SubtitleTrack], keys: list[str]) -> str:
+    lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"]
+    for track, key in zip(tracks, keys):
         lines.append(
             "#EXT-X-MEDIA:TYPE=SUBTITLES,"
             f'GROUP-ID="{SUBTITLE_GROUP}",'
             f'LANGUAGE="{track.language}",'
-            f'NAME="{track.name}",'
+            f'NAME="{_escape_attr(track.name)}",'
             f"DEFAULT={'YES' if track.default else 'NO'},"
             "AUTOSELECT=YES,"
             f"FORCED={'YES' if track.forced else 'NO'},"
-            f'URI="subtitles/{track.language}.m3u8"'
+            f'URI="subtitles/{key}.m3u8"'
         )
 
     video = _first_stream(probe, "video") or {}
@@ -179,20 +203,28 @@ def build_hls_package(
     plan = plan_conversion(probe)
     run_ffmpeg(build_ffmpeg_command(source, out_dir, plan))
 
-    tracks = subtitles if subtitles is not None else discover_subtitles(source)
+    discovered = subtitles if subtitles is not None else discover_subtitles(source)
     duration = _duration(probe)
     fps = _frame_rate(probe) or 24.0
 
-    for track in tracks:
-        vtt_path = out_dir / "subtitles" / f"{track.language}.vtt"
-        convert_to_webvtt(track, vtt_path, fps=fps)
+    # Only tracks that actually convert reach the master playlist, so a
+    # malformed sidecar among dozens never leaves a dangling URI reference.
+    tracks: list[SubtitleTrack] = []
+    keys: list[str] = []
+    for track, key in zip(discovered, _subtitle_keys(discovered)):
+        try:
+            convert_to_webvtt(track, out_dir / "subtitles" / f"{key}.vtt", fps=fps)
+        except (UnsupportedSubtitleError, ValueError, OSError):
+            continue
         _write(
-            out_dir / "subtitles" / f"{track.language}.m3u8",
-            _subtitle_media_playlist(duration, f"{track.language}.vtt"),
+            out_dir / "subtitles" / f"{key}.m3u8",
+            _subtitle_media_playlist(duration, f"{key}.vtt"),
         )
+        tracks.append(track)
+        keys.append(key)
 
     master_path = out_dir / "master.m3u8"
-    _write(master_path, _master_playlist(probe, tracks))
+    _write(master_path, _master_playlist(probe, tracks, keys))
     return HlsPackage(video_id=video_id, out_dir=out_dir, master_path=master_path, tracks=tracks)
 
 

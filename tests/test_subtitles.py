@@ -17,51 +17,125 @@ VTT_HEADER = "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0\n"
 
 
 def _touch(path: Path, content: str = "") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
 
 
-def test_discover_finds_supported_sidecars(tmp_path):
-    video = _touch(tmp_path / "movie.mp4")
-    _touch(tmp_path / "movie.en.srt")
-    _touch(tmp_path / "movie.es.sub", "00:00:01.00,00:00:02.00\nHola\n")
-    _touch(tmp_path / "movie.vtt")
+def _by_lang(tracks):
+    return {t.language: t for t in tracks}
+
+
+def test_stem_sidecar_srt_next_to_video(tmp_path):
+    # movies/The.Gorge.2025.../The.Gorge.2025...srt
+    video = _touch(tmp_path / "The.Gorge.2025.1080p.WEBRip.x264.AAC5.1-[YTS.MX].mp4")
+    _touch(tmp_path / "The.Gorge.2025.1080p.WEBRip.x264.AAC5.1-[YTS.MX].srt")
 
     tracks = discover_subtitles(video)
-
-    langs = [(t.language, t.name, t.format) for t in tracks]
-    assert ("en", "English", "srt") in langs
-    assert ("es", "Spanish", "sub") in langs
-    assert ("und", "Unknown", "vtt") in langs
+    assert len(tracks) == 1
+    assert tracks[0].language == "und"
+    assert tracks[0].format == "srt"
 
 
-def test_discover_is_deterministically_ordered(tmp_path):
-    video = _touch(tmp_path / "movie.mp4")
-    _touch(tmp_path / "movie.es.srt")
-    _touch(tmp_path / "movie.en.srt")
+def test_srt_next_to_differently_suffixed_video(tmp_path):
+    # El.Secreto...WORLD.srt sits next to El.Secreto...WORLD-subtitled.m4v
+    video = _touch(tmp_path / "El.Secreto.2020.AAC-WORLD-subtitled.m4v")
+    _touch(tmp_path / "El.Secreto.2020.AAC-WORLD.srt")
 
     tracks = discover_subtitles(video)
+    assert len(tracks) == 1
 
-    assert [t.language for t in tracks] == sorted(t.language for t in tracks)
+
+def test_subs_folder_iso639_2_codes(tmp_path):
+    # movies/<Movie>/Subs/{ger,jpn,vie,fre}.srt
+    video = _touch(tmp_path / "movie.mkv")
+    for code in ("ger", "jpn", "vie", "fre", "spa"):
+        _touch(tmp_path / "Subs" / f"{code}.srt")
+
+    tracks = _by_lang(discover_subtitles(video))
+    assert set(tracks) == {"de", "ja", "vi", "fr", "es"}
+    assert tracks["de"].name == "German"
 
 
-def test_first_non_forced_track_is_default(tmp_path):
-    video = _touch(tmp_path / "movie.mp4")
-    _touch(tmp_path / "movie.en.srt")
-    _touch(tmp_path / "movie.es.srt")
+def test_subs_folder_descriptor_and_region_names(tmp_path):
+    video = _touch(tmp_path / "movie.mkv")
+    _touch(tmp_path / "Subs" / "Latin American.spa.srt")
+    _touch(tmp_path / "Subs" / "European.spa.srt")
+    _touch(tmp_path / "Subs" / "SDH.eng.HI.srt")
+    _touch(tmp_path / "Subs" / "Canadian (Forced).fre.srt")
+    _touch(tmp_path / "Subs" / "English.srt")
 
     tracks = discover_subtitles(video)
+    langs = sorted(t.language for t in tracks)
+    # two Spanish (region variants), plus en (SDH), en (plain), fr (forced)
+    assert langs == ["en", "en", "es", "es", "fr"]
 
+    spanish_names = sorted(t.name for t in tracks if t.language == "es")
+    assert spanish_names == ["Spanish (European)", "Spanish (Latin American)"]
+
+    forced = [t for t in tracks if t.forced]
+    assert len(forced) == 1 and forced[0].language == "fr"
+
+    sdh = next(t for t in tracks if "SDH" in t.name)
+    assert sdh.language == "en"
+
+
+def test_tv_per_episode_subs_folder(tmp_path):
+    # tv/<Show>/<Season>/Subs/<episode_stem>/3_English.srt — only the matching
+    # episode's subtitles attach to that episode.
+    season = tmp_path / "Rick.and.Morty.S05.1080p.BluRay.x265-RARBG"
+    e01 = "Rick.and.Morty.S05E01.1080p.BluRay.x265-RARBG"
+    e02 = "Rick.and.Morty.S05E02.1080p.BluRay.x265-RARBG"
+    video = _touch(season / f"{e01}.mp4")
+    _touch(season / f"{e02}.mp4")
+    _touch(season / "Subs" / e01 / "3_English.srt")
+    _touch(season / "Subs" / e02 / "3_English.srt")
+
+    tracks = discover_subtitles(video)
+    assert len(tracks) == 1
+    assert tracks[0].language == "en"
+    assert tracks[0].source_path.name == "3_English.srt"
+    assert e01 in str(tracks[0].source_path)
+
+
+def test_nested_srt_bucket_and_vobsub_rejected(tmp_path):
+    # Dragon Ball: Subtitles/srt/English.srt (kept) + Subtitles/VobSub/x.idx+.sub (rejected)
+    video = _touch(tmp_path / "movie.mkv")
+    _touch(tmp_path / "Subtitles" / "srt" / "English.srt")
+    _touch(tmp_path / "Subtitles" / "VobSub" / "jp.idx")
+    _touch(tmp_path / "Subtitles" / "VobSub" / "jp.sub")
+
+    tracks = discover_subtitles(video)
+    assert [t.language for t in tracks] == ["en"]
+
+
+def test_release_prefixed_subtitles_folder(tmp_path):
+    # Dragon Ball: the folder is "<release>.Subtitles", not plain "Subtitles".
+    video = _touch(tmp_path / "Dragon.Ball.Z.Resurrection.F.mkv")
+    _touch(tmp_path / "Dragon.Ball.Z.Resurrection.F.Subtitles" / "srt" / "English.srt")
+    _touch(tmp_path / "Dragon.Ball.Z.Resurrection.F.Subtitles" / "VobSub" / "ja.idx")
+    _touch(tmp_path / "Dragon.Ball.Z.Resurrection.F.Subtitles" / "VobSub" / "ja.sub")
+
+    tracks = discover_subtitles(video)
+    assert [t.language for t in tracks] == ["en"]
+
+
+def test_english_marked_default_among_many(tmp_path):
+    video = _touch(tmp_path / "movie.mkv")
+    for code in ("ger", "jpn", "eng", "spa"):
+        _touch(tmp_path / "Subs" / f"{code}.srt")
+
+    tracks = discover_subtitles(video)
     defaults = [t for t in tracks if t.default]
     assert len(defaults) == 1
     assert defaults[0].language == "en"
 
 
-def test_unsupported_extensions_are_ignored(tmp_path):
-    video = _touch(tmp_path / "movie.mp4")
+def test_app_bundle_and_unrelated_files_ignored(tmp_path):
+    video = _touch(tmp_path / "movie.mkv")
     _touch(tmp_path / "movie.txt")
-    _touch(tmp_path / "movie.ass")
-    _touch(tmp_path / "other.srt")  # different stem, not a sidecar
+    _touch(tmp_path / "movie.ass")  # not supported yet
+    _touch(tmp_path / "Subler.app" / "Contents" / "en.strings")  # app bundle junk
 
     assert discover_subtitles(video) == []
 

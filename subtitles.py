@@ -4,9 +4,20 @@ Only text subtitle formats are supported: SRT, WebVTT, and text ``.sub``
 (SubViewer/timestamp and MicroDVD frame-based). Image-based VobSub (an
 ``.idx`` + binary ``.sub`` pair) is rejected because it is not text.
 
-Sidecars only exist for library rows, whose source lives on the real
-filesystem next to potential ``.srt``/``.vtt``/``.sub`` siblings. Download
-rows (``videos/{id}.mp4``) never have sidecars, so discovery returns ``[]``.
+Sidecars only exist for library rows (real filesystem media). Real scene
+releases scatter subtitles several ways, all handled here:
+
+* Same-directory siblings: ``Movie.2025.1080p...srt`` next to the video, or
+  ``Movie.srt`` next to ``Movie-subtitled.m4v``.
+* A ``Subs/`` (or ``Subtitles/``) folder holding one file per language, named
+  by ISO-639-2/B code (``ger.srt``, ``jpn.srt``), full name (``English.srt``),
+  or ``Descriptor.code`` (``Latin American.spa.srt``, ``SDH.eng.HI.srt``,
+  ``Canadian (Forced).fre.srt``).
+* Nested buckets inside that folder: ``Subtitles/srt/English.srt``,
+  ``Subtitles/VobSub/...`` (rejected), and per-episode TV folders
+  ``Subs/{episode_stem}/3_English.srt`` (matched to the right episode by stem).
+
+Download rows (``videos/{id}.mp4``) never have sidecars, so discovery is ``[]``.
 """
 
 import os
@@ -16,20 +27,57 @@ from pathlib import Path
 
 SUBTITLE_EXTENSIONS = {".srt", ".vtt", ".sub"}
 
-# Minimal ISO-639-1 → display name map; unknown codes fall back to upper-case.
-_LANG_NAMES = {
-    "en": "English",
-    "es": "Spanish",
-    "fr": "French",
-    "de": "German",
-    "pt": "Portuguese",
-    "it": "Italian",
-    "ja": "Japanese",
-    "zh": "Chinese",
-    "ru": "Russian",
-    "nl": "Dutch",
-    "und": "Unknown",
+# Folder names that hold subtitles beside a video.
+_SUBTITLE_DIR_NAMES = {"subs", "subtitles"}
+# Nested folders inside a Subs/ dir that are format/purpose buckets (not a
+# per-episode folder) and should always be descended into.
+_GENERIC_BUCKETS = {"srt", "vtt", "sub", "vobsub", "forced", "sdh", "cc", "subs", "subtitles"}
+
+# Trailing markers that describe a track rather than name its language. 'hi'
+# here means hearing-impaired, not Hindi — this library spells Hindi 'hin', so
+# treating bare 'hi' as a descriptor is safe and avoids mislabeling SDH files.
+_DESCRIPTORS = {"sdh", "hi", "cc", "forced", "hearing", "impaired", "foreign", "full"}
+
+# ISO-639-2/B (and a few 639-1) codes seen across the library → (tag, name).
+# `tag` is the short language tag emitted in the HLS LANGUAGE attribute.
+_ISO_CODES = {
+    "eng": ("en", "English"), "en": ("en", "English"),
+    "spa": ("es", "Spanish"), "es": ("es", "Spanish"),
+    "fre": ("fr", "French"), "fra": ("fr", "French"), "fr": ("fr", "French"),
+    "ger": ("de", "German"), "deu": ("de", "German"), "de": ("de", "German"),
+    "chi": ("zh", "Chinese"), "zho": ("zh", "Chinese"), "zh": ("zh", "Chinese"),
+    "jpn": ("ja", "Japanese"), "ja": ("ja", "Japanese"),
+    "por": ("pt", "Portuguese"), "pt": ("pt", "Portuguese"),
+    "dut": ("nl", "Dutch"), "nld": ("nl", "Dutch"), "nl": ("nl", "Dutch"),
+    "gre": ("el", "Greek"), "ell": ("el", "Greek"),
+    "cze": ("cs", "Czech"), "ces": ("cs", "Czech"),
+    "dan": ("da", "Danish"), "fin": ("fi", "Finnish"), "hun": ("hu", "Hungarian"),
+    "ita": ("it", "Italian"), "it": ("it", "Italian"),
+    "kor": ("ko", "Korean"), "may": ("ms", "Malay"), "msa": ("ms", "Malay"),
+    "pol": ("pl", "Polish"), "swe": ("sv", "Swedish"), "tha": ("th", "Thai"),
+    "tur": ("tr", "Turkish"), "vie": ("vi", "Vietnamese"), "ara": ("ar", "Arabic"),
+    "heb": ("he", "Hebrew"), "hin": ("hi", "Hindi"), "ind": ("id", "Indonesian"),
+    "nor": ("no", "Norwegian"), "nob": ("nb", "Norwegian Bokmal"),
+    "rus": ("ru", "Russian"), "ukr": ("uk", "Ukrainian"), "tel": ("te", "Telugu"),
+    "tam": ("ta", "Tamil"), "fil": ("fil", "Filipino"), "slv": ("sl", "Slovenian"),
+    "slo": ("sk", "Slovak"), "slk": ("sk", "Slovak"), "rum": ("ro", "Romanian"),
+    "ron": ("ro", "Romanian"), "glg": ("gl", "Galician"), "baq": ("eu", "Basque"),
+    "eus": ("eu", "Basque"), "hrv": ("hr", "Croatian"), "mal": ("ml", "Malayalam"),
+    "lit": ("lt", "Lithuanian"), "lav": ("lv", "Latvian"), "est": ("et", "Estonian"),
+    "cat": ("ca", "Catalan"), "bul": ("bg", "Bulgarian"), "kan": ("kn", "Kannada"),
 }
+
+# Full language names → tag (for files named "English.srt", "Français.fre.srt").
+_NAME_CODES = {
+    "english": "en", "spanish": "es", "french": "fr", "français": "fr",
+    "francais": "fr", "german": "de", "deutsch": "de", "chinese": "zh",
+    "japanese": "ja", "portuguese": "pt", "dutch": "nl", "italian": "it",
+    "russian": "ru", "korean": "ko", "arabic": "ar", "hebrew": "he",
+    "español": "es", "espanol": "es",
+}
+
+_TAG_NAMES = {tag: name for tag, name in _ISO_CODES.values()}
+_TAG_NAMES["und"] = "Unknown"
 
 _VTT_HEADER = "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0\n"
 
@@ -56,8 +104,8 @@ class SubtitleTrack:
     forced: bool = False
 
 
-def _language_name(language: str) -> str:
-    return _LANG_NAMES.get(language, language.upper())
+def _language_name(tag: str) -> str:
+    return _TAG_NAMES.get(tag, tag.upper())
 
 
 def _is_vobsub(sub_path: Path) -> bool:
@@ -65,56 +113,148 @@ def _is_vobsub(sub_path: Path) -> bool:
     return sub_path.suffix.lower() == ".sub" and sub_path.with_suffix(".idx").exists()
 
 
-def discover_subtitles(video_path) -> list[SubtitleTrack]:
-    """Return supported text subtitle sidecars next to ``video_path``.
+_TOKEN_SPLIT = re.compile(r"[.\-_\s()\[\]]+")
 
-    Matches ``{stem}.<ext>`` (language ``und``) and ``{stem}.{lang}.<ext>``
-    where ``lang`` is the trailing dotted component when it is 2–8 letters.
-    VobSub and unsupported extensions are ignored. Tracks are ordered by
-    ``(language, name)``; the first non-forced track is marked ``default``.
+
+def _tokenize(stem: str) -> list[str]:
+    return [t for t in _TOKEN_SPLIT.split(stem) if t]
+
+
+def _describe_from_name(stem: str) -> tuple[str, str, bool]:
+    """Parse a Subs-folder filename stem into (tag, display_name, forced).
+
+    Scans tokens right-to-left for a language code or name, skipping trailing
+    descriptor markers (SDH/HI/Forced/region words). Leftover descriptor words
+    are folded into the display name so same-language variants stay distinct
+    (e.g. "Spanish (Latin American)" vs "Spanish (European)").
     """
-    video_path = Path(video_path)
-    directory = video_path.parent
-    video_stem = video_path.stem
-    if not directory.exists():
+    tokens = _tokenize(stem)
+    lower = [t.lower() for t in tokens]
+    forced = any(t == "forced" for t in lower)
+
+    tag = "und"
+    lang_index = None
+    for i in range(len(tokens) - 1, -1, -1):
+        t = lower[i]
+        if t in _DESCRIPTORS or t.isdigit():
+            continue
+        if t in _ISO_CODES:
+            tag, lang_index = _ISO_CODES[t][0], i
+            break
+        if t in _NAME_CODES:
+            tag, lang_index = _NAME_CODES[t], i
+            break
+
+    # Descriptor/region words other than the language token, for a unique name.
+    extras = [
+        tokens[i]
+        for i in range(len(tokens))
+        if i != lang_index and not lower[i].isdigit()
+        and lower[i] not in _NAME_CODES and lower[i] not in _ISO_CODES
+    ]
+    base = _language_name(tag)
+    name = f"{base} ({' '.join(extras)})" if extras else base
+    return tag, name, forced
+
+
+def _sibling_tag(video_stem: str, sub_stem: str):
+    """If ``sub_stem`` is a same-dir sidecar for ``video_stem``, return its tag.
+
+    Handles exact match, ``{video}.{code}`` sidecars, and the ``X`` vs
+    ``X-subtitled`` prefix relationship. Returns ``None`` when unrelated.
+    """
+    if sub_stem == video_stem:
+        return "und"
+    for longer, shorter in ((sub_stem, video_stem), (video_stem, sub_stem)):
+        if longer.startswith(shorter) and len(longer) > len(shorter):
+            rest = longer[len(shorter):]
+            if rest[0] in "._- ":
+                token = rest.lstrip("._- ").split(".")[0].lower()
+                return _ISO_CODES.get(token, (None,))[0] or _NAME_CODES.get(token) or "und"
+    return None
+
+
+def _list_files(directory: Path):
+    try:
+        return [e for e in directory.iterdir() if e.is_file()]
+    except OSError:
         return []
 
+
+def _is_subtitle_dir(name: str) -> bool:
+    lower = name.lower()
+    # Exact "Subs"/"Subtitles", or a release-prefixed variant whose final
+    # dotted token is one of those (e.g. "Dragon.Ball...F.Subtitles").
+    return lower in _SUBTITLE_DIR_NAMES or lower.split(".")[-1] in _SUBTITLE_DIR_NAMES
+
+
+def _subtitle_files(video_dir: Path, video_stem: str):
+    """Yield subtitle files in ``Subs``/``Subtitles`` folders next to the video.
+
+    Descends one level into generic buckets (``srt/``, ``VobSub/``) and into a
+    per-episode folder whose name matches ``video_stem``.
+    """
+    for child in sorted(p for p in video_dir.iterdir() if p.is_dir()):
+        if not _is_subtitle_dir(child.name):
+            continue
+        yield from _list_files(child)
+        for nested in sorted(p for p in child.iterdir() if p.is_dir()):
+            if nested.name == video_stem or nested.name.lower() in _GENERIC_BUCKETS:
+                yield from _list_files(nested)
+
+
+def discover_subtitles(video_path) -> list[SubtitleTrack]:
+    """Return supported text subtitle tracks for ``video_path``.
+
+    Searches same-directory siblings and adjacent ``Subs``/``Subtitles``
+    folders (see module docstring). VobSub and unsupported extensions are
+    ignored. Tracks are ordered by ``(tag, name)``; English (else the first
+    non-forced track) is marked ``default``.
+    """
+    video_path = Path(video_path)
+    video_dir = video_path.parent
+    video_stem = video_path.stem
+    if not video_dir.exists():
+        return []
+
+    seen: set[Path] = set()
     tracks: list[SubtitleTrack] = []
-    for entry in directory.iterdir():
-        if not entry.is_file():
-            continue
-        ext = entry.suffix.lower()
-        if ext not in SUBTITLE_EXTENSIONS:
-            continue
-        full_stem = entry.name[: -len(entry.suffix)]
 
-        if full_stem == video_stem:
-            language = "und"
-        elif full_stem.startswith(video_stem + "."):
-            suffix = full_stem[len(video_stem) + 1 :]
-            language = suffix.lower() if 2 <= len(suffix) <= 8 and suffix.isalpha() else "und"
-        else:
-            continue
-
+    def add(entry: Path, tag: str, name: str, forced: bool) -> None:
+        if entry in seen or entry.suffix.lower() not in SUBTITLE_EXTENSIONS:
+            return
         if _is_vobsub(entry):
-            continue
+            return
+        seen.add(entry)
+        tracks.append(SubtitleTrack(entry, tag, name, entry.suffix.lstrip("."), forced=forced))
 
-        tracks.append(
-            SubtitleTrack(
-                source_path=entry,
-                language=language,
-                name=_language_name(language),
-                format=ext.lstrip("."),
-                forced="forced" in full_stem.lower(),
-            )
-        )
+    for entry in _list_files(video_dir):
+        if entry.suffix.lower() not in SUBTITLE_EXTENSIONS:
+            continue
+        tag = _sibling_tag(video_stem, entry.name[: -len(entry.suffix)])
+        if tag is None:
+            continue
+        name = _language_name(tag) if tag != "und" else "Subtitles"
+        add(entry, tag, name, forced="forced" in entry.stem.lower())
+
+    for entry in _subtitle_files(video_dir, video_stem):
+        tag, name, forced = _describe_from_name(entry.name[: -len(entry.suffix)])
+        add(entry, tag, name, forced)
 
     tracks.sort(key=lambda t: (t.language, t.name, t.source_path.name))
+    _mark_default(tracks)
+    return tracks
+
+
+def _mark_default(tracks: list[SubtitleTrack]) -> None:
+    for track in tracks:
+        if track.language == "en" and not track.forced:
+            track.default = True
+            return
     for track in tracks:
         if not track.forced:
             track.default = True
-            break
-    return tracks
+            return
 
 
 def _format_ts(total_seconds: float) -> str:
