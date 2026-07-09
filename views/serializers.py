@@ -14,6 +14,17 @@ def _hls_ready(video: dict) -> bool:
     return video.get("status") == "done"
 
 
+def preview_url_for(video: dict) -> str | None:
+    """Where to fetch this row's poster/thumbnail image from.
+
+    Library rows proxy Plex thumbs through our own endpoint; download rows
+    (YouTube) carry an external thumbnail URL straight in the column.
+    """
+    if (video.get("source") or "download") == "library":
+        return f"/videos/{video['id']}/preview"
+    return video.get("preview_url")
+
+
 def serialize_video(video: dict) -> dict:
     source = video.get("source") or "download"
     data = {
@@ -22,7 +33,7 @@ def serialize_video(video: dict) -> dict:
         "title": video.get("title"),
         "platform": video.get("platform"),
         "source_key": video.get("source_key"),
-        "preview_url": video.get("preview_url"),
+        "preview_url": preview_url_for(video),
         "classification": video.get("classification") or "children",
         "position": video.get("position"),
         "status": video["status"],
@@ -59,7 +70,6 @@ def serialize_video(video: dict) -> dict:
         # whole /api/videos response. Playback/display use stream_path and
         # title instead, so an empty url is never read for library rows.
         data["url"] = ""
-        data["preview_url"] = f"/videos/{video['id']}/preview"
         if video.get("show_rating_key"):
             data["show_preview_url"] = f"/videos/{video['id']}/preview?kind=show"
     if video.get("platform") == "upload":

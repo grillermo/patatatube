@@ -3,6 +3,8 @@ import os
 import re
 from html import escape
 
+from views.serializers import preview_url_for
+
 # filename, CSS device width, CSS device height, pixel ratio, orientation
 SPLASH_STARTUP_IMAGES = (
     ("4__iPhone_SE__iPod_touch_5th_generation_and_later_portrait.png", 320, 568, 2, "portrait"),
@@ -64,6 +66,18 @@ def _status_badge(status: str) -> str:
     return f'<span style="color:{colors.get(status,"#888")};font-size:0.8em">{status}</span>'
 
 
+def _preview_src(video: dict) -> str | None:
+    """preview_url_for's result, with our own upload token attached when it
+    points at our own token-gated endpoint (external thumbnail URLs need none).
+    """
+    url = preview_url_for(video)
+    if url and url.startswith("/videos/"):
+        token = escape(os.getenv("UPLOAD_TOKEN", ""), quote=True)
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}token={token}"
+    return url
+
+
 def _splash_startup_link(filename: str, width: int, height: int, scale: int, orientation: str) -> str:
     media = (
         f"(device-width: {width}px) and (device-height: {height}px) "
@@ -110,11 +124,13 @@ def build_videos_page(videos: list[dict], classifications: list[str], current_cl
 
         if v["status"] == "done":
             name_text = title if title else escape(v["url"][:60]) + ("…" if len(v["url"]) > 60 else "")
+            preview_url = _preview_src(v)
+            preview_attr = f' data-preview-src="{escape(preview_url, quote=True)}"' if preview_url else ""
             player = f"""
             <div class="video-wrap">
               <div class="name-overlay">{name_text}</div>
               <video id="v{v['id']}" controls playsinline webkit-playsinline preload="none"
-                     onloadedmetadata="this.currentTime=0">
+                     onloadedmetadata="this.currentTime=0"{preview_attr}>
                 <source src="/videos/{v['id']}/stream?token={escape(os.getenv('UPLOAD_TOKEN', ''))}" type="video/mp4">
               </video>
             </div>"""
@@ -367,8 +383,87 @@ function enterFullscreen(v){{
   }} catch(e) {{}}
 }}
 
+var PREVIEW_CACHE_PREFIX = 'patatatube:preview:';
+
+function previewCacheKey(url){{
+  return PREVIEW_CACHE_PREFIX + url;
+}}
+
+function readPreviewCache(url){{
+  try {{
+    var raw = localStorage.getItem(previewCacheKey(url));
+    if(!raw) return null;
+    var parsed = JSON.parse(raw);
+    return parsed && parsed.data ? parsed.data : null;
+  }} catch(_err) {{
+    return null;
+  }}
+}}
+
+function evictOldestPreview(){{
+  var oldestKey = null;
+  var oldestTs = Infinity;
+  for(var i = 0; i < localStorage.length; i++){{
+    var key = localStorage.key(i);
+    if(!key || key.indexOf(PREVIEW_CACHE_PREFIX) !== 0) continue;
+    try {{
+      var parsed = JSON.parse(localStorage.getItem(key));
+      if(parsed && typeof parsed.ts === 'number' && parsed.ts < oldestTs){{
+        oldestTs = parsed.ts;
+        oldestKey = key;
+      }}
+    }} catch(_err) {{}}
+  }}
+  if(!oldestKey) return false;
+  localStorage.removeItem(oldestKey);
+  return true;
+}}
+
+function writePreviewCache(url, dataUrl){{
+  var payload = JSON.stringify({{data: dataUrl, ts: Date.now()}});
+  while(true){{
+    try {{
+      localStorage.setItem(previewCacheKey(url), payload);
+      return;
+    }} catch(_err) {{
+      if(!evictOldestPreview()) return;
+    }}
+  }}
+}}
+
+function applyPreview(video, url){{
+  if(!url) return;
+  var cached = readPreviewCache(url);
+  if(cached){{
+    video.poster = cached;
+    return;
+  }}
+
+  fetch(url, {{credentials: 'same-origin'}})
+    .then(function(resp){{
+      if(!resp.ok) throw new Error('preview fetch failed');
+      return resp.blob();
+    }})
+    .then(function(blob){{
+      return new Promise(function(resolve, reject){{
+        var reader = new FileReader();
+        reader.onload = function(){{ resolve(reader.result); }};
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      }});
+    }})
+    .then(function(dataUrl){{
+      video.poster = dataUrl;
+      writePreviewCache(url, dataUrl);
+    }})
+    .catch(function(_err){{}});
+}}
+
 document.querySelectorAll('video[id]').forEach(function(v){{
   var wrap = v.closest('.video-wrap');
+  var previewSrc = v.getAttribute('data-preview-src');
+  if(previewSrc) applyPreview(v, previewSrc);
+
   var overlay = wrap ? wrap.querySelector('.name-overlay') : null;
   if(overlay){{
     overlay.addEventListener('click', function(){{
@@ -376,6 +471,7 @@ document.querySelectorAll('video[id]').forEach(function(v){{
       if(p && typeof p.catch === 'function') p.catch(function(){{}});
     }});
   }}
+
   v.addEventListener('play', function(){{
     if(wrap) wrap.classList.add('is-playing');
     pauseOtherVideos(v);
