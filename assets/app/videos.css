@@ -1,0 +1,46 @@
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#111;color:#eee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:12px;padding-top:calc(12px + env(safe-area-inset-top));padding-bottom:calc(12px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));}
+@media (display-mode: standalone) {
+  body{min-height:100dvh}
+}
+.nav{display:flex;gap:8px;overflow-x:auto;padding-bottom:10px;margin-bottom:12px;max-width:900px;margin-left:auto;margin-right:auto;scrollbar-width:none}
+.nav::-webkit-scrollbar{display:none}
+.nav-link{padding:6px 16px;border-radius:20px;background:#2a2a2a;color:#aaa;text-decoration:none;white-space:nowrap;font-size:0.9em;flex-shrink:0}
+.nav-link.active{background:#4a9eff;color:#fff}
+.grid{display:grid;grid-template-columns:1fr;gap:14px;max-width:480px;margin:0 auto}
+@media (orientation:landscape) and (min-width:600px){
+  .grid{grid-template-columns:1fr 1fr;max-width:900px}
+}
+.card{background:#1e1e1e;border-radius:10px;padding:12px;position:relative}
+.meta{font-size:0.78em;color:#aaa;margin-bottom:8px;word-break:break-all}
+.title{font-size:1.15em;color:#eee;margin-bottom:4px;word-break:break-word}
+video{display:block;width:100%;height:100%;object-fit:contain}
+.video-wrap{position:relative;aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden}
+.name-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;font-size:1.6em;font-weight:600;color:#eee;background:#000;border-radius:8px;cursor:pointer;word-break:break-word}
+.video-wrap.is-playing .name-overlay{display:none}
+.move{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}
+.move form{margin:0}
+.move button{background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:6px;padding:6px 12px;font-size:1em;cursor:pointer}
+.move button:active{background:#3a3a3a}
+.download-btn{background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:6px;padding:6px 12px;font-size:1em;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;margin-right:auto}
+.download-btn:active{background:#3a3a3a}
+.menu{position:absolute;top:10px;right:10px;z-index:10}
+.menu>summary{list-style:none;cursor:pointer;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:6px;padding:2px 9px;font-size:1.3em;color:#eee;user-select:none;-webkit-user-select:none}
+.menu>summary::-webkit-details-marker{display:none}
+.menu-dropdown{position:absolute;right:0;top:calc(100% + 4px);background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;overflow:hidden;min-width:140px;z-index:20;box-shadow:0 4px 12px rgba(0,0,0,0.5)}
+.menu-dropdown form{margin:0}
+.menu-btn{display:block;width:100%;padding:10px 14px;background:transparent;color:#eee;border:none;border-bottom:1px solid #3a3a3a;text-align:left;font-size:0.9em;cursor:pointer;font-family:inherit}
+.menu-dropdown form:last-child .menu-btn{border-bottom:none}
+.menu-btn:hover{background:#3a3a3a}
+.menu-btn.active-cls{color:#4a9eff}
+#upload-fab{position:fixed;top:calc(12px + env(safe-area-inset-top));right:calc(12px + env(safe-area-inset-right));z-index:30;width:40px;height:40px;border-radius:50%;background:#4a9eff;color:#fff;border:none;font-size:1.4em;line-height:1;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.4)}
+#upload-fab:active{background:#3a8eef}
+dialog#upload-dialog{background:#1e1e1e;color:#eee;border:1px solid #3a3a3a;border-radius:8px;padding:16px;max-width:340px;width:90vw}
+dialog#upload-dialog::backdrop{background:rgba(0,0,0,0.6)}
+dialog#upload-dialog h3{margin-bottom:12px;font-size:1.1em}
+dialog#upload-dialog input[type=file]{width:100%;margin-bottom:12px;color:#eee}
+dialog#upload-dialog select{width:100%;padding:8px;margin-bottom:12px;background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;border-radius:6px}
+.dialog-actions{display:flex;justify-content:flex-end;gap:8px}
+.dialog-actions button{padding:8px 16px;border-radius:6px;border:1px solid #3a3a3a;background:#2a2a2a;color:#eee;cursor:pointer;font-size:0.9em}
+.dialog-actions button[type=submit]{background:#4a9eff;border-color:#4a9eff}
+#nprogress .bar{background:#4a9eff}
