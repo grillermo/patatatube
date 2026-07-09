@@ -1,0 +1,62 @@
+{% import "_macros.html" as m -%}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Patata Videos</title>
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Videos">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+{{ m.splash_links(splash_images) }}
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/assets/vendor/nprogress.css">
+<link rel="stylesheet" href="/assets/app/videos.css">
+</head>
+<body>
+<script src="/assets/vendor/nprogress.js"></script>
+<button type="button" id="upload-fab" aria-label="Upload video" onclick="document.getElementById('upload-dialog').showModal()">+</button>
+<dialog id="upload-dialog">
+  <form id="upload-form">
+    <h3>Upload video</h3>
+    <input type="file" id="upload-file-input" accept="video/*" required>
+    <select id="upload-classification">
+      {% for cls in classifications -%}
+      <option value="{{ cls }}">{{ cls }}</option>
+      {% endfor -%}
+    </select>
+    <p id="upload-error" style="display:none;color:#f66;font-size:0.85em"></p>
+    <div class="dialog-actions">
+      <button type="button" onclick="document.getElementById('upload-dialog').close()">Cancel</button>
+      <button type="submit">Upload</button>
+    </div>
+  </form>
+</dialog>
+<script>
+(function(){
+  var params=new URLSearchParams(window.location.search);
+  var cls=params.get('classification');
+  if(cls){
+    document.cookie='preferred_classification='+encodeURIComponent(cls)+';path=/;max-age=31536000;SameSite=Lax';
+  }else{
+    var m=document.cookie.match(/(?:^|;\s*)preferred_classification=([^;]+)/);
+    if(m){window.location.replace('/?classification='+m[1]);}
+  }
+})();
+</script>
+<h2 style="text-align:center;margin-bottom:12px;font-size:1.1em;max-width:900px;margin-left:auto;margin-right:auto">Patata Videos</h2>
+{{ m.nav(classifications, current_classification) }}
+<div class="grid">
+{% for v in videos -%}
+{{ m.card(v, classifications, current_classification, upload_token) }}
+{% else -%}
+<p style="color:#aaa;text-align:center">No videos yet.</p>
+{% endfor -%}
+</div>
+<script>window.UPLOAD_TOKEN = {{ upload_token | tojson }};</script>
+<script src="/assets/app/videos.js"></script>
+</body>
+</html>
