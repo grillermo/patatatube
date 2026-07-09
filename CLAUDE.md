@@ -44,7 +44,7 @@ See `ios/README.md` for the full manual test checklist (no automated iOS test ta
 - `db.py` — the only SQLite layer. Single `videos` table. `init_db()` is an **idempotent migration runner**: it does `CREATE TABLE IF NOT EXISTS`, then additive `ALTER TABLE` guards for each newer column, then backfills (`_backfill_positions`, `_backfill_youtube_preview_urls`) and cleanup. Schema changes go here as new idempotent guards, not a migrations framework.
 - `services.py` — mutation logic (`apply_move`, `apply_classification`) called by **both** the HTML form endpoints and the JSON API endpoints in `main.py`. Put shared write logic here.
 - `views/serializers.py` — `serialize_video` is the canonical video-to-dict presenter for the JSON API. Keep the API shape here.
-- `views/templates.py` — the server-rendered HTML page + PWA splash images.
+- `views/render.py` + `views/templates/*.html` — the server-rendered HTML page + PWA splash images.
 
 `CLASSIFICATIONS` (in `db.py`: children/adults/education/entertainment) is the source of truth for video categories, imported everywhere that validates a classification.
 

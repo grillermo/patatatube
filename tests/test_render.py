@@ -68,3 +68,30 @@ def test_dialog_and_assets_present():
     assert "/assets/app/videos.css" in html
     assert "/assets/app/videos.js" in html
     assert "window.UPLOAD_TOKEN" in html
+
+
+def test_app_asset_route_serves_css_and_js(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("UPLOAD_TOKEN", "secret")
+
+    import importlib
+
+    import db as db_module
+    import main as main_module
+    import router as router_module
+    from fastapi.testclient import TestClient
+
+    importlib.reload(db_module)
+    importlib.reload(router_module)
+    importlib.reload(main_module)
+
+    with TestClient(main_module.app) as client:
+        css = client.get("/assets/app/videos.css")
+        js = client.get("/assets/app/videos.js")
+        missing = client.get("/assets/app/nope.txt")
+
+    assert css.status_code == 200
+    assert css.headers["content-type"].startswith("text/css")
+    assert js.status_code == 200
+    assert "text/javascript" in js.headers["content-type"]
+    assert missing.status_code == 404

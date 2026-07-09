@@ -3,10 +3,13 @@
 #   WEB_CONCURRENCY=4 ./serve   # override worker count (default 2)
 # Development: DEV=1 ./serve     # single process + hot reload (workers ignored)
 
+PORT="${PORT:-3050}"
+PYTHON_BIN="${PYTHON_BIN:-python_env/bin/python}"
+
 if [ "$DEV" = "1" ]; then
-  exec python3.13 python_env/bin/uvicorn main:app \
+  exec "$PYTHON_BIN" -m uvicorn main:app \
     --host 0.0.0.0 \
-    --port 3050 \
+    --port "$PORT" \
     --reload \
     --reload-dir . \
     --reload-include '*.py' \
@@ -19,9 +22,9 @@ if [ "$DEV" = "1" ]; then
     --forwarded-allow-ips='*'
 fi
 
-exec python3.13 python_env/bin/uvicorn main:app \
+exec "$PYTHON_BIN" -m uvicorn main:app \
   --host 0.0.0.0 \
-  --port 3050 \
+  --port "$PORT" \
   --workers "${WEB_CONCURRENCY:-2}" \
   --proxy-headers \
   --forwarded-allow-ips='*'

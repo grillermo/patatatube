@@ -20,7 +20,7 @@ import services
 from db import CLASSIFICATIONS
 from downloader import download_video, process_uploaded_video
 from views.serializers import serialize_video
-from views.templates import SPLASH_STARTUP_IMAGES, build_videos_page
+from views.render import build_videos_page
 
 router = APIRouter()
 
@@ -41,6 +41,8 @@ VENDOR_MIME_TYPES = {
     ".js": "application/javascript",
     ".css": "text/css",
 }
+APP_DIR = Path("assets/app")
+APP_MIME_TYPES = {".css": "text/css", ".js": "text/javascript"}
 
 ROOT_STATIC_ASSETS = {
     "favicon.ico": ("favicon.ico", "image/x-icon"),
@@ -526,6 +528,18 @@ async def vendor_asset(filename: str):
         raise HTTPException(status_code=404, detail="Not found")
     target = VENDOR_DIR / safe_name
     media_type = VENDOR_MIME_TYPES.get(target.suffix.lower())
+    if not target.exists() or media_type is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(target, media_type=media_type)
+
+
+@router.get("/assets/app/{filename}", include_in_schema=False)
+async def app_asset(filename: str):
+    safe_name = Path(filename).name
+    if safe_name != filename:
+        raise HTTPException(status_code=404, detail="Not found")
+    target = APP_DIR / safe_name
+    media_type = APP_MIME_TYPES.get(target.suffix.lower())
     if not target.exists() or media_type is None:
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(target, media_type=media_type)

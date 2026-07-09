@@ -377,7 +377,8 @@ def test_videos_page_loads_vendored_nprogress(client):
 
 def test_videos_page_exposes_upload_token_for_xhr(client):
     resp = client.get("/videos")
-    assert 'var UPLOAD_TOKEN = "test-secret";' in resp.text
+    assert 'window.UPLOAD_TOKEN = "test-secret";' in resp.text
+    assert "/assets/app/videos.js" in resp.text
 
 
 def test_upload_platform_video_shows_filename_title_not_tmp_path(client):
@@ -493,13 +494,14 @@ def test_videos_page_references_all_splash_startup_assets(client):
     from pathlib import Path
     import main
     import router
+    from views.render import SPLASH_STARTUP_IMAGES
 
     splash_files = {
         p.name
         for p in Path("assets/splash").iterdir()
         if p.is_file() and p.suffix.lower() in router.SPLASH_MIME_TYPES
     }
-    startup_files = {image[0] for image in router.SPLASH_STARTUP_IMAGES}
+    startup_files = {image[0] for image in SPLASH_STARTUP_IMAGES}
 
     assert splash_files == startup_files | {router.SPLASH_ICON}
 
