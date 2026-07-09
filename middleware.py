@@ -9,7 +9,7 @@ def setup_middleware(app: FastAPI) -> None:
         h.strip()
         for h in os.getenv(
             "ALLOWED_HOSTS",
-            "videos.chiq.me,patatatube.chiq.me,localhost,127.0.0.1,0.0.0.0,testserver",
+            "videos.chiq.me,patatatube.chiq.me,localhost,127.0.0.1,0.0.0.0,testserver, 192.168.1.1",
         ).split(",")
         if h.strip()
     ]
