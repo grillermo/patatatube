@@ -1,0 +1,64 @@
+{% macro splash_links(images) -%}
+<link rel="apple-touch-startup-image" href="/apple-splash-optimized.jpg">
+{% for f, w, h, scale, orient in images -%}
+<link rel="apple-touch-startup-image" media="(device-width: {{ w }}px) and (device-height: {{ h }}px) and (-webkit-device-pixel-ratio: {{ scale }}) and (orientation: {{ orient }})" href="/assets/splash/{{ f }}">
+{% endfor -%}
+{%- endmacro %}
+
+{% macro nav(classifications, current) -%}
+<nav class="nav">
+{%- for cls in classifications -%}
+<a href="/?classification={{ cls }}" class="nav-link{{ ' active' if cls == current else '' }}">{{ cls }}</a>
+{%- endfor -%}
+</nav>
+{%- endmacro %}
+
+{% macro classification_menu(v, classifications, current) -%}
+<details class="menu">
+<summary>&#8942;</summary>
+<div class="menu-dropdown">
+{%- for cls in classifications -%}
+<form method="post" action="/videos/{{ v.id }}/classify">
+<input type="hidden" name="current_classification" value="{{ current or '' }}">
+<input type="hidden" name="classification" value="{{ cls }}">
+<button type="submit" class="menu-btn{{ ' active-cls' if cls == (v.classification or 'children') else '' }}">{{ cls }}</button>
+</form>
+{%- endfor -%}
+</div>
+</details>
+{%- endmacro %}
+
+{% macro card(v, classifications, current, upload_token) -%}
+<div class="card">
+{{ classification_menu(v, classifications, current) }}
+{% if v.status == "done" -%}
+<div class="video-wrap">
+  <div class="name-overlay">{{ v | display_name }}</div>
+  {% set p = v | preview_src -%}
+  <video id="v{{ v.id }}" controls playsinline webkit-playsinline preload="none"
+         onloadedmetadata="this.currentTime=0"{% if p %} data-preview-src="{{ p }}"{% endif %}>
+    <source src="/videos/{{ v.id }}/stream?token={{ upload_token }}" type="video/mp4">
+  </video>
+</div>
+{% elif v.status == "error" -%}
+<p style="color:#c00;font-size:0.85em">Error: {{ v.error_msg or "unknown" }}</p>
+{% else -%}
+<p style="color:#aaa;font-size:0.85em">Video is {{ v.status }}…</p>
+{%- endif %}
+<div class="move">
+  {% if v.status == "done" -%}
+  <a class="download-btn" href="/videos/{{ v.id }}/stream?token={{ upload_token }}" download="{{ v | download_name }}.mp4" aria-label="Download video">&#8681;</a>
+  {%- endif %}
+  <form method="post" action="/videos/{{ v.id }}/move">
+    <input type="hidden" name="direction" value="up">
+    <input type="hidden" name="classification" value="{{ current or '' }}">
+    <button type="submit" aria-label="Move up">&#9650;</button>
+  </form>
+  <form method="post" action="/videos/{{ v.id }}/move">
+    <input type="hidden" name="direction" value="down">
+    <input type="hidden" name="classification" value="{{ current or '' }}">
+    <button type="submit" aria-label="Move down">&#9660;</button>
+  </form>
+</div>
+</div>
+{%- endmacro %}
