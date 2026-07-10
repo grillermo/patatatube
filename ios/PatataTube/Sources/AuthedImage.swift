@@ -7,13 +7,16 @@ import PatataTubeKit
 struct AuthedImage: View {
     let path: String?
     var localFileURL: URL? = nil
+    /// true → scaledToFill (crop to cover); false → scaledToFit (letterbox).
+    var fill: Bool = true
     @EnvironmentObject var model: AppModel
     @State private var image: UIImage?
 
     var body: some View {
         ZStack {
             if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+                let img = Image(uiImage: image).resizable()
+                if fill { img.scaledToFill() } else { img.scaledToFit() }
             } else {
                 ProgressView()
             }

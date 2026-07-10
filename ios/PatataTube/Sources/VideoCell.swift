@@ -31,19 +31,32 @@ struct VideoCell: View {
 
     private enum DownloadPhase { case idle, loading, done }
 
+    /// tv/movies previews are tall Plex posters; letterbox them instead of cropping.
+    private var isPoster: Bool {
+        video.classification == "tv" || video.classification == "movies"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button(action: onPlay) {
                 ZStack {
                     Rectangle().fill(.black)
-                        .aspectRatio(16.0/9.0, contentMode: .fit)
                     Text(video.title ?? video.url)
                         .font(.subheadline)
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 12)
                     if video.previewUrl != nil || cachedPreviewURL != nil {
-                        AuthedImage(path: video.previewUrl, localFileURL: cachedPreviewURL)
+                        // scaledToFill previews report their covering size as their
+                        // frame, which can exceed the cell; sizing the ZStack from the
+                        // black rectangle and clipping here keeps every cell 16:9.
+                        // tv/movies use tall Plex posters — letterbox (fit) them so
+                        // they aren't center-cropped; everything else fills the frame.
+                        Rectangle().fill(.clear)
+                            .overlay {
+                                AuthedImage(path: video.previewUrl, localFileURL: cachedPreviewURL,
+                                            fill: !isPoster)
+                            }
                             .clipped()
                     }
                     if video.status != "done" {
@@ -53,6 +66,9 @@ struct VideoCell: View {
                     Image(systemName: "play.circle.fill")
                         .font(.system(size: 40)).foregroundStyle(.white.opacity(0.9))
                 }
+                .aspectRatio(16.0/9.0, contentMode: .fit)
+                .clipped()
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
