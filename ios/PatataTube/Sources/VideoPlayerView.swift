@@ -26,7 +26,10 @@ struct VideoPlayerView: View {
         }
         .simultaneousGesture(pullDownToDismiss)
         .task { setup() }
-        .onDisappear { player?.pause() }
+        .onDisappear {
+            player?.pause()
+            deactivateAudioSession()
+        }
     }
 
     /// Vertical-only drag; horizontal moves (scrubbing) and taps fall through to AVKit controls.
@@ -52,6 +55,7 @@ struct VideoPlayerView: View {
     private var backdropOpacity: Double { max(1 - dragOffset / 400, 0.4) }
 
     private func setup() {
+        activateAudioSession()
         let player: AVPlayer
         if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
             // Offline MP4 wins: instant, no network. (HLS offline is a later phase.)
@@ -65,6 +69,8 @@ struct VideoPlayerView: View {
         } else {
             return
         }
+        player.allowsExternalPlayback = true
+        player.usesExternalPlaybackWhileExternalScreenIsActive = true
         self.player = player
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -80,5 +86,26 @@ struct VideoPlayerView: View {
             options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(token)"]
         }
         return AVURLAsset(url: url, options: options)
+    }
+
+    /// A `.playback` session is what lets AVPlayer send full video (not just audio)
+    /// over AirPlay. Errors are non-fatal: local playback still works without it.
+    private func activateAudioSession() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setActive(true)
+        } catch {
+            // Non-fatal — leave local playback running.
+        }
+    }
+
+    /// Release the session on dismiss so other apps' audio can resume.
+    private func deactivateAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            // Non-fatal.
+        }
     }
 }
