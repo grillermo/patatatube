@@ -40,6 +40,7 @@ struct VideoGridView: View {
         return store.videos.filter { video in
             if let title = video.title, normalized(title).contains(query) { return true }
             if let showTitle = video.showTitle, normalized(showTitle).contains(query) { return true }
+            if let summary = video.summary, normalized(summary).contains(query) { return true }
             if video.versions.contains(where: { normalized($0.label ?? "").contains(query) }) { return true }
             if let filename = video.sourceFilename, normalized(filename).contains(query) { return true }
             return false
