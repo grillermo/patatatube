@@ -104,7 +104,8 @@ video {
   background: #000;
   border-radius: 8px;
   cursor: pointer;
-  word-break: break-word
+  word-break: break-word;
+  opacity: 0;
 }
 .video-wrap.is-playing .name-overlay {
   display: none
