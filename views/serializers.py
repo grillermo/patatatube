@@ -69,6 +69,10 @@ def serialize_video(video: dict) -> dict:
         # non-optional String, and a null would break JSON decoding of the
         # whole /api/videos response. Playback/display use stream_path and
         # title instead, so an empty url is never read for library rows.
+        # Expose only the basename so the client can search by filename
+        # without leaking the server's directory layout.
+        raw_path = video.get("url") or ""
+        data["source_filename"] = raw_path.rsplit("/", 1)[-1] or None
         data["url"] = ""
         if video.get("show_rating_key"):
             data["show_preview_url"] = f"/videos/{video['id']}/preview?kind=show"

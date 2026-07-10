@@ -30,13 +30,18 @@ struct VideoGridView: View {
         [GridItem(.adaptive(minimum: cellSize), spacing: 16)]
     }
 
+    private func normalized(_ text: String) -> String {
+        text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+    }
+
     private var filteredVideos: [Video] {
         guard !activeSearch.isEmpty else { return store.videos }
-        let query = activeSearch.lowercased()
+        let query = normalized(activeSearch)
         return store.videos.filter { video in
-            if let title = video.title, title.lowercased().contains(query) { return true }
-            if let showTitle = video.showTitle, showTitle.lowercased().contains(query) { return true }
-            if video.versions.contains(where: { ($0.label ?? "").lowercased().contains(query) }) { return true }
+            if let title = video.title, normalized(title).contains(query) { return true }
+            if let showTitle = video.showTitle, normalized(showTitle).contains(query) { return true }
+            if video.versions.contains(where: { normalized($0.label ?? "").contains(query) }) { return true }
+            if let filename = video.sourceFilename, normalized(filename).contains(query) { return true }
             return false
         }
     }
