@@ -13,6 +13,8 @@ struct VideoPlayerView: View {
     @State private var playToEndObserver: NSObjectProtocol?
     /// false while backgrounded: player detached from the video layer so audio continues.
     @State private var attached = true
+    /// Captured before suspension so backgrounding never restarts user-paused playback.
+    @State private var resumeAfterDetaching = false
     /// Live vertical drag offset for the pull-down-to-dismiss gesture.
     @State private var dragOffset: CGFloat = 0
 
@@ -20,7 +22,11 @@ struct VideoPlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea().opacity(backdropOpacity)
             if let player {
-                PlayerViewController(player: player, attached: attached)
+                PlayerViewController(
+                    player: player,
+                    attached: attached,
+                    resumeAfterDetaching: resumeAfterDetaching
+                )
                     .ignoresSafeArea()
                     .onAppear { player.play() }
                     .offset(y: dragOffset)
@@ -33,11 +39,13 @@ struct VideoPlayerView: View {
         .task { await setup() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
+            case .inactive:
+                resumeAfterDetaching = player.map { $0.timeControlStatus != .paused } ?? false
             case .background:
                 attached = false
-                player?.play()   // keep audio rolling without the video layer
             case .active:
                 attached = true
+                resumeAfterDetaching = false
             default:
                 break
             }
@@ -98,7 +106,7 @@ struct VideoPlayerView: View {
         ) { _ in
             Task { @MainActor in dismiss() }
         }
-        await loadArtwork()
+        await loadArtwork(for: player)
     }
 
     private func removePlayToEndObserver() {
@@ -109,11 +117,15 @@ struct VideoPlayerView: View {
     }
 
     /// Best-effort lock-screen artwork; controls work without it.
-    private func loadArtwork() async {
-        guard let path = video.previewUrl,
+    private func loadArtwork(for expectedPlayer: AVPlayer) async {
+        guard !Task.isCancelled,
+              self.player === expectedPlayer,
+              let path = video.previewUrl,
               let data = try? await model.api.imageData(path: path),
+              !Task.isCancelled,
+              self.player === expectedPlayer,
               let image = UIImage(data: data) else { return }
-        nowPlaying.setArtwork(image)
+        nowPlaying.setArtwork(image, for: expectedPlayer)
     }
 
     /// AVURLAsset carrying the bearer token; AVPlayer reuses these headers for

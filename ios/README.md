@@ -120,6 +120,7 @@ On first launch grid is empty / errors — need server config:
 - [ ] Play a video, lock the phone → audio continues; lock screen shows title, artwork, and controls
 - [ ] Play/pause and scrub from the lock screen and Control Center
 - [ ] Switch apps mid-playback → audio continues
+- [ ] Pause a video, then lock the phone or switch apps → playback remains paused
 - [ ] Return to the app → video resumes in sync with audio
 - [ ] Video ends while locked → playback stops and lock screen controls clear
 - [ ] Pull-down-to-dismiss still works; AVKit tap/scrub controls still work

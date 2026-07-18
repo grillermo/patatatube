@@ -7,13 +7,17 @@ import AVKit
 struct PlayerViewController: UIViewControllerRepresentable {
     let player: AVPlayer
     let attached: Bool
+    let resumeAfterDetaching: Bool
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        controller.player = player
+        controller.player = attached ? player : nil
         controller.allowsPictureInPicturePlayback = false
         // NowPlayingManager owns the lock screen; stop AVKit competing for it.
         controller.updatesNowPlayingInfoCenter = false
+        if !attached && resumeAfterDetaching {
+            player.play()
+        }
         return controller
     }
 
@@ -22,6 +26,9 @@ struct PlayerViewController: UIViewControllerRepresentable {
             if controller.player !== player { controller.player = player }
         } else if controller.player != nil {
             controller.player = nil
+            if resumeAfterDetaching {
+                player.play()
+            }
         }
     }
 }

@@ -9,6 +9,13 @@ import UIKit
 /// the lock-screen progress bar from elapsed + rate in between.
 @MainActor
 final class NowPlayingManager {
+    private enum RemoteAction: Sendable {
+        case play
+        case pause
+        case togglePlayPause
+        case seek(TimeInterval)
+    }
+
     private weak var player: AVPlayer?
     private var rateObservation: NSKeyValueObservation?
     private var statusObservation: NSKeyValueObservation?
@@ -42,8 +49,9 @@ final class NowPlayingManager {
     }
 
     /// Best-effort: called only when the thumbnail download succeeds.
-    func setArtwork(_ image: UIImage) {
-        var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+    func setArtwork(_ image: UIImage, for expectedPlayer: AVPlayer) {
+        guard player === expectedPlayer,
+              var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
         info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
@@ -73,39 +81,43 @@ final class NowPlayingManager {
 
     private func registerCommands() {
         let center = MPRemoteCommandCenter.shared()
-        add(center.playCommand) { player, _ in
-            player.play()
-            return .success
-        }
-        add(center.pauseCommand) { player, _ in
-            player.pause()
-            return .success
-        }
-        add(center.togglePlayPauseCommand) { player, _ in
-            player.rate == 0 ? player.play() : player.pause()
-            return .success
-        }
-        add(center.changePlaybackPositionCommand) { player, event in
+        add(center.playCommand, action: .play)
+        add(center.pauseCommand, action: .pause)
+        add(center.togglePlayPauseCommand, action: .togglePlayPause)
+        let target = center.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let event = event as? MPChangePlaybackPositionCommandEvent else {
                 return .commandFailed
             }
-            player.seek(to: CMTime(seconds: event.positionTime, preferredTimescale: 600))
+            let positionTime = event.positionTime
+            Task { @MainActor [weak self] in
+                self?.handle(.seek(positionTime))
+            }
             return .success
         }
+        targets.append((center.changePlaybackPositionCommand, target))
     }
 
-    /// Remote-command handlers arrive on the main thread but the closure type is
-    /// nonisolated under Swift 6; assumeIsolated bridges without a hop.
-    private func add(
-        _ command: MPRemoteCommand,
-        handler: @escaping @MainActor (AVPlayer, MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus
-    ) {
-        let target = command.addTarget { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let player = self?.player else { return .commandFailed }
-                return handler(player, event)
+    private func add(_ command: MPRemoteCommand, action: RemoteAction) {
+        let target = command.addTarget { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handle(action)
             }
+            return .success
         }
         targets.append((command, target))
+    }
+
+    private func handle(_ action: RemoteAction) {
+        guard let player else { return }
+        switch action {
+        case .play:
+            player.play()
+        case .pause:
+            player.pause()
+        case .togglePlayPause:
+            player.rate == 0 ? player.play() : player.pause()
+        case .seek(let positionTime):
+            player.seek(to: CMTime(seconds: positionTime, preferredTimescale: 600))
+        }
     }
 }
