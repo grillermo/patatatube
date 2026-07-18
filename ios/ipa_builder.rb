@@ -6,9 +6,9 @@
 # refresh-ipa.rb (drops the .ipa in iCloud for manual sideload) and ../deploy
 # (publishes it to an AltStore source).
 #
-# AltStore re-signs the .ipa on-device, so the archive is built with automatic
-# (free Apple ID) signing baked into project.yml (DEVELOPMENT_TEAM /
-# CODE_SIGN_STYLE); no Distribute step is needed.
+# AltStore re-signs the .ipa on-device, so the archive is built unsigned. This
+# keeps releases independent of local Xcode accounts and provisioning profiles;
+# no Distribute step is needed.
 
 require "fileutils"
 require "shellwords"
@@ -79,6 +79,7 @@ module IpaBuilder
       "-configuration Release " \
       "-destination 'generic/platform=iOS' " \
       "-archivePath #{Shellwords.escape(archive)} " \
+      "CODE_SIGNING_ALLOWED=NO " \
       "-allowProvisioningUpdates " \
       "archive",
       chdir: PROJECT_DIR
