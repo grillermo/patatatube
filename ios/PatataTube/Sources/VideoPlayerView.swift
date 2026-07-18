@@ -10,6 +10,7 @@ struct VideoPlayerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var player: AVPlayer?
     @State private var nowPlaying = NowPlayingManager()
+    @State private var playToEndObserver: NSObjectProtocol?
     /// false while backgrounded: player detached from the video layer so audio continues.
     @State private var attached = true
     /// Live vertical drag offset for the pull-down-to-dismiss gesture.
@@ -43,6 +44,7 @@ struct VideoPlayerView: View {
         }
         .onDisappear {
             player?.pause()
+            removePlayToEndObserver()
             nowPlaying.detach()
             deactivateAudioSession()
         }
@@ -89,13 +91,21 @@ struct VideoPlayerView: View {
         player.usesExternalPlaybackWhileExternalScreenIsActive = true
         self.player = player
         nowPlaying.attach(player: player, title: video.title ?? video.sourceFilename ?? "PatataTube")
-        NotificationCenter.default.addObserver(
+        removePlayToEndObserver()
+        playToEndObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem, queue: .main
         ) { _ in
             Task { @MainActor in dismiss() }
         }
         await loadArtwork()
+    }
+
+    private func removePlayToEndObserver() {
+        if let playToEndObserver {
+            NotificationCenter.default.removeObserver(playToEndObserver)
+            self.playToEndObserver = nil
+        }
     }
 
     /// Best-effort lock-screen artwork; controls work without it.
