@@ -5,6 +5,7 @@ import PatataTubeKit
 struct VideoGridView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var classifications: [String] = ["children", "adults", "education", "tv", "movies"]
     @State private var showSettings = false
@@ -96,22 +97,41 @@ struct VideoGridView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showSettings = true } label: { Image(systemName: "gear") }
                 }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        Task { await downloadAll() }
-                    } label: {
-                        if downloadingAll { ProgressView() }
-                        else { Image(systemName: "arrow.down.circle") }
+                if horizontalSizeClass == .compact {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            Button {
+                                Task { await downloadAll() }
+                            } label: { Label("Download all", systemImage: "arrow.down.circle") }
+                            .disabled(downloadingAll)
+                            Button {
+                                cellSize = max(cellSize - cellSizeStep, minCellSize)
+                            } label: { Label("Smaller cells", systemImage: "minus.magnifyingglass") }
+                            .disabled(cellSize <= minCellSize)
+                            Button {
+                                cellSize = min(cellSize + cellSizeStep, maxCellSize)
+                            } label: { Label("Bigger cells", systemImage: "plus.magnifyingglass") }
+                            .disabled(cellSize >= maxCellSize)
+                        } label: { Image(systemName: "ellipsis.circle") }
                     }
-                    .disabled(downloadingAll)
-                    Button {
-                        cellSize = max(cellSize - cellSizeStep, minCellSize)
-                    } label: { Image(systemName: "minus.magnifyingglass") }
-                    .disabled(cellSize <= minCellSize)
-                    Button {
-                        cellSize = min(cellSize + cellSizeStep, maxCellSize)
-                    } label: { Image(systemName: "plus.magnifyingglass") }
-                    .disabled(cellSize >= maxCellSize)
+                } else {
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        Button {
+                            Task { await downloadAll() }
+                        } label: {
+                            if downloadingAll { ProgressView() }
+                            else { Image(systemName: "arrow.down.circle") }
+                        }
+                        .disabled(downloadingAll)
+                        Button {
+                            cellSize = max(cellSize - cellSizeStep, minCellSize)
+                        } label: { Image(systemName: "minus.magnifyingglass") }
+                        .disabled(cellSize <= minCellSize)
+                        Button {
+                            cellSize = min(cellSize + cellSizeStep, maxCellSize)
+                        } label: { Image(systemName: "plus.magnifyingglass") }
+                        .disabled(cellSize >= maxCellSize)
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
