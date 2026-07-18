@@ -654,12 +654,17 @@ def _sync_versions(conn: sqlite3.Connection, video_id: int, item: dict) -> None:
 def upsert_library_video(item: dict) -> tuple[int, str]:
     """Insert or update a library row keyed on Plex rating key when available."""
     with _conn() as conn:
+        row = None
         if item.get("plex_rating_key"):
             row = conn.execute(
                 "SELECT id, deleted_at FROM videos WHERE plex_rating_key = ?",
                 (item["plex_rating_key"],),
             ).fetchone()
-        else:
+        # source_path is globally UNIQUE, so even when a rating-key lookup misses
+        # (Plex reassigned the key, two items share a file, or a tombstoned row
+        # still owns the path) we must match the existing row by path and UPDATE
+        # it — a fall-through INSERT would hit the UNIQUE constraint.
+        if row is None:
             row = conn.execute(
                 "SELECT id, deleted_at FROM videos WHERE source_path = ?",
                 (item["source_path"],),

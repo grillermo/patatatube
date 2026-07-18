@@ -184,6 +184,26 @@ def test_upsert_library_video_updates_existing(fresh_db):
     assert db.get_video(vid)["title"] == "System (renamed)"
 
 
+def test_upsert_same_path_new_rating_key_updates_not_collides(fresh_db):
+    # Plex changed the ratingKey on rescan (or two items share a file). The
+    # rating-key lookup misses, but source_path is globally UNIQUE, so a naive
+    # INSERT hits "UNIQUE constraint failed: videos.source_path". Must UPDATE.
+    import db
+    vid, _ = db.upsert_library_video(LIB_ITEM)
+    vid2, status = db.upsert_library_video({**LIB_ITEM, "plex_rating_key": "9999"})
+    assert vid2 == vid and status == "updated"
+
+
+def test_upsert_tombstoned_same_path_new_rating_key(fresh_db):
+    # A tombstoned row still owns source_path; a rescan with a different rating
+    # key must not INSERT-collide on it.
+    import db
+    vid, _ = db.upsert_library_video(LIB_ITEM)
+    db.tombstone_video(vid)
+    vid2, status = db.upsert_library_video({**LIB_ITEM, "plex_rating_key": "9999"})
+    assert vid2 == vid and status == "tombstoned"
+
+
 def test_upsert_skips_tombstoned(fresh_db):
     import db
     vid, _ = db.upsert_library_video(LIB_ITEM)
