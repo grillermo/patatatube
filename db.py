@@ -1,19 +1,29 @@
 import sqlite3
 import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 CLASSIFICATIONS = ["children", "adults", "anabel", "tv", "movies"]
 
 
+@contextmanager
 def _conn():
+    # sqlite3's own connection context manager commits/rolls back but never
+    # closes, so `with sqlite3.connect(...) as c` leaks the fd until GC reaps
+    # it. Wrap it here to commit on success like `with conn:` and always close
+    # on exit, keeping the fd count flat under load.
     conn = sqlite3.connect(os.getenv("DB_PATH", "data/watch_later.sqlite"), timeout=30)
     conn.row_factory = sqlite3.Row
     # WAL lets multiple worker processes read while one writes, instead of
     # locking the whole DB. busy_timeout waits out brief write contention.
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _add_column(conn: sqlite3.Connection, ddl: str) -> None:
@@ -244,7 +254,7 @@ def add_video(
                 next_position,
             ),
         )
-    return cur.lastrowid
+        return cur.lastrowid
 
 
 def _video_with_versions(conn: sqlite3.Connection, row: sqlite3.Row | None) -> dict | None:
@@ -430,7 +440,44 @@ def get_all_videos(classification: str | None = None) -> list[dict]:
             rows = conn.execute(
                 "SELECT * FROM videos WHERE deleted_at IS NULL ORDER BY position DESC, created_at DESC"
             ).fetchall()
-    return [_video_with_versions(conn, r) for r in rows]
+        videos = [dict(r) for r in rows]
+        _attach_versions(conn, videos)
+    return videos
+
+
+def _attach_versions(conn: sqlite3.Connection, videos: list[dict]) -> None:
+    """Batch-load versions for the library rows in `videos` with two queries
+    total, instead of the per-row pair `_video_with_versions` would issue (the
+    N+1 that opened a fresh connection and file handle for every library row)."""
+    library_ids = [v["id"] for v in videos if v.get("source") == "library"]
+    if not library_ids:
+        return
+
+    placeholders = ",".join("?" for _ in library_ids)
+    chosen = {
+        row["id"]: row["chosen_version_id"]
+        for row in conn.execute(
+            f"SELECT id, chosen_version_id FROM videos WHERE id IN ({placeholders})",
+            library_ids,
+        ).fetchall()
+    }
+    versions_by_video: dict[int, list[dict]] = {vid: [] for vid in library_ids}
+    for row in conn.execute(
+        f"""
+        SELECT *
+        FROM video_versions
+        WHERE video_id IN ({placeholders})
+        ORDER BY position ASC, id ASC
+        """,
+        library_ids,
+    ).fetchall():
+        version = dict(row)
+        version["is_chosen"] = version["id"] == chosen.get(version["video_id"])
+        versions_by_video[version["video_id"]].append(version)
+
+    for video in videos:
+        if video.get("source") == "library":
+            video["versions"] = versions_by_video[video["id"]]
 
 
 def set_video_classification(video_id: int, classification: str) -> None:

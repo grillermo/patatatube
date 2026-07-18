@@ -98,6 +98,32 @@ function enterFullscreen(v){
   } catch(e) {}
 }
 
+var AUTOPLAY_KEY = 'patatatube:autoplay';
+
+function autoplayEnabled(){
+  try { return localStorage.getItem(AUTOPLAY_KEY) === '1'; } catch(_err) { return false; }
+}
+
+var autoplayToggle = document.getElementById('autoplay-toggle');
+if(autoplayToggle){
+  autoplayToggle.setAttribute('aria-pressed', autoplayEnabled() ? 'true' : 'false');
+  autoplayToggle.addEventListener('click', function(){
+    var next = !autoplayEnabled();
+    try { localStorage.setItem(AUTOPLAY_KEY, next ? '1' : '0'); } catch(_err) {}
+    autoplayToggle.setAttribute('aria-pressed', next ? 'true' : 'false');
+  });
+}
+
+function playNextVideo(current){
+  var vids = Array.prototype.slice.call(document.querySelectorAll('video[id]'));
+  var idx = vids.indexOf(current);
+  if(idx === -1 || idx + 1 >= vids.length) return;
+  var next = vids[idx + 1];
+  try { next.scrollIntoView({behavior: 'smooth', block: 'center'}); } catch(_err) { next.scrollIntoView(); }
+  var p = next.play();
+  if(p && typeof p.catch === 'function') p.catch(function(){});
+}
+
 var PREVIEW_CACHE_PREFIX = 'patatatube:preview:';
 
 function previewCacheKey(url){
@@ -205,6 +231,7 @@ document.querySelectorAll('video[id]').forEach(function(v){
       stopAllPreloads();
     }
     exitFullscreen(v);
+    if(autoplayEnabled()) playNextVideo(v);
   });
 });
 

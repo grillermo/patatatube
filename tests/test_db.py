@@ -61,6 +61,48 @@ def test_get_all_videos(tmp_db):
     assert len(videos) == 2
 
 
+def test_conn_closes_on_exit(tmp_db):
+    import sqlite3
+    with tmp_db._conn() as conn:
+        pass
+    # After the context exits the connection must be closed, not left open
+    # for the garbage collector to reap (which leaks file descriptors).
+    with pytest.raises(sqlite3.ProgrammingError):
+        conn.execute("SELECT 1")
+
+
+def test_get_all_videos_batches_version_queries(fresh_db, monkeypatch):
+    import db
+    for key, prefix in (("42", "/m/a"), ("43", "/m/b")):
+        db.upsert_library_video(
+            {
+                **_versioned_movie_item(key),
+                "source_path": f"{prefix}-1080.mkv",
+                "versions": [
+                    {"source_path": f"{prefix}-1080.mkv", "label": "1080p"},
+                    {"source_path": f"{prefix}-4k.mkv", "label": "4K"},
+                ],
+            }
+        )
+
+    original_conn = db._conn
+    opened = 0
+
+    def counting_conn():
+        nonlocal opened
+        opened += 1
+        return original_conn()
+
+    monkeypatch.setattr(db, "_conn", counting_conn)
+    videos = db.get_all_videos("movies")
+
+    # Two library rows, each with two versions. The whole listing must use a
+    # single connection — no per-row version fetch (the N+1 that leaked FDs).
+    assert opened == 1
+    for video in videos:
+        assert len(video["versions"]) == 2
+
+
 def test_video_metadata_fields_and_source_lookup(tmp_db):
     vid_id = tmp_db.add_video(
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",

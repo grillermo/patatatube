@@ -6,6 +6,11 @@
 PORT="${PORT:-3050}"
 PYTHON_BIN="${PYTHON_BIN:-python_env/bin/python}"
 
+# macOS launchd hands processes a 256-fd soft limit. Video streaming, HLS
+# segment bursts, preview fetches and SQLite each hold fds, so raise the soft
+# limit toward the hard cap. Defense in depth on top of closing connections.
+ulimit -n "${FD_LIMIT:-8192}" 2>/dev/null || true
+
 if [ "$DEV" = "1" ]; then
   exec "$PYTHON_BIN" -m uvicorn main:app \
     --host 0.0.0.0 \

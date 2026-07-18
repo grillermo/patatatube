@@ -46,6 +46,16 @@ body {
   background: #4a9eff;
   color: #fff
 }
+#autoplay-toggle {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  margin-left: auto
+}
+#autoplay-toggle[aria-pressed="true"] {
+  background: #2e7d32;
+  color: #fff
+}
 .grid {
   display: grid;
   grid-template-columns: 1fr;

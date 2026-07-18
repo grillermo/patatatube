@@ -10,6 +10,7 @@
 {%- for cls in classifications -%}
 <a href="/?classification={{ cls }}" class="nav-link{{ ' active' if cls == current else '' }}">{{ cls }}</a>
 {%- endfor -%}
+<button type="button" id="autoplay-toggle" class="nav-link" aria-pressed="false">autoplay</button>
 </nav>
 {%- endmacro %}
 
