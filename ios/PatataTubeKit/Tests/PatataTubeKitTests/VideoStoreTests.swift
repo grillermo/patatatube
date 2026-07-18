@@ -219,14 +219,14 @@ private func tempCache() -> VideoListCache {
     #expect(cache.load(classification: nil)?.count == 2)
 }
 
-@MainActor @Test func loadFallsBackToCacheWhenNetworkFails() async {
+@MainActor @Test func loadFallsBackToCacheAndSetsErrorWhenNetworkFails() async {
     let cache = tempCache()
     cache.save([makeVideo(id: 9)], classification: nil)
     let api = FakeAPI(); api.throwOnVideos = true
     let store = VideoStore(api: api, cache: cache)
     await store.load()
     #expect(store.videos.map(\.id) == [9])
-    #expect(store.errorText == nil)
+    #expect(store.errorText?.contains("503") == true)
 }
 
 @MainActor @Test func loadSetsErrorWhenNetworkFailsAndNoCache() async {
@@ -247,14 +247,14 @@ private func tempCache() -> VideoListCache {
     #expect(store.videos.map(\.id) == [1, 2]) // ended on fresh data
 }
 
-@MainActor @Test func bootLoadServesCacheOffline() async {
+@MainActor @Test func bootLoadServesCacheAndSetsErrorOffline() async {
     let cache = tempCache()
     cache.save([makeVideo(id: 9)], classification: nil)
     let api = FakeAPI(); api.throwOnVideos = true
     let store = VideoStore(api: api, cache: cache)
     await store.bootLoad()
     #expect(store.videos.map(\.id) == [9])
-    #expect(store.errorText == nil)
+    #expect(store.errorText?.contains("503") == true)
 }
 
 @MainActor @Test func deleteCallsApiThenRefetches() async {

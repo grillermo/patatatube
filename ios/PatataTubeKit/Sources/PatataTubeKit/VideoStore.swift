@@ -46,9 +46,8 @@ public final class VideoStore: ObservableObject {
         } catch {
             if let cached = cache?.load(classification: filter) {
                 videos = cached
-            } else {
-                errorText = String(describing: error)
             }
+            errorText = String(describing: error)
         }
     }
 
