@@ -7,7 +7,11 @@ struct VideoPlayerView: View {
     let video: Video
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var player: AVPlayer?
+    @State private var nowPlaying = NowPlayingManager()
+    /// false while backgrounded: player detached from the video layer so audio continues.
+    @State private var attached = true
     /// Live vertical drag offset for the pull-down-to-dismiss gesture.
     @State private var dragOffset: CGFloat = 0
 
@@ -15,7 +19,7 @@ struct VideoPlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea().opacity(backdropOpacity)
             if let player {
-                VideoPlayer(player: player)
+                PlayerViewController(player: player, attached: attached)
                     .ignoresSafeArea()
                     .onAppear { player.play() }
                     .offset(y: dragOffset)
@@ -25,9 +29,21 @@ struct VideoPlayerView: View {
             }
         }
         .simultaneousGesture(pullDownToDismiss)
-        .task { setup() }
+        .task { await setup() }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                attached = false
+                player?.play()   // keep audio rolling without the video layer
+            case .active:
+                attached = true
+            default:
+                break
+            }
+        }
         .onDisappear {
             player?.pause()
+            nowPlaying.detach()
             deactivateAudioSession()
         }
     }
@@ -54,7 +70,7 @@ struct VideoPlayerView: View {
     private var dragScale: CGFloat { max(1 - dragOffset / 1000, 0.85) }
     private var backdropOpacity: Double { max(1 - dragOffset / 400, 0.4) }
 
-    private func setup() {
+    private func setup() async {
         activateAudioSession()
         let player: AVPlayer
         if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
@@ -72,10 +88,22 @@ struct VideoPlayerView: View {
         player.allowsExternalPlayback = true
         player.usesExternalPlaybackWhileExternalScreenIsActive = true
         self.player = player
+        nowPlaying.attach(player: player, title: video.title ?? video.sourceFilename ?? "PatataTube")
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem, queue: .main
-        ) { _ in dismiss() }
+        ) { _ in
+            Task { @MainActor in dismiss() }
+        }
+        await loadArtwork()
+    }
+
+    /// Best-effort lock-screen artwork; controls work without it.
+    private func loadArtwork() async {
+        guard let path = video.previewUrl,
+              let data = try? await model.api.imageData(path: path),
+              let image = UIImage(data: data) else { return }
+        nowPlaying.setArtwork(image)
     }
 
     /// AVURLAsset carrying the bearer token; AVPlayer reuses these headers for
@@ -88,8 +116,8 @@ struct VideoPlayerView: View {
         return AVURLAsset(url: url, options: options)
     }
 
-    /// A `.playback` session is what lets AVPlayer send full video (not just audio)
-    /// over AirPlay. Errors are non-fatal: local playback still works without it.
+    /// A `.playback` session is what lets audio continue in the background and
+    /// AVPlayer send full video (not just audio) over AirPlay.
     private func activateAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
