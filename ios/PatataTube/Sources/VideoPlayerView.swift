@@ -98,6 +98,7 @@ struct VideoPlayerView: View {
         player.allowsExternalPlayback = true
         player.usesExternalPlaybackWhileExternalScreenIsActive = true
         self.player = player
+        Task { await applyAudioSelection(item: item, lang: video.audioLang) }
         nowPlaying.onNext = { advance(by: 1) }
         nowPlaying.onPrevious = { handlePrevious() }
         nowPlaying.attach(player: player, title: title(of: video))
@@ -172,6 +173,7 @@ struct VideoPlayerView: View {
         }
         currentIndex = nextIndex
         player.replaceCurrentItem(with: item)
+        Task { await applyAudioSelection(item: item, lang: videos[nextIndex].audioLang) }
         bindPlayToEnd()
         player.play()
         nowPlaying.updateTitle(title(of: video))
@@ -218,6 +220,26 @@ struct VideoPlayerView: View {
             options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(token)"]
         }
         return AVURLAsset(url: url, options: options)
+    }
+
+    /// Selects the audible option matching the server-side language choice.
+    /// mp4 assets carry every allowlisted track; HLS already serves only the
+    /// chosen one. No match (or no selection group) leaves the default track.
+    private func applyAudioSelection(item: AVPlayerItem, lang: String?) async {
+        guard let lang,
+              let group = try? await item.asset.loadMediaSelectionGroup(for: .audible) else { return }
+        let target = normalizedLanguage(lang)
+        guard let option = group.options.first(where: { option in
+            guard let tag = option.extendedLanguageTag ?? option.locale?.identifier else { return false }
+            return normalizedLanguage(tag) == target
+        }) else { return }
+        item.select(option, in: group)
+    }
+
+    /// "spa" (server, ISO 639-2) and "es-419" (asset, BCP-47) both → "es".
+    private func normalizedLanguage(_ code: String) -> String {
+        let base = code.split(separator: "-").first.map(String.init) ?? code.lowercased()
+        return Locale.LanguageCode(base).identifier(.alpha2) ?? base.lowercased()
     }
 
     /// A `.playback` session is what lets audio continue in the background and
