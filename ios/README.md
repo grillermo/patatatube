@@ -129,7 +129,7 @@ On first launch grid is empty / errors — need server config:
 - [ ] Switch apps mid-playback → audio continues
 - [ ] Pause a video, then lock the phone or switch apps → playback remains paused
 - [ ] Return to the app → video resumes in sync with audio
-- [ ] Video ends while locked → playback stops and lock screen controls clear
+- [ ] Video ends while locked or backgrounded → playback advances to the next playable queue item; playback stops and lock screen controls clear only when no playable item remains
 - [ ] Pull-down-to-dismiss still works; AVKit tap/scrub controls still work
 - [ ] AirPlay still works (full video on the external screen)
 
