@@ -63,6 +63,7 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
 - `library.py` owns scanning (`scan_library`) and on-demand ffmpeg conversion (`convert_library_video`): passthrough / remux / transcode per the iPad codec policy (`plan_conversion`), converted file written as a sibling `{name}.mp4`.
 - Library rows live in the same `videos` table with `source='library'`, statuses `unconverted → converting → done`; failures set `error_msg` and revert to `unconverted` (never row-delete). Deletes tombstone via `deleted_at` and never touch `source_path`.
 - Stream endpoint is token-gated (Bearer or `?token=`); library previews proxy Plex thumbs at `/videos/{id}/preview` with a disk cache in `data/previews/`.
+- Conversions keep every audio track matching `LIBRARY_AUDIO_LANGS` (default `eng,spa`; first track as fallback). Per-version `audio_langs`/`converted_langs` are JSON columns filled at scan/convert time; the per-movie choice lives in `videos.audio_lang` (`POST /api/videos/{id}/audio`), and the HLS package carries only the chosen language (invalidated via `hls.invalidate` on change).
 
 ## Conventions
 
