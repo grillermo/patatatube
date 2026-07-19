@@ -31,6 +31,7 @@ struct MovieCell: View {
     /// Live download fraction (0...1), polled from the cache while downloading.
     @State private var progress: Double = 0
     @State private var observedCacheState: CacheState?
+    @State private var activeDownloadID: UUID?
 
     private enum DownloadPhase { case idle, loading, done }
 
@@ -117,6 +118,7 @@ struct MovieCell: View {
             updateObservedCacheState(newState)
         }
         .onChange(of: video.chosenVersionId) { _, _ in
+            activeDownloadID = nil
             downloadPhase = .idle
             observedCacheState = nil
             progress = 0
@@ -152,6 +154,7 @@ struct MovieCell: View {
                 .transition(.scale.combined(with: .opacity))
         case .downloading:
             Button {
+                activeDownloadID = nil
                 onCancel()
                 withAnimation {
                     downloadPhase = .idle
@@ -179,12 +182,16 @@ struct MovieCell: View {
         case .notCached:
             Button {
                 Task {
+                    let downloadID = UUID()
+                    activeDownloadID = downloadID
                     withAnimation {
                         downloadPhase = .loading
                         observedCacheState = .downloading(0)
                         progress = 0
                     }
                     let ok = await onDownload()
+                    guard activeDownloadID == downloadID else { return }
+                    activeDownloadID = nil
                     withAnimation {
                         downloadPhase = ok ? .done : .idle
                         observedCacheState = ok ? .cached : .notCached
