@@ -2,9 +2,20 @@
 import SwiftUI
 import AVKit
 import PatataTubeKit
+import UIKit
 
 struct VideoPlayerView: View {
-    let video: Video
+    let videos: [Video]
+    let startIndex: Int
+    @State private var currentIndex: Int
+
+    init(videos: [Video], startIndex: Int) {
+        self.videos = videos
+        self.startIndex = startIndex
+        _currentIndex = State(initialValue: startIndex)
+    }
+
+    private var video: Video { videos[currentIndex] }
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -82,31 +93,101 @@ struct VideoPlayerView: View {
 
     private func setup() async {
         activateAudioSession()
-        let player: AVPlayer
-        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
-            // Offline MP4 wins: instant, no network. (HLS offline is a later phase.)
-            player = AVPlayer(url: model.cache.localURL(for: video.id, versionId: video.chosenVersionId))
-        } else if let hlsURL = model.hlsURL(for: video) {
-            // Remote HLS exposes native subtitle tracks in the AVKit controls.
-            player = AVPlayer(playerItem: AVPlayerItem(asset: authedAsset(url: hlsURL)))
-        } else if let url = model.streamURL(for: video) {
-            // Direct MP4 fallback for rows without an HLS package.
-            player = AVPlayer(playerItem: AVPlayerItem(asset: authedAsset(url: url)))
-        } else {
-            return
-        }
+        guard let item = playerItem(for: video) else { return }
+        let player = AVPlayer(playerItem: item)
         player.allowsExternalPlayback = true
         player.usesExternalPlaybackWhileExternalScreenIsActive = true
         self.player = player
-        nowPlaying.attach(player: player, title: video.title ?? video.sourceFilename ?? "PatataTube")
+        nowPlaying.onNext = { advance(by: 1) }
+        nowPlaying.onPrevious = { handlePrevious() }
+        nowPlaying.attach(player: player, title: title(of: video))
+        nowPlaying.setNextEnabled(playableIndex(from: currentIndex, direction: 1) != nil)
+        bindPlayToEnd()
+        await loadArtwork(for: player)
+    }
+
+    /// AVPlayerItem for a queue entry, or nil when it has no playable source
+    /// (skipped during queue navigation). Order matches the original logic:
+    /// cached MP4 → remote HLS → direct MP4.
+    private func playerItem(for video: Video) -> AVPlayerItem? {
+        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
+            // Offline MP4 wins: instant, no network. (HLS offline is a later phase.)
+            return AVPlayerItem(url: model.cache.localURL(for: video.id, versionId: video.chosenVersionId))
+        }
+        // Library rows that haven't been converted server-side have no streamable file yet.
+        if video.isLibrary && video.status != "done" { return nil }
+        if let hlsURL = model.hlsURL(for: video) {
+            // Remote HLS exposes native subtitle tracks in the AVKit controls.
+            return AVPlayerItem(asset: authedAsset(url: hlsURL))
+        }
+        if let url = model.streamURL(for: video) {
+            // Direct MP4 fallback for rows without an HLS package.
+            return AVPlayerItem(asset: authedAsset(url: url))
+        }
+        return nil
+    }
+
+    private func title(of video: Video) -> String {
+        video.title ?? video.sourceFilename ?? "PatataTube"
+    }
+
+    /// Rebind end-of-item handling to the current item. Foreground keeps the
+    /// dismiss-on-end behavior; locked/backgrounded always auto-advances.
+    /// `applicationState` is read at fire time — a closure-captured scenePhase
+    /// would be frozen at bind time.
+    private func bindPlayToEnd() {
         removePlayToEndObserver()
         playToEndObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
-            object: player.currentItem, queue: .main
+            object: player?.currentItem, queue: .main
         ) { _ in
-            Task { @MainActor in dismiss() }
+            Task { @MainActor in
+                if UIApplication.shared.applicationState == .active {
+                    dismiss()
+                } else {
+                    advance(by: 1)
+                }
+            }
         }
-        await loadArtwork(for: player)
+    }
+
+    /// Nearest queue index in `direction` with a playable source, or nil.
+    private func playableIndex(from index: Int, direction: Int) -> Int? {
+        var i = index + direction
+        while videos.indices.contains(i) {
+            if playerItem(for: videos[i]) != nil { return i }
+            i += direction
+        }
+        return nil
+    }
+
+    /// Switch to the nearest playable video in `direction`; stop at queue ends.
+    private func advance(by direction: Int) {
+        guard let player else { return }
+        guard let nextIndex = playableIndex(from: currentIndex, direction: direction),
+              let item = playerItem(for: videos[nextIndex]) else {
+            player.pause()
+            if UIApplication.shared.applicationState == .active { dismiss() }
+            return
+        }
+        currentIndex = nextIndex
+        player.replaceCurrentItem(with: item)
+        bindPlayToEnd()
+        player.play()
+        nowPlaying.updateTitle(title(of: video))
+        nowPlaying.setNextEnabled(playableIndex(from: currentIndex, direction: 1) != nil)
+        Task { await loadArtwork(for: player) }
+    }
+
+    /// iOS convention: >3s in (or already at the queue start) restarts the
+    /// current video; otherwise go back one video.
+    private func handlePrevious() {
+        guard let player else { return }
+        if player.currentTime().seconds > 3 || playableIndex(from: currentIndex, direction: -1) == nil {
+            player.seek(to: .zero)
+        } else {
+            advance(by: -1)
+        }
     }
 
     private func removePlayToEndObserver() {
@@ -118,12 +199,14 @@ struct VideoPlayerView: View {
 
     /// Best-effort lock-screen artwork; controls work without it.
     private func loadArtwork(for expectedPlayer: AVPlayer) async {
+        let index = currentIndex
         guard !Task.isCancelled,
               self.player === expectedPlayer,
               let path = video.previewUrl,
               let data = try? await model.api.imageData(path: path),
               !Task.isCancelled,
-              self.player === expectedPlayer else { return }
+              self.player === expectedPlayer,
+              currentIndex == index else { return }
         nowPlaying.setArtwork(data, for: expectedPlayer)
     }
 
