@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum CacheState: Equatable, Sendable {
     case notCached
@@ -44,6 +45,23 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         return root.appendingPathComponent(name)
     }
 
+    /// Local file URL of a cached show poster, or nil if none is cached.
+    /// Keyed by the raw showPreviewUrl string so store and lookup always agree.
+    public func cachedShowPosterURL(for key: String) -> URL? {
+        let prefix = "poster.\(posterHash(key))."
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        guard let name = contents.first(where: { $0.hasPrefix(prefix) }) else { return nil }
+        return root.appendingPathComponent(name)
+    }
+
+    /// Writes poster bytes for a show. Best-effort: failures leave the poster uncached.
+    public func storeShowPoster(_ data: Data, for key: String) {
+        try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let destination = root.appendingPathComponent("poster.\(posterHash(key)).\(safeExt(from: key))")
+        try? fileManager.removeItem(at: destination)
+        try? data.write(to: destination)
+    }
+
     public func state(for id: Int, versionId: Int? = nil) -> CacheState {
         let key = cacheKey(videoId: id, versionId: versionId)
         if fileManager.fileExists(atPath: localURL(for: id, versionId: versionId).path) { return .cached }
@@ -53,10 +71,15 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     }
 
     public func download(id: Int, versionId: Int? = nil, from remote: URL, preview: URL? = nil,
+                         showPosterKey: String? = nil, showPoster: URL? = nil,
                          bearerToken: String? = nil) async throws {
         _ = try await downloadVideo(id: id, versionId: versionId, from: remote, bearerToken: bearerToken)
         // Best-effort: a missing preview must not fail the cached video.
         if let preview { try? await cachePreview(id: id, from: preview, bearerToken: bearerToken) }
+        // Show poster is shared across episodes: fetch once, skip when cached.
+        if let showPosterKey, let showPoster, cachedShowPosterURL(for: showPosterKey) == nil {
+            try? await cacheShowPoster(key: showPosterKey, from: showPoster, bearerToken: bearerToken)
+        }
     }
 
     /// Cancels an in-flight download for this id/version. The awaiting
@@ -220,5 +243,27 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let destination = root.appendingPathComponent("\(id).preview.\(safeExt)")
         try? fileManager.removeItem(at: destination)
         try data.write(to: destination)
+    }
+
+    private func cacheShowPoster(key: String, from remote: URL, bearerToken: String? = nil) async throws {
+        var request = URLRequest(url: remote)
+        if let bearerToken {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw APIError.badStatus(http.statusCode)
+        }
+        storeShowPoster(data, for: key)
+    }
+
+    private func posterHash(_ key: String) -> String {
+        let digest = SHA256.hash(data: Data(key.utf8))
+        return String(digest.map { String(format: "%02x", $0) }.joined().prefix(16))
+    }
+
+    private func safeExt(from urlString: String) -> String {
+        let ext = (URL(string: urlString)?.pathExtension ?? "").lowercased()
+        return (1...4).contains(ext.count) && ext.allSatisfy(\.isLetter) ? ext : "jpg"
     }
 }

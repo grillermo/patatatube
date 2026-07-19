@@ -167,4 +167,84 @@ struct CacheManagerTests {
                                    bearerToken: "secret")
         #expect(seenAuth == ["Bearer secret", "Bearer secret"])
     }
+
+    @Test func showPosterStoreAndLookup() throws {
+        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        let key = "/library/shows/bluey/poster.png"
+        #expect(manager.cachedShowPosterURL(for: key) == nil)
+
+        manager.storeShowPoster(Data([0x01, 0x02]), for: key)
+
+        let url = try #require(manager.cachedShowPosterURL(for: key))
+        #expect(url.pathExtension == "png")
+        #expect(try Data(contentsOf: url) == Data([0x01, 0x02]))
+        // A different key must not resolve to this poster.
+        #expect(manager.cachedShowPosterURL(for: "/other/poster.png") == nil)
+    }
+
+    @Test func showPosterKeyIsStableAndExtSanitized() throws {
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let key = "https://img.test/poster?size=big"
+        manager.storeShowPoster(Data([0xAA]), for: key)
+        manager.storeShowPoster(Data([0xBB]), for: key)
+
+        let url = try #require(manager.cachedShowPosterURL(for: key))
+        #expect(url.pathExtension == "jpg")
+        #expect(try Data(contentsOf: url) == Data([0xBB]))
+        let posters = try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("poster.") }
+        #expect(posters.count == 1)
+    }
+
+    @Test func downloadAlsoCachesShowPoster() async throws {
+        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        MockDownloadProtocol.handler = { req in
+            let bytes: [UInt8] = req.url!.host == "img.test" ? [0xCC] : [0x00]
+            return (jsonResponse(req.url!), Data(bytes))
+        }
+        try await manager.download(
+            id: 31,
+            from: URL(string: "https://srv.test/videos/31/stream")!,
+            showPosterKey: "/library/shows/bluey/poster.jpg",
+            showPoster: URL(string: "https://img.test/poster.jpg")!
+        )
+        let url = try #require(manager.cachedShowPosterURL(for: "/library/shows/bluey/poster.jpg"))
+        #expect(try Data(contentsOf: url) == Data([0xCC]))
+    }
+
+    @Test func showPosterFailureStillCachesVideo() async throws {
+        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        MockDownloadProtocol.handler = { req in
+            if req.url!.host == "img.test" { throw URLError(.timedOut) }
+            return (jsonResponse(req.url!), Data([0x09]))
+        }
+        try await manager.download(
+            id: 32,
+            from: URL(string: "https://srv.test/videos/32/stream")!,
+            showPosterKey: "k",
+            showPoster: URL(string: "https://img.test/poster.jpg")!
+        )
+        #expect(manager.state(for: 32) == .cached)
+        #expect(manager.cachedShowPosterURL(for: "k") == nil)
+    }
+
+    @Test func downloadSkipsPosterFetchWhenAlreadyCached() async throws {
+        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        manager.storeShowPoster(Data([0x01]), for: "k2")
+        var posterRequests = 0
+        MockDownloadProtocol.handler = { req in
+            if req.url!.host == "img.test" { posterRequests += 1 }
+            return (jsonResponse(req.url!), Data([0x00]))
+        }
+        try await manager.download(
+            id: 33,
+            from: URL(string: "https://srv.test/videos/33/stream")!,
+            showPosterKey: "k2",
+            showPoster: URL(string: "https://img.test/poster.jpg")!
+        )
+        #expect(posterRequests == 0)
+        let url = try #require(manager.cachedShowPosterURL(for: "k2"))
+        #expect(try Data(contentsOf: url) == Data([0x01]))
+    }
 }
