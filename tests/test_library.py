@@ -6,14 +6,21 @@ import library
 
 
 def probe(container="matroska,webm", vcodec="hevc", width=1920, tag="[0][0][0][0]",
-          acodec="eac3", with_audio=True):
+          acodec="eac3", with_audio=True, audio=None):
+    """audio optionally supplies (codec, language, title) tuples."""
     streams = [{
         "codec_type": "video",
         "codec_name": vcodec,
         "width": width,
         "codec_tag_string": tag,
     }]
-    if with_audio:
+    if audio is not None:
+        for codec, lang, title in audio:
+            streams.append({
+                "codec_type": "audio", "codec_name": codec, "channels": 6,
+                "tags": {"language": lang, "title": title},
+            })
+    elif with_audio:
         streams.append({"codec_type": "audio", "codec_name": acodec, "channels": 6})
     return {"streams": streams, "format": {"format_name": container}}
 
@@ -40,7 +47,7 @@ def test_mkv_hevc_remuxes_with_hvc1():
     plan = library.plan_conversion(probe())
     assert not plan.passthrough
     assert plan.video_args == ["-c:v", "copy", "-tag:v", "hvc1"]
-    assert plan.audio_args == ["-c:a", "copy"]
+    assert plan.audio_args == ["-c:a:0", "copy"]
 
 
 def test_mkv_h264_remuxes_with_avc1():
@@ -60,11 +67,78 @@ def test_4k_downscales_and_reencodes():
 def test_unsupported_codecs_reencode():
     plan = library.plan_conversion(probe(vcodec="vp9", acodec="dts"))
     assert plan.video_args[0:2] == ["-c:v", "libx264"]
-    assert plan.audio_args == ["-c:a", "aac", "-b:a", "128k", "-ac", "2"]
+    assert plan.audio_args == ["-c:a:0", "aac", "-b:a:0", "128k", "-ac:a:0", "2"]
 
 
 def test_no_audio_stream():
     plan = library.plan_conversion(probe(with_audio=False))
+    assert plan.audio_args == ["-an"]
+
+
+def multi_probe():
+    return probe(audio=[
+        ("eac3", "cat", ""),
+        ("eac3", "eng", ""),
+        ("eac3", "spa", "Latin American"),
+        ("dts", "spa", "European"),
+    ])
+
+
+def test_allowed_audio_langs_default(monkeypatch):
+    monkeypatch.delenv("LIBRARY_AUDIO_LANGS", raising=False)
+    assert library.allowed_audio_langs() == ["eng", "spa"]
+    monkeypatch.setenv("LIBRARY_AUDIO_LANGS", " ENG , jpn,")
+    assert library.allowed_audio_langs() == ["eng", "jpn"]
+
+
+def test_audio_track_list():
+    assert library.audio_track_list(multi_probe()) == [
+        {"lang": "cat", "title": ""},
+        {"lang": "eng", "title": ""},
+        {"lang": "spa", "title": "Latin American"},
+        {"lang": "spa", "title": "European"},
+    ]
+
+
+def test_audio_track_list_untagged():
+    assert library.audio_track_list(probe()) == [{"lang": "und", "title": ""}]
+
+
+def test_select_audio_indices_allowlist():
+    assert library.select_audio_indices(multi_probe(), ["eng", "spa"]) == [1, 2, 3]
+
+
+def test_select_audio_indices_fallback_first():
+    assert library.select_audio_indices(multi_probe(), ["jpn"]) == [0]
+
+
+def test_select_audio_indices_no_audio():
+    assert library.select_audio_indices(probe(with_audio=False), ["eng"]) == []
+
+
+def test_plan_conversion_multi_track(monkeypatch):
+    monkeypatch.delenv("LIBRARY_AUDIO_LANGS", raising=False)
+    plan = library.plan_conversion(multi_probe())
+    assert not plan.passthrough
+    assert plan.audio_maps == [1, 2, 3]
+    assert plan.audio_langs == ["eng", "spa", "spa"]
+    assert plan.audio_args == [
+        "-c:a:0", "copy",
+        "-c:a:1", "copy",
+        "-c:a:2", "aac", "-b:a:2", "128k", "-ac:a:2", "2",
+    ]
+
+
+def test_plan_conversion_explicit_indices():
+    plan = library.plan_conversion(multi_probe(), audio_indices=[2])
+    assert plan.audio_maps == [2]
+    assert plan.audio_langs == ["spa"]
+    assert plan.audio_args == ["-c:a:0", "copy"]
+
+
+def test_plan_conversion_no_audio_keeps_an():
+    plan = library.plan_conversion(probe(with_audio=False))
+    assert plan.audio_maps == []
     assert plan.audio_args == ["-an"]
 
 

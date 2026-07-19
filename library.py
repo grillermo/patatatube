@@ -27,6 +27,8 @@ class ConversionPlan:
     passthrough: bool
     video_args: list[str] = field(default_factory=list)
     audio_args: list[str] = field(default_factory=list)
+    audio_maps: list[int] = field(default_factory=list)
+    audio_langs: list[str] = field(default_factory=list)
 
 
 def _first_stream(probe: dict, stream_type: str) -> dict | None:
@@ -36,11 +38,51 @@ def _first_stream(probe: dict, stream_type: str) -> dict | None:
     return None
 
 
-def plan_conversion(probe: dict) -> ConversionPlan:
+def allowed_audio_langs() -> list[str]:
+    """Languages kept in conversions, read per-call for environment changes."""
+    raw = os.getenv("LIBRARY_AUDIO_LANGS", "eng,spa")
+    return [part.strip().lower() for part in raw.split(",") if part.strip()]
+
+
+def _audio_streams(probe: dict) -> list[dict]:
+    return [stream for stream in probe.get("streams", []) if stream.get("codec_type") == "audio"]
+
+
+def audio_track_list(probe: dict) -> list[dict]:
+    """Return language and title metadata for each audio stream in stream order."""
+    tracks = []
+    for stream in _audio_streams(probe):
+        tags = stream.get("tags") or {}
+        tracks.append({
+            "lang": (tags.get("language") or "und").lower(),
+            "title": tags.get("title") or "",
+        })
+    return tracks
+
+
+def select_audio_indices(probe: dict, langs: list[str]) -> list[int]:
+    """Select allowlisted audio-stream indices, falling back to the first stream."""
+    streams = _audio_streams(probe)
+    if not streams:
+        return []
+    selected = [
+        index for index, track in enumerate(audio_track_list(probe))
+        if track["lang"] in langs
+    ]
+    return selected or [0]
+
+
+def plan_conversion(probe: dict, audio_indices: list[int] | None = None) -> ConversionPlan:
     video = _first_stream(probe, "video")
     audio = _first_stream(probe, "audio")
     if not video:
         raise RuntimeError("No video stream found")
+
+    if audio_indices is None:
+        audio_indices = select_audio_indices(probe, allowed_audio_langs())
+    audio_streams = _audio_streams(probe)
+    tracks = audio_track_list(probe)
+    audio_langs = [tracks[index]["lang"] for index in audio_indices]
 
     container = probe.get("format", {}).get("format_name", "")
     is_mp4 = "mp4" in container
@@ -52,7 +94,7 @@ def plan_conversion(probe: dict) -> ConversionPlan:
     audio_compat = audio is None or audio.get("codec_name") in _COMPAT_AUDIO
 
     if is_mp4 and video_compat and hevc_tagged and audio_compat:
-        return ConversionPlan(passthrough=True)
+        return ConversionPlan(passthrough=True, audio_maps=audio_indices, audio_langs=audio_langs)
 
     if video_compat:
         tag = "hvc1" if vcodec == "hevc" else "avc1"
@@ -62,14 +104,27 @@ def plan_conversion(probe: dict) -> ConversionPlan:
         if not fits:
             video_args += _SCALE_ARGS
 
-    if audio is None:
+    if not audio_indices:
         audio_args = ["-an"]
-    elif audio_compat:
-        audio_args = ["-c:a", "copy"]
     else:
-        audio_args = ["-c:a", "aac", "-b:a", "128k", "-ac", "2"]
+        audio_args = []
+        for output_index, input_index in enumerate(audio_indices):
+            if audio_streams[input_index].get("codec_name") in _COMPAT_AUDIO:
+                audio_args += [f"-c:a:{output_index}", "copy"]
+            else:
+                audio_args += [
+                    f"-c:a:{output_index}", "aac",
+                    f"-b:a:{output_index}", "128k",
+                    f"-ac:a:{output_index}", "2",
+                ]
 
-    return ConversionPlan(passthrough=False, video_args=video_args, audio_args=audio_args)
+    return ConversionPlan(
+        passthrough=False,
+        video_args=video_args,
+        audio_args=audio_args,
+        audio_maps=audio_indices,
+        audio_langs=audio_langs,
+    )
 
 
 def conversion_target(source: Path) -> Path:
