@@ -6,8 +6,9 @@
 ## Goal
 
 While a video plays with the phone locked, the lock-screen next button starts the
-next video's audio. Previous button works too. A new auto-play setting makes
-videos advance automatically when one ends, both locked and unlocked.
+next video's audio. Previous button works too. While locked/backgrounded, videos
+always auto-advance when one ends; in the foreground the current
+dismiss-on-end behavior is kept. No settings UI.
 
 ## Current state
 
@@ -24,12 +25,11 @@ The player keeps its single-`AVPlayer` architecture. Track changes are
 active `.playback` audio session carry over. The `fullScreenCover` stays alive
 while the phone is locked, so the SwiftUI view can service remote commands.
 
-### 1. Auto-play setting
+### 1. Auto-play behavior (no setting)
 
-- `SettingsView` gains a "Auto-play next video" `Toggle` bound to
-  `@AppStorage("autoPlayNext")`, default **off**.
-- When **on**: a video ending advances to the next video (foreground and
-  locked). When **off**: current behavior — dismiss on end.
+- Locked/backgrounded (`scenePhase != .active`; the view already tracks this
+  via its `attached` state): a video ending always advances to the next video.
+- Foreground: current behavior — dismiss on end.
 
 ### 2. Queue source
 
@@ -50,7 +50,8 @@ while the phone is locked, so the SwiftUI view can service remote commands.
   - Re-register the play-to-end observer for the new item (it is bound to
     `player.currentItem`).
   - Push new title via `NowPlayingManager.updateTitle`, reload artwork.
-- Play-to-end handler: `autoPlayNext ? advance(by: 1) : dismiss()`.
+- Play-to-end handler: backgrounded → `advance(by: 1)`; foreground →
+  `dismiss()` (current behavior).
 - Previous follows the iOS convention: elapsed > 3 s → seek to 0;
   otherwise `advance(by: -1)` (at index 0 → seek to 0).
 
@@ -79,9 +80,8 @@ No iOS test target exists. Manual checklist (add to `ios/README.md`):
    updates on lock screen.
 2. Previous within first 3 s → prior video; after 3 s → restarts current.
 3. Last video + next → playback stops.
-4. Auto-play ON: video ends (foreground) → next starts full-screen; (locked) →
-   next audio starts.
-5. Auto-play OFF: video ends → player dismisses (current behavior).
+4. Locked: video ends → next video's audio starts automatically.
+5. Foreground: video ends → player dismisses (current behavior).
 6. Filtered grid (e.g. "children"): queue respects the filter.
 
 ## Out of scope
