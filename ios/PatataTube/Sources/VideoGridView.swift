@@ -254,8 +254,9 @@ struct VideoGridView: View {
     private func resolveImageURL(_ path: String?) -> URL? {
         guard let path else { return nil }
         if path.hasPrefix("http") { return URL(string: path) }
-        return model.credentials.baseURL?.appendingPathComponent(
-            path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        guard let base = model.credentials.baseURL else { return nil }
+        let trimmedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return URL(string: trimmedPath, relativeTo: base.appendingPathComponent("/"))
     }
 
     private func isCancellation(_ error: Error) -> Bool {
