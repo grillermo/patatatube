@@ -235,14 +235,12 @@ struct VideoGridView: View {
             store.errorText = "No server URL configured"
             return false
         }
-        let preview: URL?
-        if let p = target.previewUrl {
-            preview = p.hasPrefix("http") ? URL(string: p)
-                : model.credentials.baseURL?.appendingPathComponent(
-                    p.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
-        } else { preview = nil }
+        let preview = resolveImageURL(target.previewUrl)
+        let posterKey = target.showPreviewUrl
+        let poster = resolveImageURL(posterKey)
         do {
             try await model.cache.download(id: target.id, versionId: target.chosenVersionId, from: url, preview: preview,
+                                           showPosterKey: posterKey, showPoster: poster,
                                            bearerToken: model.credentials.token)
             return true
         } catch {
@@ -250,6 +248,14 @@ struct VideoGridView: View {
             store.errorText = "Download failed: \(error)"
             return false
         }
+    }
+
+    /// Absolute URL for a server image path; absolute URLs pass through.
+    private func resolveImageURL(_ path: String?) -> URL? {
+        guard let path else { return nil }
+        if path.hasPrefix("http") { return URL(string: path) }
+        return model.credentials.baseURL?.appendingPathComponent(
+            path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 
     private func isCancellation(_ error: Error) -> Bool {
