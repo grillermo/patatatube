@@ -91,6 +91,8 @@ def init_db():
             _add_column(conn, "ALTER TABLE videos ADD COLUMN chosen_version_id INTEGER")
         if "hls_status" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN hls_status TEXT NOT NULL DEFAULT 'none'")
+        if "audio_lang" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN audio_lang TEXT")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS video_versions (
@@ -108,6 +110,13 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_video_versions_video_id ON video_versions(video_id);
             """
         )
+        version_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(video_versions)").fetchall()
+        }
+        if "audio_langs" not in version_columns:
+            _add_column(conn, "ALTER TABLE video_versions ADD COLUMN audio_langs TEXT")
+        if "converted_langs" not in version_columns:
+            _add_column(conn, "ALTER TABLE video_versions ADD COLUMN converted_langs TEXT")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_source_path ON videos(source_path)"
         )
@@ -414,6 +423,19 @@ def set_chosen_version(video_id: int, version_id: int) -> bool:
         conn.execute("UPDATE videos SET chosen_version_id = ? WHERE id = ?", (version_id, video_id))
         _sync_video_from_chosen(conn, video_id)
         return True
+
+
+def set_audio_lang(video_id: int, lang: str) -> None:
+    with _conn() as conn:
+        conn.execute("UPDATE videos SET audio_lang = ? WHERE id = ?", (lang, video_id))
+
+
+def set_version_audio_langs(version_id: int, audio_langs_json: str) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE video_versions SET audio_langs = ? WHERE id = ?",
+            (audio_langs_json, version_id),
+        )
 
 
 def get_video(video_id: int) -> dict | None:
@@ -772,6 +794,7 @@ def set_library_state(
     status: str,
     converted_path: str | None = None,
     error_msg: str | None = None,
+    converted_langs: str | None = None,
     version_id: int | None = None,
 ) -> None:
     """Status updates for library rows. Unlike update_video, never deletes the row."""
@@ -786,16 +809,17 @@ def set_library_state(
                     UPDATE video_versions
                     SET status = ?,
                         converted_path = COALESCE(?, converted_path),
+                        converted_langs = COALESCE(?, converted_langs),
                         error_msg = ?
                     WHERE video_id = ? AND id = ?
                     """,
-                    (status, converted_path, error_msg, video_id, version_id),
+                    (status, converted_path, converted_langs, error_msg, video_id, version_id),
                 )
                 if error_msg and status == "unconverted":
                     conn.execute(
                         """
                         UPDATE video_versions
-                        SET converted_path = NULL
+                        SET converted_path = NULL, converted_langs = NULL
                         WHERE video_id = ? AND id = ?
                         """,
                         (video_id, version_id),
