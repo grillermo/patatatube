@@ -219,32 +219,37 @@ struct VideoGridView: View {
     }
 
     private func play(_ video: Video) {
+        let queueSnapshot = filteredVideos
+
         // Already downloaded to device: play the local file directly, no network.
         // ensureReady() would hit /prepare and fail offline (-1009) even though
         // the cached MP4 is ready to play. VideoPlayerView plays from cache too.
         if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
-            startPlayback(video)
+            startPlayback(video, queueSnapshot: queueSnapshot)
             return
         }
         guard video.isLibrary, video.status != "done" else {
-            startPlayback(video)
+            startPlayback(video, queueSnapshot: queueSnapshot)
             return
         }
         preparing = true
         Task {
             defer { preparing = false }
             do {
-                startPlayback(try await store.ensureReady(id: video.id))
+                startPlayback(
+                    try await store.ensureReady(id: video.id),
+                    queueSnapshot: queueSnapshot
+                )
             } catch {
                 store.errorText = String(describing: error)
             }
         }
     }
 
-    /// Snapshot the visible list as the playback queue. `video` may be the
+    /// Starts playback from the tap-time queue snapshot. `video` may be the
     /// ensureReady-updated copy, so it replaces its stale row in the snapshot.
-    private func startPlayback(_ video: Video) {
-        var queue = filteredVideos
+    private func startPlayback(_ video: Video, queueSnapshot: [Video]) {
+        var queue = queueSnapshot
         if let index = queue.firstIndex(where: { $0.id == video.id }) {
             queue[index] = video
         } else {
