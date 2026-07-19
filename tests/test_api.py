@@ -929,6 +929,85 @@ def test_prepare_download_row_is_400(client, monkeypatch):
     assert resp.status_code == 400
 
 
+def test_prepare_selects_allowlisted_source_audio_and_invalidates_hls(client, tmp_path, monkeypatch):
+    import db
+    import library
+
+    vid, _ = make_library_row(tmp_path)
+    version = db.get_video_versions(vid)[0]
+    db.set_library_state(
+        vid, "done", converted_path=str(tmp_path / "ep.mp4"),
+        converted_langs='["eng", "spa"]', version_id=version["id"],
+    )
+    monkeypatch.setattr(library, "probe_source", lambda p: {
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920,
+             "codec_tag_string": "avc1"},
+            {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "eng"}},
+            {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "spa"}},
+        ],
+        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
+    })
+    invalidated = []
+    monkeypatch.setattr("router.hls.invalidate", invalidated.append)
+
+    resp = client.post(f"/api/videos/{vid}/prepare", json={"audio_lang": "spa"}, headers=AUTH)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "done"}
+    assert db.get_video(vid)["audio_lang"] == "spa"
+    assert invalidated == [vid]
+
+
+def test_prepare_rejects_audio_outside_allowlist_or_source(client, tmp_path, monkeypatch):
+    import library
+
+    vid, _ = make_library_row(tmp_path)
+    monkeypatch.setattr(library, "probe_source", lambda p: {
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920,
+             "codec_tag_string": "avc1"},
+            {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "eng"}},
+        ],
+        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
+    })
+
+    assert client.post(
+        f"/api/videos/{vid}/prepare", json={"audio_lang": "jpn"}, headers=AUTH
+    ).status_code == 400
+    assert client.post(
+        f"/api/videos/{vid}/prepare", json={"audio_lang": "spa"}, headers=AUTH
+    ).status_code == 400
+
+
+def test_prepare_reconverts_legacy_or_missing_selected_audio(client, tmp_path, monkeypatch):
+    import db
+    import library
+
+    vid, _ = make_library_row(tmp_path)
+    version = db.get_video_versions(vid)[0]
+    db.set_library_state(vid, "done", converted_path=str(tmp_path / "ep.mp4"), version_id=version["id"])
+    monkeypatch.setattr(library, "probe_source", lambda p: {
+        "streams": [
+            {"codec_type": "video", "codec_name": "hevc", "width": 1920,
+             "codec_tag_string": "[0][0][0][0]"},
+            {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "eng"}},
+            {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "spa"}},
+        ],
+        "format": {"format_name": "matroska,webm"},
+    })
+    converted, invalidated = [], []
+    monkeypatch.setattr("router.library.convert_library_video", converted.append)
+    monkeypatch.setattr("router.hls.invalidate", invalidated.append)
+
+    resp = client.post(f"/api/videos/{vid}/prepare", json={"audio_lang": "spa"}, headers=AUTH)
+
+    assert resp.status_code == 202
+    assert converted == [vid]
+    assert invalidated == [vid]
+    assert db.get_video(vid)["audio_lang"] == "spa"
+
+
 def test_prepare_while_done_is_noop_200(client, tmp_path, monkeypatch):
     import db
     vid, _ = make_library_row(tmp_path)
