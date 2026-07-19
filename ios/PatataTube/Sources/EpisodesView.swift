@@ -24,7 +24,8 @@ struct EpisodesView: View {
 
     private func row(for episode: Video) -> some View {
         HStack(spacing: 12) {
-            AuthedImage(path: episode.previewUrl)
+            AuthedImage(path: episode.previewUrl,
+                        localFileURL: model.cache.cachedPreviewURL(for: episode.id))
                 .frame(width: 120, height: 68)
                 .background(.secondary.opacity(0.2))
                 .cornerRadius(6)
