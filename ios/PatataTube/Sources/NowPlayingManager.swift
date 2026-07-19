@@ -14,9 +14,14 @@ final class NowPlayingManager {
         case pause
         case togglePlayPause
         case seek(TimeInterval)
+        case next
+        case previous
     }
 
     private weak var player: AVPlayer?
+    /// Set by the owning view before `attach`; drive queue navigation.
+    var onNext: (() -> Void)?
+    var onPrevious: (() -> Void)?
     private var rateObservation: NSKeyValueObservation?
     private var statusObservation: NSKeyValueObservation?
     private var seekObserver: NSObjectProtocol?
@@ -41,9 +46,13 @@ final class NowPlayingManager {
         }
         seekObserver = NotificationCenter.default.addObserver(
             forName: AVPlayerItem.timeJumpedNotification,
-            object: player.currentItem, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.pushDynamicInfo() }
+            object: nil, queue: .main
+        ) { [weak self] notification in
+            let item = notification.object as? AVPlayerItem
+            Task { @MainActor in
+                guard let self, let item, item === self.player?.currentItem else { return }
+                self.pushDynamicInfo()
+            }
         }
         registerCommands()
     }
@@ -55,6 +64,20 @@ final class NowPlayingManager {
               let artwork = Self.makeArtwork(from: data) else { return }
         info[MPMediaItemPropertyArtwork] = artwork
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    /// Push the new track's title on a queue change and drop the previous
+    /// track's artwork so the lock screen never shows a stale thumbnail.
+    func updateTitle(_ title: String) {
+        var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+        info[MPMediaItemPropertyTitle] = title
+        info[MPMediaItemPropertyArtwork] = nil
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        pushDynamicInfo()
+    }
+
+    func setNextEnabled(_ enabled: Bool) {
+        MPRemoteCommandCenter.shared().nextTrackCommand.isEnabled = enabled
     }
 
     /// MediaPlayer calls its artwork provider on a private queue. Build the
@@ -76,6 +99,8 @@ final class NowPlayingManager {
         if let seekObserver { NotificationCenter.default.removeObserver(seekObserver) }
         seekObserver = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        onNext = nil
+        onPrevious = nil
         player = nil
     }
 
@@ -96,6 +121,8 @@ final class NowPlayingManager {
         add(center.playCommand, action: .play)
         add(center.pauseCommand, action: .pause)
         add(center.togglePlayPauseCommand, action: .togglePlayPause)
+        add(center.nextTrackCommand, action: .next)
+        add(center.previousTrackCommand, action: .previous)
         let target = center.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let event = event as? MPChangePlaybackPositionCommandEvent else {
                 return .commandFailed
@@ -120,6 +147,16 @@ final class NowPlayingManager {
     }
 
     private func handle(_ action: RemoteAction) {
+        switch action {
+        case .next:
+            onNext?()
+            return
+        case .previous:
+            onPrevious?()
+            return
+        default:
+            break
+        }
         guard let player else { return }
         switch action {
         case .play:
@@ -130,6 +167,8 @@ final class NowPlayingManager {
             player.rate == 0 ? player.play() : player.pause()
         case .seek(let positionTime):
             player.seek(to: CMTime(seconds: positionTime, preferredTimescale: 600))
+        case .next, .previous:
+            break
         }
     }
 }
