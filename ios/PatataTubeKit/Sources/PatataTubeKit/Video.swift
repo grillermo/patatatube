@@ -1,4 +1,4 @@
-public struct VideoVersion: Codable, Equatable, Sendable, Identifiable {
+public struct VideoVersion: Codable, Equatable, Hashable, Sendable, Identifiable {
     public let id: Int
     public let label: String?
     public let status: String
@@ -12,7 +12,7 @@ public struct VideoVersion: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-public struct SubtitleTrack: Codable, Equatable, Sendable {
+public struct SubtitleTrack: Codable, Equatable, Hashable, Sendable {
     public let language: String
     public let name: String
     public let `default`: Bool
@@ -26,7 +26,7 @@ public struct SubtitleTrack: Codable, Equatable, Sendable {
     }
 }
 
-public struct Video: Codable, Identifiable, Equatable, Sendable {
+public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: Int
     public let url: String
     public let title: String?
