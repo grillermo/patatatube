@@ -30,6 +30,10 @@ struct MovieDetailView: View {
         store.videos.first { $0.id == video.id } ?? video
     }
 
+    private var chosenVersion: VideoVersion? {
+        currentVideo.versions.first { $0.isChosen } ?? currentVideo.versions.first
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -80,6 +84,27 @@ struct MovieDetailView: View {
                         }
                         .pickerStyle(.menu)
                     }
+
+                    let audioTracks = chosenVersion?.audioTracks ?? []
+                    if audioTracks.count > 1 {
+                        Picker("Audio", selection: Binding(
+                            get: { currentVideo.audioLang ?? audioTracks.first?.lang ?? "" },
+                            set: { lang in
+                                guard lang != currentVideo.audioLang else { return }
+                                if audioTracks.first(where: { $0.lang == lang })?.available == false {
+                                    // Server will re-convert; the cached MP4 is about to go stale.
+                                    model.cache.removeCached(id: currentVideo.id,
+                                                             versionId: currentVideo.chosenVersionId)
+                                }
+                                Task { await store.chooseAudio(id: currentVideo.id, lang: lang) }
+                            }
+                        )) {
+                            ForEach(audioTracks, id: \.lang) { track in
+                                Text(audioLabel(for: track)).tag(track.lang)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
                     Spacer()
                 }
             }
@@ -91,6 +116,12 @@ struct MovieDetailView: View {
             await pollCacheState()
         }
         .onChange(of: currentVideo.chosenVersionId) { _, _ in
+            activeDownloadID = nil
+            downloadPhase = .idle
+            observedCacheState = nil
+            progress = 0
+        }
+        .onChange(of: currentVideo.audioLang) { _, _ in
             activeDownloadID = nil
             downloadPhase = .idle
             observedCacheState = nil
@@ -195,6 +226,12 @@ struct MovieDetailView: View {
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
+    }
+
+    /// "spa" → "Spanish"; the source's title tag disambiguates when present.
+    private func audioLabel(for track: AudioTrack) -> String {
+        let name = Locale.current.localizedString(forLanguageCode: track.lang) ?? track.lang
+        return track.title.isEmpty ? name : "\(name) — \(track.title)"
     }
 
     private func updateObservedCacheState(_ state: CacheState) {
