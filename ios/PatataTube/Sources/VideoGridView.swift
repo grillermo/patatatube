@@ -59,23 +59,9 @@ struct VideoGridView: View {
                 } else if store.filter == "movies" {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(filteredVideos) { video in
-                            let cache = model.cache
-                            let videoId = video.id
-                            let versionId = video.chosenVersionId
                             MovieCell(
                                 video: video,
-                                cacheState: cache.state(for: videoId, versionId: versionId),
-                                currentCacheState: { cache.state(for: videoId, versionId: versionId) },
-                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
-                                localFileURL: cache.localURL(for: videoId, versionId: versionId),
-                                classifications: classifications,
-                                onDownload: { await download(video) },
-                                onCancel: { cache.cancel(id: videoId, versionId: versionId) },
-                                onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
-                                onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
-                                onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
-                                onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
-                                onDelete: { Task { await store.delete(id: video.id) } }
+                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id)
                             )
                         }
                     }
