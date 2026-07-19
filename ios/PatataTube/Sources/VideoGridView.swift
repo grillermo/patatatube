@@ -11,6 +11,9 @@ struct VideoGridView: View {
     @State private var showSettings = false
     @State private var showUpload = false
     @State private var playing: Video?
+    /// Snapshot of the visible list taken when playback starts; the lock-screen
+    /// next/previous queue. Grid refreshes don't mutate an active queue.
+    @State private var playQueue: [Video] = []
     @State private var preparing = false
     @State private var downloadingAll = false
 
@@ -164,7 +167,10 @@ struct VideoGridView: View {
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
             .fullScreenCover(item: $playing) { video in
-                VideoPlayerView(video: video)
+                VideoPlayerView(
+                    videos: playQueue,
+                    startIndex: playQueue.firstIndex(where: { $0.id == video.id }) ?? 0
+                )
             }
             .task { await initialLoad() }
             .overlay { if let error = store.errorText { errorBanner(error) } }
@@ -217,22 +223,35 @@ struct VideoGridView: View {
         // ensureReady() would hit /prepare and fail offline (-1009) even though
         // the cached MP4 is ready to play. VideoPlayerView plays from cache too.
         if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
-            playing = video
+            startPlayback(video)
             return
         }
         guard video.isLibrary, video.status != "done" else {
-            playing = video
+            startPlayback(video)
             return
         }
         preparing = true
         Task {
             defer { preparing = false }
             do {
-                playing = try await store.ensureReady(id: video.id)
+                startPlayback(try await store.ensureReady(id: video.id))
             } catch {
                 store.errorText = String(describing: error)
             }
         }
+    }
+
+    /// Snapshot the visible list as the playback queue. `video` may be the
+    /// ensureReady-updated copy, so it replaces its stale row in the snapshot.
+    private func startPlayback(_ video: Video) {
+        var queue = filteredVideos
+        if let index = queue.firstIndex(where: { $0.id == video.id }) {
+            queue[index] = video
+        } else {
+            queue = [video]
+        }
+        playQueue = queue
+        playing = video
     }
 
     /// Downloads a video for offline playback. Returns true only when the MP4
