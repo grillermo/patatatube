@@ -49,11 +49,23 @@ final class NowPlayingManager {
     }
 
     /// Best-effort: called only when the thumbnail download succeeds.
-    func setArtwork(_ image: UIImage, for expectedPlayer: AVPlayer) {
+    func setArtwork(_ data: Data, for expectedPlayer: AVPlayer) {
         guard player === expectedPlayer,
-              var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
-        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+              var info = MPNowPlayingInfoCenter.default().nowPlayingInfo,
+              let artwork = Self.makeArtwork(from: data) else { return }
+        info[MPMediaItemPropertyArtwork] = artwork
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    /// MediaPlayer calls its artwork provider on a private queue. Build the
+    /// closure outside MainActor isolation and capture only immutable image data.
+    nonisolated private static func makeArtwork(from data: Data) -> MPMediaItemArtwork? {
+        guard let validatedImage = UIImage(data: data) else { return nil }
+        let boundsSize = validatedImage.size
+        let requestHandler: @Sendable (CGSize) -> UIImage = { _ in
+            UIImage(data: data) ?? UIImage()
+        }
+        return MPMediaItemArtwork(boundsSize: boundsSize, requestHandler: requestHandler)
     }
 
     func detach() {

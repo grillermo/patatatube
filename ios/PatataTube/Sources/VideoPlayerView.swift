@@ -123,9 +123,8 @@ struct VideoPlayerView: View {
               let path = video.previewUrl,
               let data = try? await model.api.imageData(path: path),
               !Task.isCancelled,
-              self.player === expectedPlayer,
-              let image = UIImage(data: data) else { return }
-        nowPlaying.setArtwork(image, for: expectedPlayer)
+              self.player === expectedPlayer else { return }
+        nowPlaying.setArtwork(data, for: expectedPlayer)
     }
 
     /// AVURLAsset carrying the bearer token; AVPlayer reuses these headers for
