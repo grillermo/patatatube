@@ -5,7 +5,7 @@ import PatataTubeKit
 /// Episode list for one show, sectioned by season.
 struct EpisodesView: View {
     let show: ShowGroup
-    let onPlay: (Video) -> Void
+    let onPlay: (Video, [Video]) -> Void
     let onDownload: (Video) -> Void
     @EnvironmentObject var model: AppModel
 
@@ -49,6 +49,6 @@ struct EpisodesView: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { onPlay(episode) }
+        .onTapGesture { onPlay(episode, show.episodes) }
     }
 }

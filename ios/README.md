@@ -15,7 +15,7 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 
 ### Playback
 - Tap a cell to open a fullscreen player that autoplays
-- Auto-dismisses on end of video
+- Auto-dismisses on end of video in the foreground; when locked or backgrounded, playback auto-advances to the next playable queue item
 - Tap to dismiss
 - Pull-down-to-dismiss gesture (the close "X" was removed in favor of gestures)
 
@@ -122,7 +122,7 @@ On first launch grid is empty / errors — need server config:
 - [ ] Switch apps mid-playback → audio continues
 - [ ] Pause a video, then lock the phone or switch apps → playback remains paused
 - [ ] Return to the app → video resumes in sync with audio
-- [ ] Video ends while locked or backgrounded → playback advances to the next playable queue item; playback stops and lock screen controls clear only when no playable item remains
+- [ ] Video ends while locked or backgrounded → playback advances to the next playable queue item; playback stops when no playable item remains
 - [ ] Pull-down-to-dismiss still works; AVKit tap/scrub controls still work
 - [ ] AirPlay still works (full video on the external screen)
 
