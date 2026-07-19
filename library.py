@@ -1,5 +1,6 @@
 """Library scanning and on-demand iPad conversion for /Volumes/Media files."""
 
+import json
 import os
 import subprocess
 from dataclasses import dataclass, field
@@ -168,26 +169,43 @@ def convert_library_video(video_id: int) -> None:
         if not source.exists():
             raise RuntimeError(f"source file missing: {source}")
 
-        plan = plan_conversion(probe_source(source))
+        probe = probe_source(source)
+        plan = plan_conversion(probe)
         if plan.passthrough:
-            db.set_library_state(video_id, "done", version_id=version["id"])
+            db.set_library_state(
+                video_id, "done",
+                converted_langs=json.dumps([t["lang"] for t in audio_track_list(probe)]),
+                version_id=version["id"],
+            )
             return
 
         target = conversion_target(source)
         # Hidden temp file in the same directory: invisible to Plex and our scans,
         # and os.replace stays atomic because it is on the same volume.
         tmp = target.with_name("." + target.name)
+        map_args = ["-map", "0:v:0"]
+        for index in plan.audio_maps:
+            map_args += ["-map", f"0:a:{index}"]
         cmd = [
             FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-y",
             "-i", str(source),
-            "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",
+            *map_args, "-sn", "-dn",
             *plan.video_args, *plan.audio_args,
             "-movflags", "+faststart",
             str(tmp),
         ]
         _run_ffmpeg(cmd)
         os.replace(tmp, target)
-        db.set_library_state(video_id, "done", converted_path=str(target), version_id=version["id"])
+        db.set_library_state(
+            video_id, "done",
+            converted_path=str(target),
+            converted_langs=json.dumps(plan.audio_langs),
+            version_id=version["id"],
+        )
+        # The streamable file changed; any packaged HLS output is stale.
+        # Function-level import avoids hls importing library at module load.
+        import hls
+        hls.invalidate(video_id)
     except Exception as exc:  # noqa: BLE001 - background task, must not raise
         if tmp is not None:
             Path(tmp).unlink(missing_ok=True)

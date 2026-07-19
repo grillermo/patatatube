@@ -234,6 +234,43 @@ def test_convert_runs_ffmpeg_and_records_sibling(fresh_db, tmp_path, monkeypatch
     assert cmd[-1].startswith(str(tmp_path / "."))  # hidden temp file, atomic replace
 
 
+def test_convert_maps_allowlisted_tracks_and_records_langs(fresh_db, tmp_path, monkeypatch):
+    import db
+    monkeypatch.delenv("LIBRARY_AUDIO_LANGS", raising=False)
+    vid, src = lib_row(tmp_path)
+    monkeypatch.setattr(library, "probe_source", lambda p: multi_probe())
+    calls = []
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"converted")
+
+    monkeypatch.setattr(library, "_run_ffmpeg", fake_run)
+    invalidated = []
+    import hls
+    monkeypatch.setattr(hls, "invalidate", invalidated.append)
+    library.convert_library_video(vid)
+
+    cmd = calls[0]
+    maps = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-map"]
+    assert maps == ["0:v:0", "0:a:1", "0:a:2", "0:a:3"]
+    version = db.get_video_versions(vid)[0]
+    assert version["converted_langs"] == '["eng", "spa", "spa"]'
+    assert invalidated == [vid]
+
+
+def test_convert_passthrough_records_all_source_langs(fresh_db, tmp_path, monkeypatch):
+    import db
+    vid, src = lib_row(tmp_path, "ep.mp4")
+    monkeypatch.setattr(library, "probe_source", lambda p: probe(
+        container="mov,mp4,m4a,3gp,3g2,mj2", vcodec="h264",
+        audio=[("aac", "cat", ""), ("aac", "eng", "")]))
+    library.convert_library_video(vid)
+    version = db.get_video_versions(vid)[0]
+    assert version["status"] == "done"
+    assert version["converted_langs"] == '["cat", "eng"]'
+
+
 def test_convert_failure_returns_to_unconverted(fresh_db, tmp_path, monkeypatch):
     import db
     vid, src = lib_row(tmp_path)
