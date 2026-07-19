@@ -13,7 +13,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private let fileManager = FileManager.default
     private let lock = NSLock()
     private var inFlight: [String: Double] = [:]
-    private var continuations: [String: CheckedContinuation<URL, Error>] = [:]
+    private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
     private var idByTask: [Int: String] = [:]
     private var tasksByKey: [String: URLSessionDownloadTask] = [:]
     private var completedResults: [Int: Result<URL, Error>] = [:]
@@ -102,7 +102,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         } else {
             progress = 0
         }
-        lock.withLock { inFlight[key] = progress }
+        lock.withLock {
+            guard tasksByKey[key]?.taskIdentifier == downloadTask.taskIdentifier else { return }
+            inFlight[key] = progress
+        }
     }
 
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
@@ -153,7 +156,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             let task = downloadTask(key: key, from: remote, bearerToken: bearerToken)
             lock.withLock {
                 inFlight[key] = 0
-                continuations[key] = continuation
+                continuations[task.taskIdentifier] = continuation
                 idByTask[task.taskIdentifier] = key
                 tasksByKey[key] = task
             }
@@ -176,11 +179,13 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
 
     private func finish(key: String, taskIdentifier: Int, result: Result<URL, Error>) {
         let continuation = lock.withLock {
-            inFlight[key] = nil
             idByTask[taskIdentifier] = nil
             completedResults[taskIdentifier] = nil
-            tasksByKey[key] = nil
-            return continuations.removeValue(forKey: key)
+            if tasksByKey[key]?.taskIdentifier == taskIdentifier {
+                inFlight[key] = nil
+                tasksByKey[key] = nil
+            }
+            return continuations.removeValue(forKey: taskIdentifier)
         }
 
         switch result {

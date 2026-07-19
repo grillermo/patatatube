@@ -48,6 +48,77 @@ private final class HangingDownloadProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+// Ensures the first request has started before cancellation, then holds the
+// retry response until the first protocol instance stops. The cancelled task's
+// completion can therefore collide with the registered retry before it ends.
+private final class CancelThenRetryDownloadProtocol: URLProtocol {
+    private static let condition = NSCondition()
+    nonisolated(unsafe) private static var requestCount = 0
+    nonisolated(unsafe) private static var firstRequestStopped = false
+
+    private var requestNumber = 0
+
+    static func reset() {
+        condition.withLock {
+            requestCount = 0
+            firstRequestStopped = false
+        }
+    }
+
+    static func waitForFirstRequestToStart() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(2)
+        while requestCount == 0 {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        requestNumber = Self.condition.withLock {
+            Self.requestCount += 1
+            Self.condition.broadcast()
+            return Self.requestCount
+        }
+
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Length": "4"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+
+        if requestNumber == 1 {
+            client?.urlProtocol(self, didLoad: Data([0x00]))
+            return
+        }
+
+        Self.condition.lock()
+        while !Self.firstRequestStopped {
+            Self.condition.wait()
+        }
+        Self.condition.unlock()
+
+        Thread.sleep(forTimeInterval: 0.1)
+        client?.urlProtocol(self, didLoad: Data([0x01, 0x02, 0x03, 0x04]))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {
+        guard requestNumber == 1 else { return }
+        Thread.sleep(forTimeInterval: 0.1)
+        Self.condition.withLock {
+            Self.firstRequestStopped = true
+            Self.condition.broadcast()
+        }
+    }
+}
+
 private func mockDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [MockDownloadProtocol.self]
@@ -57,6 +128,12 @@ private func mockDownloadConfig() -> URLSessionConfiguration {
 private func hangingDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [HangingDownloadProtocol.self]
+    return config
+}
+
+private func cancelThenRetryDownloadConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [CancelThenRetryDownloadProtocol.self]
     return config
 }
 
@@ -149,6 +226,36 @@ struct CacheManagerTests {
         await #expect(throws: Error.self) { try await task.value }
         #expect(manager.state(for: 21) == .notCached)
         #expect(!FileManager.default.fileExists(atPath: manager.localURL(for: 21).path))
+    }
+
+    @Test func cancelThenImmediateSameKeyRetryCompletesIndependently() async throws {
+        CancelThenRetryDownloadProtocol.reset()
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: cancelThenRetryDownloadConfig())
+        let remote = URL(string: "https://srv.test/videos/22/stream")!
+
+        let first = Task {
+            try await manager.download(id: 22, versionId: 3, from: remote)
+        }
+        while manager.state(for: 22, versionId: 3) == .notCached { await Task.yield() }
+        guard CancelThenRetryDownloadProtocol.waitForFirstRequestToStart() else {
+            Issue.record("The first download never reached the URL protocol")
+            return
+        }
+
+        manager.cancel(id: 22, versionId: 3)
+        let retry = Task {
+            try await manager.download(id: 22, versionId: 3, from: remote)
+        }
+
+        try await retry.value
+        await #expect(throws: Error.self) { try await first.value }
+        #expect(manager.state(for: 22, versionId: 3) == .cached)
+        #expect(try Data(contentsOf: manager.localURL(for: 22, versionId: 3))
+                == Data([0x01, 0x02, 0x03, 0x04]))
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("22:3.resume").path
+        ))
     }
 
     @Test func testDownloadSendsBearerToken() async throws {
