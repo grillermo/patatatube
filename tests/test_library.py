@@ -358,3 +358,50 @@ def test_scan_library_filters_versions_per_file(fresh_db, tmp_path, monkeypatch)
     movie = next(v for v in db.get_all_videos("movies") if v["plex_rating_key"] == "42")
     paths = [v["source_path"] for v in db.get_video_versions(movie["id"])]
     assert paths == [str(real)]  # converted sibling + missing file both dropped
+
+
+def test_scan_probes_missing_audio_langs(fresh_db, tmp_path, monkeypatch):
+    import db
+    import plex
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    item = {"source_path": str(src), "title": "a", "classification": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "a", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+    probes = []
+
+    def fake_probe(path):
+        probes.append(str(path))
+        return multi_probe()
+
+    monkeypatch.setattr(library, "probe_source", fake_probe)
+    library.scan_library()
+    movie = db.get_all_videos("movies")[0]
+    version = db.get_video_versions(movie["id"])[0]
+    import json
+    assert [t["lang"] for t in json.loads(version["audio_langs"])] == ["cat", "eng", "spa", "spa"]
+    assert probes == [str(src)]
+
+    library.scan_library()  # second scan: already probed, no new ffprobe call
+    assert probes == [str(src)]
+
+
+def test_scan_survives_probe_failure(fresh_db, tmp_path, monkeypatch):
+    import db
+    import plex
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    item = {"source_path": str(src), "title": "a", "classification": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "a", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+
+    def boom(path):
+        raise RuntimeError("ffprobe missing")
+
+    monkeypatch.setattr(library, "probe_source", boom)
+    result = library.scan_library()
+    assert result["added"] == 1  # scan not aborted
+    movie = db.get_all_videos("movies")[0]
+    assert db.get_video_versions(movie["id"])[0]["audio_langs"] is None  # retried next scan

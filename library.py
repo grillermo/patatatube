@@ -232,6 +232,18 @@ def _relabel_versions(versions: list[dict]) -> None:
         v["label"] = label
 
 
+def _probe_missing_audio_langs(video_id: int) -> None:
+    """Fill missing per-version audio metadata without aborting a library scan."""
+    for version in db.get_video_versions(video_id):
+        if version.get("audio_langs") is not None:
+            continue
+        try:
+            probe = probe_source(Path(version["source_path"]))
+        except Exception:  # noqa: BLE001 - scan must survive a bad file
+            continue
+        db.set_version_audio_langs(version["id"], json.dumps(audio_track_list(probe)))
+
+
 def scan_library() -> dict:
     """Upsert every Plex library item into the videos table. Metadata only, no ffmpeg.
 
@@ -270,11 +282,13 @@ def scan_library() -> dict:
                 except OSError:
                     pass
             item["added_at"] = min(mtimes) if mtimes else None
-        _, status = db.upsert_library_video(item)
+        video_id, status = db.upsert_library_video(item)
         if status == "created":
             added += 1
         elif status == "updated":
             updated += 1
         else:  # tombstoned
             skipped += 1
+            continue
+        _probe_missing_audio_langs(video_id)
     return {"added": added, "updated": updated, "skipped": skipped}
