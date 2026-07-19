@@ -1,5 +1,6 @@
 """Library scanning and on-demand iPad conversion for /Volumes/Media files."""
 
+import json
 import os
 import subprocess
 from dataclasses import dataclass, field
@@ -27,6 +28,8 @@ class ConversionPlan:
     passthrough: bool
     video_args: list[str] = field(default_factory=list)
     audio_args: list[str] = field(default_factory=list)
+    audio_maps: list[int] = field(default_factory=list)
+    audio_langs: list[str] = field(default_factory=list)
 
 
 def _first_stream(probe: dict, stream_type: str) -> dict | None:
@@ -36,11 +39,50 @@ def _first_stream(probe: dict, stream_type: str) -> dict | None:
     return None
 
 
-def plan_conversion(probe: dict) -> ConversionPlan:
+def allowed_audio_langs() -> list[str]:
+    """Languages kept in conversions, read per-call for environment changes."""
+    raw = os.getenv("LIBRARY_AUDIO_LANGS", "eng,spa")
+    return [part.strip().lower() for part in raw.split(",") if part.strip()]
+
+
+def _audio_streams(probe: dict) -> list[dict]:
+    return [stream for stream in probe.get("streams", []) if stream.get("codec_type") == "audio"]
+
+
+def audio_track_list(probe: dict) -> list[dict]:
+    """Return language and title metadata for each audio stream in stream order."""
+    tracks = []
+    for stream in _audio_streams(probe):
+        tags = stream.get("tags") or {}
+        tracks.append({
+            "lang": (tags.get("language") or "und").lower(),
+            "title": tags.get("title") or "",
+        })
+    return tracks
+
+
+def select_audio_indices(probe: dict, langs: list[str]) -> list[int]:
+    """Select allowlisted audio-stream indices, falling back to the first stream."""
+    streams = _audio_streams(probe)
+    if not streams:
+        return []
+    selected = [
+        index for index, track in enumerate(audio_track_list(probe))
+        if track["lang"] in langs
+    ]
+    return selected or [0]
+
+
+def plan_conversion(probe: dict, audio_indices: list[int] | None = None) -> ConversionPlan:
     video = _first_stream(probe, "video")
-    audio = _first_stream(probe, "audio")
     if not video:
         raise RuntimeError("No video stream found")
+
+    if audio_indices is None:
+        audio_indices = select_audio_indices(probe, allowed_audio_langs())
+    audio_streams = _audio_streams(probe)
+    tracks = audio_track_list(probe)
+    audio_langs = [tracks[index]["lang"] for index in audio_indices]
 
     container = probe.get("format", {}).get("format_name", "")
     is_mp4 = "mp4" in container
@@ -49,10 +91,13 @@ def plan_conversion(probe: dict) -> ConversionPlan:
     fits = width <= IPAD_MAX_WIDTH
     video_compat = vcodec in _COMPAT_VIDEO and fits
     hevc_tagged = vcodec != "hevc" or video.get("codec_tag_string") == "hvc1"
-    audio_compat = audio is None or audio.get("codec_name") in _COMPAT_AUDIO
+    audio_compat = all(
+        audio_streams[index].get("codec_name") in _COMPAT_AUDIO
+        for index in audio_indices
+    )
 
     if is_mp4 and video_compat and hevc_tagged and audio_compat:
-        return ConversionPlan(passthrough=True)
+        return ConversionPlan(passthrough=True, audio_maps=audio_indices, audio_langs=audio_langs)
 
     if video_compat:
         tag = "hvc1" if vcodec == "hevc" else "avc1"
@@ -62,18 +107,33 @@ def plan_conversion(probe: dict) -> ConversionPlan:
         if not fits:
             video_args += _SCALE_ARGS
 
-    if audio is None:
+    if not audio_indices:
         audio_args = ["-an"]
-    elif audio_compat:
-        audio_args = ["-c:a", "copy"]
     else:
-        audio_args = ["-c:a", "aac", "-b:a", "128k", "-ac", "2"]
+        audio_args = []
+        for output_index, input_index in enumerate(audio_indices):
+            if audio_streams[input_index].get("codec_name") in _COMPAT_AUDIO:
+                audio_args += [f"-c:a:{output_index}", "copy"]
+            else:
+                audio_args += [
+                    f"-c:a:{output_index}", "aac",
+                    f"-b:a:{output_index}", "128k",
+                    f"-ac:a:{output_index}", "2",
+                ]
 
-    return ConversionPlan(passthrough=False, video_args=video_args, audio_args=audio_args)
+    return ConversionPlan(
+        passthrough=False,
+        video_args=video_args,
+        audio_args=audio_args,
+        audio_maps=audio_indices,
+        audio_langs=audio_langs,
+    )
 
 
-def conversion_target(source: Path) -> Path:
+def conversion_target(source: Path, existing_converted_path: str | None = None) -> Path:
     """Sibling mp4 path for a converted file; .ios.mp4 on name collision."""
+    if existing_converted_path:
+        return Path(existing_converted_path)
     target = source.with_suffix(".mp4")
     if target == source or target.exists():
         target = source.with_suffix(".ios.mp4")
@@ -113,26 +173,43 @@ def convert_library_video(video_id: int) -> None:
         if not source.exists():
             raise RuntimeError(f"source file missing: {source}")
 
-        plan = plan_conversion(probe_source(source))
+        probe = probe_source(source)
+        plan = plan_conversion(probe)
         if plan.passthrough:
-            db.set_library_state(video_id, "done", version_id=version["id"])
+            db.set_library_state(
+                video_id, "done",
+                converted_langs=json.dumps([t["lang"] for t in audio_track_list(probe)]),
+                version_id=version["id"],
+            )
             return
 
-        target = conversion_target(source)
+        target = conversion_target(source, version.get("converted_path"))
         # Hidden temp file in the same directory: invisible to Plex and our scans,
         # and os.replace stays atomic because it is on the same volume.
         tmp = target.with_name("." + target.name)
+        map_args = ["-map", "0:v:0"]
+        for index in plan.audio_maps:
+            map_args += ["-map", f"0:a:{index}"]
         cmd = [
             FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-y",
             "-i", str(source),
-            "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",
+            *map_args, "-sn", "-dn",
             *plan.video_args, *plan.audio_args,
             "-movflags", "+faststart",
             str(tmp),
         ]
         _run_ffmpeg(cmd)
         os.replace(tmp, target)
-        db.set_library_state(video_id, "done", converted_path=str(target), version_id=version["id"])
+        db.set_library_state(
+            video_id, "done",
+            converted_path=str(target),
+            converted_langs=json.dumps(plan.audio_langs),
+            version_id=version["id"],
+        )
+        # The streamable file changed; any packaged HLS output is stale.
+        # Function-level import avoids hls importing library at module load.
+        import hls
+        hls.invalidate(video_id)
     except Exception as exc:  # noqa: BLE001 - background task, must not raise
         if tmp is not None:
             Path(tmp).unlink(missing_ok=True)
@@ -157,6 +234,18 @@ def _relabel_versions(versions: list[dict]) -> None:
     labels = version_namer.label_versions([Path(p).name for p in source_paths])
     for v, label in zip(versions, labels):
         v["label"] = label
+
+
+def _probe_missing_audio_langs(video_id: int) -> None:
+    """Fill missing per-version audio metadata without aborting a library scan."""
+    for version in db.get_video_versions(video_id):
+        if version.get("audio_langs") is not None:
+            continue
+        try:
+            probe = probe_source(Path(version["source_path"]))
+        except Exception:  # noqa: BLE001 - scan must survive a bad file
+            continue
+        db.set_version_audio_langs(version["id"], json.dumps(audio_track_list(probe)))
 
 
 def scan_library() -> dict:
@@ -197,11 +286,13 @@ def scan_library() -> dict:
                 except OSError:
                     pass
             item["added_at"] = min(mtimes) if mtimes else None
-        _, status = db.upsert_library_video(item)
+        video_id, status = db.upsert_library_video(item)
         if status == "created":
             added += 1
         elif status == "updated":
             updated += 1
         else:  # tombstoned
             skipped += 1
+            continue
+        _probe_missing_audio_langs(video_id)
     return {"added": added, "updated": updated, "skipped": skipped}

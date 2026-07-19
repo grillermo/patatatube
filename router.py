@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import secrets
@@ -102,6 +103,14 @@ class ClassifyRequest(BaseModel):
 
 class VersionRequest(BaseModel):
     version_id: int
+
+
+class AudioRequest(BaseModel):
+    lang: str
+
+
+class PrepareRequest(BaseModel):
+    audio_lang: str | None = None
 
 
 def _print_bad_request_details(request: Request, body: UploadRequest):
@@ -633,6 +642,42 @@ async def api_choose_video_version(video_id: int, body: VersionRequest, request:
     return {"ok": ok}
 
 
+@router.post("/api/videos/{video_id}/audio")
+async def api_choose_audio(
+    video_id: int, body: AudioRequest, request: Request, background_tasks: BackgroundTasks
+):
+    _check_token(request)
+    video = db.get_video(video_id)
+    if not video or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.get("source") != "library":
+        raise HTTPException(status_code=400, detail="Only library videos have audio tracks")
+    version = db.get_video_version(video_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    try:
+        source_langs = {track["lang"] for track in json.loads(version.get("audio_langs") or "[]")}
+    except (TypeError, ValueError):
+        source_langs = set()
+    if body.lang not in library.allowed_audio_langs() or body.lang not in source_langs:
+        raise HTTPException(status_code=400, detail="Language not available")
+
+    db.set_audio_lang(video_id, body.lang)
+    hls.invalidate(video_id)
+
+    converted = None
+    if version.get("converted_langs"):
+        try:
+            converted = json.loads(version["converted_langs"])
+        except (TypeError, ValueError):
+            converted = None
+    if version["status"] == "done" and (converted is None or body.lang not in converted):
+        db.set_library_state(video_id, "converting", version_id=version["id"])
+        background_tasks.add_task(library.convert_library_video, video_id)
+    return {"ok": True}
+
+
 @router.post("/api/video/{video_id}/delete")
 async def api_delete_video(video_id: int, request: Request):
     _check_token(request)
@@ -690,7 +735,12 @@ async def api_video(video_id: int, request: Request):
 
 
 @router.post("/api/videos/{video_id}/prepare")
-async def api_prepare_video(video_id: int, request: Request, background_tasks: BackgroundTasks):
+async def api_prepare_video(
+    video_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    body: PrepareRequest | None = None,
+):
     _check_token(request)
     video = db.get_video(video_id)
     if not video or video.get("deleted_at"):
@@ -701,15 +751,53 @@ async def api_prepare_video(video_id: int, request: Request, background_tasks: B
     version = db.get_video_version(video_id)
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
-    if version["status"] == "done":
+    # The legacy no-body API remains a cheap readiness check. A requested
+    # language below deliberately probes a completed row to verify that its
+    # conversion includes that track (and upgrades old one-track outputs).
+    if version["status"] == "done" and not (body and body.audio_lang):
         return {"status": "done"}
-    if version["status"] == "converting":
-        return JSONResponse({"status": "converting"}, status_code=202)
 
     source = Path(version["source_path"])
     if not source.exists():
         db.set_library_state(video_id, "unconverted", error_msg=f"source file missing: {source}", version_id=version["id"])
         raise HTTPException(status_code=404, detail="Source file missing")
+
+    if version["status"] == "converting":
+        return JSONResponse({"status": "converting"}, status_code=202)
+
+    try:
+        probe = await asyncio.to_thread(library.probe_source, source)
+        plan = library.plan_conversion(probe)
+    except Exception as exc:  # ffprobe failure
+        db.set_library_state(video_id, "unconverted", error_msg=str(exc), version_id=version["id"])
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    selected_lang = body.audio_lang.lower() if body and body.audio_lang else None
+    if selected_lang:
+        source_langs = {track["lang"] for track in library.audio_track_list(probe)}
+        if selected_lang not in library.allowed_audio_langs():
+            raise HTTPException(status_code=400, detail="Audio language is not allowed")
+        if selected_lang not in source_langs:
+            raise HTTPException(status_code=400, detail="Audio language is not in this source")
+        if video.get("audio_lang") != selected_lang:
+            db.set_audio_lang(video_id, selected_lang)
+            hls.invalidate(video_id)
+
+    if plan.passthrough:
+        db.set_library_state(
+            video_id, "done",
+            converted_langs=json.dumps([track["lang"] for track in library.audio_track_list(probe)]),
+            version_id=version["id"],
+        )
+        return {"status": "done"}
+
+    if version["status"] == "done":
+        try:
+            converted_langs = set(json.loads(version.get("converted_langs") or "null") or [])
+        except (TypeError, ValueError):
+            converted_langs = set()
+        if set(plan.audio_langs).issubset(converted_langs):
+            return {"status": "done"}
 
     # Write "converting" now, before the first await, so a second concurrent
     # request for this same video reads "converting" on its own db.get_video
@@ -719,16 +807,6 @@ async def api_prepare_video(video_id: int, request: Request, background_tasks: B
     # before either writes, but this closes the practical window between
     # overlapping requests a few milliseconds apart.)
     db.set_library_state(video_id, "converting", version_id=version["id"])
-
-    try:
-        plan = await asyncio.to_thread(lambda: library.plan_conversion(library.probe_source(source)))
-    except Exception as exc:  # ffprobe failure
-        db.set_library_state(video_id, "unconverted", error_msg=str(exc), version_id=version["id"])
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    if plan.passthrough:
-        db.set_library_state(video_id, "done", version_id=version["id"])
-        return {"status": "done"}
 
     background_tasks.add_task(library.convert_library_video, video_id)
     return JSONResponse({"status": "converting"}, status_code=202)

@@ -91,6 +91,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         task?.cancel()
     }
 
+    /// Deletes a cached MP4. Used when the server re-converts a file with a
+    /// different audio track set, making the cached copy stale.
+    public func removeCached(id: Int, versionId: Int? = nil) {
+        try? fileManager.removeItem(at: localURL(for: id, versionId: versionId))
+    }
+
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                            didWriteData bytesWritten: Int64,
                            totalBytesWritten: Int64,

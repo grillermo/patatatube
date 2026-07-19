@@ -1,14 +1,38 @@
+public struct AudioTrack: Codable, Equatable, Hashable, Sendable {
+    public let lang: String
+    public let title: String
+    public let available: Bool
+
+    public init(lang: String, title: String, available: Bool) {
+        self.lang = lang; self.title = title; self.available = available
+    }
+}
+
 public struct VideoVersion: Codable, Equatable, Hashable, Sendable, Identifiable {
     public let id: Int
     public let label: String?
     public let status: String
     public let isChosen: Bool
+    public let audioTracks: [AudioTrack]
 
-    public init(id: Int, label: String?, status: String, isChosen: Bool) {
+    public init(id: Int, label: String?, status: String, isChosen: Bool,
+                audioTracks: [AudioTrack] = []) {
         self.id = id
         self.label = label
         self.status = status
         self.isChosen = isChosen
+        self.audioTracks = audioTracks
+    }
+
+    enum CodingKeys: String, CodingKey { case id, label, status, isChosen, audioTracks }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(Int.self, forKey: .id)
+        self.label = try c.decodeIfPresent(String.self, forKey: .label)
+        self.status = try c.decode(String.self, forKey: .status)
+        self.isChosen = try c.decode(Bool.self, forKey: .isChosen)
+        self.audioTracks = try c.decodeIfPresent([AudioTrack].self, forKey: .audioTracks) ?? []
     }
 }
 
@@ -49,12 +73,14 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let hlsPath: String?
     public let subtitleTracks: [SubtitleTrack]
     public let sourceFilename: String?
+    public let audioLang: String?
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, platform, sourceKey, previewUrl, classification, position
         case status, errorMsg, streamPath, source, showTitle, season, episode, summary
         case showPreviewUrl, chosenVersionId, versions, hlsPath, subtitleTracks
         case sourceFilename
+        case audioLang
     }
 
     public var isLibrary: Bool { source == "library" }
@@ -66,7 +92,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
             episode: Int? = nil, summary: String? = nil, showPreviewUrl: String? = nil,
             chosenVersionId: Int? = nil, versions: [VideoVersion] = [],
             hlsPath: String? = nil, subtitleTracks: [SubtitleTrack] = [],
-            sourceFilename: String? = nil) {
+            sourceFilename: String? = nil, audioLang: String? = nil) {
         self.id = id; self.url = url; self.title = title; self.platform = platform
         self.sourceKey = sourceKey; self.previewUrl = previewUrl
         self.classification = classification; self.position = position
@@ -76,6 +102,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.chosenVersionId = chosenVersionId; self.versions = versions
         self.hlsPath = hlsPath; self.subtitleTracks = subtitleTracks
         self.sourceFilename = sourceFilename
+        self.audioLang = audioLang
     }
 
     public init(from decoder: Decoder) throws {
@@ -102,6 +129,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.hlsPath = try c.decodeIfPresent(String.self, forKey: .hlsPath)
         self.subtitleTracks = try c.decodeIfPresent([SubtitleTrack].self, forKey: .subtitleTracks) ?? []
         self.sourceFilename = try c.decodeIfPresent(String.self, forKey: .sourceFilename)
+        self.audioLang = try c.decodeIfPresent(String.self, forKey: .audioLang)
     }
 
     func withClassification(_ c: String) -> Video {
@@ -112,7 +140,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
             episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
             chosenVersionId: chosenVersionId, versions: versions,
             hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-            sourceFilename: sourceFilename)
+            sourceFilename: sourceFilename, audioLang: audioLang)
     }
 
     func withChosenVersion(_ versionId: Int) -> Video {
@@ -124,9 +152,21 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
               chosenVersionId: versionId,
               versions: versions.map {
-                  VideoVersion(id: $0.id, label: $0.label, status: $0.status, isChosen: $0.id == versionId)
+                  VideoVersion(id: $0.id, label: $0.label, status: $0.status,
+                               isChosen: $0.id == versionId, audioTracks: $0.audioTracks)
               },
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-              sourceFilename: sourceFilename)
+              sourceFilename: sourceFilename, audioLang: audioLang)
+    }
+
+    func withAudioLang(_ lang: String) -> Video {
+        return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
+              previewUrl: previewUrl, classification: classification, position: position,
+              status: status, errorMsg: errorMsg, streamPath: streamPath,
+              source: source, showTitle: showTitle, season: season,
+              episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
+              chosenVersionId: chosenVersionId, versions: versions,
+              hlsPath: hlsPath, subtitleTracks: subtitleTracks,
+              sourceFilename: sourceFilename, audioLang: lang)
     }
 }

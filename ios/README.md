@@ -123,6 +123,20 @@ On first launch grid is empty / errors — need server config:
 - [ ] Version picker on the movie card and detail page switches versions; download state resets accordingly.
 - [ ] Movie card ellipsis menu still offers Info / Move / classify / Delete.
 
+### Audio language selector (library movies)
+- [ ] Open a MULTI movie's detail page: an "Audio" picker appears next to the
+      Version picker, listing English/Spanish with source title tags.
+- [ ] Single-audio movies show no Audio picker.
+- [ ] Pick a language already in the converted file: play starts on that
+      language immediately (no conversion).
+- [ ] Pick a language missing from an old (pre-feature) conversion: status
+      flips to "converting"; when done, playback uses the new language and the
+      cached copy re-downloads.
+- [ ] Cache a movie, go offline: cached playback still honors the picker
+      choice (tracks are embedded in the MP4).
+- [ ] While streaming (HLS), switching language repackages: next play carries
+      the new language.
+
 ### Background audio
 - [ ] Play a video, lock the phone → audio continues; lock screen shows title, artwork, and controls
 - [ ] Play/pause and scrub from the lock screen and Control Center

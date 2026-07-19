@@ -1,5 +1,34 @@
 """Canonical video presenter shared by the SSR page and the JSON API."""
 
+import json
+
+from library import allowed_audio_langs
+
+
+def _audio_tracks(version: dict) -> list[dict]:
+    """Return selectable source tracks and whether each is in the conversion."""
+    try:
+        source_tracks = json.loads(version.get("audio_langs") or "[]")
+    except (TypeError, ValueError):
+        return []
+    converted = None
+    if version.get("converted_langs"):
+        try:
+            converted = json.loads(version["converted_langs"])
+        except (TypeError, ValueError):
+            converted = None
+    allowed = allowed_audio_langs()
+    first_lang = source_tracks[0]["lang"] if source_tracks else None
+    tracks, seen = [], set()
+    for track in source_tracks:
+        lang = track.get("lang")
+        if lang not in allowed or lang in seen:
+            continue
+        seen.add(lang)
+        available = lang in converted if converted is not None else lang == first_lang
+        tracks.append({"lang": lang, "title": track.get("title") or "", "available": available})
+    return tracks
+
 
 def _hls_ready(video: dict) -> bool:
     """Whether an HLS package can be served for this row.
@@ -53,12 +82,14 @@ def serialize_video(video: dict) -> dict:
         data["hls_path"] = f"/videos/{video['id']}/hls/master.m3u8"
     if video.get("versions") is not None:
         data["chosen_version_id"] = video.get("chosen_version_id")
+        data["audio_lang"] = video.get("audio_lang")
         data["versions"] = [
             {
                 "id": version["id"],
                 "label": version.get("label"),
                 "status": version["status"],
                 "is_chosen": bool(version.get("is_chosen")),
+                "audio_tracks": _audio_tracks(version),
             }
             for version in video.get("versions", [])
         ]

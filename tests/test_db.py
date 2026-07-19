@@ -369,6 +369,19 @@ def test_version_helpers_update_chosen_version_and_paths(fresh_db):
     assert db.get_converted_paths() == {"/m/4k.mp4"}
 
 
+def test_changing_version_clears_audio_lang_missing_from_new_version(fresh_db):
+    import db
+
+    video_id, _ = db.upsert_library_video(_versioned_movie_item())
+    versions = db.get_video_versions(video_id)
+    db.set_version_audio_langs(versions[0]["id"], '[{"lang": "eng", "title": ""}]')
+    db.set_version_audio_langs(versions[1]["id"], '[{"lang": "spa", "title": ""}]')
+    db.set_audio_lang(video_id, "eng")
+
+    assert db.set_chosen_version(video_id, versions[1]["id"])
+    assert db.get_video(video_id)["audio_lang"] is None
+
+
 def test_upsert_library_video_syncs_versions_by_rating_key(fresh_db):
     import db
 
@@ -391,3 +404,72 @@ def test_upsert_library_video_syncs_versions_by_rating_key(fresh_db):
     refreshed = db.get_video_versions(video_id)
     assert [v["label"] for v in refreshed] == ["1080p", "4K Remux"]
     assert next(v for v in refreshed if v["source_path"] == "/m/4k.mkv")["is_chosen"] is True
+
+
+def _lib_item(tmp_path, name="m.mkv", key="k1"):
+    src = tmp_path / name
+    src.write_bytes(b"x")
+    return {
+        "source_path": str(src),
+        "title": "M",
+        "classification": "movies",
+        "show_title": None,
+        "season": None,
+        "episode": None,
+        "summary": None,
+        "plex_rating_key": key,
+        "show_rating_key": None,
+    }
+
+
+def test_audio_lang_roundtrip(fresh_db, tmp_path):
+    import db
+
+    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
+    assert db.get_video(vid)["audio_lang"] is None
+    db.set_audio_lang(vid, "spa")
+    assert db.get_video(vid)["audio_lang"] == "spa"
+
+
+def test_version_audio_langs_roundtrip(fresh_db, tmp_path):
+    import db
+
+    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
+    version = db.get_video_versions(vid)[0]
+    assert version["audio_langs"] is None
+    db.set_version_audio_langs(version["id"], '[{"lang": "eng", "title": ""}]')
+    version = db.get_video_versions(vid)[0]
+    assert version["audio_langs"] == '[{"lang": "eng", "title": ""}]'
+
+
+def test_set_library_state_stores_converted_langs(fresh_db, tmp_path):
+    import db
+
+    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
+    version = db.get_video_versions(vid)[0]
+    db.set_library_state(
+        vid,
+        "done",
+        converted_path="/tmp/out.mp4",
+        converted_langs='["eng", "spa"]',
+        version_id=version["id"],
+    )
+    version = db.get_video_versions(vid)[0]
+    assert version["converted_langs"] == '["eng", "spa"]'
+
+
+def test_set_library_state_error_clears_converted_langs(fresh_db, tmp_path):
+    import db
+
+    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
+    version = db.get_video_versions(vid)[0]
+    db.set_library_state(
+        vid,
+        "done",
+        converted_path="/tmp/out.mp4",
+        converted_langs='["eng"]',
+        version_id=version["id"],
+    )
+    db.set_library_state(vid, "unconverted", error_msg="boom", version_id=version["id"])
+    version = db.get_video_versions(vid)[0]
+    assert version["converted_langs"] is None

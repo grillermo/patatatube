@@ -1,6 +1,53 @@
 from views.serializers import serialize_video
 
 
+def _library_video(**over):
+    video = {
+        "id": 1, "url": "/x/y.mkv", "status": "done", "source": "library",
+        "classification": "movies", "chosen_version_id": 10, "audio_lang": "spa",
+        "versions": [{
+            "id": 10, "label": "1080p", "status": "done", "is_chosen": True,
+            "audio_langs": (
+                '[{"lang": "cat", "title": ""}, {"lang": "eng", "title": ""},'
+                ' {"lang": "spa", "title": "Latin American"}, {"lang": "spa", "title": "European"}]'
+            ),
+            "converted_langs": '["eng", "spa", "spa"]',
+        }],
+    }
+    video.update(over)
+    return video
+
+
+def test_serialize_audio_tracks(monkeypatch):
+    monkeypatch.delenv("LIBRARY_AUDIO_LANGS", raising=False)
+    data = serialize_video(_library_video())
+    assert data["audio_lang"] == "spa"
+    assert data["versions"][0]["audio_tracks"] == [
+        {"lang": "eng", "title": "", "available": True},
+        {"lang": "spa", "title": "Latin American", "available": True},
+    ]
+
+
+def test_serialize_audio_tracks_legacy_conversion(monkeypatch):
+    """NULL converted_langs means only the first source track is present."""
+    monkeypatch.delenv("LIBRARY_AUDIO_LANGS", raising=False)
+    video = _library_video()
+    video["versions"][0]["converted_langs"] = None
+    data = serialize_video(video)
+    assert data["versions"][0]["audio_tracks"] == [
+        {"lang": "eng", "title": "", "available": False},
+        {"lang": "spa", "title": "Latin American", "available": False},
+    ]
+
+
+def test_serialize_audio_tracks_unprobed(monkeypatch):
+    video = _library_video()
+    video["versions"][0]["audio_langs"] = None
+    data = serialize_video(video)
+    assert data["versions"][0]["audio_tracks"] == []
+    assert data["audio_lang"] == "spa"
+
+
 def test_serialize_video_full_shape():
     video = {
         "id": 7,

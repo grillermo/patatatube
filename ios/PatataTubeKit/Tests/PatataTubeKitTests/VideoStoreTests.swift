@@ -44,6 +44,8 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     private(set) var scanCalls = 0
     var chooseVersionResult = true
     private(set) var chosenVersions: [(id: Int, versionId: Int)] = []
+    var chooseAudioResult = true
+    private(set) var chosenAudio: [(id: Int, lang: String)] = []
     var prepareResult = "done"
     var videoResults: [Video] = []
     private(set) var videoCalls = 0
@@ -56,6 +58,10 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool {
         chosenVersions.append((id, versionId))
         return chooseVersionResult
+    }
+    func chooseAudio(id: Int, lang: String) async throws -> Bool {
+        chosenAudio.append((id, lang))
+        return chooseAudioResult
     }
     func prepare(id: Int) async throws -> String { prepareResult }
     func video(id: Int) async throws -> Video {
@@ -203,6 +209,32 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
 
     #expect(store.videos[0].chosenVersionId == 10)
     #expect(store.videos[0].versions.map(\.isChosen) == [true, false])
+}
+
+@MainActor @Test func chooseAudioOptimisticallyUpdatesThenReloads() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api)
+    await store.load()
+
+    await store.chooseAudio(id: 1, lang: "es")
+
+    #expect(api.chosenAudio.map(\.id) == [1])
+    #expect(api.chosenAudio.map(\.lang) == ["es"])
+    #expect(api.loadCount == 2)
+}
+
+@MainActor @Test func chooseAudioRevertsWhenServerReturnsNotOk() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1)]
+    api.chooseAudioResult = false
+    let store = VideoStore(api: api)
+    await store.load()
+
+    await store.chooseAudio(id: 1, lang: "es")
+
+    #expect(store.videos[0].audioLang == nil)
+    #expect(api.loadCount == 1)
 }
 
 private func tempCache() -> VideoListCache {

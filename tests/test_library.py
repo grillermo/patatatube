@@ -6,14 +6,21 @@ import library
 
 
 def probe(container="matroska,webm", vcodec="hevc", width=1920, tag="[0][0][0][0]",
-          acodec="eac3", with_audio=True):
+          acodec="eac3", with_audio=True, audio=None):
+    """audio optionally supplies (codec, language, title) tuples."""
     streams = [{
         "codec_type": "video",
         "codec_name": vcodec,
         "width": width,
         "codec_tag_string": tag,
     }]
-    if with_audio:
+    if audio is not None:
+        for codec, lang, title in audio:
+            streams.append({
+                "codec_type": "audio", "codec_name": codec, "channels": 6,
+                "tags": {"language": lang, "title": title},
+            })
+    elif with_audio:
         streams.append({"codec_type": "audio", "codec_name": acodec, "channels": 6})
     return {"streams": streams, "format": {"format_name": container}}
 
@@ -22,6 +29,19 @@ def test_passthrough_compatible_mp4():
     p = probe(container="mov,mp4,m4a,3gp,3g2,mj2", vcodec="h264", acodec="aac")
     plan = library.plan_conversion(p)
     assert plan.passthrough
+
+
+def test_passthrough_transcodes_a_selected_incompatible_audio_stream():
+    plan = library.plan_conversion(probe(
+        container="mov,mp4,m4a,3gp,3g2,mj2", vcodec="h264",
+        audio=[("aac", "eng", ""), ("dts", "spa", "")],
+    ))
+
+    assert not plan.passthrough
+    assert plan.audio_args == [
+        "-c:a:0", "copy",
+        "-c:a:1", "aac", "-b:a:1", "128k", "-ac:a:1", "2",
+    ]
 
 
 def test_passthrough_hevc_requires_hvc1_tag():
@@ -40,7 +60,7 @@ def test_mkv_hevc_remuxes_with_hvc1():
     plan = library.plan_conversion(probe())
     assert not plan.passthrough
     assert plan.video_args == ["-c:v", "copy", "-tag:v", "hvc1"]
-    assert plan.audio_args == ["-c:a", "copy"]
+    assert plan.audio_args == ["-c:a:0", "copy"]
 
 
 def test_mkv_h264_remuxes_with_avc1():
@@ -60,11 +80,78 @@ def test_4k_downscales_and_reencodes():
 def test_unsupported_codecs_reencode():
     plan = library.plan_conversion(probe(vcodec="vp9", acodec="dts"))
     assert plan.video_args[0:2] == ["-c:v", "libx264"]
-    assert plan.audio_args == ["-c:a", "aac", "-b:a", "128k", "-ac", "2"]
+    assert plan.audio_args == ["-c:a:0", "aac", "-b:a:0", "128k", "-ac:a:0", "2"]
 
 
 def test_no_audio_stream():
     plan = library.plan_conversion(probe(with_audio=False))
+    assert plan.audio_args == ["-an"]
+
+
+def multi_probe():
+    return probe(audio=[
+        ("eac3", "cat", ""),
+        ("eac3", "eng", ""),
+        ("eac3", "spa", "Latin American"),
+        ("dts", "spa", "European"),
+    ])
+
+
+def test_allowed_audio_langs_default(monkeypatch):
+    monkeypatch.delenv("LIBRARY_AUDIO_LANGS", raising=False)
+    assert library.allowed_audio_langs() == ["eng", "spa"]
+    monkeypatch.setenv("LIBRARY_AUDIO_LANGS", " ENG , jpn,")
+    assert library.allowed_audio_langs() == ["eng", "jpn"]
+
+
+def test_audio_track_list():
+    assert library.audio_track_list(multi_probe()) == [
+        {"lang": "cat", "title": ""},
+        {"lang": "eng", "title": ""},
+        {"lang": "spa", "title": "Latin American"},
+        {"lang": "spa", "title": "European"},
+    ]
+
+
+def test_audio_track_list_untagged():
+    assert library.audio_track_list(probe()) == [{"lang": "und", "title": ""}]
+
+
+def test_select_audio_indices_allowlist():
+    assert library.select_audio_indices(multi_probe(), ["eng", "spa"]) == [1, 2, 3]
+
+
+def test_select_audio_indices_fallback_first():
+    assert library.select_audio_indices(multi_probe(), ["jpn"]) == [0]
+
+
+def test_select_audio_indices_no_audio():
+    assert library.select_audio_indices(probe(with_audio=False), ["eng"]) == []
+
+
+def test_plan_conversion_multi_track(monkeypatch):
+    monkeypatch.delenv("LIBRARY_AUDIO_LANGS", raising=False)
+    plan = library.plan_conversion(multi_probe())
+    assert not plan.passthrough
+    assert plan.audio_maps == [1, 2, 3]
+    assert plan.audio_langs == ["eng", "spa", "spa"]
+    assert plan.audio_args == [
+        "-c:a:0", "copy",
+        "-c:a:1", "copy",
+        "-c:a:2", "aac", "-b:a:2", "128k", "-ac:a:2", "2",
+    ]
+
+
+def test_plan_conversion_explicit_indices():
+    plan = library.plan_conversion(multi_probe(), audio_indices=[2])
+    assert plan.audio_maps == [2]
+    assert plan.audio_langs == ["spa"]
+    assert plan.audio_args == ["-c:a:0", "copy"]
+
+
+def test_plan_conversion_no_audio_keeps_an():
+    plan = library.plan_conversion(probe(with_audio=False))
+    assert plan.audio_maps == []
     assert plan.audio_args == ["-an"]
 
 
@@ -160,6 +247,64 @@ def test_convert_runs_ffmpeg_and_records_sibling(fresh_db, tmp_path, monkeypatch
     assert cmd[-1].startswith(str(tmp_path / "."))  # hidden temp file, atomic replace
 
 
+def test_reconversion_replaces_the_tracked_output(fresh_db, tmp_path, monkeypatch):
+    import db
+
+    vid, src = lib_row(tmp_path)
+    monkeypatch.setattr(library, "probe_source", lambda p: probe())
+    output = tmp_path / "ep.mp4"
+    output.write_bytes(b"old")
+    version = db.get_video_versions(vid)[0]
+    db.set_library_state(vid, "done", converted_path=str(output), version_id=version["id"])
+
+    def fake_run(cmd):
+        Path(cmd[-1]).write_bytes(b"replacement")
+
+    monkeypatch.setattr(library, "_run_ffmpeg", fake_run)
+    library.convert_library_video(vid)
+
+    assert output.read_bytes() == b"replacement"
+    assert db.get_video_versions(vid)[0]["converted_path"] == str(output)
+    assert not (tmp_path / "ep.ios.mp4").exists()
+
+
+def test_convert_maps_allowlisted_tracks_and_records_langs(fresh_db, tmp_path, monkeypatch):
+    import db
+    monkeypatch.delenv("LIBRARY_AUDIO_LANGS", raising=False)
+    vid, src = lib_row(tmp_path)
+    monkeypatch.setattr(library, "probe_source", lambda p: multi_probe())
+    calls = []
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"converted")
+
+    monkeypatch.setattr(library, "_run_ffmpeg", fake_run)
+    invalidated = []
+    import hls
+    monkeypatch.setattr(hls, "invalidate", invalidated.append)
+    library.convert_library_video(vid)
+
+    cmd = calls[0]
+    maps = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-map"]
+    assert maps == ["0:v:0", "0:a:1", "0:a:2", "0:a:3"]
+    version = db.get_video_versions(vid)[0]
+    assert version["converted_langs"] == '["eng", "spa", "spa"]'
+    assert invalidated == [vid]
+
+
+def test_convert_passthrough_records_all_source_langs(fresh_db, tmp_path, monkeypatch):
+    import db
+    vid, src = lib_row(tmp_path, "ep.mp4")
+    monkeypatch.setattr(library, "probe_source", lambda p: probe(
+        container="mov,mp4,m4a,3gp,3g2,mj2", vcodec="h264",
+        audio=[("aac", "cat", ""), ("aac", "eng", "")]))
+    library.convert_library_video(vid)
+    version = db.get_video_versions(vid)[0]
+    assert version["status"] == "done"
+    assert version["converted_langs"] == '["cat", "eng"]'
+
+
 def test_convert_failure_returns_to_unconverted(fresh_db, tmp_path, monkeypatch):
     import db
     vid, src = lib_row(tmp_path)
@@ -247,3 +392,50 @@ def test_scan_library_filters_versions_per_file(fresh_db, tmp_path, monkeypatch)
     movie = next(v for v in db.get_all_videos("movies") if v["plex_rating_key"] == "42")
     paths = [v["source_path"] for v in db.get_video_versions(movie["id"])]
     assert paths == [str(real)]  # converted sibling + missing file both dropped
+
+
+def test_scan_probes_missing_audio_langs(fresh_db, tmp_path, monkeypatch):
+    import db
+    import plex
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    item = {"source_path": str(src), "title": "a", "classification": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "a", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+    probes = []
+
+    def fake_probe(path):
+        probes.append(str(path))
+        return multi_probe()
+
+    monkeypatch.setattr(library, "probe_source", fake_probe)
+    library.scan_library()
+    movie = db.get_all_videos("movies")[0]
+    version = db.get_video_versions(movie["id"])[0]
+    import json
+    assert [t["lang"] for t in json.loads(version["audio_langs"])] == ["cat", "eng", "spa", "spa"]
+    assert probes == [str(src)]
+
+    library.scan_library()  # second scan: already probed, no new ffprobe call
+    assert probes == [str(src)]
+
+
+def test_scan_survives_probe_failure(fresh_db, tmp_path, monkeypatch):
+    import db
+    import plex
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    item = {"source_path": str(src), "title": "a", "classification": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "a", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+
+    def boom(path):
+        raise RuntimeError("ffprobe missing")
+
+    monkeypatch.setattr(library, "probe_source", boom)
+    result = library.scan_library()
+    assert result["added"] == 1  # scan not aborted
+    movie = db.get_all_videos("movies")[0]
+    assert db.get_video_versions(movie["id"])[0]["audio_langs"] is None  # retried next scan
