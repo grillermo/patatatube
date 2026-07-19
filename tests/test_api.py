@@ -828,9 +828,16 @@ def test_api_video_serializes_versions(client, tmp_path):
     assert resp.status_code == 200
     data = resp.json()
     assert data["chosen_version_id"] == versions[1]["id"]
+    assert data["audio_lang"] is None
     assert data["versions"] == [
-        {"id": versions[0]["id"], "label": "1080p", "status": "unconverted", "is_chosen": False},
-        {"id": versions[1]["id"], "label": "4K", "status": "unconverted", "is_chosen": True},
+        {
+            "id": versions[0]["id"], "label": "1080p", "status": "unconverted",
+            "is_chosen": False, "audio_tracks": [],
+        },
+        {
+            "id": versions[1]["id"], "label": "4K", "status": "unconverted",
+            "is_chosen": True, "audio_tracks": [],
+        },
     ]
 
 
