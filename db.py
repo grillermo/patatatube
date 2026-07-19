@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -412,7 +413,7 @@ def set_chosen_version(video_id: int, version_id: int) -> bool:
     with _conn() as conn:
         row = conn.execute(
             """
-            SELECT id
+            SELECT id, audio_langs
             FROM video_versions
             WHERE video_id = ? AND id = ?
             """,
@@ -421,6 +422,18 @@ def set_chosen_version(video_id: int, version_id: int) -> bool:
         if not row:
             return False
         conn.execute("UPDATE videos SET chosen_version_id = ? WHERE id = ?", (version_id, video_id))
+        selected_lang = conn.execute(
+            "SELECT audio_lang FROM videos WHERE id = ?", (video_id,)
+        ).fetchone()["audio_lang"]
+        if selected_lang:
+            try:
+                available_langs = {
+                    track.get("lang") for track in json.loads(row["audio_langs"] or "[]")
+                }
+            except (TypeError, ValueError):
+                available_langs = set()
+            if selected_lang not in available_langs:
+                conn.execute("UPDATE videos SET audio_lang = NULL WHERE id = ?", (video_id,))
         _sync_video_from_chosen(conn, video_id)
         return True
 

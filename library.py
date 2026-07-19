@@ -75,7 +75,6 @@ def select_audio_indices(probe: dict, langs: list[str]) -> list[int]:
 
 def plan_conversion(probe: dict, audio_indices: list[int] | None = None) -> ConversionPlan:
     video = _first_stream(probe, "video")
-    audio = _first_stream(probe, "audio")
     if not video:
         raise RuntimeError("No video stream found")
 
@@ -92,7 +91,10 @@ def plan_conversion(probe: dict, audio_indices: list[int] | None = None) -> Conv
     fits = width <= IPAD_MAX_WIDTH
     video_compat = vcodec in _COMPAT_VIDEO and fits
     hevc_tagged = vcodec != "hevc" or video.get("codec_tag_string") == "hvc1"
-    audio_compat = audio is None or audio.get("codec_name") in _COMPAT_AUDIO
+    audio_compat = all(
+        audio_streams[index].get("codec_name") in _COMPAT_AUDIO
+        for index in audio_indices
+    )
 
     if is_mp4 and video_compat and hevc_tagged and audio_compat:
         return ConversionPlan(passthrough=True, audio_maps=audio_indices, audio_langs=audio_langs)
@@ -128,8 +130,10 @@ def plan_conversion(probe: dict, audio_indices: list[int] | None = None) -> Conv
     )
 
 
-def conversion_target(source: Path) -> Path:
+def conversion_target(source: Path, existing_converted_path: str | None = None) -> Path:
     """Sibling mp4 path for a converted file; .ios.mp4 on name collision."""
+    if existing_converted_path:
+        return Path(existing_converted_path)
     target = source.with_suffix(".mp4")
     if target == source or target.exists():
         target = source.with_suffix(".ios.mp4")
@@ -179,7 +183,7 @@ def convert_library_video(video_id: int) -> None:
             )
             return
 
-        target = conversion_target(source)
+        target = conversion_target(source, version.get("converted_path"))
         # Hidden temp file in the same directory: invisible to Plex and our scans,
         # and os.replace stays atomic because it is on the same volume.
         tmp = target.with_name("." + target.name)

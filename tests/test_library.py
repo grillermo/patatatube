@@ -31,6 +31,19 @@ def test_passthrough_compatible_mp4():
     assert plan.passthrough
 
 
+def test_passthrough_transcodes_a_selected_incompatible_audio_stream():
+    plan = library.plan_conversion(probe(
+        container="mov,mp4,m4a,3gp,3g2,mj2", vcodec="h264",
+        audio=[("aac", "eng", ""), ("dts", "spa", "")],
+    ))
+
+    assert not plan.passthrough
+    assert plan.audio_args == [
+        "-c:a:0", "copy",
+        "-c:a:1", "aac", "-b:a:1", "128k", "-ac:a:1", "2",
+    ]
+
+
 def test_passthrough_hevc_requires_hvc1_tag():
     good = probe(container="mov,mp4,m4a,3gp,3g2,mj2", vcodec="hevc", tag="hvc1")
     assert library.plan_conversion(good).passthrough
@@ -232,6 +245,27 @@ def test_convert_runs_ffmpeg_and_records_sibling(fresh_db, tmp_path, monkeypatch
     cmd = calls[0]
     assert "-c:v" in cmd and "copy" in cmd and "+faststart" in cmd
     assert cmd[-1].startswith(str(tmp_path / "."))  # hidden temp file, atomic replace
+
+
+def test_reconversion_replaces_the_tracked_output(fresh_db, tmp_path, monkeypatch):
+    import db
+
+    vid, src = lib_row(tmp_path)
+    monkeypatch.setattr(library, "probe_source", lambda p: probe())
+    output = tmp_path / "ep.mp4"
+    output.write_bytes(b"old")
+    version = db.get_video_versions(vid)[0]
+    db.set_library_state(vid, "done", converted_path=str(output), version_id=version["id"])
+
+    def fake_run(cmd):
+        Path(cmd[-1]).write_bytes(b"replacement")
+
+    monkeypatch.setattr(library, "_run_ffmpeg", fake_run)
+    library.convert_library_video(vid)
+
+    assert output.read_bytes() == b"replacement"
+    assert db.get_video_versions(vid)[0]["converted_path"] == str(output)
+    assert not (tmp_path / "ep.ios.mp4").exists()
 
 
 def test_convert_maps_allowlisted_tracks_and_records_langs(fresh_db, tmp_path, monkeypatch):
