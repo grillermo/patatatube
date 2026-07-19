@@ -275,6 +275,20 @@ struct CacheManagerTests {
         #expect(seenAuth == ["Bearer secret", "Bearer secret"])
     }
 
+    @Test func removeCachedDeletesOnlyRequestedVersion() throws {
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let base = manager.localURL(for: 7)
+        let version = manager.localURL(for: 7, versionId: 2)
+        try Data([0x01]).write(to: base)
+        try Data([0x02]).write(to: version)
+
+        manager.removeCached(id: 7, versionId: 2)
+
+        #expect(FileManager.default.fileExists(atPath: base.path))
+        #expect(!FileManager.default.fileExists(atPath: version.path))
+    }
+
     @Test func showPosterStoreAndLookup() throws {
         let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
         let key = "/library/shows/bluey/poster.png"

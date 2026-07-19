@@ -22,6 +22,7 @@ public protocol VideoAPI: Sendable {
     func move(id: Int, direction: String) async throws -> Bool
     func classify(id: Int, classification: String) async throws -> Bool
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool
+    func chooseAudio(id: Int, lang: String) async throws -> Bool
     func upload(url: String) async throws -> Int
     func delete(id: Int) async throws -> Bool
     func scanLibrary() async throws -> ScanResult
@@ -94,6 +95,10 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
 
     public func chooseVersion(id: Int, versionId: Int) async throws -> Bool {
         try await postOK("api/videos/\(id)/version", body: ["version_id": versionId])
+    }
+
+    public func chooseAudio(id: Int, lang: String) async throws -> Bool {
+        try await postOK("api/videos/\(id)/audio", body: ["lang": lang])
     }
 
     public func delete(id: Int) async throws -> Bool {

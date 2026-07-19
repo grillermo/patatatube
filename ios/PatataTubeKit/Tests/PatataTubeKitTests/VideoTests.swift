@@ -74,3 +74,24 @@ private let sampleJSON = """
     #expect(video.source == nil)
     #expect(video.isLibrary == false)
 }
+
+@Test func decodesAudioMetadataAndDefaultsLegacyVersions() throws {
+    let json = """
+    {"id": 1, "url": "u", "title": null, "platform": null,
+     "source_key": null, "preview_url": null, "classification": "children",
+     "position": 1, "status": "done", "error_msg": null,
+     "stream_path": "/videos/1/stream", "audio_lang": "es",
+     "versions": [{"id": 2, "label": "HD", "status": "done", "is_chosen": true},
+                  {"id": 3, "label": null, "status": "done", "is_chosen": false,
+                   "audio_tracks": [{"lang": "en", "title": "English", "available": true}]}]}
+    """.data(using: .utf8)!
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+    let video = try decoder.decode(Video.self, from: json)
+
+    #expect(video.audioLang == "es")
+    #expect(video.versions[0].audioTracks.isEmpty)
+    #expect(video.versions[1].audioTracks == [AudioTrack(lang: "en", title: "English", available: true)])
+    #expect(video.withAudioLang("fr").audioLang == "fr")
+}

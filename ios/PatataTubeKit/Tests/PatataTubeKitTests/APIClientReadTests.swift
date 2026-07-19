@@ -125,6 +125,16 @@ struct APIClientTests {
             #expect(ok == false)
         }
 
+        @Test func chooseAudioSendsLanguage() async throws {
+            MockURLProtocol.handler = { req in
+                #expect(req.url?.path == "/api/videos/3/audio")
+                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: String]
+                #expect(json["lang"] == "es")
+                return (jsonResponse(req.url!), #"{"ok":true}"#.data(using: .utf8)!)
+            }
+            #expect(try await makeClient().chooseAudio(id: 3, lang: "es"))
+        }
+
         @Test func uploadReturnsNewId() async throws {
             MockURLProtocol.handler = { req in
                 #expect(req.url?.path == "/upload")
