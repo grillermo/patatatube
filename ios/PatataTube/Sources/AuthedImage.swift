@@ -9,6 +9,9 @@ struct AuthedImage: View {
     var localFileURL: URL? = nil
     /// true → scaledToFill (crop to cover); false → scaledToFit (letterbox).
     var fill: Bool = true
+    /// Called with the raw bytes when the image was fetched from the network
+    /// (never for local-file loads). Lets callers persist it to a cache.
+    var onNetworkLoad: ((Data) -> Void)? = nil
     @EnvironmentObject var model: AppModel
     @State private var image: UIImage?
 
@@ -32,6 +35,7 @@ struct AuthedImage: View {
         guard let path else { return }
         if let data = try? await model.api.imageData(path: path) {
             image = UIImage(data: data)
+            onNetworkLoad?(data)
         }
     }
 }
