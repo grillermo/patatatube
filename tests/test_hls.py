@@ -3,6 +3,8 @@
 from pathlib import Path
 
 import hls
+import pytest
+import library
 from subtitles import SubtitleTrack
 
 
@@ -126,3 +128,72 @@ def test_subtitle_media_playlist_is_vod(tmp_path):
     assert "#EXT-X-ENDLIST" in playlist
     vtt = (pkg.out_dir / "subtitles" / "en.vtt").read_text(encoding="utf-8")
     assert vtt.startswith("WEBVTT")
+
+
+def test_build_command_maps_selected_audio(tmp_path):
+    plan = library.ConversionPlan(
+        passthrough=False,
+        video_args=["-c:v", "copy", "-tag:v", "avc1"],
+        audio_args=["-c:a:0", "copy"],
+        audio_maps=[2],
+        audio_langs=["spa"],
+    )
+    cmd = hls.build_ffmpeg_command(Path("in.mp4"), tmp_path, plan)
+    assert ["-map", "0:v:0", "-map", "0:a:2"] == cmd[cmd.index("-map"):cmd.index("-map") + 4]
+
+
+def test_build_command_no_audio(tmp_path):
+    plan = library.ConversionPlan(
+        passthrough=False,
+        video_args=["-c:v", "copy"],
+        audio_args=["-an"],
+        audio_maps=[],
+        audio_langs=[],
+    )
+    cmd = hls.build_ffmpeg_command(Path("in.mp4"), tmp_path, plan)
+    assert "0:a:0?" not in cmd and cmd.count("-map") == 1
+
+
+def test_build_package_selects_audio_lang(tmp_path):
+    probe = {
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920},
+            {"codec_type": "audio", "codec_name": "eac3", "tags": {"language": "cat"}},
+            {"codec_type": "audio", "codec_name": "eac3", "tags": {"language": "spa"}},
+        ],
+        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2", "duration": "10"},
+    }
+    commands = []
+    hls.build_hls_package(
+        1,
+        tmp_path / "in.mp4",
+        output_root=tmp_path / "out",
+        probe=probe,
+        subtitles=[],
+        run_ffmpeg=commands.append,
+        audio_lang="spa",
+    )
+    assert "0:a:1" in commands[0]
+
+
+@pytest.fixture()
+def fresh_db(monkeypatch, tmp_path):
+    import importlib
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
+    import db
+    importlib.reload(db)
+    db.init_db()
+    yield
+
+
+def test_invalidate_removes_dir_and_resets_status(fresh_db, tmp_path, monkeypatch):
+    import db
+    vid = db.add_video("http://x")
+    db.set_hls_status(vid, "done")
+    monkeypatch.setattr(hls, "HLS_DIR", tmp_path)
+    directory = tmp_path / str(vid)
+    directory.mkdir()
+    (directory / "master.m3u8").write_text("x")
+    hls.invalidate(vid)
+    assert not directory.exists()
+    assert db.get_video(vid)["hls_status"] == "none"

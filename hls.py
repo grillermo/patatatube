@@ -10,13 +10,14 @@ All output for a video is constrained under ``HLS_DIR / str(video_id)``.
 
 import math
 import os
+import shutil
 import subprocess
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import db
-from library import plan_conversion, probe_source
+from library import audio_track_list, plan_conversion, probe_source, select_audio_indices
 from subtitles import (
     SubtitleTrack,
     UnsupportedSubtitleError,
@@ -41,6 +42,12 @@ class HlsPackage:
 
 def hls_dir_for(video_id, output_root: Path | None = None) -> Path:
     return (output_root or HLS_DIR) / str(video_id)
+
+
+def invalidate(video_id) -> None:
+    """Drop stale HLS output so the next play repackages the current choice."""
+    shutil.rmtree(hls_dir_for(video_id), ignore_errors=True)
+    db.set_hls_status(video_id, "none")
 
 
 def _first_stream(probe: dict, kind: str) -> dict | None:
@@ -91,15 +98,19 @@ def build_ffmpeg_command(source: Path, out_dir: Path, plan) -> list[str]:
 
     Passthrough sources use a global ``-c copy``; otherwise the per-stream
     args from ``plan_conversion`` (which transcode only incompatible streams).
+    Audio maps come from the plan, which limits HLS output to one track.
     """
     if plan.passthrough:
         codec_args = ["-c", "copy"]
     else:
         codec_args = [*plan.video_args, *plan.audio_args]
+    map_args = ["-map", "0:v:0"]
+    for index in plan.audio_maps:
+        map_args += ["-map", f"0:a:{index}"]
     return [
         FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(source),
-        "-map", "0:v:0", "-map", "0:a:0?",
+        *map_args,
         *codec_args,
         "-f", "hls",
         "-hls_playlist_type", "vod",
@@ -193,6 +204,7 @@ def build_hls_package(
     probe: dict | None = None,
     subtitles: list[SubtitleTrack] | None = None,
     run_ffmpeg=_run_ffmpeg,
+    audio_lang: str | None = None,
 ) -> HlsPackage:
     """Probe, segment, normalize subtitles, and write the multivariant playlist."""
     source = Path(source_path)
@@ -200,7 +212,14 @@ def build_hls_package(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     probe = probe if probe is not None else probe_source(source)
-    plan = plan_conversion(probe)
+    tracks = audio_track_list(probe)
+    audio_indices: list[int] | None = None
+    if audio_lang:
+        match = next((index for index, track in enumerate(tracks) if track["lang"] == audio_lang), None)
+        audio_indices = [match] if match is not None else None
+    if audio_indices is None:
+        audio_indices = select_audio_indices(probe, [])
+    plan = plan_conversion(probe, audio_indices=audio_indices)
     run_ffmpeg(build_ffmpeg_command(source, out_dir, plan))
 
     discovered = subtitles if subtitles is not None else discover_subtitles(source)
@@ -253,7 +272,9 @@ def prepare(video_id: int, source_path) -> None:
     the library-convert path which never leaves a row wedged in 'converting'.
     """
     try:
-        build_hls_package(video_id, source_path)
+        video = db.get_video(video_id)
+        audio_lang = video.get("audio_lang") if video else None
+        build_hls_package(video_id, source_path, audio_lang=audio_lang)
         db.set_hls_status(video_id, "done")
     except Exception:  # noqa: BLE001 - background task, must not raise
         traceback.print_exc()
