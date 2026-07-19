@@ -115,6 +115,13 @@ On first launch grid is empty / errors — need server config:
 - [ ] Downloading an unprepared episode prepares first, then caches; airplane mode playback works from cache.
 - [ ] Delete on a library video removes it from the list; the original file on /Volumes/Media is untouched; a later refresh does not resurrect it.
 - [ ] A conversion failure (e.g. unplug the Media volume mid-convert) shows an error and the episode can be retried.
+- [ ] Movies tab shows portrait 2:3 poster cards (no letterbox bars); other tabs unchanged.
+- [ ] "all" tab still shows movies as 16:9 letterboxed VideoCells.
+- [ ] Tap a movie card poster → detail page with poster, title, summary.
+- [ ] Play from the detail page works for an unconverted library movie (Preparing… overlay appears over the pushed page).
+- [ ] Download from the detail page and from the movie card both show the progress ring and end in a green checkmark; cancel mid-download resets to the arrow.
+- [ ] Version picker on the movie card and detail page switches versions; download state resets accordingly.
+- [ ] Movie card ellipsis menu still offers Info / Move / classify / Delete.
 
 ### Background audio
 - [ ] Play a video, lock the phone → audio continues; lock screen shows title, artwork, and controls
