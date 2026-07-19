@@ -1,7 +1,9 @@
 # tests/test_api.py
-import pytest
 import importlib
+import json
 from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -726,6 +728,86 @@ def make_library_row(tmp_path, name="ep.mkv"):
     src.write_bytes(b"fake")
     vid, _ = db.upsert_library_video({**LIB_ITEM_API, "source_path": str(src)})
     return vid, src
+
+
+def _seed_multi_audio_movie(tmp_path, converted_langs='["eng", "spa"]', status="done"):
+    import db
+
+    src = tmp_path / "m.mkv"
+    src.write_bytes(b"x")
+    vid, _ = db.upsert_library_video({
+        "source_path": str(src), "title": "M", "classification": "movies",
+        "show_title": None, "season": None, "episode": None, "summary": None,
+        "plex_rating_key": "m1", "show_rating_key": None,
+    })
+    version = db.get_video_versions(vid)[0]
+    db.set_version_audio_langs(version["id"], json.dumps([
+        {"lang": "cat", "title": ""}, {"lang": "eng", "title": ""},
+        {"lang": "spa", "title": ""},
+    ]))
+    db.set_library_state(
+        vid, status, converted_path=str(tmp_path / "m.mp4"),
+        converted_langs=converted_langs, version_id=version["id"],
+    )
+    return vid, version["id"]
+
+
+def test_choose_audio_requires_token(client, tmp_path):
+    vid, _ = _seed_multi_audio_movie(tmp_path)
+
+    resp = client.post(f"/api/videos/{vid}/audio", json={"lang": "spa"})
+
+    assert resp.status_code in (401, 403)
+
+
+def test_choose_audio_sets_lang(client, tmp_path):
+    import db
+
+    vid, _ = _seed_multi_audio_movie(tmp_path)
+    resp = client.post(f"/api/videos/{vid}/audio", json={"lang": "spa"}, headers=AUTH)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    assert db.get_video(vid)["audio_lang"] == "spa"
+    assert db.get_video(vid)["status"] == "done"
+
+
+def test_choose_audio_rejects_unknown_lang(client, tmp_path):
+    vid, _ = _seed_multi_audio_movie(tmp_path)
+
+    assert client.post(
+        f"/api/videos/{vid}/audio", json={"lang": "jpn"}, headers=AUTH
+    ).status_code == 400
+    assert client.post(
+        f"/api/videos/{vid}/audio", json={"lang": "cat"}, headers=AUTH
+    ).status_code == 400
+
+
+def test_choose_audio_triggers_reconvert_when_missing(client, tmp_path, monkeypatch):
+    import db
+    import library
+
+    vid, _ = _seed_multi_audio_movie(tmp_path, converted_langs='["cat"]')
+    converted = []
+    monkeypatch.setattr(library, "convert_library_video", converted.append)
+
+    resp = client.post(f"/api/videos/{vid}/audio", json={"lang": "spa"}, headers=AUTH)
+
+    assert resp.status_code == 200
+    assert db.get_video(vid)["status"] == "converting"
+    assert converted == [vid]
+
+
+def test_choose_audio_legacy_null_converted_langs_reconverts(client, tmp_path, monkeypatch):
+    import db
+    import library
+
+    vid, _ = _seed_multi_audio_movie(tmp_path, converted_langs=None)
+    monkeypatch.setattr(library, "convert_library_video", lambda video_id: None)
+
+    client.post(f"/api/videos/{vid}/audio", json={"lang": "spa"}, headers=AUTH)
+
+    assert db.get_video(vid)["status"] == "converting"
 
 
 def test_scan_requires_token(client):

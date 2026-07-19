@@ -105,6 +105,10 @@ class VersionRequest(BaseModel):
     version_id: int
 
 
+class AudioRequest(BaseModel):
+    lang: str
+
+
 class PrepareRequest(BaseModel):
     audio_lang: str | None = None
 
@@ -636,6 +640,42 @@ async def api_choose_video_version(video_id: int, body: VersionRequest, request:
     _check_token(request)
     ok = services.choose_version(video_id, body.version_id)
     return {"ok": ok}
+
+
+@router.post("/api/videos/{video_id}/audio")
+async def api_choose_audio(
+    video_id: int, body: AudioRequest, request: Request, background_tasks: BackgroundTasks
+):
+    _check_token(request)
+    video = db.get_video(video_id)
+    if not video or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.get("source") != "library":
+        raise HTTPException(status_code=400, detail="Only library videos have audio tracks")
+    version = db.get_video_version(video_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    try:
+        source_langs = {track["lang"] for track in json.loads(version.get("audio_langs") or "[]")}
+    except (TypeError, ValueError):
+        source_langs = set()
+    if body.lang not in library.allowed_audio_langs() or body.lang not in source_langs:
+        raise HTTPException(status_code=400, detail="Language not available")
+
+    db.set_audio_lang(video_id, body.lang)
+    hls.invalidate(video_id)
+
+    converted = None
+    if version.get("converted_langs"):
+        try:
+            converted = json.loads(version["converted_langs"])
+        except (TypeError, ValueError):
+            converted = None
+    if version["status"] == "done" and (converted is None or body.lang not in converted):
+        db.set_library_state(video_id, "converting", version_id=version["id"])
+        background_tasks.add_task(library.convert_library_video, video_id)
+    return {"ok": True}
 
 
 @router.post("/api/video/{video_id}/delete")

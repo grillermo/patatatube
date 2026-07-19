@@ -25,3 +25,31 @@ Verification (required interpreter):
 /Users/grillermo/c/patatatube/python_env/bin/python -m pytest tests/
 # 234 passed
 ```
+
+## Correction: dedicated audio-selection endpoint
+
+Review found that Task 7's `/prepare` enhancement did not implement the
+separately required `POST /api/videos/{id}/audio` endpoint. Added
+`AudioRequest` and the dedicated token-gated route. It validates the selected
+language against both the chosen version's source tracks and the configured
+allowlist, stores the selection, invalidates HLS, and requeues completed
+conversions when the selected language is absent or their `converted_langs`
+metadata is legacy `NULL`.
+
+TDD: five endpoint tests were added first and failed with 404 while the route
+was absent. They now cover authentication, persistence without needless
+reconversion, invalid language rejection, missing-track reconversion, and
+legacy `NULL` metadata reconversion.
+
+Verification (required interpreter):
+
+```
+/Users/grillermo/c/patatatube/python_env/bin/python -m pytest tests/test_api.py -k choose_audio -v
+# 5 passed, 90 deselected
+
+/Users/grillermo/c/patatatube/python_env/bin/python -m pytest tests/test_api.py -v
+# 95 passed
+
+/Users/grillermo/c/patatatube/python_env/bin/python -m pytest tests/
+# 239 passed
+```
