@@ -28,13 +28,22 @@ struct AuthedImage: View {
     }
 
     private func loadImage() async {
+        // .task(id:) re-fires every time a lazy container brings the cell back
+        // on screen; without these guards each scroll re-hits the server.
+        if image != nil { return }
+        if let path, let cached = ImageMemoryCache.shared.data(for: path) {
+            image = UIImage(data: cached)
+            return
+        }
         if let localFileURL, let data = try? Data(contentsOf: localFileURL) {
             image = UIImage(data: data)
+            if let path { ImageMemoryCache.shared.store(data, for: path) }
             return
         }
         guard let path else { return }
         if let data = try? await model.api.imageData(path: path) {
             image = UIImage(data: data)
+            ImageMemoryCache.shared.store(data, for: path)
             onNetworkLoad?(data)
         }
     }
