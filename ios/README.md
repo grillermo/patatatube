@@ -133,6 +133,18 @@ On first launch grid is empty / errors — need server config:
 - [ ] Pull-down-to-dismiss still works; AVKit tap/scrub controls still work
 - [ ] AirPlay still works (full video on the external screen)
 
+### Lock-screen next/previous + auto-advance
+
+1. Play a video from the grid, lock the phone → lock-screen **next** starts the
+   next video's audio; the title updates on the lock screen.
+2. Lock-screen **previous** within the first 3 s → prior video; after 3 s →
+   restarts the current one. On the first video it restarts.
+3. On the last video, **next** stops playback (button greyed out).
+4. Locked: a video ending auto-advances to the next one.
+5. Foreground: a video ending dismisses the player (unchanged behavior).
+6. With a classification tab or search active, the queue respects that filter.
+7. Unplayable rows (unconverted library items) are skipped when advancing.
+
 ## Notes
 
 - No unit/UI test target yet — this is the only verification path.
