@@ -110,6 +110,8 @@ final class NowPlayingManager {
         let duration = item.duration.seconds
         if duration.isFinite {
             info[MPMediaItemPropertyPlaybackDuration] = duration
+        } else {
+            info[MPMediaItemPropertyPlaybackDuration] = nil
         }
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentTime().seconds
         info[MPNowPlayingInfoPropertyPlaybackRate] = player.rate

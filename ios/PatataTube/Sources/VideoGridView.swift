@@ -57,7 +57,9 @@ struct VideoGridView: View {
                 filterTabs
                 if store.filter == "tv" {
                     ShowsView(videos: filteredVideos,
-                              onPlay: { play($0) },
+                              onPlay: { video, queue in
+                                  play(video, queueSnapshot: queue)
+                              },
                               onDownload: { v in Task { await download(v) } })
                 } else if store.filter == "movies" {
                     LazyVGrid(columns: columns, spacing: 16) {
@@ -220,7 +222,10 @@ struct VideoGridView: View {
 
     private func play(_ video: Video) {
         let queueSnapshot = filteredVideos
+        play(video, queueSnapshot: queueSnapshot)
+    }
 
+    private func play(_ video: Video, queueSnapshot: [Video]) {
         // Already downloaded to device: play the local file directly, no network.
         // ensureReady() would hit /prepare and fail offline (-1009) even though
         // the cached MP4 is ready to play. VideoPlayerView plays from cache too.

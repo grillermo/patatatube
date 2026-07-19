@@ -5,7 +5,7 @@ import PatataTubeKit
 /// Grid of TV shows; tap navigates to that show's episodes.
 struct ShowsView: View {
     let videos: [Video]
-    let onPlay: (Video) -> Void
+    let onPlay: (Video, [Video]) -> Void
     let onDownload: (Video) -> Void
     @EnvironmentObject var model: AppModel
 
