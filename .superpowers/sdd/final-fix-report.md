@@ -46,3 +46,23 @@ collection. Installing the complete requirements file could not build the
 unrelated `watchfiles==0.24.0` on Python 3.14 because its PyO3 dependency only
 supports Python through 3.13; the test suite does not require `watchfiles` and
 passed after the two required packages were installed.
+
+4. **P1: HLS package stays stale after version selection**
+   - `services.choose_version` now invalidates the video's HLS package after a
+     successful database selection. Both the SSR and JSON version-selection
+     endpoints already use this service, while `db.py` remains independent of
+     HLS storage.
+   - Regression: `test_choose_version_invalidates_existing_hls_package` proves
+     a successful alternate-version selection invalidates that video's package.
+
+## Final P1 TDD evidence
+
+The new service regression was added before the implementation and failed as
+expected: the selected version changed but the invalidation spy was empty.
+After the minimal service-layer change it passed.
+
+## Final P1 verification
+
+- Focused regression: `python -m pytest tests/test_services.py -q` — **5 passed**.
+- Full backend suite: `python -m pytest tests/ -q` — **243 passed**.
+- `git diff --check` — clean.
