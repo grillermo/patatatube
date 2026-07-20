@@ -56,11 +56,13 @@ struct VideoGridView: View {
             ScrollView {
                 filterTabs
                 if store.filter == "tv" {
-                    ShowsView(videos: filteredVideos,
-                              onPlay: { video, queue in
-                                  play(video, queueSnapshot: queue)
-                              },
-                              onDownload: { v in Task { await download(v) } })
+                    ShowsView(
+                        videos: filteredVideos,
+                        onPlay: { video, queue in
+                            play(video, queueSnapshot: queue)
+                        },
+                        onDownload: { await download($0) }
+                    )
                 } else if store.filter == "movies" {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(filteredVideos) { video in

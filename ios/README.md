@@ -112,15 +112,29 @@ On first launch grid is empty / errors — need server config:
 - [ ] "tv" tab shows one card per show with poster + episode count; tapping opens seasons → episodes with thumbs and summaries.
 - [ ] Playing an unprepared mkv episode (from the pushed episode list) shows "Preparing…" over the episode list and blocks further taps (e.g. double-tapping Play does not fire a second prepare), then plays (remux takes seconds).
 - [ ] Playing an already-compatible mp4 movie starts without any conversion wait.
-- [ ] Downloading an unprepared episode prepares first, then caches; airplane mode playback works from cache.
+- [ ] Download an unprepared episode: Preparing… appears, then the episode row
+      shows the same 44×44 progress ring and green checkmark as a VideoCell and
+      MovieDetailView; airplane-mode playback works from cache.
 - [ ] Delete on a library video removes it from the list; the original file on /Volumes/Media is untouched; a later refresh does not resurrect it.
 - [ ] A conversion failure (e.g. unplug the Media volume mid-convert) shows an error and the episode can be retried.
 - [ ] Movies tab shows portrait 2:3 poster cards (no letterbox bars); other tabs unchanged.
 - [ ] "all" tab still shows movies as 16:9 letterboxed VideoCells.
 - [ ] Tap a movie card poster → detail page with poster, title, summary.
 - [ ] Play from the detail page works for an unconverted library movie (Preparing… overlay appears over the pushed page).
-- [ ] Download from the detail page and from the movie card both show the progress ring and end in a green checkmark; cancel mid-download resets to the arrow.
-- [ ] Version picker on the movie card and detail page switches versions; download state resets accordingly.
+- [ ] Start one download from each surface (VideoCell, MovieDetailView, and an
+      episode row): every visible matching control tracks live progress and
+      finishes as a green checkmark.
+- [ ] Tap each active progress ring: only the matching download is cancelled,
+      its control immediately returns to the arrow, and no playback begins.
+- [ ] After a network interruption, restore connectivity and tap Download:
+      progress resumes through CacheManager rather than restarting.
+- [ ] Cancel and immediately retry the same item: the new attempt continues to
+      show progress and an old cancellation completion never resets it.
+- [ ] Switch version or audio language during an attempt: the control resets to
+      the newly selected identity; switching back rediscovers the old identity's
+      live or completed cache state.
+- [ ] Delete a cached movie from MovieDetailView: the green checkmark changes to
+      the download arrow immediately, without waiting for a poll.
 - [ ] Movie card ellipsis menu still offers Info / Move / classify / Delete.
 
 ### Audio language selector (library movies)
@@ -161,5 +175,8 @@ On first launch grid is empty / errors — need server config:
 
 ## Notes
 
-- No unit/UI test target yet — this is the only verification path.
+- `PatataTubeTests` covers the shared download button's state, rendering,
+  interaction, polling, and task cancellation. Run it from `ios/PatataTube`
+  with `xcodebuild test -project PatataTube.xcodeproj -scheme PatataTube
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.3.1'`.
 - `PatataTubeKit` (Sources/PatataTubeKit) is a local SwiftPM package with the networking/cache/model logic — build it standalone with `swift build` inside `ios/PatataTubeKit` if isolating a bug there.

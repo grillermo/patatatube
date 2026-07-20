@@ -6,7 +6,7 @@ import PatataTubeKit
 struct EpisodesView: View {
     let show: ShowGroup
     let onPlay: (Video, [Video]) -> Void
-    let onDownload: (Video) -> Void
+    let onDownload: (Video) async -> Bool
     @EnvironmentObject var model: AppModel
 
     var body: some View {
@@ -24,31 +24,56 @@ struct EpisodesView: View {
 
     private func row(for episode: Video) -> some View {
         HStack(spacing: 12) {
-            AuthedImage(path: episode.previewUrl,
-                        localFileURL: model.cache.cachedPreviewURL(for: episode.id))
-                .frame(width: 120, height: 68)
-                .background(.secondary.opacity(0.2))
-                .cornerRadius(6)
-                .clipped()
-            VStack(alignment: .leading, spacing: 4) {
-                Text("E\(episode.episode ?? 0) — \(episode.title ?? "Untitled")")
-                    .font(.subheadline)
-                if let summary = episode.summary {
-                    Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            Button {
+                onPlay(episode, show.episodes)
+            } label: {
+                HStack(spacing: 12) {
+                    AuthedImage(
+                        path: episode.previewUrl,
+                        localFileURL: model.cache.cachedPreviewURL(for: episode.id)
+                    )
+                    .frame(width: 120, height: 68)
+                    .background(.secondary.opacity(0.2))
+                    .cornerRadius(6)
+                    .clipped()
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("E\(episode.episode ?? 0) — \(episode.title ?? "Untitled")")
+                            .font(.subheadline)
+                        if let summary = episode.summary {
+                            Text(summary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                    Spacer()
                 }
+                .contentShape(Rectangle())
             }
-            Spacer()
-            switch model.cache.state(for: episode.id, versionId: episode.chosenVersionId) {
-            case .cached:
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            case .downloading(let p):
-                ProgressView(value: p)
-            case .notCached:
-                Button { onDownload(episode) } label: { Image(systemName: "arrow.down.circle") }
-                    .buttonStyle(.plain)
-            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Play episode")
+
+            DownloadButton(
+                identity: DownloadButtonIdentity(
+                    videoID: episode.id,
+                    versionID: episode.chosenVersionId,
+                    audioLanguage: episode.audioLang
+                ),
+                currentCacheState: {
+                    model.cache.state(
+                        for: episode.id,
+                        versionId: episode.chosenVersionId
+                    )
+                },
+                onDownload: { await onDownload(episode) },
+                onCancel: {
+                    model.cache.cancel(
+                        id: episode.id,
+                        versionId: episode.chosenVersionId
+                    )
+                }
+            )
         }
-        .contentShape(Rectangle())
-        .onTapGesture { onPlay(episode, show.episodes) }
     }
 }
