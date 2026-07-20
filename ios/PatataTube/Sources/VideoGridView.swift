@@ -16,6 +16,7 @@ struct VideoGridView: View {
     @State private var playing: PlaybackQueue?
     @State private var preparing = false
     @State private var downloadingAll = false
+    @State private var errorBannerOffset: CGFloat = 0
 
     // Search: text updates immediately for the field, but filtering only
     // applies 0.5s after the user stops typing (debounce), to avoid
@@ -29,6 +30,14 @@ struct VideoGridView: View {
     private let minCellSize: Double = 120
     private let maxCellSize: Double = 420
     private let cellSizeStep: Double = 50
+
+    static func shouldDismissErrorBanner(translation: CGSize) -> Bool {
+        abs(translation.width) >= 100 && abs(translation.width) > abs(translation.height)
+    }
+
+    static func shouldClearErrorBanner(currentText: String?, displayedText: String) -> Bool {
+        currentText == displayedText
+    }
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: cellSize), spacing: 16)]
@@ -316,8 +325,29 @@ struct VideoGridView: View {
     private func errorBanner(_ text: String) -> some View {
         VStack {
             Spacer()
-            Text(text).font(.caption).padding()
-                .background(.red.opacity(0.85)).foregroundStyle(.white).cornerRadius(8)
+            Text(text)
+                .font(.caption)
+                .padding()
+                .background(.red.opacity(0.85))
+                .foregroundStyle(.white)
+                .cornerRadius(8)
+                .offset(x: errorBannerOffset)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 20)
+                        .onChanged { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            errorBannerOffset = value.translation.width
+                        }
+                        .onEnded { value in
+                            if Self.shouldDismissErrorBanner(translation: value.translation),
+                               Self.shouldClearErrorBanner(currentText: store.errorText, displayedText: text) {
+                                store.errorText = nil
+                            }
+                            withAnimation(.spring()) {
+                                errorBannerOffset = 0
+                            }
+                        }
+                )
                 .padding()
         }
     }
