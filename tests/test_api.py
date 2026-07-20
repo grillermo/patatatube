@@ -470,18 +470,6 @@ def test_root_page_returns_html(client):
     assert "text/html" in resp.headers["content-type"]
 
 
-def test_videos_page_omits_manual_reorder_controls(client):
-    import db
-
-    video_id = db.add_video("https://twitter.com/x/status/1")
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    assert f'action="/videos/{video_id}/move"' not in resp.text
-    assert 'aria-label="Move up"' not in resp.text
-    assert 'aria-label="Move down"' not in resp.text
-
-
 def test_move_endpoints_removed(client):
     import db
 

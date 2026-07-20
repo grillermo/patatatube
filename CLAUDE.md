@@ -42,7 +42,7 @@ See `ios/README.md` for the full manual test checklist (no automated iOS test ta
 ### Layering — the SSR page and the JSON API share logic, don't duplicate it
 
 - `db.py` — the only SQLite layer. Single `videos` table. `init_db()` is an **idempotent migration runner**: it does `CREATE TABLE IF NOT EXISTS`, then additive `ALTER TABLE` guards for each newer column, then backfills (`_backfill_positions`, `_backfill_youtube_preview_urls`) and cleanup. Schema changes go here as new idempotent guards, not a migrations framework.
-- `services.py` — mutation logic (`apply_move`, `apply_classification`) called by **both** the HTML form endpoints and the JSON API endpoints in `main.py`. Put shared write logic here.
+- `services.py` — mutation logic (`apply_classification`) called by **both** the HTML form endpoints and the JSON API endpoints in `main.py`. Put shared write logic here.
 - `views/serializers.py` — `serialize_video` is the canonical video-to-dict presenter for the JSON API. Keep the API shape here.
 - `views/render.py` + `views/templates/*.html` — the server-rendered HTML page + PWA splash images.
 
@@ -55,7 +55,7 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
 ### iOS
 
 - `ios/PatataTubeKit/` — a local SwiftPM package holding all logic (`APIClient`, `CacheManager`, `VideoStore`, `Video`, `CredentialStore`). This is the testable core; build/isolate bugs here with `swift build`.
-- `ios/PatataTube/` — the SwiftUI app shell (`Sources/*.swift`), an XcodeGen target. `Video` decodes the server's snake_case JSON; `CacheManager` downloads MP4s for offline playback; `VideoStore` does optimistic classify/move/upload against `APIClient`.
+- `ios/PatataTube/` — the SwiftUI app shell (`Sources/*.swift`), an XcodeGen target. `Video` decodes the server's snake_case JSON; `CacheManager` downloads MP4s for offline playback; `VideoStore` does optimistic classify/upload against `APIClient`.
 
 ### Plex library (library rows)
 
