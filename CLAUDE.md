@@ -50,7 +50,7 @@ See `ios/README.md` for the full manual test checklist (no automated iOS test ta
 
 ### Auth
 
-Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` compared with `secrets.compare_digest`. If `UPLOAD_TOKEN` is unset the server returns 503 (upload disabled). The SSR form endpoints (`/videos/{id}/move`, `/videos/{id}/classify`) are **not** token-gated; the `/api/*` equivalents are.
+Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` compared with `secrets.compare_digest`. If `UPLOAD_TOKEN` is unset the server returns 503 (upload disabled). The SSR form endpoint (`/videos/{id}/classify`) is **not** token-gated; the `/api/*` equivalent is.
 
 ### iOS
 

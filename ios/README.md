@@ -95,7 +95,6 @@ On first launch grid is empty / errors — need server config:
 - **Grid loads**: after saving settings, pull-to-refresh or relaunch → videos populate grid
 - **Filter tabs**: horizontal scroll tabs (all / children / adults / education / entertainment) — tap one, grid reloads filtered
 - **Play video**: tap a cell → fullscreen player opens, autoplays, closes automatically on end-of-video; X button also dismisses
-- **Reorder**: use up/down controls on cell → move video, confirm grid order updates
 - **Classify**: use classify control on cell → pick new classification, confirm video moves/reflects under new filter tab
 - **Download/cache**: tap download on a cell → check cache state changes (icon/indicator); play same video again → should stream from local cache (test by killing network access to server and replaying)
 - **Resume download**: start downloading a large video, kill network access before it finishes, restore network, then tap download again → progress should resume instead of restarting from 0%
