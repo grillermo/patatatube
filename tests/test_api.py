@@ -269,6 +269,75 @@ def test_stream_clamps_range_end(client):
         fake_video.unlink(missing_ok=True)
 
 
+def test_stream_sends_resume_validators(client):
+    import db
+    from pathlib import Path
+
+    fake_video = Path("videos") / "1.mp4"
+    fake_video.parent.mkdir(exist_ok=True)
+    fake_video.write_bytes(b"0123456789")
+    try:
+        vid_id = db.add_video("https://twitter.com/x/status/1")
+        db.update_video(vid_id, status="done", filename="1.mp4")
+
+        full = client.get(f"/videos/{vid_id}/stream", headers=AUTH)
+        assert full.status_code == 200
+        assert "etag" in full.headers
+        assert "last-modified" in full.headers
+        # Strong ETag: URLSession refuses to resume against weak validators.
+        assert not full.headers["etag"].startswith("W/")
+
+        partial = client.get(f"/videos/{vid_id}/stream", headers={**AUTH, "Range": "bytes=4-7"})
+        assert partial.status_code == 206
+        assert partial.headers["etag"] == full.headers["etag"]
+        assert partial.headers["last-modified"] == full.headers["last-modified"]
+    finally:
+        fake_video.unlink(missing_ok=True)
+
+
+def test_stream_if_range_matching_returns_partial(client):
+    import db
+    from pathlib import Path
+
+    fake_video = Path("videos") / "1.mp4"
+    fake_video.parent.mkdir(exist_ok=True)
+    fake_video.write_bytes(b"0123456789")
+    try:
+        vid_id = db.add_video("https://twitter.com/x/status/1")
+        db.update_video(vid_id, status="done", filename="1.mp4")
+
+        etag = client.get(f"/videos/{vid_id}/stream", headers=AUTH).headers["etag"]
+        resp = client.get(
+            f"/videos/{vid_id}/stream",
+            headers={**AUTH, "Range": "bytes=4-7", "If-Range": etag},
+        )
+        assert resp.status_code == 206
+        assert resp.content == b"4567"
+    finally:
+        fake_video.unlink(missing_ok=True)
+
+
+def test_stream_if_range_stale_returns_full_body(client):
+    import db
+    from pathlib import Path
+
+    fake_video = Path("videos") / "1.mp4"
+    fake_video.parent.mkdir(exist_ok=True)
+    fake_video.write_bytes(b"0123456789")
+    try:
+        vid_id = db.add_video("https://twitter.com/x/status/1")
+        db.update_video(vid_id, status="done", filename="1.mp4")
+
+        resp = client.get(
+            f"/videos/{vid_id}/stream",
+            headers={**AUTH, "Range": "bytes=4-7", "If-Range": '"stale-validator"'},
+        )
+        assert resp.status_code == 200
+        assert resp.content == b"0123456789"
+    finally:
+        fake_video.unlink(missing_ok=True)
+
+
 def test_stream_rejects_unsatisfiable_range(client):
     import db
     from pathlib import Path

@@ -8,6 +8,8 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from email.utils import formatdate
+
 import anyio
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -282,6 +284,21 @@ def _static_asset_response(cache_key: str) -> Response:
     )
 
 
+def _stream_validators(stat: os.stat_result) -> tuple[str, str]:
+    """Strong ETag + Last-Modified for a video file. URLSession only emits
+    resume data when the initial response carried one of these validators,
+    so without them an interrupted iOS download always restarts from zero."""
+    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+    last_modified = formatdate(stat.st_mtime, usegmt=True)
+    return etag, last_modified
+
+
+def _if_range_matches(if_range: str | None, etag: str, last_modified: str) -> bool:
+    if if_range is None:
+        return True
+    return if_range.strip() in (etag, last_modified)
+
+
 def _range_not_satisfiable(file_size: int) -> HTTPException:
     return HTTPException(
         status_code=416,
@@ -400,10 +417,15 @@ async def stream_video(video_id: int, request: Request):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Video file missing")
 
-    file_size = file_path.stat().st_size
+    stat = file_path.stat()
+    file_size = stat.st_size
+    etag, last_modified = _stream_validators(stat)
     range_header = request.headers.get("Range")
 
-    if range_header:
+    # A stale If-Range validator means the file changed since the client's
+    # partial copy (e.g. re-conversion); serve the full body instead of
+    # letting a resumed download splice bytes from two different files.
+    if range_header and _if_range_matches(request.headers.get("If-Range"), etag, last_modified):
         start, end = _parse_byte_range(range_header, file_size)
         chunk_size = end - start + 1
         is_last = end == file_size - 1
@@ -422,6 +444,8 @@ async def stream_video(video_id: int, request: Request):
                 "Accept-Ranges": "bytes",
                 "Content-Length": str(chunk_size),
                 "Cache-Control": VIDEO_CACHE_CONTROL,
+                "ETag": etag,
+                "Last-Modified": last_modified,
             },
         )
 
@@ -432,6 +456,8 @@ async def stream_video(video_id: int, request: Request):
             "Accept-Ranges": "bytes",
             "Content-Length": str(file_size),
             "Cache-Control": VIDEO_CACHE_CONTROL,
+            "ETag": etag,
+            "Last-Modified": last_modified,
         },
     )
 
