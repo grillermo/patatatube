@@ -20,7 +20,6 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 - Pull-down-to-dismiss gesture (the close "X" was removed in favor of gestures)
 
 ### Per-video actions
-- Reorder with up/down controls
 - Classify — move a video to a different category
 - Delete videos
 - Download a single video for offline playback, with visual feedback on the download button
@@ -38,7 +37,7 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 ### Settings & connection
 - Configurable base URL and upload token
 - "Test connection" to verify server reachability
-- Optimistic UI: classify/move/upload reflect immediately, then reconcile with the server
+- Optimistic UI: classify/upload reflect immediately, then reconcile with the server
 
 ### App shell
 - App icon and launch splash generated from SVG
@@ -143,7 +142,7 @@ On first launch grid is empty / errors — need server config:
       live or completed cache state.
 - [ ] Delete a cached movie from MovieDetailView: the green checkmark changes to
       the download arrow immediately, without waiting for a poll.
-- [ ] Movie card ellipsis menu still offers Info / Move / classify / Delete.
+- [ ] Movie card ellipsis menu still offers Info / classify / Delete.
 
 ### Audio language selector (library movies)
 - [ ] Open a MULTI movie's detail page: an "Audio" picker appears next to the
