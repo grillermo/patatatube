@@ -22,6 +22,26 @@ struct EpisodesView: View {
         .navigationTitle(show.title)
     }
 
+    @MainActor
+    static func hasEligibleEpisode(
+        in episodes: [Video],
+        currentCacheState: (Video) -> CacheState
+    ) -> Bool {
+        episodes.contains { currentCacheState($0) == .notCached }
+    }
+
+    @MainActor
+    static func downloadEligibleEpisodes(
+        _ episodes: [Video],
+        currentCacheState: (Video) -> CacheState,
+        onDownload: (Video) async -> Bool
+    ) async {
+        for episode in episodes {
+            guard currentCacheState(episode) == .notCached else { continue }
+            _ = await onDownload(episode)
+        }
+    }
+
     private func row(for episode: Video) -> some View {
         HStack(spacing: 12) {
             Button {
