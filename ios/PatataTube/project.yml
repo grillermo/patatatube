@@ -9,6 +9,12 @@ packages:
   Capture:
     url: https://github.com/bitdriftlabs/capture-ios.git
     from: "0.23.5"
+  Clocks:
+    url: https://github.com/pointfreeco/swift-clocks.git
+    from: "1.1.0"
+  ViewInspector:
+    url: https://github.com/nalexn/ViewInspector.git
+    from: "0.10.3"
 targets:
   PatataTube:
     type: application
@@ -44,6 +50,7 @@ targets:
       - package: PatataTubeKit
       - package: Capture
         product: Capture
+      - package: Clocks
     settings:
       base:
         DEVELOPMENT_TEAM: Q3WS4MWCW3
@@ -54,10 +61,28 @@ targets:
         CURRENT_PROJECT_VERSION: "52"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "6.0"
+  PatataTubeTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Tests
+    dependencies:
+      - target: PatataTube
+      - package: Clocks
+      - package: ViewInspector
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.patatube.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
 schemes:
   PatataTube:
     build:
       targets:
         PatataTube: all
+    test:
+      targets:
+        - PatataTubeTests
     archive:
       config: Release
