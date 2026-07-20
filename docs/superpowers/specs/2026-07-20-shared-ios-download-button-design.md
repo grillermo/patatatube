@@ -64,7 +64,9 @@ from the environment:
 - a current-cache-state closure;
 - an async download closure returning `Bool`;
 - a cancellation closure;
-- its download identity.
+- its download identity;
+- an optional caller-controlled refresh token for cache mutations that must be
+  reflected immediately instead of waiting for the next poll.
 
 This keeps the component reusable across the three call sites and permits
 tests to supply deterministic state and controlled async completions.
@@ -103,6 +105,11 @@ elsewhere.
 The polling task is tied to the component identity. SwiftUI cancels it when the
 view disappears or the identity changes. Disappearance stops observation but
 does not cancel the underlying cache download.
+
+Changing the refresh token resets local observation and immediately rereads
+the same identity. This is separate from an identity change: it handles a
+synchronous external mutation, such as deleting the currently cached movie,
+without pretending that the selected content changed.
 
 ### Starting a download
 
@@ -168,8 +175,10 @@ logic, polling loop, and button renderer with `DownloadButton`. Pass the live
 The existing version and audio change handlers no longer reset download state;
 the shared identity performs that reset.
 
-The Delete cached menu remains local to `MovieDetailView`. After deletion, the
-shared poll observes `.notCached`; no deletion API belongs in the button.
+The Delete cached menu remains local to `MovieDetailView`. It increments a
+small refresh token after removal so the shared button rereads `.notCached`
+immediately, preserving the reference implementation's instant arrow reset.
+No deletion API belongs in the button.
 
 ### VideoCell
 
@@ -213,6 +222,7 @@ Automated button coverage includes:
 - immediate retry protected from the first attempt's late completion;
 - identity change invalidating an outstanding completion and restarting
   observation;
+- refresh-token change immediately reflecting an external cache mutation;
 - view disappearance stopping polling without invoking cancellation.
 
 Keep the complete `PatataTubeKit` suite green, including cancellation and
@@ -247,5 +257,6 @@ standalone `PatataTubeKit` test suite.
 - Interrupted downloads remain resumable; explicitly cancelled downloads
   restart according to `CacheManager`'s current contract.
 - A stale completion cannot overwrite a cancel, retry, or identity change.
+- Deleting the cached movie resets the detail button immediately.
 - Episode download/cancel taps do not trigger playback.
 - New button tests, existing cache tests, and the iOS build pass.
