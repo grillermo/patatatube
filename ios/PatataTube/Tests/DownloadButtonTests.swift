@@ -58,3 +58,190 @@ struct DownloadButtonStateTests {
         #expect(state.effectiveState == .downloading(0.4))
     }
 }
+
+@MainActor
+private final class CacheStateSource {
+    var value: CacheState
+    private(set) var readCount = 0
+
+    init(_ value: CacheState) {
+        self.value = value
+    }
+
+    func read() -> CacheState {
+        readCount += 1
+        return value
+    }
+}
+
+private actor DownloadGate {
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var bufferedResult: Bool?
+
+    func wait() async -> Bool {
+        if let bufferedResult {
+            self.bufferedResult = nil
+            return bufferedResult
+        }
+        return await withCheckedContinuation { continuation = $0 }
+    }
+
+    func finish(_ result: Bool) {
+        if let continuation {
+            self.continuation = nil
+            continuation.resume(returning: result)
+        } else {
+            bufferedResult = result
+        }
+    }
+}
+
+@MainActor
+private func eventually(
+    _ message: String,
+    condition: @escaping @MainActor () -> Bool
+) async {
+    for _ in 0..<100 {
+        if condition() { return }
+        await Task.yield()
+    }
+    Issue.record(Comment(rawValue: message))
+}
+
+@MainActor
+private func makeDownloadButton(
+    state: DownloadButtonState,
+    cache: CacheStateSource = CacheStateSource(.notCached),
+    refreshToken: Int = 0,
+    onDownload: @escaping () async -> Bool = { false },
+    onCancel: @escaping () -> Void = {}
+) -> DownloadButton {
+    DownloadButton(
+        identity: DownloadButtonIdentity(videoID: 7, versionID: 3, audioLanguage: "eng"),
+        refreshToken: refreshToken,
+        currentCacheState: { cache.read() },
+        onDownload: onDownload,
+        onCancel: onCancel,
+        state: state
+    )
+}
+
+@Suite("Download button view", .serialized)
+@MainActor
+struct DownloadButtonViewTests {
+    @Test func rendersAccessibleIdleActiveAndCachedStates() throws {
+        let state = DownloadButtonState()
+        let sut = makeDownloadButton(state: state)
+
+        var control = try sut.inspect().find(ViewType.Button.self)
+        #expect(try control.accessibilityLabel().string() == "Download")
+
+        state.observe(.downloading(1.4))
+        control = try sut.inspect().find(ViewType.Button.self)
+        #expect(try control.accessibilityLabel().string() == "Cancel download")
+        #expect(try control.accessibilityValue().string() == "100%")
+
+        state.reset(to: .cached)
+        let image = try sut.inspect().find(ViewType.Image.self)
+        #expect(try image.accessibilityLabel().string() == "Downloaded")
+    }
+
+    @Test func tappingDownloadShowsLoadingThenAppliesSuccess() async throws {
+        let state = DownloadButtonState()
+        let gate = DownloadGate()
+        let sut = makeDownloadButton(state: state, onDownload: { await gate.wait() })
+
+        try sut.inspect().find(ViewType.Button.self).tap()
+        await eventually("Download tap never entered loading") {
+            state.effectiveState == .downloading(0)
+        }
+
+        await gate.finish(true)
+        await eventually("Successful completion never showed cached") {
+            state.effectiveState == .cached
+        }
+    }
+
+    @Test func tappingDownloadReturnsToIdleOnFailure() async throws {
+        let state = DownloadButtonState()
+        let gate = DownloadGate()
+        let sut = makeDownloadButton(state: state, onDownload: { await gate.wait() })
+
+        try sut.inspect().find(ViewType.Button.self).tap()
+        await eventually("Download tap never entered loading") { state.isDownloading }
+        await gate.finish(false)
+        await eventually("Failed completion never returned to idle") {
+            state.effectiveState == .notCached
+        }
+    }
+
+    @Test func tappingRingInvalidatesAttemptBeforeCallingCancel() throws {
+        let state = DownloadButtonState(initialCacheState: .downloading(0.35))
+        var cancelCount = 0
+        var attemptWasInvalidated = false
+        let sut = makeDownloadButton(state: state, onCancel: {
+            cancelCount += 1
+            attemptWasInvalidated = state.activeAttemptID == nil
+        })
+
+        state.begin()
+        state.observe(.downloading(0.35))
+        try sut.inspect().find(ViewType.Button.self).tap()
+
+        #expect(cancelCount == 1)
+        #expect(attemptWasInvalidated)
+        #expect(state.effectiveState == .notCached)
+    }
+
+    @Test func pollingUsesActiveAndInactiveIntervals() async {
+        let state = DownloadButtonState()
+        let source = CacheStateSource(.downloading(0.25))
+        let clock = TestClock()
+        let polling = Task {
+            await state.poll(currentCacheState: { source.read() }, clock: clock)
+        }
+        await eventually("Initial cache state was not read") { source.readCount == 1 }
+
+        await clock.advance(by: .milliseconds(149))
+        #expect(source.readCount == 1)
+        await clock.advance(by: .milliseconds(1))
+        await eventually("Active 150 ms poll did not fire") { source.readCount == 2 }
+
+        source.value = .notCached
+        await clock.advance(by: .milliseconds(150))
+        await eventually("Transition to inactive state was not observed") {
+            source.readCount == 3
+        }
+        await clock.advance(by: .milliseconds(499))
+        #expect(source.readCount == 3)
+        await clock.advance(by: .milliseconds(1))
+        await eventually("Inactive 500 ms poll did not fire") { source.readCount == 4 }
+
+        polling.cancel()
+        await clock.run()
+    }
+
+    @Test func removingHostedViewStopsPollingWithoutCancellingDownload() async {
+        let state = DownloadButtonState()
+        let source = CacheStateSource(.downloading(0.2))
+        let clock = TestClock()
+        var cancelCount = 0
+        let sut = makeDownloadButton(
+            state: state,
+            cache: source,
+            onCancel: { cancelCount += 1 }
+        )
+        .environment(\.continuousClock, clock)
+
+        ViewHosting.host(view: sut)
+        await eventually("Hosted view never started polling") { source.readCount > 0 }
+        ViewHosting.expel()
+        await Task.yield()
+        let readsAfterExpel = source.readCount
+        await clock.advance(by: .seconds(1))
+        await Task.yield()
+
+        #expect(source.readCount == readsAfterExpel)
+        #expect(cancelCount == 0)
+    }
+}

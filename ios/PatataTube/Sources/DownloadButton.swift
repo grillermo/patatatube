@@ -1,6 +1,8 @@
+import Clocks
 import Foundation
 import Observation
 import PatataTubeKit
+import SwiftUI
 
 struct DownloadButtonIdentity: Hashable, Sendable {
     let videoID: Int
@@ -95,6 +97,119 @@ final class DownloadButtonState {
             progress = 1
         case .notCached:
             if phase == .idle { progress = 0 }
+        }
+    }
+
+    func poll(
+        currentCacheState: @escaping () -> CacheState,
+        clock: any Clock<Duration>
+    ) async {
+        while !Task.isCancelled {
+            observe(currentCacheState())
+            let interval: Duration = isDownloading ? .milliseconds(150) : .milliseconds(500)
+            do {
+                try await clock.sleep(for: interval)
+            } catch {
+                return
+            }
+        }
+    }
+}
+
+@MainActor
+struct DownloadButton: View {
+    let identity: DownloadButtonIdentity
+    var refreshToken: Int = 0
+    let currentCacheState: () -> CacheState
+    let onDownload: () async -> Bool
+    let onCancel: () -> Void
+
+    @Environment(\.continuousClock) private var clock
+    @State private var state: DownloadButtonState
+
+    private struct ObservationID: Hashable {
+        let identity: DownloadButtonIdentity
+        let refreshToken: Int
+    }
+
+    init(
+        identity: DownloadButtonIdentity,
+        refreshToken: Int = 0,
+        currentCacheState: @escaping () -> CacheState,
+        onDownload: @escaping () async -> Bool,
+        onCancel: @escaping () -> Void,
+        state: DownloadButtonState? = nil
+    ) {
+        self.identity = identity
+        self.refreshToken = refreshToken
+        self.currentCacheState = currentCacheState
+        self.onDownload = onDownload
+        self.onCancel = onCancel
+        _state = State(initialValue: state ?? DownloadButtonState(
+            initialCacheState: currentCacheState()
+        ))
+    }
+
+    var body: some View {
+        control
+            .task(id: ObservationID(identity: identity, refreshToken: refreshToken)) {
+                state.reset(to: currentCacheState())
+                await state.poll(currentCacheState: currentCacheState, clock: clock)
+            }
+    }
+
+    @ViewBuilder
+    private var control: some View {
+        switch state.effectiveState {
+        case .cached:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.system(size: 30))
+                .frame(width: 44, height: 44)
+                .transition(.scale.combined(with: .opacity))
+                .accessibilityLabel("Downloaded")
+
+        case .downloading:
+            Button {
+                withAnimation { state.cancel() }
+                onCancel()
+            } label: {
+                ZStack {
+                    Circle()
+                        .stroke(Color.gray.opacity(0.25), lineWidth: 4)
+                    Circle()
+                        .trim(from: 0, to: state.clampedProgress)
+                        .stroke(
+                            Color.accentColor,
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear(duration: 0.15), value: state.clampedProgress)
+                }
+                .frame(width: 30, height: 30)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel download")
+            .accessibilityValue("\(Int(state.clampedProgress * 100))%")
+
+        case .notCached:
+            Button {
+                Task { @MainActor in
+                    let attemptID = withAnimation { state.begin() }
+                    let succeeded = await onDownload()
+                    withAnimation {
+                        state.finish(attemptID: attemptID, succeeded: succeeded)
+                    }
+                }
+            } label: {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 30))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Download")
         }
     }
 }
