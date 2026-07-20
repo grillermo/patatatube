@@ -23,13 +23,6 @@ struct VideoCell: View {
 
     @State private var confirmingDelete = false
     @State private var showingInfo = false
-    /// Tracks the button's live transition: idle → loading → done, layered over `cacheState`.
-    @State private var downloadPhase: DownloadPhase = .idle
-    /// Live download fraction (0...1), polled from the cache while downloading.
-    @State private var progress: Double = 0
-    @State private var observedCacheState: CacheState?
-
-    private enum DownloadPhase { case idle, loading, done }
 
     /// tv/movies previews are tall Plex posters; letterbox them instead of cropping.
     private var isPoster: Bool {
@@ -73,7 +66,16 @@ struct VideoCell: View {
             .buttonStyle(.plain)
 
             HStack {
-                downloadButton
+                DownloadButton(
+                    identity: DownloadButtonIdentity(
+                        videoID: video.id,
+                        versionID: video.chosenVersionId,
+                        audioLanguage: video.audioLang
+                    ),
+                    currentCacheState: currentCacheState,
+                    onDownload: onDownload,
+                    onCancel: onCancel
+                )
                 Spacer()
                 if video.versions.count > 1 {
                     Picker("Version", selection: Binding(
@@ -114,125 +116,11 @@ struct VideoCell: View {
             Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $showingInfo) {
-            VideoInfoView(video: video, cacheState: effectiveState,
+            VideoInfoView(video: video, cacheState: cacheState,
                           cachedPreviewURL: cachedPreviewURL, localFileURL: localFileURL)
         }
-        .task(id: downloadPollKey) {
-            await pollCacheState()
-        }
-        .onChange(of: cacheState) { _, newState in
-            updateObservedCacheState(newState)
-        }
-        .onChange(of: video.chosenVersionId) { _, _ in
-            downloadPhase = .idle
-            observedCacheState = nil
-            progress = 0
-        }
     }
 
-    /// Local phase wins during the live tap→download→done transition; otherwise trust the parent.
-    private var effectiveState: CacheState {
-        let observedState = observedCacheState ?? cacheState
-        switch downloadPhase {
-        case .loading:
-            if case .downloading = observedState { return observedState }
-            return .downloading(progress)
-        case .done: return .cached
-        case .idle: return observedState
-        }
-    }
-
-    private var downloadPollKey: String {
-        "\(video.id):\(video.chosenVersionId ?? -1)"
-    }
-
-    private var clampedProgress: Double {
-        min(max(progress, 0), 1)
-    }
-
-    @ViewBuilder private var downloadButton: some View {
-        switch effectiveState {
-        case .cached:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                .font(.system(size: 30))
-                .frame(width: 44, height: 44)
-                .transition(.scale.combined(with: .opacity))
-        case .downloading:
-            Button {
-                onCancel()
-                withAnimation {
-                    downloadPhase = .idle
-                    observedCacheState = .notCached
-                    progress = 0
-                }
-            } label: {
-                ZStack {
-                    Circle()
-                        .stroke(Color.gray.opacity(0.25), lineWidth: 4)
-                    Circle()
-                        .trim(from: 0, to: clampedProgress)
-                        .stroke(
-                            Color.accentColor,
-                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
-                        .animation(.linear(duration: 0.15), value: clampedProgress)
-                }
-                .frame(width: 30, height: 30)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        case .notCached:
-            Button {
-                Task {
-                    withAnimation {
-                        downloadPhase = .loading
-                        observedCacheState = .downloading(0)
-                        progress = 0
-                    }
-                    let ok = await onDownload()
-                    withAnimation {
-                        downloadPhase = ok ? .done : .idle
-                        observedCacheState = ok ? .cached : .notCached
-                        progress = ok ? 1 : 0
-                    }
-                }
-            } label: {
-                Image(systemName: "arrow.down.circle")
-                    .font(.system(size: 30))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-        }
-    }
-
-    private func pollCacheState() async {
-        while !Task.isCancelled {
-            let state = currentCacheState()
-            updateObservedCacheState(state)
-
-            if case .downloading = state {
-                try? await Task.sleep(for: .milliseconds(150))
-            } else {
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
-    }
-
-    private func updateObservedCacheState(_ state: CacheState) {
-        observedCacheState = state
-        switch state {
-        case .downloading(let p):
-            progress = p
-        case .cached:
-            progress = 1
-        case .notCached:
-            if downloadPhase == .idle {
-                progress = 0
-            }
-        }
-    }
 }
 
 /// A modal listing every locally-known field about a video, plus its on-disk

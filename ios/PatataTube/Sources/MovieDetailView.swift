@@ -15,14 +15,8 @@ struct MovieDetailView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
 
-    /// Tracks the button's live transition: idle → loading → done, layered over the cache state.
-    @State private var downloadPhase: DownloadPhase = .idle
-    /// Live download fraction (0...1), polled from the cache while downloading.
-    @State private var progress: Double = 0
-    @State private var observedCacheState: CacheState?
-    @State private var activeDownloadID: UUID?
-
-    private enum DownloadPhase { case idle, loading, done }
+    /// Forces the shared button to reread cache state after an explicit delete.
+    @State private var downloadRefreshToken = 0
 
     /// The pushed Video is a value snapshot; prefer the live store row so a
     /// version change made from this page is reflected immediately.
@@ -70,7 +64,27 @@ struct MovieDetailView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    downloadButton
+                    DownloadButton(
+                        identity: DownloadButtonIdentity(
+                            videoID: currentVideo.id,
+                            versionID: currentVideo.chosenVersionId,
+                            audioLanguage: currentVideo.audioLang
+                        ),
+                        refreshToken: downloadRefreshToken,
+                        currentCacheState: {
+                            model.cache.state(
+                                for: currentVideo.id,
+                                versionId: currentVideo.chosenVersionId
+                            )
+                        },
+                        onDownload: { await onDownload(currentVideo) },
+                        onCancel: {
+                            model.cache.cancel(
+                                id: currentVideo.id,
+                                versionId: currentVideo.chosenVersionId
+                            )
+                        }
+                    )
 
                     if currentVideo.versions.count > 1 {
                         Picker("Version", selection: Binding(
@@ -119,12 +133,7 @@ struct MovieDetailView: View {
                         model.cache.removeAllCached(id: currentVideo.id)
                         // Flip the download button back to the arrow now,
                         // instead of waiting for the 500ms cache poll.
-                        activeDownloadID = nil
-                        withAnimation {
-                            downloadPhase = .idle
-                            observedCacheState = .notCached
-                            progress = 0
-                        }
+                        withAnimation { downloadRefreshToken &+= 1 }
                     } label: {
                         Label("Delete cached", systemImage: "trash")
                     }
@@ -134,139 +143,11 @@ struct MovieDetailView: View {
                 }
             }
         }
-        .task(id: downloadPollKey) {
-            await pollCacheState()
-        }
-        .onChange(of: currentVideo.chosenVersionId) { _, _ in
-            activeDownloadID = nil
-            downloadPhase = .idle
-            observedCacheState = nil
-            progress = 0
-        }
-        .onChange(of: currentVideo.audioLang) { _, _ in
-            activeDownloadID = nil
-            downloadPhase = .idle
-            observedCacheState = nil
-            progress = 0
-        }
-    }
-
-    private var cacheState: CacheState {
-        model.cache.state(for: currentVideo.id, versionId: currentVideo.chosenVersionId)
-    }
-
-    /// Local phase wins during the live tap→download→done transition; otherwise trust the cache.
-    private var effectiveState: CacheState {
-        let observedState = observedCacheState ?? cacheState
-        switch downloadPhase {
-        case .loading:
-            if case .downloading = observedState { return observedState }
-            return .downloading(progress)
-        case .done: return .cached
-        case .idle: return observedState
-        }
-    }
-
-    private var downloadPollKey: String {
-        "\(currentVideo.id):\(currentVideo.chosenVersionId ?? -1)"
-    }
-
-    private var clampedProgress: Double {
-        min(max(progress, 0), 1)
-    }
-
-    @ViewBuilder private var downloadButton: some View {
-        switch effectiveState {
-        case .cached:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                .font(.system(size: 30))
-                .frame(width: 44, height: 44)
-                .transition(.scale.combined(with: .opacity))
-        case .downloading:
-            Button {
-                activeDownloadID = nil
-                model.cache.cancel(id: currentVideo.id, versionId: currentVideo.chosenVersionId)
-                withAnimation {
-                    downloadPhase = .idle
-                    observedCacheState = .notCached
-                    progress = 0
-                }
-            } label: {
-                ZStack {
-                    Circle()
-                        .stroke(Color.gray.opacity(0.25), lineWidth: 4)
-                    Circle()
-                        .trim(from: 0, to: clampedProgress)
-                        .stroke(
-                            Color.accentColor,
-                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
-                        .animation(.linear(duration: 0.15), value: clampedProgress)
-                }
-                .frame(width: 30, height: 30)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        case .notCached:
-            Button {
-                Task {
-                    let downloadID = UUID()
-                    activeDownloadID = downloadID
-                    withAnimation {
-                        downloadPhase = .loading
-                        observedCacheState = .downloading(0)
-                        progress = 0
-                    }
-                    let ok = await onDownload(currentVideo)
-                    guard activeDownloadID == downloadID else { return }
-                    activeDownloadID = nil
-                    withAnimation {
-                        downloadPhase = ok ? .done : .idle
-                        observedCacheState = ok ? .cached : .notCached
-                        progress = ok ? 1 : 0
-                    }
-                }
-            } label: {
-                Image(systemName: "arrow.down.circle")
-                    .font(.system(size: 30))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-        }
-    }
-
-    private func pollCacheState() async {
-        while !Task.isCancelled {
-            let state = cacheState
-            updateObservedCacheState(state)
-
-            if case .downloading = state {
-                try? await Task.sleep(for: .milliseconds(150))
-            } else {
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
     }
 
     /// "spa" → "Spanish"; the source's title tag disambiguates when present.
     private func audioLabel(for track: AudioTrack) -> String {
         let name = Locale.current.localizedString(forLanguageCode: track.lang) ?? track.lang
         return track.title.isEmpty ? name : "\(name) — \(track.title)"
-    }
-
-    private func updateObservedCacheState(_ state: CacheState) {
-        observedCacheState = state
-        switch state {
-        case .downloading(let p):
-            progress = p
-        case .cached:
-            progress = 1
-        case .notCached:
-            if downloadPhase == .idle {
-                progress = 0
-            }
-        }
     }
 }
