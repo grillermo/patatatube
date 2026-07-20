@@ -95,10 +95,6 @@ class UploadRequest(BaseModel):
     url: str
 
 
-class MoveRequest(BaseModel):
-    direction: str
-
-
 class ClassifyRequest(BaseModel):
     classification: str
 
@@ -613,13 +609,6 @@ async def manifest():
     )
 
 
-@router.post("/videos/{video_id}/move")
-async def move_video_endpoint(video_id: int, direction: str = Form(...), classification: str | None = Form(default=None)):
-    services.apply_move(video_id, direction)
-    redirect_url = f"/?classification={classification}" if classification else "/"
-    return RedirectResponse(url=redirect_url, status_code=303)
-
-
 @router.post("/videos/{video_id}/classify")
 async def classify_video_endpoint(video_id: int, classification: str = Form(...), current_classification: str | None = Form(default=None)):
     services.apply_classification(video_id, classification)
@@ -645,13 +634,6 @@ async def api_videos(classification: str | None = None):
         classification = None
     videos = db.get_all_videos(classification)
     return [serialize_video(v) for v in videos]
-
-
-@router.post("/api/videos/{video_id}/move")
-async def api_move_video(video_id: int, body: MoveRequest, request: Request):
-    _check_token(request)
-    ok = services.apply_move(video_id, body.direction)
-    return {"ok": ok}
 
 
 @router.post("/api/videos/{video_id}/classify")

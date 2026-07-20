@@ -470,6 +470,37 @@ def test_root_page_returns_html(client):
     assert "text/html" in resp.headers["content-type"]
 
 
+def test_videos_page_omits_manual_reorder_controls(client):
+    import db
+
+    video_id = db.add_video("https://twitter.com/x/status/1")
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    assert f'action="/videos/{video_id}/move"' not in resp.text
+    assert 'aria-label="Move up"' not in resp.text
+    assert 'aria-label="Move down"' not in resp.text
+
+
+def test_move_endpoints_removed(client):
+    import db
+
+    video_id = db.add_video("https://twitter.com/x/status/1")
+    pwa = client.post(
+        f"/videos/{video_id}/move",
+        data={"direction": "up"},
+        follow_redirects=False,
+    )
+    api = client.post(
+        f"/api/videos/{video_id}/move",
+        json={"direction": "up"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert pwa.status_code == 404
+    assert api.status_code == 404
+
+
 def test_patatatube_host_is_allowed(client):
     resp = client.get("/", headers={"host": "patatatube.chiq.me"})
     assert resp.status_code == 200
@@ -685,39 +716,6 @@ def test_api_classifications_lists_all(client):
     resp = client.get("/api/classifications")
     assert resp.status_code == 200
     assert resp.json() == {"classifications": db.CLASSIFICATIONS}
-
-
-def test_api_move_requires_token(client):
-    import db
-    vid = db.add_video("https://twitter.com/x/status/1")
-    resp = client.post(f"/api/videos/{vid}/move", json={"direction": "up"})
-    assert resp.status_code == 401
-
-
-def test_api_move_swaps_and_returns_ok(client):
-    import db
-    first = db.add_video("https://twitter.com/x/status/1")
-    second = db.add_video("https://twitter.com/x/status/2")
-    resp = client.post(
-        f"/api/videos/{second}/move",
-        json={"direction": "down"},
-        headers={"Authorization": "Bearer test-secret"},
-    )
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
-    assert db.get_video(first)["position"] > db.get_video(second)["position"]
-
-
-def test_api_move_invalid_direction_returns_not_ok(client):
-    import db
-    vid = db.add_video("https://twitter.com/x/status/1")
-    resp = client.post(
-        f"/api/videos/{vid}/move",
-        json={"direction": "sideways"},
-        headers={"Authorization": "Bearer test-secret"},
-    )
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": False}
 
 
 def test_api_classify_requires_token(client):

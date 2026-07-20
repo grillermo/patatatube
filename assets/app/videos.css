@@ -120,26 +120,11 @@ video {
 .video-wrap.is-playing .name-overlay {
   display: none
 }
-.move {
+.card-actions {
   display: flex;
   gap: 8px;
   margin-top: 8px;
   justify-content: flex-end
-}
-.move form {
-  margin: 0
-}
-.move button {
-  background: #2a2a2a;
-  color: #eee;
-  border: 1px solid #3a3a3a;
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 1em;
-  cursor: pointer
-}
-.move button:active {
-  background: #3a3a3a
 }
 .download-btn {
   background: #2a2a2a;

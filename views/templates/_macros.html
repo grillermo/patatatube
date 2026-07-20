@@ -46,20 +46,10 @@
 {% else -%}
 <p style="color:#aaa;font-size:0.85em">Video is {{ v.status }}…</p>
 {%- endif %}
-<div class="move">
+<div class="card-actions">
   {% if v.status == "done" -%}
   <a class="download-btn" href="/videos/{{ v.id }}/stream?token={{ upload_token }}" download="{{ v | download_name }}.mp4" aria-label="Download video">&#8681;</a>
   {%- endif %}
-  <form method="post" action="/videos/{{ v.id }}/move">
-    <input type="hidden" name="direction" value="up">
-    <input type="hidden" name="classification" value="{{ current or '' }}">
-    <button type="submit" aria-label="Move up">&#9650;</button>
-  </form>
-  <form method="post" action="/videos/{{ v.id }}/move">
-    <input type="hidden" name="direction" value="down">
-    <input type="hidden" name="classification" value="{{ current or '' }}">
-    <button type="submit" aria-label="Move down">&#9660;</button>
-  </form>
 </div>
 </div>
 {%- endmacro %}

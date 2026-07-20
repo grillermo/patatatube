@@ -30,21 +30,6 @@ def test_apply_classification_rejects_invalid(fresh_db):
     assert db.get_video(vid)["classification"] == "children"
 
 
-def test_apply_move_swaps_positions(fresh_db):
-    db, services = fresh_db
-    first = db.add_video("https://twitter.com/x/status/1")
-    second = db.add_video("https://twitter.com/x/status/2")
-    # second has the higher position (added later)
-    assert services.apply_move(second, "down") is True
-    assert db.get_video(first)["position"] > db.get_video(second)["position"]
-
-
-def test_apply_move_rejects_bad_direction(fresh_db):
-    db, services = fresh_db
-    vid = db.add_video("https://twitter.com/x/status/1")
-    assert services.apply_move(vid, "sideways") is False
-
-
 def test_choose_version_invalidates_existing_hls_package(fresh_db, monkeypatch):
     db, services = fresh_db
     video_id, _ = db.upsert_library_video(

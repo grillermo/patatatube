@@ -526,37 +526,6 @@ def set_hls_status(video_id: int, status: str) -> None:
         conn.execute("UPDATE videos SET hls_status = ? WHERE id = ?", (status, video_id))
 
 
-def move_video(video_id: int, direction: str) -> bool:
-    if direction not in ("up", "down"):
-        return False
-    with _conn() as conn:
-        current = conn.execute(
-            "SELECT position FROM videos WHERE id = ?", (video_id,)
-        ).fetchone()
-        if not current or current["position"] is None:
-            return False
-        pos = current["position"]
-        if direction == "up":
-            neighbor = conn.execute(
-                "SELECT id, position FROM videos WHERE position > ? ORDER BY position ASC LIMIT 1",
-                (pos,),
-            ).fetchone()
-        else:
-            neighbor = conn.execute(
-                "SELECT id, position FROM videos WHERE position < ? ORDER BY position DESC LIMIT 1",
-                (pos,),
-            ).fetchone()
-        if not neighbor:
-            return False
-        conn.execute(
-            "UPDATE videos SET position = ? WHERE id = ?", (neighbor["position"], video_id)
-        )
-        conn.execute(
-            "UPDATE videos SET position = ? WHERE id = ?", (pos, neighbor["id"])
-        )
-        return True
-
-
 def get_completed_video_by_source(platform: str, source_key: str) -> dict | None:
     with _conn() as conn:
         row = conn.execute(
