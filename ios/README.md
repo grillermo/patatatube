@@ -110,6 +110,14 @@ On first launch grid is empty / errors — need server config:
 - [ ] Settings has valid base URL + token; tap the refresh (↻) toolbar button — spinner shows, then movie/TV items appear.
 - [ ] "movies" tab shows the movie grid with Plex posters.
 - [ ] "tv" tab shows one card per show with poster + episode count; tapping opens seasons → episodes with thumbs and summaries.
+- [ ] Open a TV show: the episode list has an accessible top-right Download all
+      control; a fully cached show leaves it disabled.
+- [ ] Tap Download all with cached, active, and uncached episodes: only that
+      show's uncached episodes start, in season/episode order, one at a time;
+      the toolbar shows a disabled spinner and each row shows live progress.
+- [ ] Cancel one active episode or let one fail: the toolbar batch continues to
+      the next eligible episode; navigating back also leaves the started batch
+      running.
 - [ ] Playing an unprepared mkv episode (from the pushed episode list) shows "Preparing…" over the episode list and blocks further taps (e.g. double-tapping Play does not fire a second prepare), then plays (remux takes seconds).
 - [ ] Playing an already-compatible mp4 movie starts without any conversion wait.
 - [ ] Download an unprepared episode: Preparing… appears, then the episode row
