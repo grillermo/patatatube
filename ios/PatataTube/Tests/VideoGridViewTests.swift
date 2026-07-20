@@ -25,4 +25,15 @@ struct VideoGridViewErrorBannerTests {
             translation: CGSize(width: 0, height: 120)
         ))
     }
+
+    @Test func dismissesOnlyTheErrorShownWhenTheDragBegan() {
+        #expect(VideoGridView.shouldClearErrorBanner(
+            currentText: "Original error",
+            displayedText: "Original error"
+        ))
+        #expect(!VideoGridView.shouldClearErrorBanner(
+            currentText: "Newer error",
+            displayedText: "Original error"
+        ))
+    }
 }

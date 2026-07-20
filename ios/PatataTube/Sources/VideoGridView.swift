@@ -35,6 +35,10 @@ struct VideoGridView: View {
         abs(translation.width) >= 100 && abs(translation.width) > abs(translation.height)
     }
 
+    static func shouldClearErrorBanner(currentText: String?, displayedText: String) -> Bool {
+        currentText == displayedText
+    }
+
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: cellSize), spacing: 16)]
     }
@@ -332,7 +336,8 @@ struct VideoGridView: View {
                             errorBannerOffset = value.translation.width
                         }
                         .onEnded { value in
-                            if Self.shouldDismissErrorBanner(translation: value.translation) {
+                            if Self.shouldDismissErrorBanner(translation: value.translation),
+                               Self.shouldClearErrorBanner(currentText: store.errorText, displayedText: text) {
                                 store.errorText = nil
                             }
                             withAnimation(.spring()) {
