@@ -1,13 +1,45 @@
 // ios/PatataTube/Sources/EpisodesView.swift
+import Clocks
 import SwiftUI
 import PatataTubeKit
+
+@MainActor
+@Observable
+final class EpisodesDownloadAllState {
+    private(set) var canDownloadAll = false
+    private(set) var isDownloading = false
+
+    func setEligibility(_ value: Bool) {
+        canDownloadAll = value
+    }
+
+    func setDownloading(_ value: Bool) {
+        isDownloading = value
+    }
+}
 
 /// Episode list for one show, sectioned by season.
 struct EpisodesView: View {
     let show: ShowGroup
     let onPlay: (Video, [Video]) -> Void
     let onDownload: (Video) async -> Bool
+    private let cacheStateOverride: ((Video) -> CacheState)?
+
     @EnvironmentObject var model: AppModel
+    @Environment(\.continuousClock) private var clock
+    @State private var downloadState = EpisodesDownloadAllState()
+
+    init(
+        show: ShowGroup,
+        onPlay: @escaping (Video, [Video]) -> Void,
+        onDownload: @escaping (Video) async -> Bool,
+        currentCacheState: ((Video) -> CacheState)? = nil
+    ) {
+        self.show = show
+        self.onPlay = onPlay
+        self.onDownload = onDownload
+        self.cacheStateOverride = currentCacheState
+    }
 
     var body: some View {
         List {
@@ -20,6 +52,26 @@ struct EpisodesView: View {
             }
         }
         .navigationTitle(show.title)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { @MainActor in
+                        await downloadAll()
+                    }
+                } label: {
+                    if downloadState.isDownloading {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.down.circle")
+                    }
+                }
+                .disabled(downloadState.isDownloading || !downloadState.canDownloadAll)
+                .accessibilityLabel("Download all episodes")
+            }
+        }
+        .task {
+            await observeDownloadAllEligibility()
+        }
     }
 
     @MainActor
@@ -40,6 +92,46 @@ struct EpisodesView: View {
             guard currentCacheState(episode) == .notCached else { continue }
             _ = await onDownload(episode)
         }
+    }
+
+    private func currentCacheState(for episode: Video) -> CacheState {
+        if let cacheStateOverride {
+            return cacheStateOverride(episode)
+        }
+        return model.cache.state(
+            for: episode.id,
+            versionId: episode.chosenVersionId
+        )
+    }
+
+    private func observeDownloadAllEligibility() async {
+        while !Task.isCancelled {
+            downloadState.setEligibility(Self.hasEligibleEpisode(
+                in: show.episodes,
+                currentCacheState: currentCacheState(for:)
+            ))
+            do {
+                try await clock.sleep(for: .milliseconds(500))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func downloadAll() async {
+        downloadState.setDownloading(true)
+        defer {
+            downloadState.setEligibility(Self.hasEligibleEpisode(
+                in: show.episodes,
+                currentCacheState: currentCacheState(for:)
+            ))
+            downloadState.setDownloading(false)
+        }
+        await Self.downloadEligibleEpisodes(
+            show.episodes,
+            currentCacheState: currentCacheState(for:),
+            onDownload: onDownload
+        )
     }
 
     private func row(for episode: Video) -> some View {
@@ -81,10 +173,7 @@ struct EpisodesView: View {
                     audioLanguage: episode.audioLang
                 ),
                 currentCacheState: {
-                    model.cache.state(
-                        for: episode.id,
-                        versionId: episode.chosenVersionId
-                    )
+                    currentCacheState(for: episode)
                 },
                 onDownload: { await onDownload(episode) },
                 onCancel: {
