@@ -13,6 +13,11 @@ final class AppModel: ObservableObject {
     @Published var baseURLText: String
     @Published var tokenText: String
 
+    /// When on, a finished video rolls into the next one in the queue. Session-only
+    /// by design — it resets to off on relaunch, so a long queue can never keep
+    /// playing across launches unnoticed.
+    @Published var autoplay: Bool = false
+
     init() {
         let credentials = KeychainCredentialStore()
         let api = APIClient(store: credentials)

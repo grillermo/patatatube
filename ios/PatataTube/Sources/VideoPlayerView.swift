@@ -137,10 +137,9 @@ struct VideoPlayerView: View {
         video.title ?? video.sourceFilename ?? "PatataTube"
     }
 
-    /// Rebind end-of-item handling to the current item. Foreground keeps the
-    /// dismiss-on-end behavior; locked/backgrounded always auto-advances.
-    /// `applicationState` is read at fire time — a closure-captured scenePhase
-    /// would be frozen at bind time.
+    /// Rebind end-of-item handling to the current item. `applicationState` and
+    /// `model.autoplay` are read at fire time — closure-captured copies would be
+    /// frozen at bind time.
     private func bindPlayToEnd() {
         removePlayToEndObserver()
         playToEndObserver = NotificationCenter.default.addObserver(
@@ -148,10 +147,16 @@ struct VideoPlayerView: View {
             object: player?.currentItem, queue: .main
         ) { _ in
             Task { @MainActor in
-                if UIApplication.shared.applicationState == .active {
-                    dismiss()
-                } else {
+                switch playbackEndAction(
+                    autoplay: model.autoplay,
+                    isForeground: UIApplication.shared.applicationState == .active
+                ) {
+                case .advance:
                     advance(by: 1)
+                case .dismiss:
+                    dismiss()
+                case .stop:
+                    player?.pause()
                 }
             }
         }
