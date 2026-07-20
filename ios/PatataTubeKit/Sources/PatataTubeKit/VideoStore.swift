@@ -96,15 +96,6 @@ public final class VideoStore: ObservableObject {
         }
     }
 
-    public func move(id: Int, direction: String) async {
-        do {
-            let ok = try await api.move(id: id, direction: direction)
-            if ok { await load() }
-        } catch {
-            errorText = String(describing: error)
-        }
-    }
-
     /// Deletes on the server, then refreshes the list (and cache) from the API.
     public func delete(id: Int) async {
         do {

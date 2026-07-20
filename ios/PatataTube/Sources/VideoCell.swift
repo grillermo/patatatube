@@ -15,8 +15,6 @@ struct VideoCell: View {
     /// Returns true only when the MP4 actually cached, so we don't paint a false checkmark.
     let onDownload: () async -> Bool
     let onCancel: () -> Void
-    let onMoveUp: () -> Void
-    let onMoveDown: () -> Void
     let onClassify: (String) -> Void
     let onChooseVersion: (Int) -> Void
     let onDelete: () -> Void
@@ -92,9 +90,6 @@ struct VideoCell: View {
                 }
                 Menu {
                     Button("Info", systemImage: "info.circle") { showingInfo = true }
-                    Button("Move up") { onMoveUp() }
-                    Button("Move down") { onMoveDown() }
-                    Divider()
                     ForEach(classifications, id: \.self) { c in
                         Button(c) { onClassify(c) }
                     }

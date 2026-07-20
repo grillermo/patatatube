@@ -14,7 +14,6 @@ private func makeVideo(id: Int, classification: String = "children", status: Str
 private final class FakeAPI: VideoAPI, @unchecked Sendable {
     var videosToReturn: [Video] = []
     var classifyResult = true
-    var moveResult = true
     var uploadId = 100
     var throwOnClassify = false
     var throwOnVideos = false
@@ -27,7 +26,6 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         return videosToReturn
     }
     func classifications() async throws -> [String] { ["children", "adults"] }
-    func move(id: Int, direction: String) async throws -> Bool { moveResult }
     func classify(id: Int, classification: String) async throws -> Bool {
         if throwOnClassify { throw APIError.badStatus(500) }
         return classifyResult
@@ -295,14 +293,6 @@ private func tempCache() -> VideoListCache {
     await store.load()          // loadCount == 1
     await store.delete(id: 1)   // delete -> reload
     #expect(api.deletedIds == [1])
-    #expect(api.loadCount == 2)
-}
-
-@MainActor @Test func moveRefetchesOnSuccess() async {
-    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api)
-    await store.load()          // loadCount == 1
-    await store.move(id: 1, direction: "up")  // success -> reload
     #expect(api.loadCount == 2)
 }
 

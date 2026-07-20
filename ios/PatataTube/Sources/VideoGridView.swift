@@ -89,8 +89,6 @@ struct VideoGridView: View {
                                 onPlay: { play(video) },
                                 onDownload: { await download(video) },
                                 onCancel: { cache.cancel(id: videoId, versionId: versionId) },
-                                onMoveUp: { Task { await store.move(id: video.id, direction: "up") } },
-                                onMoveDown: { Task { await store.move(id: video.id, direction: "down") } },
                                 onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
                                 onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
                                 onDelete: { Task { await store.delete(id: video.id) } }

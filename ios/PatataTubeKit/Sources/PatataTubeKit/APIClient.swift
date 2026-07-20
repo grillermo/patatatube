@@ -19,7 +19,6 @@ public struct ScanResult: Decodable, Equatable, Sendable {
 public protocol VideoAPI: Sendable {
     func videos(classification: String?) async throws -> [Video]
     func classifications() async throws -> [String]
-    func move(id: Int, direction: String) async throws -> Bool
     func classify(id: Int, classification: String) async throws -> Bool
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool
     func chooseAudio(id: Int, lang: String) async throws -> Bool
@@ -83,10 +82,6 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         } catch {
             throw APIError.decoding(String(describing: error))
         }
-    }
-
-    public func move(id: Int, direction: String) async throws -> Bool {
-        try await postOK("api/videos/\(id)/move", body: ["direction": direction])
     }
 
     public func classify(id: Int, classification: String) async throws -> Bool {

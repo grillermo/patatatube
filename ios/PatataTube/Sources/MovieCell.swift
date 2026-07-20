@@ -4,7 +4,7 @@ import PatataTubeKit
 
 /// Portrait 2:3 poster for the "movies" filter tab. Just the artwork as a
 /// NavigationLink to MovieDetailView — no chrome, no controls; the detail
-/// view owns download/move/classify/delete.
+/// view owns download/classify/delete.
 struct MovieCell: View {
     let video: Video
     /// Local file URL of the cached preview image, when the video is cached offline.

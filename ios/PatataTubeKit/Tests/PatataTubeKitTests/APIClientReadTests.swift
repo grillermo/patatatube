@@ -101,19 +101,6 @@ struct APIClientTests {
     // MARK: - Write tests
 
     struct WriteTests {
-        @Test func moveSendsAuthAndBody() async throws {
-            MockURLProtocol.handler = { req in
-                #expect(req.url?.path == "/api/videos/9/move")
-                #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer tok")
-                let body = req.httpBodyData()
-                let json = try JSONSerialization.jsonObject(with: body) as! [String: String]
-                #expect(json["direction"] == "up")
-                return (jsonResponse(req.url!), #"{"ok":true}"#.data(using: .utf8)!)
-            }
-            let ok = try await makeClient().move(id: 9, direction: "up")
-            #expect(ok == true)
-        }
-
         @Test func classifySendsBody() async throws {
             MockURLProtocol.handler = { req in
                 #expect(req.url?.path == "/api/videos/3/classify")
@@ -148,7 +135,7 @@ struct APIClientTests {
 
         @Test func writeThrowsWithoutToken() async {
             await #expect(throws: APIError.notConfigured) {
-                _ = try await makeClient(token: nil).move(id: 1, direction: "up")
+                _ = try await makeClient(token: nil).classify(id: 1, classification: "children")
             }
         }
     }
