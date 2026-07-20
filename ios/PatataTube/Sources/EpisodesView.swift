@@ -54,6 +54,9 @@ struct EpisodesView: View {
         .navigationTitle(show.title)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                AutoplayToggle(isOn: $model.autoplay)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     Task { @MainActor in
                         await downloadAll()

@@ -154,6 +154,9 @@ struct VideoGridView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    AutoplayToggle(isOn: $model.autoplay)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         Task { await store.refreshLibrary() }
                     } label: {

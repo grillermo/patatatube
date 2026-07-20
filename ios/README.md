@@ -163,7 +163,8 @@ On first launch grid is empty / errors — need server config:
 - [ ] Switch apps mid-playback → audio continues
 - [ ] Pause a video, then lock the phone or switch apps → playback remains paused
 - [ ] Return to the app → video resumes in sync with audio
-- [ ] Video ends while locked or backgrounded → playback advances to the next playable queue item; playback stops when no playable item remains
+- [ ] Autoplay on, video ends while locked or backgrounded → playback advances to the next playable queue item; playback stops when no playable item remains
+- [ ] Autoplay off, video ends while locked or backgrounded → audio stops at the end; returning to the app shows the paused end frame
 - [ ] Pull-down-to-dismiss still works; AVKit tap/scrub controls still work
 - [ ] AirPlay still works (full video on the external screen)
 
@@ -174,10 +175,21 @@ On first launch grid is empty / errors — need server config:
 2. Lock-screen **previous** within the first 3 s → prior video; after 3 s →
    restarts the current one. On the first video it restarts.
 3. On the last video, **next** stops playback (button greyed out).
-4. Locked: a video ending auto-advances to the next one.
-5. Foreground: a video ending dismisses the player (unchanged behavior).
+4. Locked with autoplay on: a video ending auto-advances to the next one.
+5. Foreground with autoplay off: a video ending dismisses the player.
 6. With a classification tab or search active, the queue respects that filter.
 7. Unplayable rows (unconverted library items) are skipped when advancing.
+
+### Autoplay toggle
+
+1. The switch sits in the toolbar of both the grid and a show's episode list;
+   flipping it in one place shows it flipped in the other.
+2. Autoplay on, play an episode from a show → it ends → the next episode in list
+   order starts automatically.
+3. Autoplay on, play the last episode → it ends → the player dismisses.
+4. Autoplay off, an episode ends in the foreground → the player dismisses.
+5. Relaunch the app → the switch is back to off (it is session-only by design).
+6. Lock-screen next/previous keep working with the switch in either position.
 
 ## Notes
 
