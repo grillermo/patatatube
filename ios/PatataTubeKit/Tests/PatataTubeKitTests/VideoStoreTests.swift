@@ -17,23 +17,32 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     var uploadId = 100
     var throwOnClassify = false
     var throwOnVideos = false
+    var videosError: Error?
     private(set) var loadCount = 0
 
     func videos(classification: String?) async throws -> [Video] {
         loadCount += 1
+        if let videosError { throw videosError }
         if throwOnVideos { throw APIError.badStatus(503) }
         if let c = classification { return videosToReturn.filter { $0.classification == c } }
         return videosToReturn
     }
     func classifications() async throws -> [String] { ["children", "adults"] }
+    /// Thrown by every mutating endpoint, so one hook covers them all.
+    var mutationError: Error?
     func classify(id: Int, classification: String) async throws -> Bool {
+        if let mutationError { throw mutationError }
         if throwOnClassify { throw APIError.badStatus(500) }
         return classifyResult
     }
-    func upload(url: String) async throws -> Int { uploadId }
+    func upload(url: String) async throws -> Int {
+        if let mutationError { throw mutationError }
+        return uploadId
+    }
     var deleteResult = true
     private(set) var deletedIds: [Int] = []
     func delete(id: Int) async throws -> Bool {
+        if let mutationError { throw mutationError }
         deletedIds.append(id)
         return deleteResult
     }
@@ -48,16 +57,20 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     var videoResults: [Video] = []
     private(set) var videoCalls = 0
 
+    var scanError: Error?
     func scanLibrary() async throws -> ScanResult {
         scanCalls += 1
+        if let scanError { throw scanError }
         if throwOnScan { throw APIError.badStatus(500) }
         return scanResult
     }
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool {
+        if let mutationError { throw mutationError }
         chosenVersions.append((id, versionId))
         return chooseVersionResult
     }
     func chooseAudio(id: Int, lang: String) async throws -> Bool {
+        if let mutationError { throw mutationError }
         chosenAudio.append((id, lang))
         return chooseAudioResult
     }
@@ -265,6 +278,108 @@ private func tempCache() -> VideoListCache {
     await store.load()
     #expect(store.videos.isEmpty)
     #expect(store.errorText != nil)
+}
+
+// A cancelled URLSession task (-999) is normal SwiftUI lifecycle -- .task and
+// .refreshable cancel their work when the view updates or a newer load
+// supersedes them. It is not a failure the user should see.
+@MainActor @Test func loadIgnoresURLCancellation() async {
+    let api = FakeAPI()
+    api.videosError = URLError(.cancelled)
+    let store = VideoStore(api: api, cache: tempCache())
+    await store.load()
+    #expect(store.errorText == nil)
+}
+
+@MainActor @Test func loadIgnoresNSURLCancellation() async {
+    let api = FakeAPI()
+    api.videosError = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+    let store = VideoStore(api: api, cache: tempCache())
+    await store.load()
+    #expect(store.errorText == nil)
+}
+
+@MainActor @Test func loadIgnoresTaskCancellation() async {
+    let api = FakeAPI()
+    api.videosError = CancellationError()
+    let store = VideoStore(api: api, cache: tempCache())
+    await store.load()
+    #expect(store.errorText == nil)
+}
+
+// A cancelled refresh must not wipe out what is already on screen.
+@MainActor @Test func loadKeepsExistingVideosOnCancellation() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
+    let store = VideoStore(api: api, cache: tempCache())
+    await store.load()
+    api.videosError = URLError(.cancelled)
+    await store.load()
+    #expect(store.videos.map(\.id) == [1, 2])
+    #expect(store.errorText == nil)
+}
+
+// Same rule for the mutating endpoints: a cancelled write still rolls the
+// optimistic edit back (the server never confirmed it), but must not banner.
+@MainActor @Test func classifyIgnoresCancellation() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api, cache: tempCache())
+    await store.load()
+    api.mutationError = URLError(.cancelled)
+    await store.classify(id: 1, to: "adults")
+    #expect(store.errorText == nil)
+    #expect(store.videos.first?.classification == "children")
+}
+
+@MainActor @Test func chooseVersionIgnoresCancellation() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api, cache: tempCache())
+    await store.load()
+    api.mutationError = CancellationError()
+    await store.chooseVersion(id: 1, versionId: 7)
+    #expect(store.errorText == nil)
+}
+
+@MainActor @Test func chooseAudioIgnoresCancellation() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api, cache: tempCache())
+    await store.load()
+    api.mutationError = URLError(.cancelled)
+    await store.chooseAudio(id: 1, lang: "spa")
+    #expect(store.errorText == nil)
+}
+
+@MainActor @Test func deleteIgnoresCancellation() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api, cache: tempCache())
+    api.mutationError = URLError(.cancelled)
+    await store.delete(id: 1)
+    #expect(store.errorText == nil)
+}
+
+@MainActor @Test func uploadIgnoresCancellation() async {
+    let api = FakeAPI()
+    let store = VideoStore(api: api, cache: tempCache())
+    api.mutationError = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+    await store.upload(url: "https://example.com/v")
+    #expect(store.errorText == nil)
+}
+
+@MainActor @Test func refreshLibraryIgnoresScanCancellation() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api, cache: tempCache())
+    api.scanError = URLError(.cancelled)
+    await store.refreshLibrary()
+    #expect(store.errorText == nil)
+    #expect(store.videos.map(\.id) == [1])   // load() still ran
+}
+
+// A genuine scan failure must still surface -- the cancellation guard is
+// narrow, not a blanket silencer.
+@MainActor @Test func refreshLibraryStillReportsRealScanFailure() async {
+    let api = FakeAPI(); api.throwOnScan = true
+    let store = VideoStore(api: api, cache: tempCache())
+    await store.refreshLibrary()
+    #expect(store.errorText?.contains("500") == true)
 }
 
 @MainActor @Test func bootLoadShowsCacheThenRefreshes() async {

@@ -306,11 +306,7 @@ struct VideoGridView: View {
     }
 
     private func isCancellation(_ error: Error) -> Bool {
-        if let urlError = error as? URLError, urlError.code == .cancelled {
-            return true
-        }
-        let nsError = error as NSError
-        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+        VideoStore.isCancellation(error)
     }
 
     /// Downloads every not-yet-cached video currently in view (respects the active filter).

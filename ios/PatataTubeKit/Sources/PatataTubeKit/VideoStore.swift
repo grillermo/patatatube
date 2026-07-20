@@ -44,11 +44,31 @@ public final class VideoStore: ObservableObject {
             videos = fetched
             cache?.save(fetched, classification: filter)
         } catch {
+            // A cancelled fetch is routine SwiftUI lifecycle (.task and .refreshable
+            // cancel their work on view updates, and a newer load supersedes an older
+            // one). It says nothing about the server, so leave the list and errorText
+            // untouched rather than banner it or fall back to stale cache.
+            if Self.isCancellation(error) { return }
             if let cached = cache?.load(classification: filter) {
                 videos = cached
             }
-            errorText = String(describing: error)
+            report(error)
         }
+    }
+
+    /// True for routine task cancellation -- SwiftUI cancelling a `.task`/`.refreshable`,
+    /// or a newer request superseding an older one. Never a server-side failure.
+    public static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
+    /// Surfaces a failure to the user, swallowing cancellations.
+    private func report(_ error: Error) {
+        if Self.isCancellation(error) { return }
+        errorText = String(describing: error)
     }
 
     public func classify(id: Int, to classification: String) async {
@@ -60,7 +80,7 @@ public final class VideoStore: ObservableObject {
             if !ok { videos = previous }
         } catch {
             videos = previous
-            errorText = String(describing: error)
+            report(error)
         }
     }
 
@@ -73,7 +93,7 @@ public final class VideoStore: ObservableObject {
             if !ok { videos[index] = previous }
         } catch {
             videos[index] = previous
-            errorText = String(describing: error)
+            report(error)
         }
     }
 
@@ -92,7 +112,7 @@ public final class VideoStore: ObservableObject {
             }
         } catch {
             videos[index] = previous
-            errorText = String(describing: error)
+            report(error)
         }
     }
 
@@ -102,7 +122,7 @@ public final class VideoStore: ObservableObject {
             _ = try await api.delete(id: id)
             await load()
         } catch {
-            errorText = String(describing: error)
+            report(error)
         }
     }
 
@@ -111,7 +131,7 @@ public final class VideoStore: ObservableObject {
             _ = try await api.upload(url: url)
             await load()
         } catch {
-            errorText = String(describing: error)
+            report(error)
         }
     }
 
@@ -122,7 +142,7 @@ public final class VideoStore: ObservableObject {
         do {
             _ = try await api.scanLibrary()
         } catch {
-            scanErrorText = String(describing: error)
+            if !Self.isCancellation(error) { scanErrorText = String(describing: error) }
         }
         await load()
         // If the scan failed but load() itself succeeded (errorText is nil),
