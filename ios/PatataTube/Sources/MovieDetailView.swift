@@ -112,6 +112,28 @@ struct MovieDetailView: View {
         }
         .navigationTitle(currentVideo.title ?? "Movie")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button(role: .destructive) {
+                        model.cache.removeAllCached(id: currentVideo.id)
+                        // Flip the download button back to the arrow now,
+                        // instead of waiting for the 500ms cache poll.
+                        activeDownloadID = nil
+                        withAnimation {
+                            downloadPhase = .idle
+                            observedCacheState = .notCached
+                            progress = 0
+                        }
+                    } label: {
+                        Label("Delete cached", systemImage: "trash")
+                    }
+                    .disabled(!model.cache.hasAnyCached(id: currentVideo.id))
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
         .task(id: downloadPollKey) {
             await pollCacheState()
         }
