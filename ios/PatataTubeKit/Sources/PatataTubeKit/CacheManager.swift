@@ -97,6 +97,30 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         try? fileManager.removeItem(at: localURL(for: id, versionId: versionId))
     }
 
+    /// True when any cached MP4 (any version) exists for this video.
+    public func hasAnyCached(id: Int) -> Bool {
+        !cachedVideoFilenames(id: id).isEmpty
+    }
+
+    /// Deletes every cached MP4 and resume file for this video, all versions.
+    /// Preview images and show posters are kept — small, still useful offline.
+    public func removeAllCached(id: Int) {
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        let resumes = contents.filter {
+            $0 == "\(id).resume" || ($0.hasPrefix("\(id):") && $0.hasSuffix(".resume"))
+        }
+        for name in cachedVideoFilenames(id: id) + resumes {
+            try? fileManager.removeItem(at: root.appendingPathComponent(name))
+        }
+    }
+
+    private func cachedVideoFilenames(id: Int) -> [String] {
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        return contents.filter {
+            $0 == "\(id).mp4" || ($0.hasPrefix("\(id).v") && $0.hasSuffix(".mp4"))
+        }
+    }
+
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                            didWriteData bytesWritten: Int64,
                            totalBytesWritten: Int64,

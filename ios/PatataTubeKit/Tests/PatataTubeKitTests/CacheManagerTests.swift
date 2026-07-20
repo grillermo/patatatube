@@ -289,6 +289,49 @@ struct CacheManagerTests {
         #expect(!FileManager.default.fileExists(atPath: version.path))
     }
 
+    @Test func hasAnyCachedFindsBaseAndVersionedFiles() throws {
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        #expect(manager.hasAnyCached(id: 21) == false)
+
+        try Data([0x01]).write(to: root.appendingPathComponent("21.v3.mp4"))
+        #expect(manager.hasAnyCached(id: 21))
+
+        try Data([0x01]).write(to: root.appendingPathComponent("2.mp4"))
+        #expect(manager.hasAnyCached(id: 2))
+        // id 2 must not match 21.v3.mp4; id 1 must not match either file.
+        #expect(manager.hasAnyCached(id: 1) == false)
+    }
+
+    @Test func hasAnyCachedIgnoresPreviewFiles() throws {
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        try Data([0x01]).write(to: root.appendingPathComponent("22.preview.jpg"))
+        #expect(manager.hasAnyCached(id: 22) == false)
+    }
+
+    @Test func removeAllCachedDeletesVideosAndResumeDataKeepsPreviews() throws {
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let keep = ["23.preview.jpg", "poster.abc123.jpg", "24.mp4", "24:1.resume"]
+        let remove = ["23.mp4", "23.v1.mp4", "23.v12.mp4", "23.resume", "23:4.resume"]
+        for name in keep + remove {
+            try Data([0x01]).write(to: root.appendingPathComponent(name))
+        }
+
+        manager.removeAllCached(id: 23)
+
+        for name in remove {
+            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(name).path),
+                    "should have deleted \(name)")
+        }
+        for name in keep {
+            #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(name).path),
+                    "should have kept \(name)")
+        }
+        #expect(manager.state(for: 23) == .notCached)
+    }
+
     @Test func showPosterStoreAndLookup() throws {
         let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
         let key = "/library/shows/bluey/poster.png"
