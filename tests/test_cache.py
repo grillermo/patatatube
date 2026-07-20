@@ -1,4 +1,5 @@
 # tests/test_cache.py
+import hashlib
 import importlib
 
 import pytest
@@ -114,10 +115,51 @@ def test_mutation_flushes_cache(client, monkeypatch):
     assert "x-cache" not in after.headers
 
 
-def test_authorized_requests_bypass_cache(client):
+def test_default_item_cap_is_300_mib():
+    assert cache.CACHE_MAX_ITEM_BYTES == 300 * 1024 * 1024
+
+
+def test_same_token_hits_own_cache_entry(client):
+    headers = {"Authorization": "Bearer test-secret"}
+    first = client.get("/api/videos", headers=headers)
+    assert first.status_code == 200
+    assert "x-cache" not in first.headers
+    second = client.get("/api/videos", headers=headers)
+    assert second.headers.get("x-cache") == "hit"
+    assert second.content == first.content
+
+
+def test_tokens_get_separate_cache_scopes(client):
+    headers_a = {"Authorization": "Bearer test-secret"}
+    headers_b = {"Authorization": "Bearer other-token"}
+    client.get("/api/videos", headers=headers_a)
+    assert client.get("/api/videos", headers=headers_a).headers.get("x-cache") == "hit"
+    first_b = client.get("/api/videos", headers=headers_b)
+    assert "x-cache" not in first_b.headers
+    assert client.get("/api/videos", headers=headers_b).headers.get("x-cache") == "hit"
+
+
+def test_authed_and_public_scopes_are_separate(client):
     client.get("/api/videos")
     assert client.get("/api/videos").headers.get("x-cache") == "hit"
     authed = client.get(
         "/api/videos", headers={"Authorization": "Bearer test-secret"}
     )
     assert "x-cache" not in authed.headers
+
+
+@pytest.mark.asyncio
+async def test_redis_keyspace_holds_fingerprint_never_token(client, fake_redis):
+    token = "test-secret"
+    fingerprint = hashlib.sha256(token.encode()).hexdigest()
+    client.get("/api/videos", headers={"Authorization": f"Bearer {token}"})
+
+    keys = [k.decode() for k in await fake_redis.keys("*")]
+    fifo = [m.decode() for m in await fake_redis.lrange("ptcache:fifo", 0, -1)]
+    size_fields = [f.decode() for f in await fake_redis.hkeys("ptcache:sizes")]
+
+    assert f"ptcache:data:auth:{fingerprint}:/api/videos" in keys
+    assert f"auth:{fingerprint}:/api/videos" in fifo
+    assert f"auth:{fingerprint}:/api/videos" in size_fields
+    for name in keys + fifo + size_fields:
+        assert token not in name

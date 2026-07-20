@@ -13,9 +13,10 @@ import time
 from redis import asyncio as aioredis
 
 CACHE_MAX_BYTES = int(os.getenv("CACHE_MAX_BYTES", str(300 * 1024 * 1024)))
-# Responses bigger than this are never cached (keeps video files out of Redis
-# and bounds how much of a response body is buffered in memory).
-CACHE_MAX_ITEM_BYTES = int(os.getenv("CACHE_MAX_ITEM_BYTES", str(10 * 1024 * 1024)))
+# Responses bigger than this are never cached. Sized to admit full media
+# responses (matches CACHE_MAX_BYTES, so one item may occupy the whole cache);
+# it also bounds how much of a response body is buffered in memory.
+CACHE_MAX_ITEM_BYTES = int(os.getenv("CACHE_MAX_ITEM_BYTES", str(300 * 1024 * 1024)))
 
 _PREFIX = "ptcache"
 _FIFO_KEY = f"{_PREFIX}:fifo"

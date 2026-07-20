@@ -1,3 +1,4 @@
+import hashlib
 import os
 
 from fastapi import FastAPI, Request
@@ -14,10 +15,11 @@ _STRIPPED_HEADERS = {"content-length", "date", "server"}
 class RedisCacheMiddleware(BaseHTTPMiddleware):
     """FIFO Redis cache for GET responses, keyed by URL path + query string.
 
-    Skipped entirely for Range requests (partial content) and requests that
-    carry an Authorization header (a cached body would bypass the token
-    check). Successful mutating requests flush the whole cache so list
-    endpoints never serve stale data.
+    Skipped entirely for Range requests (partial content). Bearer-authenticated
+    requests are cached under a key scoped by the SHA-256 fingerprint of the
+    token, so identical URLs for different tokens never share a response and
+    the raw token never reaches Redis. Successful mutating requests flush the
+    whole cache so list endpoints never serve stale data.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -27,12 +29,20 @@ class RedisCacheMiddleware(BaseHTTPMiddleware):
                 await cache.clear()
             return response
 
-        if "range" in request.headers or "authorization" in request.headers:
+        if "range" in request.headers:
             return await call_next(request)
 
         key = request.url.path
         if request.url.query:
             key += "?" + request.url.query
+
+        auth = request.headers.get("authorization")
+        if auth:
+            scheme, _, token = auth.partition(" ")
+            if scheme.lower() != "bearer" or not token:
+                return await call_next(request)
+            fingerprint = hashlib.sha256(token.encode()).hexdigest()
+            key = f"auth:{fingerprint}:{key}"
 
         hit = await cache.get(key)
         if hit is not None:
