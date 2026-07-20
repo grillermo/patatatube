@@ -92,6 +92,11 @@ struct VideoPlayerView: View {
     private var backdropOpacity: Double { max(1 - dragOffset / 400, 0.4) }
 
     private func setup() async {
+        // Defensive: a malformed presentation must dismiss, not trap on videos[currentIndex].
+        guard videos.indices.contains(currentIndex) else {
+            dismiss()
+            return
+        }
         activateAudioSession()
         guard let item = playerItem(for: video) else { return }
         let player = AVPlayer(playerItem: item)

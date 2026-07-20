@@ -10,10 +10,10 @@ struct VideoGridView: View {
     @State private var classifications: [String] = ["children", "adults", "education", "tv", "movies"]
     @State private var showSettings = false
     @State private var showUpload = false
-    @State private var playing: Video?
-    /// Snapshot of the visible list taken when playback starts; the lock-screen
-    /// next/previous queue. Grid refreshes don't mutate an active queue.
-    @State private var playQueue: [Video] = []
+    /// Queue snapshot + start index, built at tap time. A single cover item —
+    /// presenting from separate state raced the boot load and could hand the
+    /// player an empty queue on the first cold-launch tap (index crash).
+    @State private var playing: PlaybackQueue?
     @State private var preparing = false
     @State private var downloadingAll = false
 
@@ -168,11 +168,8 @@ struct VideoGridView: View {
             .refreshable { await store.load() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
-            .fullScreenCover(item: $playing) { video in
-                VideoPlayerView(
-                    videos: playQueue,
-                    startIndex: playQueue.firstIndex(where: { $0.id == video.id }) ?? 0
-                )
+            .fullScreenCover(item: $playing) { request in
+                VideoPlayerView(videos: request.videos, startIndex: request.startIndex)
             }
             .task { await initialLoad() }
             .overlay { if let error = store.errorText { errorBanner(error) } }
@@ -254,14 +251,7 @@ struct VideoGridView: View {
     /// Starts playback from the tap-time queue snapshot. `video` may be the
     /// ensureReady-updated copy, so it replaces its stale row in the snapshot.
     private func startPlayback(_ video: Video, queueSnapshot: [Video]) {
-        var queue = queueSnapshot
-        if let index = queue.firstIndex(where: { $0.id == video.id }) {
-            queue[index] = video
-        } else {
-            queue = [video]
-        }
-        playQueue = queue
-        playing = video
+        playing = PlaybackQueue(video: video, queueSnapshot: queueSnapshot)
     }
 
     /// Downloads a video for offline playback. Returns true only when the MP4
