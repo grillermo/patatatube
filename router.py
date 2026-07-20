@@ -66,6 +66,23 @@ def _positive_int_env(name: str, default: int) -> int:
 _video_stream_slots = asyncio.Semaphore(_positive_int_env("VIDEO_STREAM_LIMIT", DEFAULT_VIDEO_STREAM_LIMIT))
 
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+# Single-segment YouTube paths that are pages, not video ids.
+YOUTUBE_RESERVED_PATHS = {
+    "account",
+    "feed",
+    "gaming",
+    "hashtag",
+    "live",
+    "movies",
+    "music",
+    "premium",
+    "results",
+    "shorts",
+    "source",
+    "subscriptions",
+    "trending",
+    "watch",
+}
 
 
 def _check_token(request: Request):
@@ -156,6 +173,11 @@ def _extract_youtube_id(raw_url: str) -> str:
             video_id = path.split("/")[2]
         elif path.startswith(("/channel/", "/c/", "/user/", "/@")) or path in {"", "/playlist"}:
             raise ValueError("Unsupported YouTube URL")
+        elif path.count("/") == 1 and path[1:] not in YOUTUBE_RESERVED_PATHS:
+            # Bare /<id> — not a canonical share URL, but users paste it. Legacy
+            # usernames live in the same namespace, so only ids that survive
+            # YOUTUBE_ID_RE below get through.
+            video_id = path[1:]
         else:
             raise ValueError("Unsupported YouTube URL")
     else:

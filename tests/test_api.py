@@ -143,12 +143,34 @@ def test_upload_youtube_strips_non_video_query_params(client, monkeypatch):
     assert video["source_key"] == "dQw4w9WgXcQ"
 
 
+def test_upload_youtube_bare_path_id(client, monkeypatch):
+    queued = []
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: queued.append((a, kw)))
+    resp = client.post(
+        "/upload",
+        json={"url": "https://www.youtube.com/WARwCp2porU"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 202
+    data = resp.json()
+    assert queued == [((data["id"],), {})]
+
+    import db
+
+    video = db.get_video(data["id"])
+    assert video["url"] == "https://www.youtube.com/watch?v=WARwCp2porU"
+    assert video["source_key"] == "WARwCp2porU"
+
+
 @pytest.mark.parametrize(
     "url",
     [
         "https://example.com/video",
         "https://www.youtube.com/playlist?list=PL123",
         "https://www.youtube.com/@somechannel",
+        "https://www.youtube.com/feed/history",
+        "https://www.youtube.com/results?search_query=cats",
+        "https://www.youtube.com/shortname",
     ],
 )
 def test_upload_rejects_invalid_or_unsupported_urls(client, monkeypatch, url):
