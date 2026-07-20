@@ -6,7 +6,7 @@ import PatataTubeKit
 struct ShowsView: View {
     let videos: [Video]
     let onPlay: (Video, [Video]) -> Void
-    let onDownload: (Video) -> Void
+    let onDownload: (Video) async -> Bool
     @EnvironmentObject var model: AppModel
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
