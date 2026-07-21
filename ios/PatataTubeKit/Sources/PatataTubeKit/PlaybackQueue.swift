@@ -9,11 +9,14 @@ public struct PlaybackQueue: Identifiable, Equatable, Sendable {
     public let id: Int
     public let videos: [Video]
     public let startIndex: Int
+    /// When true the player plays only this item and ends in the sleep overlay.
+    public let sleepMode: Bool
 
     /// `video` may be a fresher copy than its row in `queueSnapshot`
     /// (e.g. updated by ensureReady), so it replaces that row. A video absent
     /// from the snapshot plays as a single-item queue — never empty.
-    public init(video: Video, queueSnapshot: [Video]) {
+    public init(video: Video, queueSnapshot: [Video], sleepMode: Bool = false) {
+        self.sleepMode = sleepMode
         self.id = video.id
         if let index = queueSnapshot.firstIndex(where: { $0.id == video.id }) {
             var queue = queueSnapshot
