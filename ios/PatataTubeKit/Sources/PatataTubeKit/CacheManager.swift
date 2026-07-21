@@ -82,6 +82,42 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
     }
 
+    /// Restarts downloads interrupted by app suspension. Call when the app
+    /// returns to the foreground (and on launch): a suspended `.default` session
+    /// cancels its tasks and the OS hands back resume data, which we persisted
+    /// as `{key}.resume`. This picks those files up and continues from the last
+    /// byte. Fire-and-forget — no caller awaits the result; the delegate methods
+    /// move the finished file into place. Returns the video ids it resumed.
+    @discardableResult
+    public func resumeInterrupted() -> [Int] {
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        let keys = contents
+            .filter { $0.hasSuffix(".resume") }
+            .map { String($0.dropLast(".resume".count)) }
+        var resumed: [Int] = []
+        for key in keys {
+            let id = videoId(from: key)
+            let vid = versionId(from: key)
+            // Finished while we were away — drop the stale resume file.
+            if fileManager.fileExists(atPath: localURL(for: id, versionId: vid).path) {
+                try? fileManager.removeItem(at: resumeURL(for: key))
+                continue
+            }
+            // A live task already owns this key (e.g. the user re-tapped download).
+            if lock.withLock({ tasksByKey[key] != nil }) { continue }
+            guard let data = try? Data(contentsOf: resumeURL(for: key)), !data.isEmpty else { continue }
+            let task = session.downloadTask(withResumeData: data)
+            lock.withLock {
+                inFlight[key] = 0
+                idByTask[task.taskIdentifier] = key
+                tasksByKey[key] = task
+            }
+            task.resume()
+            resumed.append(id)
+        }
+        return resumed
+    }
+
     /// Cancels an in-flight download for this id/version. The awaiting
     /// `download` call throws; `state(for:)` returns to `.notCached`.
     /// Explicit cancel restarts from scratch - it does not persist resume data.

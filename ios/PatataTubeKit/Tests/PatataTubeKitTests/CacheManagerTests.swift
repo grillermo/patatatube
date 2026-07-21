@@ -34,8 +34,10 @@ private final class HangingDownloadProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        // A task built from resume data may have no request URL; fall back so
+        // resume-driven downloads still flow through this protocol.
         let response = HTTPURLResponse(
-            url: request.url!,
+            url: request.url ?? URL(string: "https://resumed.invalid/")!,
             statusCode: 200,
             httpVersion: nil,
             headerFields: ["Content-Length": "1000000"]
@@ -330,6 +332,53 @@ struct CacheManagerTests {
                     "should have kept \(name)")
         }
         #expect(manager.state(for: 23) == .notCached)
+    }
+
+    @Test func resumeInterruptedRestartsPendingResumeFiles() {
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: hangingDownloadConfig())
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? Data([0xFF, 0xEE]).write(to: root.appendingPathComponent("31.resume"))
+        try? Data([0xFF, 0xEE]).write(to: root.appendingPathComponent("32:4.resume"))
+
+        let resumed = Set(manager.resumeInterrupted())
+
+        #expect(resumed == [31, 32])
+        #expect(manager.state(for: 31) == .downloading(0))
+        #expect(manager.state(for: 32, versionId: 4) == .downloading(0))
+
+        manager.cancel(id: 31)
+        manager.cancel(id: 32, versionId: 4)
+    }
+
+    @Test func resumeInterruptedDropsStaleResumeWhenAlreadyCached() {
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? Data([0x01]).write(to: root.appendingPathComponent("33.mp4"))
+        try? Data([0xFF]).write(to: root.appendingPathComponent("33.resume"))
+
+        let resumed = manager.resumeInterrupted()
+
+        #expect(resumed.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("33.resume").path))
+        #expect(manager.state(for: 33) == .cached)
+    }
+
+    @Test func resumeInterruptedSkipsLiveInFlightTask() async {
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: hangingDownloadConfig())
+        let task = Task {
+            try await manager.download(id: 34, from: URL(string: "https://srv.test/videos/34/stream")!)
+        }
+        while manager.state(for: 34) == .notCached { await Task.yield() }
+        // A stale resume file for the same key must not spawn a second task.
+        try? Data([0xFF]).write(to: root.appendingPathComponent("34.resume"))
+
+        #expect(manager.resumeInterrupted().isEmpty)
+
+        manager.cancel(id: 34)
+        _ = try? await task.value
     }
 
     @Test func showPosterStoreAndLookup() throws {
