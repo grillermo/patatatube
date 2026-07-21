@@ -5,7 +5,6 @@ import PatataTubeKit
 struct VideoGridView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var classifications: [String] = ["children", "adults", "education", "tv", "movies"]
     @State private var showSettings = false
@@ -123,58 +122,46 @@ struct VideoGridView: View {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { showSettings = true } label: { Image(systemName: "gear") }
-                }
-                if horizontalSizeClass == .compact {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
-                            Button {
-                                Task { await downloadAll() }
-                            } label: { Label("Download all", systemImage: "arrow.down.circle") }
-                            .disabled(downloadingAll)
-                            Button {
-                                cellSize = max(cellSize - cellSizeStep, minCellSize)
-                            } label: { Label("Smaller cells", systemImage: "minus.magnifyingglass") }
-                            .disabled(cellSize <= minCellSize)
-                            Button {
-                                cellSize = min(cellSize + cellSizeStep, maxCellSize)
-                            } label: { Label("Bigger cells", systemImage: "plus.magnifyingglass") }
-                            .disabled(cellSize >= maxCellSize)
-                        } label: { Image(systemName: "ellipsis.circle") }
-                    }
-                } else {
-                    ToolbarItemGroup(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            showUpload = true
+                        } label: { Label("New video", systemImage: "plus") }
+
+                        Button {
+                            Task { await store.refreshLibrary() }
+                        } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                        .disabled(store.isLoading)
+
+                        Toggle(isOn: $model.autoplay) {
+                            Label("Autoplay", systemImage: "play.circle")
+                        }
+
+                        Divider()
+
                         Button {
                             Task { await downloadAll() }
-                        } label: {
-                            if downloadingAll { ProgressView() }
-                            else { Image(systemName: "arrow.down.circle") }
-                        }
+                        } label: { Label("Download all", systemImage: "arrow.down.circle") }
                         .disabled(downloadingAll)
+
                         Button {
                             cellSize = max(cellSize - cellSizeStep, minCellSize)
-                        } label: { Image(systemName: "minus.magnifyingglass") }
+                        } label: { Label("Smaller cells", systemImage: "minus.magnifyingglass") }
                         .disabled(cellSize <= minCellSize)
+
                         Button {
                             cellSize = min(cellSize + cellSizeStep, maxCellSize)
-                        } label: { Image(systemName: "plus.magnifyingglass") }
+                        } label: { Label("Bigger cells", systemImage: "plus.magnifyingglass") }
                         .disabled(cellSize >= maxCellSize)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    AutoplayToggle(isOn: $model.autoplay)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await store.refreshLibrary() }
+
+                        Divider()
+
+                        Button {
+                            showSettings = true
+                        } label: { Label("Settings", systemImage: "gear") }
                     } label: {
-                        if store.isLoading { ProgressView() }
-                        else { Image(systemName: "arrow.clockwise") }
+                        Image(systemName: "ellipsis.circle")
                     }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showUpload = true } label: { Image(systemName: "plus") }
                 }
             }
             .refreshable { await store.load() }
