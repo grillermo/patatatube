@@ -103,6 +103,14 @@ On first launch grid is empty / errors — need server config:
 - **Error banner**: point Base URL at unreachable host → red error banner appears at bottom of grid
 - **Missing token**: clear upload token in Settings, try Add Video → upload should fail (401 from backend)
 
+### Play-and-sleep
+1. Grid: children's videos with status `done` show the dark bottom-right wedge with play+moon; adults/education/tv/movies cells and non-`done` children's rows do not.
+2. Tap the wedge → video plays full screen. Tap elsewhere on the thumbnail → normal playback (autoplay behavior unchanged).
+3. With autoplay ON, let a play-and-sleep video finish → screen goes black, no next video starts.
+4. On the black overlay: single taps and swipes do nothing (no player controls appear, pull-down doesn't dismiss).
+5. Press and hold ~3s anywhere on the black overlay → returns to the grid.
+6. (Device only) Leave the overlay untouched → device auto-locks after the system auto-lock interval.
+
 ### Plex library
 
 - [ ] Settings has valid base URL + token; tap the refresh (↻) toolbar button — spinner shows, then movie/TV items appear.
