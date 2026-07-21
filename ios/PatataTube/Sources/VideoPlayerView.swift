@@ -7,11 +7,14 @@ import UIKit
 struct VideoPlayerView: View {
     let videos: [Video]
     let startIndex: Int
+    /// Play-and-sleep: play only this item, then black out so the device can lock.
+    let sleepMode: Bool
     @State private var currentIndex: Int
 
-    init(videos: [Video], startIndex: Int) {
+    init(videos: [Video], startIndex: Int, sleepMode: Bool = false) {
         self.videos = videos
         self.startIndex = startIndex
+        self.sleepMode = sleepMode
         _currentIndex = State(initialValue: startIndex)
     }
 
@@ -28,6 +31,8 @@ struct VideoPlayerView: View {
     @State private var resumeAfterDetaching = false
     /// Live vertical drag offset for the pull-down-to-dismiss gesture.
     @State private var dragOffset: CGFloat = 0
+    /// Set when sleep-mode playback finishes; only a 3s long-press clears it.
+    @State private var showingSleepOverlay = false
 
     var body: some View {
         ZStack {
@@ -44,6 +49,15 @@ struct VideoPlayerView: View {
                     .scaleEffect(dragScale)
             } else {
                 ProgressView().tint(.white)
+            }
+            if showingSleepOverlay {
+                // Sleep overlay: swallow every touch so a child can't tap back
+                // into the app; a paused player releases the idle timer, so the
+                // device auto-locks on the system schedule. Parents escape with
+                // a 3-second long-press.
+                Color.black.ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onLongPressGesture(minimumDuration: 3) { dismiss() }
             }
         }
         .simultaneousGesture(pullDownToDismiss)
@@ -73,6 +87,7 @@ struct VideoPlayerView: View {
     private var pullDownToDismiss: some Gesture {
         DragGesture(minimumDistance: 20)
             .onChanged { value in
+                guard !showingSleepOverlay else { return }
                 let dy = value.translation.height
                 let dx = value.translation.width
                 // Only engage on a downward, vertically-dominant drag.
@@ -80,6 +95,7 @@ struct VideoPlayerView: View {
                 dragOffset = dy
             }
             .onEnded { value in
+                guard !showingSleepOverlay else { return }
                 if value.translation.height > 150 {
                     dismiss()
                 } else {
@@ -149,7 +165,8 @@ struct VideoPlayerView: View {
             Task { @MainActor in
                 switch playbackEndAction(
                     autoplay: model.autoplay,
-                    isForeground: UIApplication.shared.applicationState == .active
+                    isForeground: UIApplication.shared.applicationState == .active,
+                    sleepMode: sleepMode
                 ) {
                 case .advance:
                     advance(by: 1)
@@ -157,6 +174,9 @@ struct VideoPlayerView: View {
                     dismiss()
                 case .stop:
                     player?.pause()
+                case .sleep:
+                    player?.pause()
+                    showingSleepOverlay = true
                 }
             }
         }

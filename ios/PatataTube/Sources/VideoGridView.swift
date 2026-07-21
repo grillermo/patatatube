@@ -169,7 +169,8 @@ struct VideoGridView: View {
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
             .fullScreenCover(item: $playing) { request in
-                VideoPlayerView(videos: request.videos, startIndex: request.startIndex)
+                VideoPlayerView(videos: request.videos, startIndex: request.startIndex,
+                                sleepMode: request.sleepMode)
             }
             .task { await initialLoad() }
             .overlay { if let error = store.errorText { errorBanner(error) } }
