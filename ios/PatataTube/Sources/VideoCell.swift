@@ -12,6 +12,8 @@ struct VideoCell: View {
     var localFileURL: URL? = nil
     let classifications: [String]
     let onPlay: () -> Void
+    /// Children-only corner button: play this one video, then sleep-lock.
+    let onPlaySleep: () -> Void
     /// Returns true only when the MP4 actually cached, so we don't paint a false checkmark.
     let onDownload: () async -> Bool
     let onCancel: () -> Void
@@ -25,6 +27,11 @@ struct VideoCell: View {
     /// tv/movies previews are tall Plex posters; letterbox them instead of cropping.
     private var isPoster: Bool {
         video.classification == "tv" || video.classification == "movies"
+    }
+
+    /// Play-and-sleep only makes sense on playable children's videos.
+    private var showsSleepButton: Bool {
+        video.classification == "children" && video.status == "done"
     }
 
     var body: some View {
@@ -62,6 +69,26 @@ struct VideoCell: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .overlay(alignment: .bottomTrailing) {
+                if showsSleepButton {
+                    Button(action: onPlaySleep) {
+                        ZStack(alignment: .bottomTrailing) {
+                            BottomRightTriangle().fill(.black.opacity(0.55))
+                            HStack(spacing: 2) {
+                                Image(systemName: "play.fill")
+                                Image(systemName: "moon.fill")
+                            }
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.trailing, 8)
+                            .padding(.bottom, 6)
+                        }
+                        .frame(width: 64, height: 64)
+                        .contentShape(BottomRightTriangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
 
             HStack {
                 DownloadButton(
@@ -224,5 +251,18 @@ struct VideoInfoView: View {
               let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let bytes = attrs[.size] as? Int64 else { return nil }
         return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+}
+
+/// Right triangle filling the bottom-right half of its frame — both the visual
+/// wedge and the hit area of the play-and-sleep corner button.
+struct BottomRightTriangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        p.closeSubpath()
+        return p
     }
 }

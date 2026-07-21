@@ -95,6 +95,7 @@ struct VideoGridView: View {
                                 localFileURL: cache.localURL(for: videoId, versionId: versionId),
                                 classifications: classifications,
                                 onPlay: { play(video) },
+                                onPlaySleep: { play(video, sleepMode: true) },
                                 onDownload: { await download(video) },
                                 onCancel: { cache.cancel(id: videoId, versionId: versionId) },
                                 onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
@@ -216,21 +217,21 @@ struct VideoGridView: View {
         await store.bootLoad()
     }
 
-    private func play(_ video: Video) {
+    private func play(_ video: Video, sleepMode: Bool = false) {
         let queueSnapshot = filteredVideos
-        play(video, queueSnapshot: queueSnapshot)
+        play(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode)
     }
 
-    private func play(_ video: Video, queueSnapshot: [Video]) {
+    private func play(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false) {
         // Already downloaded to device: play the local file directly, no network.
         // ensureReady() would hit /prepare and fail offline (-1009) even though
         // the cached MP4 is ready to play. VideoPlayerView plays from cache too.
         if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
-            startPlayback(video, queueSnapshot: queueSnapshot)
+            startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode)
             return
         }
         guard video.isLibrary, video.status != "done" else {
-            startPlayback(video, queueSnapshot: queueSnapshot)
+            startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode)
             return
         }
         preparing = true
@@ -239,7 +240,8 @@ struct VideoGridView: View {
             do {
                 startPlayback(
                     try await store.ensureReady(id: video.id),
-                    queueSnapshot: queueSnapshot
+                    queueSnapshot: queueSnapshot,
+                    sleepMode: sleepMode
                 )
             } catch {
                 store.errorText = String(describing: error)
@@ -249,8 +251,8 @@ struct VideoGridView: View {
 
     /// Starts playback from the tap-time queue snapshot. `video` may be the
     /// ensureReady-updated copy, so it replaces its stale row in the snapshot.
-    private func startPlayback(_ video: Video, queueSnapshot: [Video]) {
-        playing = PlaybackQueue(video: video, queueSnapshot: queueSnapshot)
+    private func startPlayback(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false) {
+        playing = PlaybackQueue(video: video, queueSnapshot: queueSnapshot, sleepMode: sleepMode)
     }
 
     /// Downloads a video for offline playback. Returns true only when the MP4
