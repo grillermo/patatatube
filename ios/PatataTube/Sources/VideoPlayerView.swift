@@ -84,6 +84,10 @@ struct VideoPlayerView: View {
         .onDisappear {
             player?.pause()
             removePlayToEndObserver()
+            readyObserver?.invalidate()
+            readyObserver = nil
+            readyTimeoutTask?.cancel()
+            readyTimeoutTask = nil
             nowPlaying.detach()
             deactivateAudioSession()
         }
@@ -248,7 +252,7 @@ struct VideoPlayerView: View {
         player.replaceCurrentItem(with: item)
         Task { await applyAudioSelection(item: item, lang: videos[nextIndex].audioLang) }
         bindPlayToEnd()
-        player.play()
+        playWhenReady(item: item, on: player)
         nowPlaying.updateTitle(title(of: video))
         nowPlaying.setNextEnabled(playableIndex(from: currentIndex, direction: 1) != nil)
         Task { await loadArtwork(for: player) }
