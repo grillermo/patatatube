@@ -13,7 +13,14 @@ PYTHON_BIN="${PYTHON_BIN:-python_env/bin/python}"
 # limit toward the hard cap. Defense in depth on top of closing connections.
 ulimit -n "${FD_LIMIT:-8192}" 2>/dev/null || true
 
+# Prefix every line with a colored label so interleaved streams are tellable
+# apart. $1: ANSI color code, $2: label. awk (not sed) for line buffering.
+colorize() {
+  awk -v p="$(printf '\033[1;%sm%-7s|\033[0m' "$1" "$2")" '{ print p, $0; fflush() }'
+}
+
 if [ "$DEV" = "1" ]; then
+  exec > >(colorize 36 dev) 2>&1
   exec "$PYTHON_BIN" -m uvicorn main:app \
     --host 0.0.0.0 \
     --port "$PORT" \
@@ -31,10 +38,15 @@ fi
 
 # gunicorn manages the worker lifecycle (respawn on crash, graceful reload via
 # SIGHUP, staged shutdown); uvicorn workers do the actual ASGI serving.
+# Access and error logs get their own colors via process substitution; anything
+# workers print directly (stdout/stderr) falls through to the "web" label.
+# fd 3 preserves the real stdout so the log labels don't also pick up "web".
+exec 3>&1
+exec > >(colorize 34 web) 2>&1
 exec "$PYTHON_BIN" -m gunicorn main:app \
   --worker-class uvicorn_worker.UvicornWorker \
   --workers "${WEB_CONCURRENCY:-3}" \
   --bind "0.0.0.0:$PORT" \
   --forwarded-allow-ips='*' \
-  --access-logfile - \
-  --error-logfile -
+  --access-logfile >(colorize 32 access >&3) \
+  --error-logfile >(colorize 33 app >&3)
