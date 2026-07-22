@@ -140,6 +140,7 @@ struct DownloadButton: View {
     let currentCacheState: () -> CacheState
     let onDownload: () async -> Bool
     let onCancel: () -> Void
+    let onDeleteCache: () -> Void
 
     @Environment(\.continuousClock) private var clock
     @State private var state: DownloadButtonState
@@ -155,6 +156,7 @@ struct DownloadButton: View {
         currentCacheState: @escaping () -> CacheState,
         onDownload: @escaping () async -> Bool,
         onCancel: @escaping () -> Void,
+        onDeleteCache: @escaping () -> Void,
         state: DownloadButtonState? = nil
     ) {
         self.identity = identity
@@ -162,6 +164,7 @@ struct DownloadButton: View {
         self.currentCacheState = currentCacheState
         self.onDownload = onDownload
         self.onCancel = onCancel
+        self.onDeleteCache = onDeleteCache
         _state = State(initialValue: state ?? DownloadButtonState(
             initialCacheState: currentCacheState()
         ))
@@ -173,18 +176,38 @@ struct DownloadButton: View {
                 state.reset(to: currentCacheState())
                 await state.poll(currentCacheState: currentCacheState, clock: clock)
             }
+            .task(id: state.armGeneration) {
+                guard state.isArmed else { return }
+                do {
+                    try await clock.sleep(for: .seconds(3))
+                } catch {
+                    return
+                }
+                withAnimation { state.disarm() }
+            }
     }
 
     @ViewBuilder
     private var control: some View {
         switch state.effectiveState {
         case .cached:
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .font(.system(size: 30))
-                .frame(width: 44, height: 44)
-                .transition(.scale.combined(with: .opacity))
-                .accessibilityLabel("Downloaded")
+            Button {
+                if state.showsArmedDelete {
+                    onDeleteCache()
+                    withAnimation { state.reset(to: .notCached) }
+                } else {
+                    withAnimation { state.arm() }
+                }
+            } label: {
+                Image(systemName: state.showsArmedDelete ? "x.circle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(state.showsArmedDelete ? .red : .green)
+                    .font(.system(size: 30))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+                    .transition(.scale.combined(with: .opacity))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(state.showsArmedDelete ? "Delete download" : "Downloaded")
 
         case .downloading:
             Button {

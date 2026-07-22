@@ -153,7 +153,8 @@ private func makeDownloadButton(
     cache: CacheStateSource = CacheStateSource(.notCached),
     refreshToken: Int = 0,
     onDownload: @escaping () async -> Bool = { false },
-    onCancel: @escaping () -> Void = {}
+    onCancel: @escaping () -> Void = {},
+    onDeleteCache: @escaping () -> Void = {}
 ) -> DownloadButton {
     DownloadButton(
         identity: DownloadButtonIdentity(videoID: 7, versionID: 3, audioLanguage: "eng"),
@@ -161,6 +162,7 @@ private func makeDownloadButton(
         currentCacheState: { cache.read() },
         onDownload: onDownload,
         onCancel: onCancel,
+        onDeleteCache: onDeleteCache,
         state: state
     )
 }
@@ -181,8 +183,8 @@ struct DownloadButtonViewTests {
         #expect(try control.accessibilityValue().string() == "100%")
 
         state.reset(to: .cached)
-        let image = try sut.inspect().find(ViewType.Image.self)
-        #expect(try image.accessibilityLabel().string() == "Downloaded")
+        control = try sut.inspect().find(ViewType.Button.self)
+        #expect(try control.accessibilityLabel().string() == "Downloaded")
     }
 
     @Test func tappingDownloadShowsLoadingThenAppliesSuccess() async throws {
@@ -282,5 +284,51 @@ struct DownloadButtonViewTests {
 
         #expect(source.readCount == readsAfterExpel)
         #expect(cancelCount == 0)
+    }
+
+    @Test func tappingCachedArmsDeletePrompt() throws {
+        let state = DownloadButtonState(initialCacheState: .cached)
+        let sut = makeDownloadButton(state: state)
+
+        var control = try sut.inspect().find(ViewType.Button.self)
+        #expect(try control.accessibilityLabel().string() == "Downloaded")
+
+        try control.tap()
+        #expect(state.showsArmedDelete)
+
+        control = try sut.inspect().find(ViewType.Button.self)
+        #expect(try control.accessibilityLabel().string() == "Delete download")
+    }
+
+    @Test func tappingArmedDeletesCacheAndReturnsToDownload() throws {
+        let state = DownloadButtonState(initialCacheState: .cached)
+        var deleteCount = 0
+        let sut = makeDownloadButton(state: state, onDeleteCache: { deleteCount += 1 })
+
+        state.arm()
+        try sut.inspect().find(ViewType.Button.self).tap()
+
+        #expect(deleteCount == 1)
+        #expect(state.effectiveState == .notCached)
+        #expect(!state.isArmed)
+
+        let control = try sut.inspect().find(ViewType.Button.self)
+        #expect(try control.accessibilityLabel().string() == "Download")
+    }
+
+    @Test func armedStateAutoRevertsAfterTimeout() async {
+        let state = DownloadButtonState(initialCacheState: .cached)
+        let clock = TestClock()
+        let sut = makeDownloadButton(state: state, cache: CacheStateSource(.cached))
+            .environment(\.continuousClock, clock)
+
+        ViewHosting.host(view: sut)
+        state.arm()
+        await eventually("View never observed armed state") { state.isArmed }
+
+        await clock.advance(by: .seconds(3))
+        await eventually("Armed state never auto-reverted") { !state.isArmed }
+
+        ViewHosting.expel()
     }
 }
