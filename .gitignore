@@ -10,3 +10,4 @@ docs/
 .tokensave/
 .worktrees/
 watch_later.sqlite
+log/

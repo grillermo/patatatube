@@ -1,6 +1,8 @@
 fastapi==0.115.0
 python-multipart==0.0.12
 uvicorn==0.30.6
+gunicorn==23.0.0
+uvicorn-worker==0.2.0
 pybalt==2025.7.1
 yt-dlp==2026.3.17
 PyYAML==6.0.2

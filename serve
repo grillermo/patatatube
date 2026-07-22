@@ -3,7 +3,9 @@
 #   WEB_CONCURRENCY=4 ./serve   # override worker count (default 2)
 # Development: DEV=1 ./serve     # single process + hot reload (workers ignored)
 
-PORT="${PORT:-3050}"
+# Caddy owns the client-facing :3050 and serves static assets / HLS segments /
+# downloaded MP4s from disk (see ~/c/server/Caddyfile); the app sits behind it.
+PORT="${PORT:-3051}"
 PYTHON_BIN="${PYTHON_BIN:-python_env/bin/python}"
 
 # macOS launchd hands processes a 256-fd soft limit. Video streaming, HLS
@@ -27,9 +29,12 @@ if [ "$DEV" = "1" ]; then
     --forwarded-allow-ips='*'
 fi
 
-exec "$PYTHON_BIN" -m uvicorn main:app \
-  --host 0.0.0.0 \
-  --port "$PORT" \
-  --workers "${WEB_CONCURRENCY:-2}" \
-  --proxy-headers \
-  --forwarded-allow-ips='*'
+# gunicorn manages the worker lifecycle (respawn on crash, graceful reload via
+# SIGHUP, staged shutdown); uvicorn workers do the actual ASGI serving.
+exec "$PYTHON_BIN" -m gunicorn main:app \
+  --worker-class uvicorn_worker.UvicornWorker \
+  --workers "${WEB_CONCURRENCY:-3}" \
+  --bind "0.0.0.0:$PORT" \
+  --forwarded-allow-ips='*' \
+  --access-logfile - \
+  --error-logfile -
