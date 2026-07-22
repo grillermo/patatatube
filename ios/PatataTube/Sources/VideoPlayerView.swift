@@ -23,6 +23,13 @@ struct VideoPlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var player: AVPlayer?
+    /// Gates mounting the player UI: false until the current item has buffered
+    /// enough to play, so we never surface AVKit's crossed-out play button.
+    @State private var itemReady = false
+    /// KVO on the current item's isPlaybackLikelyToKeepUp; flips itemReady true.
+    @State private var readyObserver: NSKeyValueObservation?
+    /// Fallback: mount + play even if buffering never reports ready (dead network).
+    @State private var readyTimeoutTask: Task<Void, Never>?
     @State private var nowPlaying = NowPlayingManager()
     @State private var playToEndObserver: NSObjectProtocol?
     /// false while backgrounded: player detached from the video layer so audio continues.
@@ -37,14 +44,13 @@ struct VideoPlayerView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea().opacity(backdropOpacity)
-            if let player {
+            if let player, itemReady {
                 PlayerViewController(
                     player: player,
                     attached: attached,
                     resumeAfterDetaching: resumeAfterDetaching
                 )
                     .ignoresSafeArea()
-                    .onAppear { player.play() }
                     .offset(y: dragOffset)
                     .scaleEffect(dragScale)
             } else {
@@ -119,6 +125,7 @@ struct VideoPlayerView: View {
         player.allowsExternalPlayback = true
         player.usesExternalPlaybackWhileExternalScreenIsActive = true
         self.player = player
+        playWhenReady(item: item, on: player)
         Task { await applyAudioSelection(item: item, lang: video.audioLang) }
         nowPlaying.onNext = { advance(by: 1) }
         nowPlaying.onPrevious = { handlePrevious() }
@@ -126,6 +133,42 @@ struct VideoPlayerView: View {
         nowPlaying.setNextEnabled(playableIndex(from: currentIndex, direction: 1) != nil)
         bindPlayToEnd()
         await loadArtwork(for: player)
+    }
+
+    /// Show a spinner until `item` has buffered enough to play, then mount the
+    /// player and start. Cancels any prior observer/timeout so requeueing is safe.
+    /// A ~12s timeout mounts anyway so a dead network still surfaces AVKit's UI.
+    private func playWhenReady(item: AVPlayerItem, on player: AVPlayer) {
+        readyObserver?.invalidate()
+        readyTimeoutTask?.cancel()
+        itemReady = false
+
+        let markReady = {
+            guard self.player === player, !self.itemReady else { return }
+            self.itemReady = true
+            player.play()
+            self.readyObserver?.invalidate()
+            self.readyObserver = nil
+            self.readyTimeoutTask?.cancel()
+            self.readyTimeoutTask = nil
+        }
+
+        // Already buffered (e.g. cached local file): mount without a flash.
+        if item.isPlaybackLikelyToKeepUp {
+            markReady()
+            return
+        }
+
+        readyObserver = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { _, change in
+            guard change.newValue == true else { return }
+            Task { @MainActor in markReady() }
+        }
+
+        readyTimeoutTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(12))
+            guard !Task.isCancelled else { return }
+            markReady()
+        }
     }
 
     /// AVPlayerItem for a queue entry, or nil when it has no playable source
