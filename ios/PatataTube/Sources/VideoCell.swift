@@ -17,6 +17,7 @@ struct VideoCell: View {
     /// Returns true only when the MP4 actually cached, so we don't paint a false checkmark.
     let onDownload: () async -> Bool
     let onCancel: () -> Void
+    let onDeleteCache: () -> Void
     let onClassify: (String) -> Void
     let onChooseVersion: (Int) -> Void
     let onDelete: () -> Void
@@ -99,7 +100,8 @@ struct VideoCell: View {
                     ),
                     currentCacheState: currentCacheState,
                     onDownload: onDownload,
-                    onCancel: onCancel
+                    onCancel: onCancel,
+                    onDeleteCache: onDeleteCache
                 )
                 Spacer()
                 if video.versions.count > 1 {

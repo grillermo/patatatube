@@ -83,6 +83,12 @@ struct MovieDetailView: View {
                                 id: currentVideo.id,
                                 versionId: currentVideo.chosenVersionId
                             )
+                        },
+                        onDeleteCache: {
+                            model.cache.removeCached(
+                                id: currentVideo.id,
+                                versionId: currentVideo.chosenVersionId
+                            )
                         }
                     )
 

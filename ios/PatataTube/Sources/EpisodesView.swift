@@ -184,6 +184,12 @@ struct EpisodesView: View {
                         id: episode.id,
                         versionId: episode.chosenVersionId
                     )
+                },
+                onDeleteCache: {
+                    model.cache.removeCached(
+                        id: episode.id,
+                        versionId: episode.chosenVersionId
+                    )
                 }
             )
         }
