@@ -218,7 +218,9 @@ def _classify_url(raw_url: str) -> dict:
 
 @router.get("/check-auth")
 async def check_auth(request: Request):
-    _check_token(request)
+    # Accepts ?token= too: Caddy's forward_auth re-sends stream/HLS requests
+    # here (uri /check-auth?{query}), and <video> tags can't send headers.
+    _check_token_or_query(request)
     return {"ok": True}
 
 
