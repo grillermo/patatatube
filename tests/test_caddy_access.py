@@ -102,3 +102,13 @@ def test_cli_exits_when_watched_process_exits(tmp_path):
     watched.terminate()
     watched.wait(timeout=2)
     assert process.wait(timeout=2) == 0
+
+
+def test_serve_wires_caddy_follower_before_dev_and_production_branches():
+    source = Path("serve").read_text()
+    start = source.index('"$LOG_PYTHON_BIN" -u caddy_access.py')
+    dev_branch = source.index('if [ "$DEV" = "1" ]')
+    assert start < dev_branch
+    assert 'CADDY_ACCESS_LOG="${CADDY_ACCESS_LOG:-log/caddy_access.log}"' in source
+    assert 'colorize 35 caddy >&3' in source
+    assert '--watch-pid "$$"' in source
