@@ -57,6 +57,45 @@ struct DownloadButtonStateTests {
         state.finish(attemptID: retryID, succeeded: true)
         #expect(state.effectiveState == .downloading(0.4))
     }
+
+    @Test func armingRequiresCachedAndTogglesDeletePrompt() {
+        let state = DownloadButtonState()
+        state.reset(to: .cached)
+        #expect(!state.showsArmedDelete)
+
+        state.arm()
+        #expect(state.isArmed)
+        #expect(state.showsArmedDelete)
+
+        state.disarm()
+        #expect(!state.isArmed)
+        #expect(!state.showsArmedDelete)
+    }
+
+    @Test func armGenerationAdvancesOnEachArm() {
+        let state = DownloadButtonState()
+        state.reset(to: .cached)
+        let first = state.armGeneration
+        state.arm()
+        state.arm()
+        #expect(state.armGeneration == first + 2)
+    }
+
+    @Test func leavingCachedClearsArmedState() {
+        let state = DownloadButtonState()
+        state.reset(to: .cached)
+        state.arm()
+        #expect(state.isArmed)
+
+        state.observe(.notCached)
+        #expect(!state.isArmed)
+        #expect(!state.showsArmedDelete)
+
+        state.reset(to: .cached)
+        state.arm()
+        state.reset(to: .downloading(0.3))
+        #expect(!state.isArmed)
+    }
 }
 
 @MainActor

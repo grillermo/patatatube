@@ -23,6 +23,8 @@ final class DownloadButtonState {
     private(set) var observedCacheState: CacheState?
     private(set) var progress: Double = 0
     private(set) var activeAttemptID: UUID?
+    private(set) var isArmed: Bool = false
+    private(set) var armGeneration: Int = 0
 
     init(initialCacheState: CacheState = .notCached) {
         observe(initialCacheState)
@@ -56,6 +58,10 @@ final class DownloadButtonState {
         return false
     }
 
+    var showsArmedDelete: Bool {
+        isArmed && effectiveState == .cached
+    }
+
     @discardableResult
     func begin(attemptID: UUID = UUID()) -> UUID {
         activeAttemptID = attemptID
@@ -86,9 +92,11 @@ final class DownloadButtonState {
         observedCacheState = nil
         progress = 0
         observe(cacheState)
+        if cacheState != .cached { isArmed = false }
     }
 
     func observe(_ cacheState: CacheState) {
+        if cacheState != .cached { isArmed = false }
         observedCacheState = cacheState
         switch cacheState {
         case .downloading(let progress):
@@ -98,6 +106,15 @@ final class DownloadButtonState {
         case .notCached:
             if phase == .idle { progress = 0 }
         }
+    }
+
+    func arm() {
+        isArmed = true
+        armGeneration += 1
+    }
+
+    func disarm() {
+        isArmed = false
     }
 
     func poll(
