@@ -117,6 +117,7 @@ On first launch grid is empty / errors — need server config:
 - [ ] Settings has valid base URL + token; tap the refresh (↻) toolbar button — spinner shows, then movie/TV items appear.
 - [ ] "movies" tab shows the movie grid with Plex posters.
 - [ ] "tv" tab shows one card per show with poster + episode count; tapping opens seasons → episodes with thumbs and summaries.
+- [ ] Browse through movie and TV covers, return to the start, then relaunch the app; previously viewed covers appear without a loader even when their videos were never downloaded.
 - [ ] Open a TV show: the episode list has an accessible top-right Download all
       control; a fully cached show leaves it disabled.
 - [ ] Tap Download all with cached, active, and uncached episodes: only that
