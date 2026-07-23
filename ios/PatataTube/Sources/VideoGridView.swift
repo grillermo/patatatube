@@ -14,6 +14,7 @@ struct VideoGridView: View {
     /// player an empty queue on the first cold-launch tap (index crash).
     @State private var playing: PlaybackQueue?
     @State private var preparing = false
+    @State private var preparationTracker = VideoPreparationTracker()
     @State private var downloadingAll = false
     @State private var errorBannerOffset: CGFloat = 0
 
@@ -176,6 +177,7 @@ struct VideoGridView: View {
             .task { await initialLoad() }
             .overlay { if let error = store.errorText { errorBanner(error) } }
         }
+        .environment(preparationTracker)
         // Attached to the NavigationStack itself (not the root ScrollView) so it renders
         // above any pushed destination (e.g. EpisodesView), where taps must also be
         // blocked while a TV episode is being prepared server-side.
