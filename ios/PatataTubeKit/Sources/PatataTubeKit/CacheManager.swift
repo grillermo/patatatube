@@ -269,7 +269,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             }
         }
 
-        for manifest in segmentedStore.manifests() {
+        let manifests = lock.withLock {
+            segmentedStore.manifests()
+        }
+        for manifest in manifests {
             let key = manifest.cacheKey
             let destination = localURL(
                 for: manifest.videoId,

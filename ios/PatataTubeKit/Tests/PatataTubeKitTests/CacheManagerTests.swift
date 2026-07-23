@@ -62,7 +62,7 @@ private final class RangeDownloadProtocol: URLProtocol {
             let data = Data([0xAA, 0xBB])
             return (
                 HTTPURLResponse(
-                    url: request.url!,
+                    url: request.url ?? URL(string: "https://resumed.invalid/")!,
                     statusCode: 200,
                     httpVersion: nil,
                     headerFields: ["Content-Length": "\(data.count)"]
@@ -706,6 +706,7 @@ private final class OwnershipRaceProtocol: URLProtocol {
 private final class BlockingSegmentFileManager: FileManager, @unchecked Sendable {
     enum BlockPoint {
         case manifestDirectory
+        case manifestPublication
         case segmentMove
     }
 
@@ -716,6 +717,7 @@ private final class BlockingSegmentFileManager: FileManager, @unchecked Sendable
     private var isBlocked = false
     private var released = false
     private var manifestDirectoryCalls = 0
+    private var attemptDirectoryRemoved = false
 
     init(cacheKey: String, blockPoint: BlockPoint) {
         self.cacheKey = cacheKey
@@ -744,6 +746,19 @@ private final class BlockingSegmentFileManager: FileManager, @unchecked Sendable
         }
     }
 
+    func scheduleReleaseAfterAttemptDirectoryRemovalOrTimeout() {
+        DispatchQueue.global().async { [self] in
+            condition.lock()
+            let deadline = Date().addingTimeInterval(1)
+            while !attemptDirectoryRemoved, !released {
+                guard condition.wait(until: deadline) else { break }
+            }
+            released = true
+            condition.broadcast()
+            condition.unlock()
+        }
+    }
+
     override func createDirectory(
         at url: URL,
         withIntermediateDirectories createIntermediates: Bool,
@@ -763,6 +778,20 @@ private final class BlockingSegmentFileManager: FileManager, @unchecked Sendable
             withIntermediateDirectories: createIntermediates,
             attributes: attributes
         )
+        if isAttemptDirectory {
+            blockIfNeeded(.manifestPublication)
+        }
+    }
+
+    override func removeItem(at URL: URL) throws {
+        try super.removeItem(at: URL)
+        if URL.lastPathComponent == cacheKey,
+           URL.deletingLastPathComponent().lastPathComponent == ".downloads" {
+            condition.withLock {
+                attemptDirectoryRemoved = true
+                condition.broadcast()
+            }
+        }
     }
 
     override func moveItem(at srcURL: URL, to dstURL: URL) throws {
@@ -1675,6 +1704,47 @@ struct CacheManagerTests {
             $0.value(forHTTPHeaderField: "If-Range") == "\"test-video\""
         })
         #expect(try Data(contentsOf: manager.localURL(for: 62)) == payload)
+    }
+
+    @Test func resumeInterruptedDoesNotDiscoverFreshManifestBeforePublication() async throws {
+        let payload = Data("abcdefghijkl".utf8)
+        RangeDownloadProtocol.reset(payload: payload)
+        let root = tempRoot()
+        let fileManager = BlockingSegmentFileManager(
+            cacheKey: "67",
+            blockPoint: .manifestPublication
+        )
+        let manager = CacheManager(
+            root: root,
+            configuration: rangeDownloadConfig(),
+            fileManager: fileManager
+        )
+        defer {
+            fileManager.releaseBlockedMutation()
+            manager.cancel(id: 67)
+        }
+        let download = Task {
+            try await manager.download(
+                id: 67,
+                from: URL(string: "https://srv.test/videos/67/stream")!,
+                streamCount: 2
+            )
+        }
+        guard fileManager.waitUntilBlocked() else {
+            Issue.record("The fresh manifest write never reached its publication window")
+            return
+        }
+        try Data([0xFF, 0xEE]).write(
+            to: root.appendingPathComponent("67.resume")
+        )
+
+        fileManager.scheduleReleaseAfterAttemptDirectoryRemovalOrTimeout()
+        let resumed = manager.resumeInterrupted()
+
+        #expect(resumed.isEmpty)
+        try await download.value
+        #expect(manager.state(for: 67) == .cached)
+        #expect(try Data(contentsOf: manager.localURL(for: 67)) == payload)
     }
 
     @Test func downloadResumesStoredManifestUsingOriginalRanges() async throws {
