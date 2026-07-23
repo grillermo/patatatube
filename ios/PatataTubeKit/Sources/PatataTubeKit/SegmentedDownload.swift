@@ -137,7 +137,12 @@ struct DownloadProbe: Equatable, Sendable {
 
 struct SegmentedDownloadStore: @unchecked Sendable {
     let root: URL
-    private let fileManager = FileManager.default
+    private let fileManager: FileManager
+
+    init(root: URL, fileManager: FileManager = .default) {
+        self.root = root
+        self.fileManager = fileManager
+    }
 
     private var downloadsRoot: URL {
         root.appendingPathComponent(".downloads", isDirectory: true)
@@ -283,6 +288,9 @@ struct SegmentedDownloadStore: @unchecked Sendable {
         manifest: SegmentedDownloadManifest,
         destination: URL
     ) throws {
+        let assembly = assemblyURL(cacheKey: manifest.cacheKey)
+        defer { try? fileManager.removeItem(at: assembly) }
+
         let validated = try manifest.validated()
         guard validated.segments.allSatisfy(\.isComplete) else {
             throw SegmentedDownloadError.corruptManifest
@@ -291,18 +299,11 @@ struct SegmentedDownloadStore: @unchecked Sendable {
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let assembly = assemblyURL(cacheKey: validated.cacheKey)
         if fileManager.fileExists(atPath: assembly.path) {
             try fileManager.removeItem(at: assembly)
         }
         guard fileManager.createFile(atPath: assembly.path, contents: nil) else {
             throw CocoaError(.fileWriteUnknown)
-        }
-        var assembled = false
-        defer {
-            if !assembled {
-                try? fileManager.removeItem(at: assembly)
-            }
         }
         do {
             let output = try FileHandle(forWritingTo: assembly)
@@ -339,9 +340,23 @@ struct SegmentedDownloadStore: @unchecked Sendable {
                 actual: actual
             )
         }
-        try? fileManager.removeItem(at: destination)
-        try fileManager.moveItem(at: assembly, to: destination)
-        assembled = true
+        let backup = destination.deletingLastPathComponent()
+            .appendingPathComponent(".\(destination.lastPathComponent).backup-\(UUID().uuidString)")
+        let hasExistingDestination = fileManager.fileExists(atPath: destination.path)
+        if hasExistingDestination {
+            try fileManager.moveItem(at: destination, to: backup)
+        }
+        do {
+            try fileManager.moveItem(at: assembly, to: destination)
+        } catch {
+            if hasExistingDestination {
+                try fileManager.moveItem(at: backup, to: destination)
+            }
+            throw error
+        }
+        if hasExistingDestination {
+            try? fileManager.removeItem(at: backup)
+        }
         remove(cacheKey: validated.cacheKey)
     }
 

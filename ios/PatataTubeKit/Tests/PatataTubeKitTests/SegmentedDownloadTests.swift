@@ -2,6 +2,22 @@ import Foundation
 import Testing
 @testable import PatataTubeKit
 
+private final class FailingPublicationFileManager: FileManager, @unchecked Sendable {
+    let blockedSource: URL
+
+    init(blockedSource: URL) {
+        self.blockedSource = blockedSource
+        super.init()
+    }
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        if srcURL == blockedSource {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+    }
+}
+
 @Suite("Segmented download primitives", .serialized)
 struct SegmentedDownloadTests {
     private func root() -> URL {
@@ -181,5 +197,63 @@ struct SegmentedDownloadTests {
         try store.assemble(manifest: manifest, destination: destination)
 
         #expect(try Data(contentsOf: destination) == Data([1, 1, 1, 2, 2, 2]))
+    }
+
+    @Test func assemblyFailureBeforeStreamingRemovesStaleScratch() throws {
+        let root = root()
+        let store = SegmentedDownloadStore(root: root)
+        var manifest = try SegmentedDownloadManifest.make(
+            videoId: 11,
+            versionId: nil,
+            remoteURL: URL(string: "https://srv.test/video")!,
+            requestedStreamCount: 1,
+            totalByteCount: 3,
+            etag: "\"v1\""
+        )
+        try store.write(manifest)
+        let assembly = store.assemblyURL(cacheKey: manifest.cacheKey)
+        try Data([9, 9, 9]).write(to: assembly)
+        manifest.segments[0].persistedByteCount = 4
+
+        #expect(throws: SegmentedDownloadError.corruptManifest) {
+            try store.assemble(
+                manifest: manifest,
+                destination: root.appendingPathComponent("11.mp4")
+            )
+        }
+        #expect(!FileManager.default.fileExists(atPath: assembly.path))
+    }
+
+    @Test func publicationFailurePreservesExistingDestination() throws {
+        let root = root()
+        let setupStore = SegmentedDownloadStore(root: root)
+        var manifest = try SegmentedDownloadManifest.make(
+            videoId: 12,
+            versionId: nil,
+            remoteURL: URL(string: "https://srv.test/video")!,
+            requestedStreamCount: 1,
+            totalByteCount: 3,
+            etag: "\"v1\""
+        )
+        manifest.segments[0].isComplete = true
+        try setupStore.write(manifest)
+        try Data([2, 2, 2]).write(
+            to: setupStore.partURL(cacheKey: manifest.cacheKey, index: 0)
+        )
+        let destination = root.appendingPathComponent("12.mp4")
+        let previous = Data([1, 1, 1])
+        try previous.write(to: destination)
+
+        let store = SegmentedDownloadStore(
+            root: root,
+            fileManager: FailingPublicationFileManager(
+                blockedSource: setupStore.assemblyURL(cacheKey: manifest.cacheKey)
+            )
+        )
+
+        #expect(throws: CocoaError.self) {
+            try store.assemble(manifest: manifest, destination: destination)
+        }
+        #expect(try Data(contentsOf: destination) == previous)
     }
 }
