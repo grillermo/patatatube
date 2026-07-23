@@ -1028,6 +1028,80 @@ private func hangingRangeConfig() -> URLSessionConfiguration {
     return config
 }
 
+// Fails the first request for the 0-3 segment with a transport error, then
+// serves it correctly. Every other range succeeds on the first try. Models a
+// single transient network blip on one of several parallel segments.
+private final class SegmentBlipThenSucceedProtocol: URLProtocol {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var attemptsByRange: [String: Int] = [:]
+
+    static let total = 8
+
+    static func reset() {
+        lock.withLock { attemptsByRange = [:] }
+    }
+
+    static func attempts(forRange range: String) -> Int {
+        lock.withLock { attemptsByRange[range] ?? 0 }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let range = request.value(forHTTPHeaderField: "Range"),
+              range.hasPrefix("bytes=")
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let bounds = range.dropFirst("bytes=".count).split(separator: "-")
+        guard bounds.count == 2,
+              let start = Int(bounds[0]),
+              let end = Int(bounds[1])
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let attempt = Self.lock.withLock { () -> Int in
+            let next = (Self.attemptsByRange[range] ?? 0) + 1
+            Self.attemptsByRange[range] = next
+            return next
+        }
+        let body = Data((start...end).map { UInt8($0) })
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 206,
+            httpVersion: nil,
+            headerFields: [
+                "Accept-Ranges": "bytes",
+                "Content-Range": "bytes \(start)-\(end)/\(Self.total)",
+                "Content-Length": "\(body.count)",
+                "ETag": "\"blip\"",
+            ]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        if range == "bytes=0-3" && attempt == 1 {
+            client?.urlProtocol(self, didLoad: body.prefix(1))
+            client?.urlProtocol(self, didFailWithError: NSError(
+                domain: NSURLErrorDomain,
+                code: URLError.networkConnectionLost.rawValue
+            ))
+            return
+        }
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+private func segmentBlipConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [SegmentBlipThenSucceedProtocol.self]
+    return config
+}
+
 private func segmentFailureConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [SegmentFailureProtocol.self]
@@ -1572,6 +1646,28 @@ struct CacheManagerTests {
         }
         #expect(manager.state(for: 51) == .notCached)
         #expect(!FileManager.default.fileExists(atPath: manager.localURL(for: 51).path))
+    }
+
+    @Test func transientSegmentBlipRetriesAndCompletesDownload() async throws {
+        SegmentBlipThenSucceedProtocol.reset()
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: segmentBlipConfig())
+
+        try await manager.download(
+            id: 70,
+            from: URL(string: "https://srv.test/videos/70/stream")!,
+            streamCount: 2
+        )
+
+        let expected = Data((0..<UInt8(SegmentBlipThenSucceedProtocol.total)).map { $0 })
+        #expect(try Data(contentsOf: manager.localURL(for: 70)) == expected)
+        #expect(manager.state(for: 70) == .cached)
+        // The 0-3 segment blipped once and was retried; siblings ran once.
+        #expect(SegmentBlipThenSucceedProtocol.attempts(forRange: "bytes=0-3") == 2)
+        #expect(SegmentBlipThenSucceedProtocol.attempts(forRange: "bytes=4-7") == 1)
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".downloads/70").path
+        ))
     }
 
     @Test func segmentFailurePreservesErrorCancelsSiblingAndRemovesScratch() async {

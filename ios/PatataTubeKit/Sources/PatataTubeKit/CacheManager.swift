@@ -109,13 +109,20 @@ final class CacheManagerCancellationFence:
 }
 
 private final class SegmentedAttempt: @unchecked Sendable {
+    // A single segment may hit a transient transport error several times on a
+    // long transfer; retry it in place this many times before failing the whole
+    // attempt, so one flaky connection can't discard the other segments' work.
+    static let maxSegmentRetries = 3
+
     let id = UUID()
     let cacheKey: String
+    let bearerToken: String?
     var manifest: SegmentedDownloadManifest
     var continuation: CheckedContinuation<URL, Error>?
     var taskIDs: Set<Int> = []
     var activeByteCounts: [Int: Int64] = [:]
     var completedResults: [Int: Result<URL, Error>] = [:]
+    var segmentRetryCounts: [Int: Int] = [:]
     var terminalError: Error?
     var preservingResumeData = false
     var resumeDataPendingTaskIDs: Set<Int> = []
@@ -124,10 +131,12 @@ private final class SegmentedAttempt: @unchecked Sendable {
 
     init(
         cacheKey: String,
+        bearerToken: String?,
         manifest: SegmentedDownloadManifest,
         continuation: CheckedContinuation<URL, Error>?
     ) {
         self.cacheKey = cacheKey
+        self.bearerToken = bearerToken
         self.manifest = manifest
         self.continuation = continuation
     }
@@ -308,6 +317,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             }
             let attempt = SegmentedAttempt(
                 cacheKey: key,
+                bearerToken: bearerToken,
                 manifest: manifest,
                 continuation: nil
             )
@@ -722,6 +732,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         try await withCheckedThrowingContinuation { continuation in
             let attempt = SegmentedAttempt(
                 cacheKey: manifest.cacheKey,
+                bearerToken: bearerToken,
                 manifest: manifest,
                 continuation: continuation
             )
@@ -752,6 +763,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         try await withCheckedThrowingContinuation { continuation in
             let attempt = SegmentedAttempt(
                 cacheKey: manifest.cacheKey,
+                bearerToken: bearerToken,
                 manifest: manifest,
                 continuation: continuation
             )
@@ -901,6 +913,43 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         tasksToStart.forEach { $0.resume() }
     }
 
+    /// Re-requests a single segment's byte range from scratch after a transient
+    /// transport failure, leaving the attempt's other segment tasks untouched.
+    private func relaunchSegment(attempt: SegmentedAttempt, segmentIndex: Int) {
+        let segment = attempt.manifest.segments[segmentIndex]
+        var request = URLRequest(url: attempt.manifest.remoteURL)
+        request.setValue(segment.range.headerValue, forHTTPHeaderField: "Range")
+        request.setValue(attempt.manifest.etag, forHTTPHeaderField: "If-Range")
+        if let bearerToken = attempt.bearerToken {
+            request.setValue(
+                "Bearer \(bearerToken)",
+                forHTTPHeaderField: "Authorization"
+            )
+        }
+        let task = session.downloadTask(with: request)
+        let context = SegmentTaskContext(
+            attemptID: attempt.id,
+            cacheKey: attempt.cacheKey,
+            segmentIndex: segmentIndex,
+            resumed: false
+        )
+        let shouldResume = lock.withLock {
+            guard let current = segmentedAttempts[attempt.cacheKey],
+                  current.id == attempt.id,
+                  !current.terminalClaimed
+            else { return false }
+            attempt.taskIDs.insert(task.taskIdentifier)
+            segmentContextByTask[task.taskIdentifier] = context
+            tasksByIdentifier[task.taskIdentifier] = task
+            return true
+        }
+        if shouldResume {
+            task.resume()
+        } else {
+            task.cancel()
+        }
+    }
+
     private func downloadLegacy(key: String, resumeData: Data) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             let task = session.downloadTask(withResumeData: resumeData)
@@ -1033,6 +1082,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         var owningAttempt: SegmentedAttempt?
         var completionError = error
         var unsafeCompletionError: Error?
+        var segmentToRetry: Int?
         var directResumeData: Data?
         var directResumeDataNeedsPendingRemoval = false
         var tasksToPreserve: [(
@@ -1103,7 +1153,37 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 }
             }
             if let completionError {
-                if let unsafeCompletionError {
+                let cancelling = attempt.explicitlyCancelled
+                    || cancellationFence.isCancellationRequested(cacheKey: context.cacheKey)
+                let retriesUsed = attempt.segmentRetryCounts[context.segmentIndex] ?? 0
+                let retryable = unsafeCompletionError == nil
+                    && attempt.terminalError == nil
+                    && !cancelling
+                    && retriesUsed < SegmentedAttempt.maxSegmentRetries
+                    && (error.map {
+                        isResumableTransportError($0, preservingResumeData: false)
+                    } ?? false)
+                if retryable {
+                    // A transient blip on one segment must not discard the whole
+                    // multiplexed download: re-request just this segment's range
+                    // from scratch and leave the sibling tasks running.
+                    attempt.segmentRetryCounts[context.segmentIndex] = retriesUsed + 1
+                    attempt.manifest.segments[context.segmentIndex].isComplete = false
+                    attempt.manifest.segments[context.segmentIndex].persistedByteCount = 0
+                    attempt.activeByteCounts[context.segmentIndex] = nil
+                    inFlight[context.cacheKey]?.record(
+                        transferredByteCount: transferredByteCount(
+                            manifest: attempt.manifest,
+                            activeByteCounts: attempt.activeByteCounts
+                        ),
+                        progress: SegmentedDownloadStore.progress(
+                            manifest: attempt.manifest,
+                            activeByteCounts: attempt.activeByteCounts
+                        ),
+                        now: now()
+                    )
+                    segmentToRetry = context.segmentIndex
+                } else if let unsafeCompletionError {
                     if attempt.terminalError == nil || attempt.preservingResumeData {
                         attempt.terminalError = unsafeCompletionError
                     }
@@ -1161,6 +1241,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
 
         guard let attempt = owningAttempt else { return }
+        if let segmentToRetry {
+            relaunchSegment(attempt: attempt, segmentIndex: segmentToRetry)
+            return
+        }
         if directResumeData != nil || directResumeDataNeedsPendingRemoval {
             preserveSegmentResumeData(
                 directResumeData,
