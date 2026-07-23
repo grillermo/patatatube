@@ -96,6 +96,76 @@ struct SegmentedDownloadTests {
         #expect(loaded.segments[0].isComplete)
     }
 
+    @Test func loadRejectsManifestWhoseIdentityDoesNotMatchDirectoryKey() throws {
+        let store = SegmentedDownloadStore(root: root())
+        let manifest = try SegmentedDownloadManifest.make(
+            videoId: 63,
+            versionId: nil,
+            remoteURL: URL(string: "https://srv.test/videos/63/stream")!,
+            requestedStreamCount: 1,
+            totalByteCount: 1,
+            etag: "\"stable\""
+        )
+        let mismatchedKey = "64"
+        try FileManager.default.createDirectory(
+            at: store.directory(cacheKey: mismatchedKey),
+            withIntermediateDirectories: true
+        )
+        try JSONEncoder().encode(manifest).write(
+            to: store.manifestURL(cacheKey: mismatchedKey)
+        )
+
+        #expect(throws: SegmentedDownloadError.corruptManifest) {
+            try store.load(cacheKey: mismatchedKey)
+        }
+    }
+
+    @Test func discoveryRemovesMismatchedDirectoryWithoutDeletingManifestIdentity() throws {
+        let store = SegmentedDownloadStore(root: root())
+        let manifest = try SegmentedDownloadManifest.make(
+            videoId: 63,
+            versionId: nil,
+            remoteURL: URL(string: "https://srv.test/videos/63/stream")!,
+            requestedStreamCount: 1,
+            totalByteCount: 1,
+            etag: "\"stable\""
+        )
+        try store.write(manifest)
+        let mismatchedKey = "64"
+        try FileManager.default.createDirectory(
+            at: store.directory(cacheKey: mismatchedKey),
+            withIntermediateDirectories: true
+        )
+        try JSONEncoder().encode(manifest).write(
+            to: store.manifestURL(cacheKey: mismatchedKey)
+        )
+
+        #expect(store.manifests() == [manifest])
+        #expect(FileManager.default.fileExists(
+            atPath: store.directory(cacheKey: manifest.cacheKey).path
+        ))
+        #expect(!FileManager.default.fileExists(
+            atPath: store.directory(cacheKey: mismatchedKey).path
+        ))
+    }
+
+    @Test func manifestRejectsMalformedStrongETags() throws {
+        for etag in ["v1", "W/\"v1\"", "\"unterminated", "\"bad\"tail", "\"has space\""] {
+            let manifest = try SegmentedDownloadManifest.make(
+                videoId: 62,
+                versionId: nil,
+                remoteURL: URL(string: "https://srv.test/videos/62/stream")!,
+                requestedStreamCount: 1,
+                totalByteCount: 1,
+                etag: etag
+            )
+
+            #expect(throws: SegmentedDownloadError.corruptManifest) {
+                try manifest.validated()
+            }
+        }
+    }
+
     @Test func validatesProbeAndRejectsAFullResponse() throws {
         let url = URL(string: "https://srv.test/video")!
         let valid = HTTPURLResponse(
@@ -120,6 +190,28 @@ struct SegmentedDownloadTests {
         )!
         #expect(throws: SegmentedDownloadError.invalidProbe) {
             try SegmentedDownloadStore.validateProbe(full, bodyCount: 10)
+        }
+    }
+
+    @Test func probeRejectsMalformedStrongETags() {
+        let url = URL(string: "https://srv.test/video")!
+
+        for etag in ["v1", "W/\"v1\"", "\"unterminated", "\"bad\"tail", "\"has space\""] {
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: 206,
+                httpVersion: nil,
+                headerFields: [
+                    "Accept-Ranges": "bytes",
+                    "Content-Range": "bytes 0-0/10",
+                    "Content-Length": "1",
+                    "ETag": etag,
+                ]
+            )!
+
+            #expect(throws: SegmentedDownloadError.invalidProbe) {
+                try SegmentedDownloadStore.validateProbe(response, bodyCount: 1)
+            }
         }
     }
 

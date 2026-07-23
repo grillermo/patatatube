@@ -247,6 +247,39 @@ private final class ResumableFailureProtocol: URLProtocol {
     }
 }
 
+private final class FreshRangeHangingProtocol: URLProtocol {
+    private static let condition = NSCondition()
+    nonisolated(unsafe) private static var requestedRange: String?
+
+    static func reset() {
+        condition.withLock {
+            requestedRange = nil
+        }
+    }
+
+    static func waitForRequestedRange() -> String? {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(5)
+        while requestedRange == nil {
+            guard condition.wait(until: deadline) else { return nil }
+        }
+        return requestedRange
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.condition.withLock {
+            Self.requestedRange = request.value(forHTTPHeaderField: "Range")
+            Self.condition.broadcast()
+        }
+    }
+
+    override func stopLoading() {}
+}
+
 private final class TransportThenUnsafeFailureProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var unsafeResponseSent = false
@@ -992,6 +1025,12 @@ private func resumableFailureConfig() -> URLSessionConfiguration {
     return config
 }
 
+private func freshRangeHangingConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [FreshRangeHangingProtocol.self]
+    return config
+}
+
 private func transportThenUnsafeFailureConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [TransportThenUnsafeFailureProtocol.self]
@@ -1549,6 +1588,38 @@ struct CacheManagerTests {
         #expect(!FileManager.default.fileExists(
             atPath: manager.localURL(for: 65).path
         ))
+    }
+
+    @Test func freshRangeRestartClearsProgressWithoutDurableResumeData() async throws {
+        let root = tempRoot()
+        let store = SegmentedDownloadStore(root: root)
+        var interrupted = try SegmentedDownloadManifest.make(
+            videoId: 68,
+            versionId: nil,
+            remoteURL: URL(string: "https://srv.test/videos/68/stream")!,
+            requestedStreamCount: 1,
+            totalByteCount: 4,
+            etag: "\"no-resume-data\""
+        )
+        // A transport failure can leave reported progress in the manifest even
+        // when URLSession supplies no durable resume blob.
+        interrupted.segments[0].persistedByteCount = 1
+        try store.write(interrupted)
+        #expect(!FileManager.default.fileExists(
+            atPath: store.resumeURL(cacheKey: "68", index: 0).path
+        ))
+
+        FreshRangeHangingProtocol.reset()
+        let restartingManager = CacheManager(
+            root: root,
+            configuration: freshRangeHangingConfig()
+        )
+        defer { restartingManager.cancel(id: 68) }
+
+        #expect(restartingManager.resumeInterrupted() == [68])
+        #expect(FreshRangeHangingProtocol.waitForRequestedRange() == "bytes=0-3")
+        #expect(restartingManager.state(for: 68) == .downloading(0))
+        #expect(try store.load(cacheKey: "68").segments[0].persistedByteCount == 0)
     }
 
     @Test func unsafeSegmentFailureOverridesTransportPreservation() async {

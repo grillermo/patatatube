@@ -753,16 +753,66 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             return
         }
 
-        var tasksToStart: [URLSessionDownloadTask] = []
-        for segment in incompleteSegments {
+        let starts = incompleteSegments.map { segment in
             let resumeURL = segmentedStore.resumeURL(
                 cacheKey: attempt.cacheKey,
                 index: segment.index
             )
             let resumeData = try? Data(contentsOf: resumeURL)
+            return (
+                segment: segment,
+                resumeData: resumeData?.isEmpty == false ? resumeData : nil
+            )
+        }
+        let freshSegmentIndexes = starts.compactMap {
+            $0.resumeData == nil ? $0.segment.index : nil
+        }
+        let resetManifest: SegmentedDownloadManifest? = lock.withLock {
+            guard let current = segmentedAttempts[attempt.cacheKey],
+                  current.id == attempt.id
+            else { return nil }
+            var didReset = false
+            for index in freshSegmentIndexes
+            where current.manifest.segments[index].persistedByteCount != 0 {
+                current.manifest.segments[index].persistedByteCount = 0
+                current.activeByteCounts[index] = nil
+                didReset = true
+            }
+            guard didReset else { return nil }
+            inFlight[attempt.cacheKey] = SegmentedDownloadStore.progress(
+                manifest: current.manifest,
+                activeByteCounts: current.activeByteCounts
+            )
+            return current.manifest
+        }
+        if let resetManifest {
+            do {
+                try cancellationFence.performMutation(cacheKey: attempt.cacheKey) {
+                    try segmentedStore.write(resetManifest)
+                }
+            } catch {
+                let ownsFailure = lock.withLock {
+                    guard let current = segmentedAttempts[attempt.cacheKey],
+                          current.id == attempt.id,
+                          !current.terminalClaimed
+                    else { return false }
+                    current.terminalError = error
+                    current.preservingResumeData = false
+                    return true
+                }
+                if ownsFailure {
+                    finishFailedSegmentedAttemptIfReady(attempt)
+                }
+                return
+            }
+        }
+
+        var tasksToStart: [URLSessionDownloadTask] = []
+        for start in starts {
+            let segment = start.segment
             let task: URLSessionDownloadTask
             let resumed: Bool
-            if let resumeData, !resumeData.isEmpty {
+            if let resumeData = start.resumeData {
                 task = session.downloadTask(withResumeData: resumeData)
                 resumed = true
             } else {

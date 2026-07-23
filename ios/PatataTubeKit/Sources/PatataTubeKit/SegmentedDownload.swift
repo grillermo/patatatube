@@ -1,5 +1,16 @@
 import Foundation
 
+private func isValidStrongETag(_ value: String) -> Bool {
+    let bytes = Array(value.utf8)
+    guard bytes.count >= 2,
+          bytes.first == 0x22,
+          bytes.last == 0x22
+    else { return false }
+    return bytes.dropFirst().dropLast().allSatisfy {
+        $0 == 0x21 || (0x23...0x7E).contains($0) || $0 >= 0x80
+    }
+}
+
 enum SegmentedDownloadError: Error, Equatable {
     case invalidStreamCount
     case invalidTotalByteCount
@@ -108,8 +119,7 @@ struct SegmentedDownloadManifest: Codable, Equatable, Sendable {
               effectiveStreamCount == segments.count,
               effectiveStreamCount <= requestedStreamCount,
               totalByteCount > 0,
-              !etag.isEmpty,
-              !etag.hasPrefix("W/"),
+              isValidStrongETag(etag),
               segments.map(\.index) == Array(segments.indices),
               segments.first?.range.start == 0,
               segments.last?.range.end == totalByteCount - 1,
@@ -193,10 +203,14 @@ struct SegmentedDownloadStore: @unchecked Sendable {
     func load(cacheKey: String) throws -> SegmentedDownloadManifest {
         do {
             let data = try Data(contentsOf: manifestURL(cacheKey: cacheKey))
-            return try JSONDecoder().decode(
+            let manifest = try JSONDecoder().decode(
                 SegmentedDownloadManifest.self,
                 from: data
             ).validated()
+            guard manifest.cacheKey == cacheKey else {
+                throw SegmentedDownloadError.corruptManifest
+            }
+            return manifest
         } catch let error as SegmentedDownloadError {
             throw error
         } catch {
@@ -214,7 +228,7 @@ struct SegmentedDownloadStore: @unchecked Sendable {
             do {
                 return try load(cacheKey: key)
             } catch {
-                remove(cacheKey: key)
+                try? fileManager.removeItem(at: directory)
                 return nil
             }
         }
@@ -233,8 +247,7 @@ struct SegmentedDownloadStore: @unchecked Sendable {
               response.value(forHTTPHeaderField: "Content-Length") == "1",
               bodyCount == 1,
               let etag = response.value(forHTTPHeaderField: "ETag"),
-              !etag.isEmpty,
-              !etag.hasPrefix("W/"),
+              isValidStrongETag(etag),
               let contentRange = response.value(forHTTPHeaderField: "Content-Range"),
               contentRange.hasPrefix("bytes 0-0/"),
               let total = Int64(contentRange.dropFirst("bytes 0-0/".count)),
