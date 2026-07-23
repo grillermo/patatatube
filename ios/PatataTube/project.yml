@@ -62,8 +62,8 @@ targets:
         CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: com.patatatube.app
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "1.1.17"
-        CURRENT_PROJECT_VERSION: "74"
+        MARKETING_VERSION: "1.1.18"
+        CURRENT_PROJECT_VERSION: "75"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "6.0"
   PatataTubeTests:
