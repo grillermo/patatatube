@@ -42,7 +42,20 @@ public final class VideoStore: ObservableObject {
         do {
             let fetched = try await api.videos(classification: filter)
             videos = fetched
-            cache?.save(fetched, classification: filter)
+            // Encode + atomic disk write off the main actor: doing it inline here
+            // (this method is @MainActor) blocked the main thread long enough to
+            // trip Sentry's app-hang detector (PATATATUBE-2, NSFileHandle.write).
+            if let cache {
+                let toSave = fetched
+                let classification = filter
+                // await the detached task's value: the main actor suspends (freeing
+                // the main thread to render) while the encode + write runs on a
+                // background thread, then resumes. Not fire-and-forget, so callers
+                // still observe the save as complete once load() returns.
+                await Task.detached(priority: .utility) {
+                    cache.save(toSave, classification: classification)
+                }.value
+            }
         } catch {
             // A cancelled fetch is routine SwiftUI lifecycle (.task and .refreshable
             // cancel their work on view updates, and a newer load supersedes an older
