@@ -14,6 +14,84 @@ private struct SegmentTaskContext {
     let resumed: Bool
 }
 
+private final class FreshProbeAttempt: @unchecked Sendable {
+    let id = UUID()
+    let cacheKey: String
+    var task: URLSessionDataTask?
+    var continuation: CheckedContinuation<DownloadProbe, Error>?
+
+    init(cacheKey: String) {
+        self.cacheKey = cacheKey
+    }
+}
+
+protocol CacheManagerCancellationFencing: Sendable {
+    func beginCancellation(cacheKey: String)
+    func endCancellation(cacheKey: String)
+    func isCancellationRequested(cacheKey: String) -> Bool
+    func performMutation(
+        cacheKey: String,
+        _ mutation: () throws -> Void
+    ) throws
+}
+
+final class CacheManagerCancellationFence:
+    CacheManagerCancellationFencing,
+    @unchecked Sendable
+{
+    private let condition = NSCondition()
+    private var cancellationRequestCounts: [String: Int] = [:]
+    private var mutationKeys: Set<String> = []
+
+    func beginCancellation(cacheKey: String) {
+        condition.lock()
+        cancellationRequestCounts[cacheKey, default: 0] += 1
+        while mutationKeys.contains(cacheKey) {
+            condition.wait()
+        }
+        condition.unlock()
+    }
+
+    func endCancellation(cacheKey: String) {
+        condition.withLock {
+            let remaining = (cancellationRequestCounts[cacheKey] ?? 1) - 1
+            cancellationRequestCounts[cacheKey] = remaining > 0 ? remaining : nil
+        }
+    }
+
+    func isCancellationRequested(cacheKey: String) -> Bool {
+        condition.withLock {
+            (cancellationRequestCounts[cacheKey] ?? 0) > 0
+        }
+    }
+
+    func performMutation(
+        cacheKey: String,
+        _ mutation: () throws -> Void
+    ) throws {
+        condition.lock()
+        guard (cancellationRequestCounts[cacheKey] ?? 0) == 0 else {
+            condition.unlock()
+            throw CancellationError()
+        }
+        mutationKeys.insert(cacheKey)
+        condition.unlock()
+
+        let result = Result { try mutation() }
+
+        condition.lock()
+        mutationKeys.remove(cacheKey)
+        let cancelled = (cancellationRequestCounts[cacheKey] ?? 0) > 0
+        condition.broadcast()
+        condition.unlock()
+
+        if cancelled {
+            throw CancellationError()
+        }
+        try result.get()
+    }
+}
+
 private final class SegmentedAttempt {
     let id = UUID()
     let cacheKey: String
@@ -41,23 +119,47 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private let root: URL
     private let segmentedStore: SegmentedDownloadStore
     private var session: URLSession!
-    private let fileManager = FileManager.default
+    private let fileManager: FileManager
     private let lock = NSLock()
+    private let cancellationFence: any CacheManagerCancellationFencing
     private var inFlight: [String: Double] = [:]
     private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
     private var idByTask: [Int: String] = [:]
     private var tasksByKey: [String: URLSessionDownloadTask] = [:]
     private var completedResults: [Int: Result<URL, Error>] = [:]
     private var segmentedAttempts: [String: SegmentedAttempt] = [:]
-    private var probeIDByKey: [String: UUID] = [:]
+    private var probeAttempts: [String: FreshProbeAttempt] = [:]
     private var segmentContextByTask: [Int: SegmentTaskContext] = [:]
     private var tasksByIdentifier: [Int: URLSessionDownloadTask] = [:]
 
-    public init(root: URL? = nil, configuration: URLSessionConfiguration = .default) {
-        self.root = root ?? FileManager.default
+    public convenience init(
+        root: URL? = nil,
+        configuration: URLSessionConfiguration = .default
+    ) {
+        self.init(
+            root: root,
+            configuration: configuration,
+            fileManager: .default,
+            cancellationFence: CacheManagerCancellationFence()
+        )
+    }
+
+    init(
+        root: URL?,
+        configuration: URLSessionConfiguration,
+        fileManager: FileManager,
+        cancellationFence: any CacheManagerCancellationFencing =
+            CacheManagerCancellationFence()
+    ) {
+        self.fileManager = fileManager
+        self.cancellationFence = cancellationFence
+        self.root = root ?? fileManager
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("videos")
-        self.segmentedStore = SegmentedDownloadStore(root: self.root)
+        self.segmentedStore = SegmentedDownloadStore(
+            root: self.root,
+            fileManager: fileManager
+        )
         super.init()
         self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         try? fileManager.createDirectory(at: self.root, withIntermediateDirectories: true)
@@ -157,7 +259,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             if lock.withLock({
                 tasksByKey[key] != nil
                     || segmentedAttempts[key] != nil
-                    || probeIDByKey[key] != nil
+                    || probeAttempts[key] != nil
             }) {
                 continue
             }
@@ -179,13 +281,23 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Explicit cancel restarts from scratch - it does not persist resume data.
     public func cancel(id: Int, versionId: Int? = nil) {
         let key = cacheKey(videoId: id, versionId: versionId)
-        let segmentedAttempt = lock.withLock {
-            if probeIDByKey.removeValue(forKey: key) != nil,
-               segmentedAttempts[key] == nil {
+        cancellationFence.beginCancellation(cacheKey: key)
+        defer {
+            cancellationFence.endCancellation(cacheKey: key)
+        }
+        let (probeTask, probeContinuation, segmentedAttempt) = lock.withLock {
+            let probe = probeAttempts.removeValue(forKey: key)
+            if probe != nil, segmentedAttempts[key] == nil {
                 inFlight[key] = nil
             }
-            return segmentedAttempts[key]
+            let task = probe?.task
+            let continuation = probe?.continuation
+            probe?.task = nil
+            probe?.continuation = nil
+            return (task, continuation, segmentedAttempts[key])
         }
+        probeTask?.cancel()
+        probeContinuation?.resume(throwing: CancellationError())
         if let attempt = segmentedAttempt,
            let claim = claimSegmentedAttempt(attempt) {
             lock.withLock { attempt.explicitlyCancelled = true }
@@ -328,22 +440,23 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             return try await downloadLegacy(key: key, resumeData: data)
         }
 
-        let probeID = UUID()
+        let probeAttempt = FreshProbeAttempt(cacheKey: key)
         let canProbe = lock.withLock {
             guard segmentedAttempts[key] == nil,
-                  probeIDByKey[key] == nil
+                  probeAttempts[key] == nil
             else { return false }
-            probeIDByKey[key] = probeID
+            probeAttempts[key] = probeAttempt
             inFlight[key] = 0
             return true
         }
         guard canProbe else { throw CancellationError() }
 
         do {
-            let probe = try await probe(remote: remote, bearerToken: bearerToken)
-            guard lock.withLock({ probeIDByKey[key] == probeID }) else {
-                throw CancellationError()
-            }
+            let probe = try await probe(
+                remote: remote,
+                bearerToken: bearerToken,
+                attempt: probeAttempt
+            )
             let manifest = try SegmentedDownloadManifest.make(
                 videoId: id,
                 versionId: versionId,
@@ -352,18 +465,16 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 totalByteCount: probe.totalByteCount,
                 etag: probe.etag
             )
-            try segmentedStore.write(manifest)
             return try await startSegmentedAttempt(
                 manifest: manifest,
                 bearerToken: bearerToken,
-                probeID: probeID
+                probeAttempt: probeAttempt
             )
         } catch {
             lock.withLock {
-                guard probeIDByKey[key] == probeID else { return }
-                probeIDByKey[key] = nil
+                guard probeAttempts[key]?.id == probeAttempt.id else { return }
+                probeAttempts[key] = nil
                 inFlight[key] = nil
-                segmentedStore.remove(cacheKey: key)
             }
             throw error
         }
@@ -371,27 +482,105 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
 
     private func probe(
         remote: URL,
-        bearerToken: String?
+        bearerToken: String?,
+        attempt: FreshProbeAttempt
     ) async throws -> DownloadProbe {
         var request = URLRequest(url: remote)
         request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
         if let bearerToken {
             request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         }
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SegmentedDownloadError.invalidProbe
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let task = session.dataTask(with: request) {
+                    [weak self, weak attempt] data, response, error in
+                        guard let self, let attempt else { return }
+                        let result: Result<DownloadProbe, Error>
+                        do {
+                            if let error {
+                                throw error
+                            }
+                            guard let http = response as? HTTPURLResponse else {
+                                throw SegmentedDownloadError.invalidProbe
+                            }
+                            if (400..<600).contains(http.statusCode) {
+                                throw APIError.badStatus(http.statusCode)
+                            }
+                            result = .success(try SegmentedDownloadStore.validateProbe(
+                                http,
+                                bodyCount: data?.count ?? 0
+                            ))
+                        } catch {
+                            result = .failure(error)
+                        }
+                        self.completeProbe(attempt, result: result)
+                }
+                let shouldResume = lock.withLock {
+                    guard probeAttempts[attempt.cacheKey]?.id == attempt.id else {
+                        return false
+                    }
+                    attempt.task = task
+                    attempt.continuation = continuation
+                    return true
+                }
+                guard shouldResume else {
+                    task.cancel()
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                task.resume()
+            }
+        } onCancel: { [weak self, weak attempt] in
+            guard let self, let attempt else { return }
+            self.cancelProbeAttempt(attempt)
         }
-        if (400..<600).contains(http.statusCode) {
-            throw APIError.badStatus(http.statusCode)
+    }
+
+    private func cancelProbeAttempt(_ attempt: FreshProbeAttempt) {
+        let claim: (
+            task: URLSessionDataTask?,
+            continuation: CheckedContinuation<DownloadProbe, Error>?
+        ) = lock.withLock {
+            guard probeAttempts[attempt.cacheKey]?.id == attempt.id else {
+                return (nil, nil)
+            }
+            probeAttempts[attempt.cacheKey] = nil
+            inFlight[attempt.cacheKey] = nil
+            let task = attempt.task
+            let continuation = attempt.continuation
+            attempt.task = nil
+            attempt.continuation = nil
+            return (task, continuation)
         }
-        return try SegmentedDownloadStore.validateProbe(http, bodyCount: data.count)
+        claim.task?.cancel()
+        claim.continuation?.resume(throwing: CancellationError())
+    }
+
+    private func completeProbe(
+        _ attempt: FreshProbeAttempt,
+        result: Result<DownloadProbe, Error>
+    ) {
+        let continuation: CheckedContinuation<DownloadProbe, Error>? = lock.withLock {
+            guard probeAttempts[attempt.cacheKey]?.id == attempt.id else {
+                return nil
+            }
+            attempt.task = nil
+            let continuation = attempt.continuation
+            attempt.continuation = nil
+            return continuation
+        }
+        switch result {
+        case .success(let probe):
+            continuation?.resume(returning: probe)
+        case .failure(let error):
+            continuation?.resume(throwing: error)
+        }
     }
 
     private func startSegmentedAttempt(
         manifest: SegmentedDownloadManifest,
         bearerToken: String?,
-        probeID: UUID
+        probeAttempt: FreshProbeAttempt
     ) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             let attempt = SegmentedAttempt(
@@ -399,26 +588,34 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 manifest: manifest,
                 continuation: continuation
             )
-            let registered = lock.withLock {
-                guard probeIDByKey[manifest.cacheKey] == probeID,
+            let registration = lock.withLock { () -> Result<Void, Error> in
+                guard probeAttempts[manifest.cacheKey]?.id == probeAttempt.id,
                       segmentedAttempts[manifest.cacheKey] == nil
-                else { return false }
-                probeIDByKey[manifest.cacheKey] = nil
+                else { return .failure(CancellationError()) }
+                do {
+                    try cancellationFence.performMutation(
+                        cacheKey: manifest.cacheKey
+                    ) {
+                        try segmentedStore.write(manifest)
+                    }
+                } catch {
+                    segmentedStore.remove(cacheKey: manifest.cacheKey)
+                    probeAttempts[manifest.cacheKey] = nil
+                    inFlight[manifest.cacheKey] = nil
+                    return .failure(error)
+                }
+                probeAttempts[manifest.cacheKey] = nil
                 segmentedAttempts[manifest.cacheKey] = attempt
                 inFlight[manifest.cacheKey] = SegmentedDownloadStore.progress(
                     manifest: manifest,
                     activeByteCounts: [:]
                 )
-                return true
+                return .success(())
             }
-            guard registered else {
-                lock.withLock {
-                    guard probeIDByKey[manifest.cacheKey] == nil,
-                          segmentedAttempts[manifest.cacheKey] == nil
-                    else { return }
-                    segmentedStore.remove(cacheKey: manifest.cacheKey)
+            guard case .success = registration else {
+                if case .failure(let error) = registration {
+                    continuation.resume(throwing: error)
                 }
-                continuation.resume(throwing: CancellationError())
                 return
             }
 
@@ -493,41 +690,44 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         task: URLSessionDownloadTask,
         location: URL
     ) -> Result<URL, Error> {
-        guard let attempt = lock.withLock({
-            segmentedAttempts[context.cacheKey].flatMap {
-                $0.id == context.attemptID && !$0.terminalClaimed ? $0 : nil
+        lock.withLock {
+            guard let attempt = segmentedAttempts[context.cacheKey],
+                  attempt.id == context.attemptID,
+                  !attempt.terminalClaimed
+            else {
+                return .failure(CancellationError())
             }
-        }) else {
-            return .failure(CancellationError())
-        }
 
-        do {
-            guard let response = task.response as? HTTPURLResponse else {
-                throw SegmentedDownloadError.invalidSegmentResponse(
+            do {
+                guard let response = task.response as? HTTPURLResponse else {
+                    throw SegmentedDownloadError.invalidSegmentResponse(
+                        index: context.segmentIndex
+                    )
+                }
+                let record = attempt.manifest.segments[context.segmentIndex]
+                let size = ((try fileManager.attributesOfItem(
+                    atPath: location.path
+                )[.size]) as? NSNumber)?.int64Value ?? -1
+                try SegmentedDownloadStore.validateSegment(
+                    response,
+                    planned: record,
+                    etag: attempt.manifest.etag,
+                    totalByteCount: attempt.manifest.totalByteCount,
+                    fileSize: size,
+                    resumed: context.resumed
+                )
+                let part = segmentedStore.partURL(
+                    cacheKey: context.cacheKey,
                     index: context.segmentIndex
                 )
+                try cancellationFence.performMutation(cacheKey: context.cacheKey) {
+                    try? fileManager.removeItem(at: part)
+                    try fileManager.moveItem(at: location, to: part)
+                }
+                return .success(part)
+            } catch {
+                return .failure(error)
             }
-            let record = attempt.manifest.segments[context.segmentIndex]
-            let size = ((try fileManager.attributesOfItem(
-                atPath: location.path
-            )[.size]) as? NSNumber)?.int64Value ?? -1
-            try SegmentedDownloadStore.validateSegment(
-                response,
-                planned: record,
-                etag: attempt.manifest.etag,
-                totalByteCount: attempt.manifest.totalByteCount,
-                fileSize: size,
-                resumed: context.resumed
-            )
-            let part = segmentedStore.partURL(
-                cacheKey: context.cacheKey,
-                index: context.segmentIndex
-            )
-            try? fileManager.removeItem(at: part)
-            try fileManager.moveItem(at: location, to: part)
-            return .success(part)
-        } catch {
-            return .failure(error)
         }
     }
 
@@ -538,6 +738,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     ) {
         var owningAttempt: SegmentedAttempt?
         var completionError = error
+        var allSegmentsComplete = false
 
         lock.withLock {
             tasksByIdentifier[taskIdentifier] = nil
@@ -550,6 +751,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             owningAttempt = attempt
             attempt.taskIDs.remove(taskIdentifier)
 
+            if cancellationFence.isCancellationRequested(cacheKey: context.cacheKey) {
+                completionError = CancellationError()
+            }
             if completionError == nil {
                 switch attempt.completedResults.removeValue(
                     forKey: context.segmentIndex
@@ -567,6 +771,22 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                     completionError = segmentError
                 }
             }
+            if completionError == nil {
+                do {
+                    try cancellationFence.performMutation(
+                        cacheKey: context.cacheKey
+                    ) {
+                        try? fileManager.removeItem(at: segmentedStore.resumeURL(
+                            cacheKey: context.cacheKey,
+                            index: context.segmentIndex
+                        ))
+                        try segmentedStore.write(attempt.manifest)
+                    }
+                    allSegmentsComplete = attempt.manifest.segments.allSatisfy(\.isComplete)
+                } catch {
+                    completionError = error
+                }
+            }
         }
 
         guard let attempt = owningAttempt else { return }
@@ -575,18 +795,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             return
         }
 
-        do {
-            try? fileManager.removeItem(at: segmentedStore.resumeURL(
-                cacheKey: context.cacheKey,
-                index: context.segmentIndex
-            ))
-            try segmentedStore.write(attempt.manifest)
-        } catch {
-            failSegmentedAttempt(attempt, error: error)
-            return
-        }
-
-        guard attempt.manifest.segments.allSatisfy(\.isComplete),
+        guard allSegmentsComplete,
               let claim = claimSegmentedAttempt(attempt)
         else { return }
         let destination = localURL(

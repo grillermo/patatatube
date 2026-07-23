@@ -261,6 +261,303 @@ private final class CancelThenRetryDownloadProtocol: URLProtocol {
     }
 }
 
+private final class StalledProbeProtocol: URLProtocol {
+    private static let condition = NSCondition()
+    nonisolated(unsafe) private static var probeStarted = false
+    nonisolated(unsafe) private static var probeStopped = false
+
+    static func reset() {
+        condition.withLock {
+            probeStarted = false
+            probeStopped = false
+        }
+    }
+
+    static func waitForProbeToStart() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(2)
+        while !probeStarted {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    static func waitForProbeToStop() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(2)
+        while !probeStopped {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.condition.withLock {
+            Self.probeStarted = true
+            Self.condition.broadcast()
+        }
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 206,
+            httpVersion: nil,
+            headerFields: [
+                "Accept-Ranges": "bytes",
+                "Content-Range": "bytes 0-0/4",
+                "Content-Length": "1",
+                "ETag": "\"stalled\"",
+            ]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data([0x01]))
+        // A complete probe response body was delivered, but the request itself
+        // remains genuinely stalled until URLSession cancels it.
+    }
+
+    override func stopLoading() {
+        Self.condition.withLock {
+            Self.probeStopped = true
+            Self.condition.broadcast()
+        }
+    }
+}
+
+private final class OwnershipRaceProtocol: URLProtocol {
+    private static let condition = NSCondition()
+    nonisolated(unsafe) private static var retrySegmentStarted = false
+    nonisolated(unsafe) private static var allowRetrySegment = false
+
+    static func reset() {
+        condition.withLock {
+            retrySegmentStarted = false
+            allowRetrySegment = false
+        }
+    }
+
+    static func waitForRetrySegmentToStart() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(5)
+        while !retrySegmentStarted {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    static func releaseRetrySegment() {
+        condition.withLock {
+            allowRetrySegment = true
+            condition.broadcast()
+        }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let range = request.value(forHTTPHeaderField: "Range") else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let isRetry = request.url!.lastPathComponent == "retry"
+        let body: Data
+        if range == "bytes=0-0" {
+            body = Data([isRetry ? 0xB0 : 0xA0])
+        } else {
+            body = isRetry
+                ? Data([0xB0, 0xB1, 0xB2, 0xB3])
+                : Data([0xA0, 0xA1, 0xA2, 0xA3])
+        }
+        let bounds = range.dropFirst("bytes=".count).split(separator: "-")
+        let start = Int(bounds[0])!
+        let end = Int(bounds[1])!
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 206,
+            httpVersion: nil,
+            headerFields: [
+                "Accept-Ranges": "bytes",
+                "Content-Range": "bytes \(start)-\(end)/4",
+                "Content-Length": "\(body.count)",
+                "ETag": isRetry ? "\"retry\"" : "\"first\"",
+            ]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+
+        if isRetry && range != "bytes=0-0" {
+            Self.condition.lock()
+            Self.retrySegmentStarted = true
+            Self.condition.broadcast()
+            while !Self.allowRetrySegment {
+                Self.condition.wait()
+            }
+            Self.condition.unlock()
+        }
+
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+private final class BlockingSegmentFileManager: FileManager, @unchecked Sendable {
+    enum BlockPoint {
+        case manifestDirectory
+        case segmentMove
+    }
+
+    private let condition = NSCondition()
+    private let cacheKey: String
+    private let blockPoint: BlockPoint
+    private var claimedBlock = false
+    private var isBlocked = false
+    private var released = false
+    private var manifestDirectoryCalls = 0
+
+    init(cacheKey: String, blockPoint: BlockPoint) {
+        self.cacheKey = cacheKey
+        self.blockPoint = blockPoint
+        super.init()
+    }
+
+    func waitUntilBlocked() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(5)
+        while !isBlocked {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    func manifestDirectoryCallCount() -> Int {
+        condition.withLock { manifestDirectoryCalls }
+    }
+
+    func releaseBlockedMutation() {
+        condition.withLock {
+            released = true
+            condition.broadcast()
+        }
+    }
+
+    override func createDirectory(
+        at url: URL,
+        withIntermediateDirectories createIntermediates: Bool,
+        attributes: [FileAttributeKey: Any]? = nil
+    ) throws {
+        let isAttemptDirectory = url.lastPathComponent == cacheKey
+            && url.deletingLastPathComponent().lastPathComponent == ".downloads"
+        if isAttemptDirectory {
+            condition.withLock {
+                manifestDirectoryCalls += 1
+                condition.broadcast()
+            }
+            blockIfNeeded(.manifestDirectory)
+        }
+        try super.createDirectory(
+            at: url,
+            withIntermediateDirectories: createIntermediates,
+            attributes: attributes
+        )
+    }
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        if dstURL.lastPathComponent == "segment-0.part",
+           dstURL.deletingLastPathComponent().lastPathComponent == cacheKey {
+            blockIfNeeded(.segmentMove)
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+    }
+
+    private func blockIfNeeded(_ point: BlockPoint) {
+        condition.lock()
+        defer { condition.unlock() }
+        guard point == blockPoint, !claimedBlock else { return }
+        claimedBlock = true
+        isBlocked = true
+        condition.broadcast()
+        while !released {
+            condition.wait()
+        }
+    }
+}
+
+private final class TrackingCancellationFence:
+    CacheManagerCancellationFencing,
+    @unchecked Sendable
+{
+    private let condition = NSCondition()
+    private var cancellationRequestCounts: [String: Int] = [:]
+    private var mutationKeys: Set<String> = []
+    private var observedRequests: Set<String> = []
+
+    func beginCancellation(cacheKey: String) {
+        condition.lock()
+        cancellationRequestCounts[cacheKey, default: 0] += 1
+        observedRequests.insert(cacheKey)
+        condition.broadcast()
+        while mutationKeys.contains(cacheKey) {
+            condition.wait()
+        }
+        condition.unlock()
+    }
+
+    func endCancellation(cacheKey: String) {
+        condition.withLock {
+            let remaining = (cancellationRequestCounts[cacheKey] ?? 1) - 1
+            cancellationRequestCounts[cacheKey] = remaining > 0 ? remaining : nil
+        }
+    }
+
+    func isCancellationRequested(cacheKey: String) -> Bool {
+        condition.withLock {
+            (cancellationRequestCounts[cacheKey] ?? 0) > 0
+        }
+    }
+
+    func performMutation(
+        cacheKey: String,
+        _ mutation: () throws -> Void
+    ) throws {
+        condition.lock()
+        guard (cancellationRequestCounts[cacheKey] ?? 0) == 0 else {
+            condition.unlock()
+            throw CancellationError()
+        }
+        mutationKeys.insert(cacheKey)
+        condition.unlock()
+
+        let result = Result { try mutation() }
+
+        condition.lock()
+        mutationKeys.remove(cacheKey)
+        let cancelled = (cancellationRequestCounts[cacheKey] ?? 0) > 0
+        condition.broadcast()
+        condition.unlock()
+
+        if cancelled {
+            throw CancellationError()
+        }
+        try result.get()
+    }
+
+    func waitForCancellationRequest(cacheKey: String) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(5)
+        while !observedRequests.contains(cacheKey) {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+}
+
 private func rangeDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [RangeDownloadProtocol.self]
@@ -282,6 +579,18 @@ private func hangingRangeConfig() -> URLSessionConfiguration {
 private func cancelThenRetryDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [CancelThenRetryDownloadProtocol.self]
+    return config
+}
+
+private func stalledProbeConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [StalledProbeProtocol.self]
+    return config
+}
+
+private func ownershipRaceConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [OwnershipRaceProtocol.self]
     return config
 }
 
@@ -416,6 +725,174 @@ struct CacheManagerTests {
         #expect(!FileManager.default.fileExists(
             atPath: root.appendingPathComponent("22:3.resume").path
         ))
+    }
+
+    @Test func cancelPromptlyFinishesDownloadAwaitingStalledFreshProbe() async {
+        StalledProbeProtocol.reset()
+        let manager = CacheManager(root: tempRoot(), configuration: stalledProbeConfig())
+        let download = Task {
+            try await manager.download(
+                id: 23,
+                from: URL(string: "https://srv.test/videos/23/stalled")!
+            )
+        }
+        guard StalledProbeProtocol.waitForProbeToStart() else {
+            Issue.record("The stalled probe never started")
+            manager.cancel(id: 23)
+            return
+        }
+
+        manager.cancel(id: 23)
+
+        let finishedPromptly = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                do {
+                    try await download.value
+                    return false
+                } catch is CancellationError {
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(200))
+                return false
+            }
+            let result = await group.next() ?? false
+            if !result {
+                download.cancel()
+            }
+            group.cancelAll()
+            while await group.next() != nil {}
+            return result
+        }
+
+        #expect(finishedPromptly)
+        #expect(StalledProbeProtocol.waitForProbeToStop())
+        #expect(manager.state(for: 23) == .notCached)
+    }
+
+    @Test func cancelledProbeCannotOverwriteImmediateRetryManifest() async throws {
+        OwnershipRaceProtocol.reset()
+        let root = tempRoot()
+        let fileManager = BlockingSegmentFileManager(
+            cacheKey: "24",
+            blockPoint: .manifestDirectory
+        )
+        let cancellationFence = TrackingCancellationFence()
+        let manager = CacheManager(
+            root: root,
+            configuration: ownershipRaceConfig(),
+            fileManager: fileManager,
+            cancellationFence: cancellationFence
+        )
+        defer {
+            fileManager.releaseBlockedMutation()
+            OwnershipRaceProtocol.releaseRetrySegment()
+        }
+        let first = Task {
+            try await manager.download(
+                id: 24,
+                from: URL(string: "https://srv.test/videos/24/first")!
+            )
+        }
+        guard fileManager.waitUntilBlocked() else {
+            Issue.record("The first manifest write never reached its mutation window")
+            manager.cancel(id: 24)
+            return
+        }
+
+        let retry = Task {
+            manager.cancel(id: 24)
+            return try await manager.download(
+                id: 24,
+                from: URL(string: "https://srv.test/videos/24/retry")!
+            )
+        }
+        guard cancellationFence.waitForCancellationRequest(cacheKey: "24") else {
+            Issue.record("Cancellation never reached the scratch-mutation fence")
+            return
+        }
+        #expect(fileManager.manifestDirectoryCallCount() == 1)
+        fileManager.releaseBlockedMutation()
+
+        await #expect(throws: CancellationError.self) { try await first.value }
+        guard OwnershipRaceProtocol.waitForRetrySegmentToStart() else {
+            Issue.record("The retry segment never started")
+            retry.cancel()
+            return
+        }
+        let manifest = try SegmentedDownloadStore(root: root).load(cacheKey: "24")
+        #expect(manifest.remoteURL.lastPathComponent == "retry")
+        #expect(manifest.etag == "\"retry\"")
+
+        OwnershipRaceProtocol.releaseRetrySegment()
+        try await retry.value
+        #expect(try Data(contentsOf: manager.localURL(for: 24))
+                == Data([0xB0, 0xB1, 0xB2, 0xB3]))
+    }
+
+    @Test func cancelledSegmentCannotRecreateImmediateRetryScratch() async throws {
+        OwnershipRaceProtocol.reset()
+        let root = tempRoot()
+        let fileManager = BlockingSegmentFileManager(
+            cacheKey: "25",
+            blockPoint: .segmentMove
+        )
+        let cancellationFence = TrackingCancellationFence()
+        let manager = CacheManager(
+            root: root,
+            configuration: ownershipRaceConfig(),
+            fileManager: fileManager,
+            cancellationFence: cancellationFence
+        )
+        defer {
+            fileManager.releaseBlockedMutation()
+            OwnershipRaceProtocol.releaseRetrySegment()
+        }
+        let first = Task {
+            try await manager.download(
+                id: 25,
+                from: URL(string: "https://srv.test/videos/25/first")!
+            )
+        }
+        guard fileManager.waitUntilBlocked() else {
+            Issue.record("The first segment never reached its filesystem mutation window")
+            manager.cancel(id: 25)
+            return
+        }
+
+        let retry = Task {
+            manager.cancel(id: 25)
+            return try await manager.download(
+                id: 25,
+                from: URL(string: "https://srv.test/videos/25/retry")!
+            )
+        }
+        guard cancellationFence.waitForCancellationRequest(cacheKey: "25") else {
+            Issue.record("Cancellation never reached the scratch-mutation fence")
+            return
+        }
+        #expect(fileManager.manifestDirectoryCallCount() == 1)
+        fileManager.releaseBlockedMutation()
+
+        await #expect(throws: CancellationError.self) { try await first.value }
+        guard OwnershipRaceProtocol.waitForRetrySegmentToStart() else {
+            Issue.record("The retry segment never started")
+            retry.cancel()
+            return
+        }
+        #expect(!FileManager.default.fileExists(
+            atPath: root
+                .appendingPathComponent(".downloads/25/segment-0.part")
+                .path
+        ))
+
+        OwnershipRaceProtocol.releaseRetrySegment()
+        try await retry.value
+        #expect(try Data(contentsOf: manager.localURL(for: 25))
+                == Data([0xB0, 0xB1, 0xB2, 0xB3]))
     }
 
     @Test func testDownloadSendsBearerToken() async throws {
