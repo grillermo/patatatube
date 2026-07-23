@@ -26,10 +26,21 @@ public final class VideoStore: ObservableObject {
         self.filter = defaults.string(forKey: Self.filterKey)
     }
 
+    /// Reads + JSON-decodes the persisted list off the main actor. Done inline it
+    /// blocked the main thread at startup long enough to trip Sentry's app-hang
+    /// detector (PATATATUBE-3, NSFileHandle.read during first render).
+    private func loadCache() async -> [Video]? {
+        guard let cache else { return nil }
+        let classification = filter
+        return await Task.detached(priority: .utility) {
+            cache.load(classification: classification)
+        }.value
+    }
+
     /// Boot path: show cached videos instantly if present, then refresh from network.
     /// With no cache, falls back to a plain network load.
     public func bootLoad() async {
-        if let cached = cache?.load(classification: filter), !cached.isEmpty {
+        if let cached = await loadCache(), !cached.isEmpty {
             videos = cached
         }
         await load()
@@ -62,7 +73,7 @@ public final class VideoStore: ObservableObject {
             // one). It says nothing about the server, so leave the list and errorText
             // untouched rather than banner it or fall back to stale cache.
             if Self.isCancellation(error) { return }
-            if let cached = cache?.load(classification: filter) {
+            if let cached = await loadCache() {
                 videos = cached
             }
             report(error)
