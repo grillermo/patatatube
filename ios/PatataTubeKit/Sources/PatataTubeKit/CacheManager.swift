@@ -45,6 +45,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         return root.appendingPathComponent(name)
     }
 
+    /// Writes preview bytes for a movie. Best-effort: failures leave the preview uncached.
+    public func storePreview(_ data: Data, for id: Int, path: String) {
+        try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let destination = root.appendingPathComponent("\(id).preview.\(safeExt(from: path))")
+        try? fileManager.removeItem(at: destination)
+        try? data.write(to: destination)
+    }
+
     /// Local file URL of a cached show poster, or nil if none is cached.
     /// Keyed by the raw showPreviewUrl string so store and lookup always agree.
     public func cachedShowPosterURL(for key: String) -> URL? {
@@ -308,12 +316,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw APIError.badStatus(http.statusCode)
         }
-        let ext = remote.pathExtension.lowercased()
-        let safeExt = (1...4).contains(ext.count) && ext.allSatisfy(\.isLetter) ? ext : "jpg"
-        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        let destination = root.appendingPathComponent("\(id).preview.\(safeExt)")
-        try? fileManager.removeItem(at: destination)
-        try data.write(to: destination)
+        storePreview(data, for: id, path: remote.absoluteString)
     }
 
     private func cacheShowPoster(key: String, from remote: URL, bearerToken: String? = nil) async throws {

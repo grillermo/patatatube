@@ -188,6 +188,19 @@ struct CacheManagerTests {
         #expect(try Data(contentsOf: previewURL) == Data([0xAA, 0xBB]))
     }
 
+    @Test func previewStoreAndLookupUsesMovieID() throws {
+        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        #expect(manager.cachedPreviewURL(for: 44) == nil)
+
+        manager.storePreview(Data([0xAA, 0xBB]), for: 44,
+                             path: "/videos/44/preview.jpg")
+
+        let url = try #require(manager.cachedPreviewURL(for: 44))
+        #expect(url.lastPathComponent == "44.preview.jpg")
+        #expect(try Data(contentsOf: url) == Data([0xAA, 0xBB]))
+        #expect(manager.cachedPreviewURL(for: 45) == nil)
+    }
+
     @Test func previewFailureStillCachesVideo() async throws {
         let root = tempRoot()
         let manager = CacheManager(root: root, configuration: mockDownloadConfig())
@@ -393,6 +406,15 @@ struct CacheManagerTests {
         #expect(try Data(contentsOf: url) == Data([0x01, 0x02]))
         // A different key must not resolve to this poster.
         #expect(manager.cachedShowPosterURL(for: "/other/poster.png") == nil)
+    }
+
+    @Test func showPosterStoreAndLookupUsesShowID() throws {
+        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        manager.storeShowPoster(Data([0x01]), for: "Bluey")
+
+        let url = try #require(manager.cachedShowPosterURL(for: "Bluey"))
+        #expect(try Data(contentsOf: url) == Data([0x01]))
+        #expect(manager.cachedShowPosterURL(for: "Other Show") == nil)
     }
 
     @Test func showPosterKeyIsStableAndExtSanitized() throws {
