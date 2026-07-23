@@ -2,22 +2,6 @@ import Foundation
 import Testing
 @testable import PatataTubeKit
 
-private final class FailingPublicationFileManager: FileManager, @unchecked Sendable {
-    let blockedSource: URL
-
-    init(blockedSource: URL) {
-        self.blockedSource = blockedSource
-        super.init()
-    }
-
-    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
-        if srcURL == blockedSource {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        try super.moveItem(at: srcURL, to: dstURL)
-    }
-}
-
 @Suite("Segmented download primitives", .serialized)
 struct SegmentedDownloadTests {
     private func root() -> URL {
@@ -157,6 +141,7 @@ struct SegmentedDownloadTests {
         try store.write(manifest)
 
         let destination = root.appendingPathComponent("9.v2.mp4")
+        try Data([9, 9, 9, 9, 9, 9]).write(to: destination)
         try store.assemble(manifest: manifest, destination: destination)
 
         #expect(try Data(contentsOf: destination) == Data([1, 1, 2, 2, 3, 3]))
@@ -244,12 +229,9 @@ struct SegmentedDownloadTests {
         let previous = Data([1, 1, 1])
         try previous.write(to: destination)
 
-        let store = SegmentedDownloadStore(
-            root: root,
-            fileManager: FailingPublicationFileManager(
-                blockedSource: setupStore.assemblyURL(cacheKey: manifest.cacheKey)
-            )
-        )
+        let store = SegmentedDownloadStore(root: root) { _, _, _ in
+            throw CocoaError(.fileWriteUnknown)
+        }
 
         #expect(throws: CocoaError.self) {
             try store.assemble(manifest: manifest, destination: destination)

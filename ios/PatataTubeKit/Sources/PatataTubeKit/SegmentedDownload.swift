@@ -138,10 +138,24 @@ struct DownloadProbe: Equatable, Sendable {
 struct SegmentedDownloadStore: @unchecked Sendable {
     let root: URL
     private let fileManager: FileManager
+    private let publish: (FileManager, URL, URL) throws -> Void
 
-    init(root: URL, fileManager: FileManager = .default) {
+    init(
+        root: URL,
+        fileManager: FileManager = .default,
+        publish: @escaping (FileManager, URL, URL) throws -> Void = {
+            fileManager, destination, assembly in
+            _ = try fileManager.replaceItemAt(
+                destination,
+                withItemAt: assembly,
+                backupItemName: nil,
+                options: []
+            )
+        }
+    ) {
         self.root = root
         self.fileManager = fileManager
+        self.publish = publish
     }
 
     private var downloadsRoot: URL {
@@ -340,22 +354,10 @@ struct SegmentedDownloadStore: @unchecked Sendable {
                 actual: actual
             )
         }
-        let backup = destination.deletingLastPathComponent()
-            .appendingPathComponent(".\(destination.lastPathComponent).backup-\(UUID().uuidString)")
-        let hasExistingDestination = fileManager.fileExists(atPath: destination.path)
-        if hasExistingDestination {
-            try fileManager.moveItem(at: destination, to: backup)
-        }
-        do {
+        if fileManager.fileExists(atPath: destination.path) {
+            try publish(fileManager, destination, assembly)
+        } else {
             try fileManager.moveItem(at: assembly, to: destination)
-        } catch {
-            if hasExistingDestination {
-                try fileManager.moveItem(at: backup, to: destination)
-            }
-            throw error
-        }
-        if hasExistingDestination {
-            try? fileManager.removeItem(at: backup)
         }
         remove(cacheKey: validated.cacheKey)
     }
