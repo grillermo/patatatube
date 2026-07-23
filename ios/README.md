@@ -207,3 +207,15 @@ On first launch grid is empty / errors — need server config:
   with `xcodebuild test -project PatataTube.xcodeproj -scheme PatataTube
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.3.1'`.
 - `PatataTubeKit` (Sources/PatataTubeKit) is a local SwiftPM package with the networking/cache/model logic — build it standalone with `swift build` inside `ios/PatataTubeKit` if isolating a bug there.
+
+### Player orientation lock
+
+1. Start a normal video in portrait, tap the video, and confirm the upper-right unlocked-rotation button appears with the AVKit controls and hides after about four seconds.
+2. Reveal the controls, enable the lock, rotate through both landscape directions, and confirm the player remains portrait.
+3. Disable the lock while physically landscape and confirm the player immediately rotates to that landscape direction.
+4. Repeat from landscape, including portrait upside down on iPad; confirm iPhone never enters portrait upside down.
+5. Enable the lock with autoplay on and let the next video start; confirm the lock remains enabled.
+6. Dismiss and open another video; confirm the lock starts disabled and normal rotation works.
+7. Repeat in play-and-sleep playback; after the black completion overlay appears, confirm the orientation button cannot be revealed or tapped.
+8. Enable Control Center Rotation Lock and confirm PatataTube's button reports only its own state; unlocking PatataTube does not disable the system setting.
+9. Confirm scrubbing, native playback controls, pull-down dismissal, subtitles/audio selection, and AirPlay still work.

@@ -10,6 +10,8 @@ struct VideoPlayerView: View {
     /// Play-and-sleep: play only this item, then black out so the device can lock.
     let sleepMode: Bool
     @State private var currentIndex: Int
+    @StateObject private var orientationLock = OrientationLockCoordinator.shared
+    @StateObject private var orientationControlVisibility = OrientationControlVisibility()
 
     init(videos: [Video], startIndex: Int, sleepMode: Bool = false) {
         self.videos = videos
@@ -19,6 +21,11 @@ struct VideoPlayerView: View {
     }
 
     private var video: Video { videos[currentIndex] }
+    private var activeWindowScene: UIWindowScene? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })
+    }
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -48,7 +55,8 @@ struct VideoPlayerView: View {
                 PlayerViewController(
                     player: player,
                     attached: attached,
-                    resumeAfterDetaching: resumeAfterDetaching
+                    resumeAfterDetaching: resumeAfterDetaching,
+                    onPlayerTap: { orientationControlVisibility.reveal() }
                 )
                     .ignoresSafeArea()
                     .offset(y: dragOffset)
@@ -56,6 +64,15 @@ struct VideoPlayerView: View {
             } else {
                 ProgressView().tint(.white)
             }
+            OrientationLockOverlay(
+                isLocked: orientationLock.isLocked,
+                isVisible: orientationControlVisibility.isVisible,
+                isBlocked: showingSleepOverlay,
+                onToggle: {
+                    orientationLock.toggle(in: activeWindowScene)
+                    orientationControlVisibility.reveal()
+                }
+            )
             if showingSleepOverlay {
                 // Sleep overlay: swallow every touch so a child can't tap back
                 // into the app; a paused player releases the idle timer, so the
@@ -67,7 +84,10 @@ struct VideoPlayerView: View {
             }
         }
         .simultaneousGesture(pullDownToDismiss)
-        .task { await setup() }
+        .task {
+            orientationLock.beginPlayerSession(in: activeWindowScene)
+            await setup()
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .inactive:
@@ -81,7 +101,14 @@ struct VideoPlayerView: View {
                 break
             }
         }
+        .onChange(of: showingSleepOverlay) { _, showingSleepOverlay in
+            if showingSleepOverlay {
+                orientationControlVisibility.hide()
+            }
+        }
         .onDisappear {
+            orientationControlVisibility.hide()
+            orientationLock.endPlayerSession(in: activeWindowScene)
             player?.pause()
             removePlayToEndObserver()
             readyObserver?.invalidate()
