@@ -815,7 +815,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let freshSegmentIndexes = starts.compactMap {
             $0.resumeData == nil ? $0.segment.index : nil
         }
-        let resetManifest: SegmentedDownloadManifest? = lock.withLock {
+        let resetManifest: SegmentedDownloadManifest? = lock.withLock { () -> SegmentedDownloadManifest? in
             guard let current = segmentedAttempts[attempt.cacheKey],
                   current.id == attempt.id
             else { return nil }
@@ -827,7 +827,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 didReset = true
             }
             guard didReset else { return nil }
-            inFlight[attempt.cacheKey] = SegmentedDownloadStore.progress(
+            inFlight[attempt.cacheKey] = activityAccumulator(
                 manifest: current.manifest,
                 activeByteCounts: current.activeByteCounts
             )
