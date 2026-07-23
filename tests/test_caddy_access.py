@@ -63,12 +63,36 @@ def _read_line(process, timeout=2.0):
     raise AssertionError("follower did not emit a line")
 
 
+def _wait_for_follower_ready(log_path: Path, process, timeout=2.0):
+    """Wait until a newly-written record is observed by the follower."""
+    deadline = time.monotonic() + timeout
+    probe = 0
+    while time.monotonic() < deadline:
+        probe += 1
+        probe_uri = f"/__caddy_follower_ready__/{probe}"
+        expected = f"GET {probe_uri} 200 1536B 12.3ms"
+        with log_path.open("a") as stream:
+            stream.write(_entry(uri=probe_uri) + "\n")
+            stream.flush()
+        probe_deadline = min(deadline, time.monotonic() + 0.05)
+        while time.monotonic() < probe_deadline:
+            try:
+                line = _read_line(process, timeout=probe_deadline - time.monotonic())
+            except AssertionError:
+                break
+            if line == expected:
+                return
+            if not line.startswith("GET /__caddy_follower_ready__/"):
+                raise AssertionError(f"unexpected follower output while waiting: {line!r}")
+    raise AssertionError("follower did not become ready")
+
+
 def test_cli_skips_history_filters_proxy_and_follows_rotation(tmp_path):
     log_path = tmp_path / "caddy_access.log"
     log_path.write_text(_entry(uri="/assets/old.js") + "\n")
     process = _start_follower(log_path, os.getpid())
     try:
-        time.sleep(0.05)
+        _wait_for_follower_ready(log_path, process)
         with log_path.open("a") as stream:
             stream.write(_entry(marked=False, uri="/api/videos") + "\n")
             stream.write(_entry(uri="/assets/new.js?token=hidden") + "\n")
@@ -88,8 +112,10 @@ def test_cli_reads_from_start_when_log_is_created_after_start(tmp_path):
     log_path = tmp_path / "later.log"
     process = _start_follower(log_path, os.getpid())
     try:
-        time.sleep(0.05)
-        log_path.write_text(_entry(uri="/favicon.ico") + "\n")
+        _wait_for_follower_ready(log_path, process)
+        with log_path.open("a") as stream:
+            stream.write(_entry(uri="/favicon.ico") + "\n")
+            stream.flush()
         assert _read_line(process) == "GET /favicon.ico 200 1536B 12.3ms"
     finally:
         process.terminate()
