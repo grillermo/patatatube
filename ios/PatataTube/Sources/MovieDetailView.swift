@@ -35,7 +35,12 @@ struct MovieDetailView: View {
                     Spacer()
                     AuthedImage(path: currentVideo.previewUrl,
                                 localFileURL: model.cache.cachedPreviewURL(for: currentVideo.id),
-                                fill: false)
+                                fill: false,
+                                onNetworkLoad: { data in
+                                    guard let path = currentVideo.previewUrl,
+                                          model.cache.cachedPreviewURL(for: currentVideo.id) == nil else { return }
+                                    model.cache.storePreview(data, for: currentVideo.id, path: path)
+                                })
                         .aspectRatio(2.0/3.0, contentMode: .fit)
                         .frame(maxHeight: 420)
                         .background(.secondary.opacity(0.2))

@@ -7,6 +7,7 @@ import PatataTubeKit
 /// view owns download/classify/delete.
 struct MovieCell: View {
     let video: Video
+    @EnvironmentObject var model: AppModel
     /// Local file URL of the cached preview image, when the video is cached offline.
     var cachedPreviewURL: URL? = nil
 
@@ -25,7 +26,12 @@ struct MovieCell: View {
                     // black rectangle and clipping here keeps every cell 2:3.
                     Rectangle().fill(.clear)
                         .overlay {
-                            AuthedImage(path: video.previewUrl, localFileURL: cachedPreviewURL)
+                            AuthedImage(path: video.previewUrl, localFileURL: cachedPreviewURL,
+                                        onNetworkLoad: { data in
+                                            guard let path = video.previewUrl,
+                                                  model.cache.cachedPreviewURL(for: video.id) == nil else { return }
+                                            model.cache.storePreview(data, for: video.id, path: path)
+                                        })
                         }
                         .clipped()
                 }

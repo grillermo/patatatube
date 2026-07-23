@@ -37,19 +37,12 @@ struct ShowsView: View {
     }
 
     private func cachedPosterURL(for show: ShowGroup) -> URL? {
-        guard let key = show.posterPath else { return nil }
-        return model.cache.cachedShowPosterURL(for: key)
+        model.cache.cachedShowPosterURL(for: show.id)
     }
 
-    /// Self-heal shows downloaded before poster caching existed: when the
-    /// poster arrives over the network and at least one episode is already
-    /// cached, persist it so the next launch works offline.
     private func backfillPoster(_ data: Data, for show: ShowGroup) {
-        guard let key = show.posterPath,
-              model.cache.cachedShowPosterURL(for: key) == nil,
-              show.episodes.contains(where: {
-                  model.cache.state(for: $0.id, versionId: $0.chosenVersionId) == .cached
-              }) else { return }
-        model.cache.storeShowPoster(data, for: key)
+        guard show.posterPath != nil,
+              model.cache.cachedShowPosterURL(for: show.id) == nil else { return }
+        model.cache.storeShowPoster(data, for: show.id)
     }
 }
