@@ -255,6 +255,41 @@ def test_stream_returns_requested_byte_range(client):
         fake_video.unlink(missing_ok=True)
 
 
+def test_stream_multiplex_ranges_recombine_to_original(client):
+    import db
+
+    payload = bytes(range(23))
+    fake_video = Path("videos") / "1.mp4"
+    fake_video.parent.mkdir(exist_ok=True)
+    fake_video.write_bytes(payload)
+    ranges = [(0, 4), (5, 10), (11, 16), (17, 22)]
+
+    try:
+        vid_id = db.add_video("https://twitter.com/x/status/1")
+        db.update_video(vid_id, status="done", filename="1.mp4")
+
+        responses = [
+            client.get(
+                f"/videos/{vid_id}/stream",
+                headers={**AUTH, "Range": f"bytes={start}-{end}"},
+            )
+            for start, end in ranges
+        ]
+
+        etags = {response.headers["etag"] for response in responses}
+        assert len(etags) == 1
+        assert not next(iter(etags)).startswith("W/")
+        assert b"".join(response.content for response in responses) == payload
+
+        for response, (start, end) in zip(responses, ranges):
+            assert response.status_code == 206
+            assert response.headers["accept-ranges"] == "bytes"
+            assert response.headers["content-range"] == f"bytes {start}-{end}/23"
+            assert response.headers["content-length"] == str(end - start + 1)
+    finally:
+        fake_video.unlink(missing_ok=True)
+
+
 def test_stream_supports_suffix_byte_range(client):
     import db
     from pathlib import Path
