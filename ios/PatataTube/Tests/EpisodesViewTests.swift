@@ -163,6 +163,7 @@ struct EpisodesDownloadAllViewTests {
             currentCacheState: { source.read($0) }
         )
         .environmentObject(AppModel())
+        .environment(VideoPreparationTracker())
         .environment(\.continuousClock, clock)
 
         ViewHosting.host(view: sut)
@@ -202,6 +203,7 @@ struct EpisodesDownloadAllViewTests {
             currentCacheState: { source.read($0) }
         )
         .environmentObject(AppModel())
+        .environment(VideoPreparationTracker())
         .environment(\.continuousClock, clock)
 
         ViewHosting.host(view: sut)
@@ -244,6 +246,7 @@ struct EpisodesDownloadAllViewTests {
             currentCacheState: { source.read($0) }
         )
         .environmentObject(AppModel())
+        .environment(VideoPreparationTracker())
 
         ViewHosting.host(view: sut)
         await eventually("Eligible show never enabled download all") {
