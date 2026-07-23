@@ -9,22 +9,29 @@ final class AppModel: ObservableObject {
     let cache: CacheManager
     let store: VideoStore
     let api: APIClient
+    private let downloadSettings: DownloadStreamSettings
 
     @Published var baseURLText: String
     @Published var tokenText: String
+    @Published var downloadStreamCount: Int
 
     /// When on, a finished video rolls into the next one in the queue. Session-only
     /// by design — it resets to off on relaunch, so a long queue can never keep
     /// playing across launches unnoticed.
     @Published var autoplay: Bool = false
 
-    init() {
-        let credentials = KeychainCredentialStore()
+    init(
+        credentials: CredentialStore = KeychainCredentialStore(),
+        cache: CacheManager = CacheManager(),
+        downloadSettings: DownloadStreamSettings = DownloadStreamSettings()
+    ) {
         let api = APIClient(store: credentials)
         self.credentials = credentials
-        self.cache = CacheManager()
+        self.cache = cache
         self.api = api
         self.store = VideoStore(api: api, cache: VideoListCache())
+        self.downloadSettings = downloadSettings
+        self.downloadStreamCount = downloadSettings.load()
         self.baseURLText = credentials.baseURL?.absoluteString ?? ""
         self.tokenText = credentials.token ?? ""
     }
@@ -32,6 +39,11 @@ final class AppModel: ObservableObject {
     func saveSettings() {
         credentials.baseURL = URL(string: baseURLText.trimmingCharacters(in: .whitespaces))
         credentials.token = tokenText.isEmpty ? nil : tokenText
+        downloadStreamCount = min(
+            max(downloadStreamCount, DownloadStreamSettings.allowedCounts.lowerBound),
+            DownloadStreamSettings.allowedCounts.upperBound
+        )
+        downloadSettings.save(downloadStreamCount)
     }
 
     /// Absolute stream/download URL for a video's `streamPath`.

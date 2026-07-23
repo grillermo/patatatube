@@ -272,7 +272,8 @@ struct VideoGridView: View {
         do {
             try await model.cache.download(id: target.id, versionId: target.chosenVersionId, from: url, preview: preview,
                                            showPosterKey: posterKey, showPoster: poster,
-                                           bearerToken: model.credentials.token)
+                                           bearerToken: model.credentials.token,
+                                           streamCount: model.downloadStreamCount)
             return true
         } catch {
             if isCancellation(error) { return false }

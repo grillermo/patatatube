@@ -37,7 +37,9 @@ struct PatataTubeApp: App {
                     // Downloads use a foreground session, so they stall when the
                     // app is suspended. Resume them from persisted resume data
                     // whenever we come back to the foreground (and on launch).
-                    if phase == .active { model.cache.resumeInterrupted() }
+                    if phase == .active {
+                        model.cache.resumeInterrupted(bearerToken: model.credentials.token)
+                    }
                 }
         }
     }

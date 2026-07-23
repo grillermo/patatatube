@@ -36,14 +36,27 @@ struct SettingsView: View {
                             .foregroundStyle(testOK ? .green : .red)
                     }
                 }
+                Section("Downloads") {
+                    Stepper(
+                        value: $model.downloadStreamCount,
+                        in: DownloadStreamSettings.allowedCounts
+                    ) {
+                        LabeledContent(
+                            "Streams per video",
+                            value: "\(model.downloadStreamCount)"
+                        )
+                    }
+                }
+
                 Section {
                     Button("Cache all videos") {
                         Task {
                             for video in model.store.videos {
                                 if let url = model.streamURL(for: video) {
                                     let preview = video.previewUrl.flatMap(URL.init(string:))
-                            try? await model.cache.download(id: video.id, versionId: video.chosenVersionId, from: url, preview: preview,
-                                                            bearerToken: model.credentials.token)
+                                try? await model.cache.download(id: video.id, versionId: video.chosenVersionId, from: url, preview: preview,
+                                                                bearerToken: model.credentials.token,
+                                                                streamCount: model.downloadStreamCount)
                                 }
                             }
                         }
