@@ -42,10 +42,9 @@ struct DownloadActivityTests {
             totalByteCount: 10_000,
             now: resumedAt
         )
-        accumulator.record(
-            transferredByteCount: 4_000,
-            progress: 0.4,
-            now: resumedAt
+        accumulator.establishResumeSamplingBaseline(
+            totalBytesWritten: 5_000,
+            bytesWritten: 1_000
         )
         accumulator.record(
             transferredByteCount: 5_000,
@@ -54,6 +53,30 @@ struct DownloadActivityTests {
         )
 
         #expect(accumulator.activity.bytesPerSecond == 500)
+    }
+
+    @Test func multiplexedSegmentSamplesUseTheAggregateByteCountForRate() {
+        var accumulator = DownloadActivityAccumulator(
+            videoID: 7,
+            versionID: 2,
+            totalByteCount: 10_000,
+            now: Date(timeIntervalSinceReferenceDate: 10)
+        )
+
+        // Segment 0 reports first; segment 1 then reports while it remains active.
+        accumulator.record(
+            transferredByteCount: 1_000,
+            progress: 0.1,
+            now: Date(timeIntervalSinceReferenceDate: 11)
+        )
+        accumulator.record(
+            transferredByteCount: 3_000,
+            progress: 0.3,
+            now: Date(timeIntervalSinceReferenceDate: 12)
+        )
+
+        #expect(accumulator.activity.transferredByteCount == 3_000)
+        #expect(accumulator.activity.bytesPerSecond == 2_000)
     }
 
     @Test func historyKeepsNewestThreeAndReloads() throws {

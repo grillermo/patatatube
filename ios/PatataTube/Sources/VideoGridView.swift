@@ -39,6 +39,14 @@ struct VideoGridView: View {
         currentText == displayedText
     }
 
+    static func downloadVideo(id: Int, versionID: Int?, videos: [Video]) -> Video? {
+        guard let stored = videos.first(where: { $0.id == id }) else { return nil }
+        guard let versionID else { return stored.withChosenVersion(nil) }
+        return stored.versions.contains(where: { $0.id == versionID })
+            ? stored.withChosenVersion(versionID)
+            : nil
+    }
+
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: cellSize), spacing: 16)]
     }
@@ -119,10 +127,7 @@ struct VideoGridView: View {
                     active: { model.cache.activeDownloads() },
                     recent: { model.cache.recentDownloads() },
                     video: { id, versionID in
-                        guard let stored = store.videos.first(where: { $0.id == id }) else { return nil }
-                        guard let versionID else { return stored }
-                        return stored.versions.contains(where: { $0.id == versionID })
-                            ? stored.withChosenVersion(versionID) : nil
+                        Self.downloadVideo(id: id, versionID: versionID, videos: store.videos)
                     },
                     onCancel: { activity in
                         model.cache.cancel(id: activity.videoID, versionId: activity.versionID)

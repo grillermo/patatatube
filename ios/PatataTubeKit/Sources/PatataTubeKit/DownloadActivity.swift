@@ -63,6 +63,16 @@ struct DownloadActivityAccumulator {
         )
     }
 
+    mutating func establishResumeSamplingBaseline(
+        totalBytesWritten: Int64,
+        bytesWritten: Int64
+    ) {
+        let currentWrite = max(bytesWritten, 0)
+        lastSample.bytes = totalBytesWritten > currentWrite
+            ? totalBytesWritten - currentWrite
+            : 0
+    }
+
     mutating func record(
         transferredByteCount: Int64,
         progress: Double,
