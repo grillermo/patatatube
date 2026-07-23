@@ -34,6 +34,28 @@ struct DownloadActivityTests {
         #expect(accumulator.activity.progress == 0.5)
     }
 
+    @Test func resumedBytesDoNotInflateTheNextRateSample() {
+        let resumedAt = Date(timeIntervalSinceReferenceDate: 10)
+        var accumulator = DownloadActivityAccumulator(
+            videoID: 7,
+            versionID: 2,
+            totalByteCount: 10_000,
+            now: resumedAt
+        )
+        accumulator.record(
+            transferredByteCount: 4_000,
+            progress: 0.4,
+            now: resumedAt
+        )
+        accumulator.record(
+            transferredByteCount: 5_000,
+            progress: 0.5,
+            now: Date(timeIntervalSinceReferenceDate: 12)
+        )
+
+        #expect(accumulator.activity.bytesPerSecond == 500)
+    }
+
     @Test func historyKeepsNewestThreeAndReloads() throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

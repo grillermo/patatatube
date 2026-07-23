@@ -62,7 +62,7 @@ struct DownloadActivityAccumulator {
             bytesPerSecond: rate
         )
         self.totalByteCount = totalByteCount ?? self.totalByteCount
-        if elapsed > 0 {
+        if elapsed >= 0 {
             lastSample = (clampedTransferredByteCount, now)
         }
     }
