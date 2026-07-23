@@ -9,6 +9,9 @@ packages:
   Capture:
     url: https://github.com/bitdriftlabs/capture-ios.git
     from: "0.23.5"
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa.git
+    from: "8.58.4"
   Clocks:
     url: https://github.com/pointfreeco/swift-clocks.git
     from: "1.1.0"
@@ -50,6 +53,8 @@ targets:
       - package: PatataTubeKit
       - package: Capture
         product: Capture
+      - package: Sentry
+        product: Sentry
       - package: Clocks
     settings:
       base:
@@ -57,8 +62,8 @@ targets:
         CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: com.patatatube.app
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "1.1.12"
-        CURRENT_PROJECT_VERSION: "69"
+        MARKETING_VERSION: "1.1.13"
+        CURRENT_PROJECT_VERSION: "70"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "6.0"
   PatataTubeTests:
