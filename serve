@@ -10,6 +10,13 @@ PYTHON_BIN="${PYTHON_BIN:-python_env/bin/python}"
 CADDY_ACCESS_LOG="${CADDY_ACCESS_LOG:-log/caddy_access.log}"
 LOG_PYTHON_BIN="${LOG_PYTHON_BIN:-$PYTHON_BIN}"
 
+# Every labeled stream is mirrored here (uncolored) for later debugging while
+# still printing to the terminal. Override with LOG_FILE=... ; log/ is gitignored.
+LOG_FILE="${LOG_FILE:-log/backend.log}"
+mkdir -p "$(dirname "$LOG_FILE")"
+# Truncate on every start so each run's log begins from scratch.
+: > "$LOG_FILE"
+
 # macOS launchd hands processes a 256-fd soft limit. Video streaming, HLS
 # segment bursts, preview fetches and SQLite each hold fds, so raise the soft
 # limit toward the hard cap. Defense in depth on top of closing connections.
@@ -17,8 +24,14 @@ ulimit -n "${FD_LIMIT:-8192}" 2>/dev/null || true
 
 # Prefix every line with a colored label so interleaved streams are tellable
 # apart. $1: ANSI color code, $2: label. awk (not sed) for line buffering.
+# Each line is also appended, uncolored, to $LOG_FILE so the same interleaved
+# view survives to disk. O_APPEND + per-line fflush keeps concurrent colorize
+# processes from clobbering each other.
 colorize() {
-  awk -v p="$(printf '\033[1;%sm%-7s|\033[0m' "$1" "$2")" '{ print p, $0; fflush() }'
+  awk -v p="$(printf '\033[1;%sm%-7s|\033[0m' "$1" "$2")" \
+      -v plain="$(printf '%-7s|' "$2")" \
+      -v logf="$LOG_FILE" \
+      '{ print p, $0; fflush(); print plain, $0 >> logf; fflush(logf) }'
 }
 
 # fd 3 preserves the real stdout so Caddy lines bypass the dev/web labels.

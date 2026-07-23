@@ -1,6 +1,8 @@
 // ios/PatataTube/Sources/AuthedImage.swift
 import SwiftUI
 import PatataTubeKit
+import Sentry
+import os
 
 /// Image loaded through APIClient so token-gated server previews work.
 /// Absolute URLs (YouTube thumbs) load without auth; local file URLs load directly.
@@ -27,22 +29,57 @@ struct AuthedImage: View {
         .task(id: path) { await loadImage() }
     }
 
+    private static let log = os.Logger(subsystem: "com.patatatube.app", category: "AuthedImage")
+
+    /// Runs a synchronous, main-thread block and reports how long it took. App
+    /// hangs (Sentry PATATATUBE-3) point at blocking file reads / image decodes
+    /// happening on the main actor here; this pins which step and how big.
+    @discardableResult
+    private func timedMainThreadWork<T>(_ step: String, bytes: Int? = nil, _ body: () -> T) -> T {
+        let start = DispatchTime.now()
+        let result = body()
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+        let kb = bytes.map { Double($0) / 1024 }
+        Self.log.log("main-thread \(step, privacy: .public) took \(ms, privacy: .public)ms bytes=\(bytes ?? -1, privacy: .public) path=\(self.path ?? "-", privacy: .public)")
+        let crumb = Breadcrumb(level: ms >= 500 ? .warning : .info, category: "AuthedImage")
+        crumb.message = "\(step) \(String(format: "%.0f", ms))ms"
+        crumb.data = ["step": step, "ms": ms, "bytes": bytes ?? -1, "path": path ?? "-", "kb": kb ?? -1]
+        SentrySDK.addBreadcrumb(crumb)
+        // Blocking the main thread past ~500ms is what accumulates into an app
+        // hang; surface those as their own Sentry event so we can catch the file.
+        if ms >= 500 {
+            SentrySDK.capture(message: "AuthedImage main-thread \(step) slow: \(String(format: "%.0f", ms))ms") { scope in
+                scope.setContext(value: [
+                    "step": step,
+                    "ms": ms,
+                    "bytes": bytes ?? -1,
+                    "path": self.path ?? "-",
+                    "localFileURL": self.localFileURL?.lastPathComponent ?? "-"
+                ], key: "authed_image")
+            }
+        }
+        return result
+    }
+
     private func loadImage() async {
         // .task(id:) re-fires every time a lazy container brings the cell back
         // on screen; without these guards each scroll re-hits the server.
         if image != nil { return }
         if let path, let cached = ImageMemoryCache.shared.data(for: path) {
-            image = UIImage(data: cached)
+            image = timedMainThreadWork("decode-memcache", bytes: cached.count) { UIImage(data: cached) }
             return
         }
-        if let localFileURL, let data = try? Data(contentsOf: localFileURL) {
-            image = UIImage(data: data)
-            if let path { ImageMemoryCache.shared.store(data, for: path) }
-            return
+        if let localFileURL {
+            let data = timedMainThreadWork("read-localfile") { try? Data(contentsOf: localFileURL) }
+            if let data {
+                image = timedMainThreadWork("decode-localfile", bytes: data.count) { UIImage(data: data) }
+                if let path { ImageMemoryCache.shared.store(data, for: path) }
+                return
+            }
         }
         guard let path else { return }
         if let data = try? await model.api.imageData(path: path) {
-            image = UIImage(data: data)
+            image = timedMainThreadWork("decode-network", bytes: data.count) { UIImage(data: data) }
             ImageMemoryCache.shared.store(data, for: path)
             onNetworkLoad?(data)
         }
