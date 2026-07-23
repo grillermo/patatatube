@@ -164,6 +164,112 @@ private final class HangingRangeProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class SegmentFailureProtocol: URLProtocol {
+    private static let condition = NSCondition()
+    nonisolated(unsafe) private static var stalledSegmentStarted = false
+    nonisolated(unsafe) private static var stalledSegmentStopped = false
+
+    private var isStalledSegment = false
+
+    static func reset() {
+        condition.withLock {
+            stalledSegmentStarted = false
+            stalledSegmentStopped = false
+        }
+    }
+
+    static func waitForStalledSegmentToStop() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(2)
+        while !stalledSegmentStopped {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let range = request.value(forHTTPHeaderField: "Range") else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        if range == "bytes=0-0" {
+            send(range: range, body: Data([0x00]), etag: "\"original\"")
+            return
+        }
+        if range == "bytes=0-1" {
+            isStalledSegment = true
+            Self.condition.withLock {
+                Self.stalledSegmentStarted = true
+                Self.condition.broadcast()
+            }
+            let response = rangeResponse(
+                range: range,
+                bodyCount: 2,
+                etag: "\"original\""
+            )
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data([0x00, 0x01]))
+            return
+        }
+
+        Self.condition.lock()
+        let deadline = Date().addingTimeInterval(2)
+        while !Self.stalledSegmentStarted {
+            guard Self.condition.wait(until: deadline) else {
+                Self.condition.unlock()
+                client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+                return
+            }
+        }
+        Self.condition.unlock()
+        send(range: range, body: Data([0x02, 0x03]), etag: "\"changed\"")
+    }
+
+    override func stopLoading() {
+        guard isStalledSegment else { return }
+        Self.condition.withLock {
+            Self.stalledSegmentStopped = true
+            Self.condition.broadcast()
+        }
+    }
+
+    private func send(range: String, body: Data, etag: String) {
+        let response = rangeResponse(
+            range: range,
+            bodyCount: body.count,
+            etag: etag
+        )
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    private func rangeResponse(
+        range: String,
+        bodyCount: Int,
+        etag: String
+    ) -> HTTPURLResponse {
+        let bounds = range.dropFirst("bytes=".count).split(separator: "-")
+        let start = Int(bounds[0])!
+        let end = Int(bounds[1])!
+        return HTTPURLResponse(
+            url: request.url!,
+            statusCode: 206,
+            httpVersion: nil,
+            headerFields: [
+                "Accept-Ranges": "bytes",
+                "Content-Range": "bytes \(start)-\(end)/4",
+                "Content-Length": "\(bodyCount)",
+                "ETag": etag,
+            ]
+        )!
+    }
+}
+
 // Ensures the first request has started before cancellation, then holds the
 // retry response until the first protocol instance stops. The cancelled task's
 // completion can therefore collide with the registered retry before it ends.
@@ -653,6 +759,12 @@ private func hangingRangeConfig() -> URLSessionConfiguration {
     return config
 }
 
+private func segmentFailureConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [SegmentFailureProtocol.self]
+    return config
+}
+
 private func cancelThenRetryDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [CancelThenRetryDownloadProtocol.self]
@@ -917,7 +1029,9 @@ struct CacheManagerTests {
             cacheKey: "25",
             blockPoint: .segmentMove
         )
-        let cancellationFence = TrackingCancellationFence()
+        let cancellationFence = TrackingCancellationFence(
+            pausesCancellationAfterRequest: true
+        )
         let manager = CacheManager(
             root: root,
             configuration: ownershipRaceConfig(),
@@ -926,6 +1040,7 @@ struct CacheManagerTests {
         )
         defer {
             fileManager.releaseBlockedMutation()
+            cancellationFence.releasePausedCancellation()
             OwnershipRaceProtocol.releaseRetrySegment()
         }
         let first = Task {
@@ -954,6 +1069,14 @@ struct CacheManagerTests {
         #expect(fileManager.manifestDirectoryCallCount() == 1)
         fileManager.releaseBlockedMutation()
 
+        let terminalFailureWasOrdered =
+            cancellationFence.waitForTerminalClaimAttempt()
+        cancellationFence.releasePausedCancellation()
+
+        #expect(
+            terminalFailureWasOrdered,
+            "Segment failure bypassed cancellation ordering"
+        )
         await #expect(throws: CancellationError.self) { try await first.value }
         guard OwnershipRaceProtocol.waitForRetrySegmentToStart() else {
             Issue.record("The retry segment never started")
@@ -1124,6 +1247,29 @@ struct CacheManagerTests {
         }
         #expect(manager.state(for: 51) == .notCached)
         #expect(!FileManager.default.fileExists(atPath: manager.localURL(for: 51).path))
+    }
+
+    @Test func segmentFailurePreservesErrorCancelsSiblingAndRemovesScratch() async {
+        SegmentFailureProtocol.reset()
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: segmentFailureConfig())
+
+        await #expect(throws: SegmentedDownloadError.changedEntity) {
+            try await manager.download(
+                id: 52,
+                from: URL(string: "https://srv.test/videos/52/stream")!,
+                streamCount: 2
+            )
+        }
+
+        #expect(SegmentFailureProtocol.waitForStalledSegmentToStop())
+        #expect(manager.state(for: 52) == .notCached)
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".downloads/52").path
+        ))
+        #expect(!FileManager.default.fileExists(
+            atPath: manager.localURL(for: 52).path
+        ))
     }
 
     @Test func removeCachedDeletesOnlyRequestedVersion() throws {

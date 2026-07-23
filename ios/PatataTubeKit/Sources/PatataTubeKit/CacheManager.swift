@@ -795,32 +795,50 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 do {
                     try cancellationFence.performMutation(
                         cacheKey: context.cacheKey
-                ) {
-                    try? fileManager.removeItem(at: segmentedStore.resumeURL(
-                        cacheKey: context.cacheKey,
-                        index: context.segmentIndex
-                    ))
-                    try segmentedStore.write(attempt.manifest)
-                }
-                if attempt.manifest.segments.allSatisfy(\.isComplete) {
-                    _ = cancellationFence.performTerminalClaim(
-                        cacheKey: context.cacheKey
                     ) {
-                        guard let claim = claimSegmentedAttemptLocked(attempt)
-                        else { return false }
-                        terminalClaim = claim
-                        return true
+                        try? fileManager.removeItem(at: segmentedStore.resumeURL(
+                            cacheKey: context.cacheKey,
+                            index: context.segmentIndex
+                        ))
+                        try segmentedStore.write(attempt.manifest)
                     }
+                } catch {
+                    completionError = error
                 }
-            } catch {
-                completionError = error
             }
+            if let completionError {
+                _ = cancellationFence.performTerminalClaim(
+                    cacheKey: context.cacheKey
+                ) {
+                    guard let claim = claimSegmentedAttemptLocked(
+                        attempt,
+                        error: completionError
+                    ) else { return false }
+                    terminalClaim = claim
+                    return true
+                }
+            } else if attempt.manifest.segments.allSatisfy(\.isComplete) {
+                _ = cancellationFence.performTerminalClaim(
+                    cacheKey: context.cacheKey
+                ) {
+                    guard let claim = claimSegmentedAttemptLocked(attempt)
+                    else { return false }
+                    terminalClaim = claim
+                    return true
+                }
             }
         }
 
         guard let attempt = owningAttempt else { return }
         if let completionError {
-            failSegmentedAttempt(attempt, error: completionError)
+            guard let claim = terminalClaim else { return }
+            segmentedStore.remove(cacheKey: attempt.cacheKey)
+            claim.tasks.forEach { $0.cancel() }
+            completeSegmentedClaim(
+                attempt,
+                continuation: claim.continuation,
+                result: .failure(claim.error ?? completionError)
+            )
             return
         }
 
@@ -847,20 +865,6 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 result: .failure(error)
             )
         }
-    }
-
-    private func failSegmentedAttempt(
-        _ attempt: SegmentedAttempt,
-        error: Error
-    ) {
-        guard let claim = claimSegmentedAttempt(attempt, error: error) else { return }
-        segmentedStore.remove(cacheKey: attempt.cacheKey)
-        claim.tasks.forEach { $0.cancel() }
-        completeSegmentedClaim(
-            attempt,
-            continuation: claim.continuation,
-            result: .failure(claim.error ?? error)
-        )
     }
 
     private func claimSegmentedAttempt(
