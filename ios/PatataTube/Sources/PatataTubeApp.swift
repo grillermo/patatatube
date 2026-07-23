@@ -2,8 +2,19 @@
 import SwiftUI
 import Capture
 
+@MainActor
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        OrientationLockCoordinator.shared.supportedOrientations
+    }
+}
+
 @main
 struct PatataTubeApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 
