@@ -13,7 +13,6 @@ struct VideoGridView: View {
     /// presenting from separate state raced the boot load and could hand the
     /// player an empty queue on the first cold-launch tap (index crash).
     @State private var playing: PlaybackQueue?
-    @State private var preparing = false
     @State private var preparationTracker = VideoPreparationTracker()
     @State private var downloadingAll = false
     @State private var errorBannerOffset: CGFloat = 0
@@ -178,23 +177,6 @@ struct VideoGridView: View {
             .overlay { if let error = store.errorText { errorBanner(error) } }
         }
         .environment(preparationTracker)
-        // Attached to the NavigationStack itself (not the root ScrollView) so it renders
-        // above any pushed destination (e.g. EpisodesView), where taps must also be
-        // blocked while a TV episode is being prepared server-side.
-        .overlay {
-            if preparing {
-                ZStack {
-                    Color.black.opacity(0.4).ignoresSafeArea()
-                    VStack(spacing: 12) {
-                        ProgressView()
-                        Text("Preparing…").foregroundStyle(.white)
-                    }
-                    .padding(24)
-                    .background(.thinMaterial)
-                    .cornerRadius(12)
-                }
-            }
-        }
     }
     private var filterTabs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -238,12 +220,18 @@ struct VideoGridView: View {
             startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode)
             return
         }
-        preparing = true
         Task {
-            defer { preparing = false }
             do {
+                guard let readyVideo = try await preparationTracker.trackIfIdle(
+                    videoID: video.id,
+                    operation: {
+                        try await store.ensureReady(id: video.id)
+                    }
+                ) else {
+                    return
+                }
                 startPlayback(
-                    try await store.ensureReady(id: video.id),
+                    readyVideo,
                     queueSnapshot: queueSnapshot,
                     sleepMode: sleepMode
                 )
@@ -265,10 +253,14 @@ struct VideoGridView: View {
     private func download(_ video: Video) async -> Bool {
         var target = video
         if video.isLibrary, video.status != "done" {
-            preparing = true
-            defer { preparing = false }
-            do { target = try await store.ensureReady(id: video.id) }
-            catch { store.errorText = String(describing: error); return false }
+            do {
+                target = try await preparationTracker.track(videoID: video.id) {
+                    try await store.ensureReady(id: video.id)
+                }
+            } catch {
+                store.errorText = String(describing: error)
+                return false
+            }
         }
         guard let url = model.streamURL(for: target) else {
             store.errorText = "No server URL configured"

@@ -126,17 +126,21 @@ On first launch grid is empty / errors — need server config:
 - [ ] Cancel one active episode or let one fail: the toolbar batch continues to
       the next eligible episode; navigating back also leaves the started batch
       running.
-- [ ] Playing an unprepared mkv episode (from the pushed episode list) shows "Preparing…" over the episode list and blocks further taps (e.g. double-tapping Play does not fire a second prepare), then plays (remux takes seconds).
+- [ ] Playing an unprepared mkv episode leaves navigation responsive, replaces
+  that episode's download button with a spinner, ignores a second Play tap for
+  the same episode, then opens playback after conversion.
 - [ ] Playing an already-compatible mp4 movie starts without any conversion wait.
-- [ ] Download an unprepared episode: Preparing… appears, then the episode row
-      shows the same 44×44 progress ring and green checkmark as a VideoCell and
-      MovieDetailView; airplane-mode playback works from cache.
+- [ ] Download an unprepared episode: its download button first shows the
+  buffering-style spinner, then the existing 44×44 determinate progress ring
+  and green checkmark; airplane-mode playback works from cache.
 - [ ] Delete on a library video removes it from the list; the original file on /Volumes/Media is untouched; a later refresh does not resurrect it.
 - [ ] A conversion failure (e.g. unplug the Media volume mid-convert) shows an error and the episode can be retried.
 - [ ] Movies tab shows portrait 2:3 poster cards (no letterbox bars); other tabs unchanged.
 - [ ] "all" tab still shows movies as 16:9 letterboxed VideoCells.
 - [ ] Tap a movie card poster → detail page with poster, title, summary.
-- [ ] Play from the detail page works for an unconverted library movie (Preparing… overlay appears over the pushed page).
+- [ ] Play from a movie detail page works for an unconverted library movie
+  while the matching download button shows a spinner and no blocking overlay
+  appears.
 - [ ] Start one download from each surface (VideoCell, MovieDetailView, and an
       episode row): every visible matching control tracks live progress and
       finishes as a green checkmark.

@@ -3,9 +3,8 @@ import SwiftUI
 import PatataTubeKit
 
 /// Pushed detail page for a single movie: poster, summary, play/download.
-/// Play and download go through VideoGridView's closures so the Preparing…
-/// overlay (attached to the NavigationStack, so it covers pushed views) and
-/// error banner behave exactly as they do from the grid.
+/// Play and download go through VideoGridView's closures so preparation state
+/// and the error banner behave exactly as they do from the grid.
 struct MovieDetailView: View {
     let video: Video
     let onPlay: (Video) -> Void
