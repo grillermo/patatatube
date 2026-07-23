@@ -8,7 +8,14 @@
 
 **Tech Stack:** FastAPI, SQLModel, Alembic, SQLite (WAL), pytest + pytest-asyncio.
 
-**Baseline note:** This plan assumes today's actual repo state: `main.py` was already split into `main.py` (app init) + `router.py` (all routes/handlers) + `middleware.py` (TrustedHostMiddleware) in a prior session. This plan replaces `router.py`'s contents with the new `api/`, `services/`, `schemas/` layers — it does not start from the original single-file `main.py`.
+**Baseline note:** This plan assumes today's actual repo state: `main.py` was already split into `main.py` (app init) + `router.py` (all routes/handlers) + `middleware.py` (TrustedHostMiddleware **plus a Redis FIFO response cache**, `RedisCacheMiddleware`, backed by `cache.py`) in a prior session. This plan replaces `router.py`'s contents with the new `api/`, `services/`, `schemas/` layers — it does not start from the original single-file `main.py`.
+
+**Repo drift since this plan was first written (2026-07-08 → now):** the following already-shipped changes are folded into the tasks below — read them before executing:
+- **Manual reorder was removed.** `db.move_video`, `services.apply_move`, `MoveRequest`, the `api_move_video`/`move_video_endpoint` handlers, and the `/api/videos/{id}/move` + `/videos/{id}/move` routes no longer exist. Every reference to "move" in the tasks below has been struck — do not port it.
+- **`CLASSIFICATIONS` is now `["children", "adults", "anabel", "tv", "movies"]`** (was `education`). Use this exact list in `config.py`.
+- **Audio-language selection shipped.** New column `videos.audio_lang`, new `video_versions.audio_langs` / `video_versions.converted_langs` (JSON), new `db.set_audio_lang` / `db.set_version_audio_langs`, new `POST /api/videos/{id}/audio` handler (`api_choose_audio`), and per-version `audio_tracks` + row-level `audio_lang` in the serializer. Model, baseline migration, repository, schema, and videos-router tasks below include these.
+- **New endpoints:** `POST /upload/file` (`upload_file` — direct file upload), `GET /assets/vendor/{filename}` (`vendor_asset`), `GET /assets/app/{filename}` (`app_asset`). Included in the videos/assets router tasks.
+- **New modules not in the original plan:** `cache.py` (Redis cache used by `middleware.py` — **stays at root, it's infra not a domain service, middleware is out of scope**), `version_namer.py` (LLM version labeler, used by `library.py` — moves to `services/`), `relabel_versions.py` (standalone one-shot LLM migration script — **stays at root**, it is not imported by the app). New tests `tests/test_cache.py` and `tests/test_version_namer.py` move alongside their modules where applicable.
 
 **Design doc:** `docs/superpowers/specs/2026-07-08-layered-architecture-refactor-design.md` — read it before starting; this plan implements it exactly. Locked decisions (SQLModel, Alembic with stamp-baseline, dedicated `repositories/`, model-instance row shape, sync engine, tests rewritten, pure-restructure scope) are not re-litigated here.
 
@@ -58,7 +65,7 @@ git commit -m "deps: add SQLModel and Alembic"
 import os
 from pathlib import Path
 
-CLASSIFICATIONS = ["children", "adults", "education", "tv", "movies"]
+CLASSIFICATIONS = ["children", "adults", "anabel", "tv", "movies"]
 
 DB_PATH = os.getenv("DB_PATH", "data/watch_later.sqlite")
 VIDEOS_DIR = Path("videos")
@@ -79,7 +86,7 @@ git commit -m "feat: add config module with CLASSIFICATIONS"
 
 **Files:** Create `models/__init__.py`, `models/video.py`. Test: `tests/test_models_video.py`
 
-Reference schema: `db.py:31-108` (`init_db`) is the source of truth for every column.
+Reference schema: `db.py:42-128` (`init_db`) is the source of truth for every column.
 
 - [ ] **Step 1:** Write the failing test `tests/test_models_video.py`:
 
@@ -175,6 +182,8 @@ class VideoVersion(SQLModel, table=True):
     error_msg: str | None = None
     position: int = Field(default=0)
     created_at: str | None = None
+    audio_langs: str | None = None       # JSON: source audio tracks (db.py:118)
+    converted_langs: str | None = None   # JSON: langs kept in the conversion (db.py:120)
 
     video: "Video" = Relationship(back_populates="versions")
 
@@ -206,6 +215,7 @@ class Video(SQLModel, table=True):
     deleted_at: str | None = None
     chosen_version_id: int | None = None
     hls_status: str = Field(default="none")
+    audio_lang: str | None = None        # chosen audio language (db.py:96)
 
     versions: list[VideoVersion] = Relationship(back_populates="video")
 ```
@@ -420,6 +430,7 @@ def upgrade() -> None:
         sa.Column("deleted_at", sa.String),
         sa.Column("chosen_version_id", sa.Integer),
         sa.Column("hls_status", sa.String, nullable=False, server_default="none"),
+        sa.Column("audio_lang", sa.String),
     )
     op.create_index("idx_videos_source_path", "videos", ["source_path"], unique=True)
 
@@ -434,6 +445,8 @@ def upgrade() -> None:
         sa.Column("error_msg", sa.String),
         sa.Column("position", sa.Integer, nullable=False, server_default="0"),
         sa.Column("created_at", sa.String, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("audio_langs", sa.String),
+        sa.Column("converted_langs", sa.String),
         sa.UniqueConstraint("video_id", "source_path"),
     )
     op.create_index("idx_video_versions_video_id", "video_versions", ["video_id"])
@@ -453,13 +466,13 @@ python_env/bin/python -c "
 import sqlite3
 conn = sqlite3.connect('/tmp/baseline_check.sqlite')
 cols = {r[1] for r in conn.execute('PRAGMA table_info(videos)')}
-assert 'hls_status' in cols and 'chosen_version_id' in cols, cols
+assert 'hls_status' in cols and 'chosen_version_id' in cols and 'audio_lang' in cols, cols
 print('OK', sorted(cols))
 "
 rm -f /tmp/baseline_check.sqlite
 ```
 
-Expected: prints `OK [...]` listing all 23 `videos` columns.
+Expected: prints `OK [...]` listing all 24 `videos` columns.
 
 - [ ] **Step 6:** Stamp the **real** dev/prod DB (do this once, manually, against `data/watch_later.sqlite` — never re-run `upgrade head` against it):
 
@@ -484,33 +497,40 @@ git commit -m "feat: add Alembic with schema baseline"
 - Create: `repositories/__init__.py`, `repositories/videos.py`
 - Test: `tests/test_repositories_videos.py` (replaces `tests/test_db.py`)
 
-This chunk ports every function in `db.py` (lines 223–762; skip `init_db`/backfills/`_conn`/`_add_column`, which move in Chunk 5) to operate on a SQLModel `Session` and return model instances instead of dicts. Read `db.py` fully before starting — the version-sync logic (`_ensure_chosen_version`, `_sync_video_from_chosen`, `_sync_versions`) is the highest-risk part of this whole refactor and must be ported with identical semantics.
+This chunk ports every function in `db.py` (lines ~243–810; skip `init_db`/backfills/`_conn`/`_add_column`, which move in Chunk 5) to operate on a SQLModel `Session` and return model instances instead of dicts. Read `db.py` fully before starting — the version-sync logic (`_ensure_chosen_version`, `_sync_video_from_chosen`, `_sync_versions`) is the highest-risk part of this whole refactor and must be ported with identical semantics.
 
 ### Function mapping
 
+Line numbers below are approximate — the file has drifted; grep for the `def` name.
+
 | `db.py` function | new `repositories/videos.py` function | notes |
 |---|---|---|
-| `add_video` (223-247) | `add_video(session, url, *, platform=None, source_key=None, title=None, preview_url=None) -> Video` | returns the model, not an int id |
-| `get_video` (409-412) | `get_video(session, video_id) -> Video \| None` | |
-| `get_all_videos` (421-433) | `get_all_videos(session, classification=None) -> list[Video]` | |
-| `delete_video` (415-418) | `delete_video(session, video_id) -> None` | cascade-delete versions |
-| `update_video` (492-516) | `update_video(session, video_id, status, *, filename=None, error_msg=None, title=None, preview_url=None) -> None` | status == "error" still deletes the row |
-| `get_completed_video_by_source` (478-489) | same name | |
-| `move_video` (447-475) | same name -> `bool` | |
-| `set_video_classification` (436-438) | same name | |
-| `set_hls_status` (441-444) | same name | |
-| `get_video_versions` (280-282) | same name -> `list[VideoVersion]` | |
-| `get_video_version` (306-325) | same name -> `VideoVersion \| None` | sets `.is_chosen` — see note below |
-| `set_chosen_version` (392-406) | same name -> `bool` | |
-| `get_version_labels` (285-303) | same name -> `dict[str, str]` | |
-| `upsert_library_video` (607-690) | same name -> `tuple[int, str]` | |
-| `tombstone_video` (693-698) | same name | |
-| `get_converted_paths` (701-715) | same name -> `set[str]` | |
-| `set_library_state` (718-762) | same name | |
-| `_ensure_chosen_version` (353-389) | `_ensure_chosen_version(session, video_id) -> int \| None` | private helper, same file |
-| `_sync_video_from_chosen` (328-350) | `_sync_video_from_chosen(session, video_id) -> None` | private helper |
-| `_sync_versions` (562-604) | `_sync_versions(session, video_id, item) -> None` | private helper |
-| `_incoming_versions` (547-559) | `_incoming_versions(item) -> list[dict]` | pure function, no session |
+| `add_video` (243) | `add_video(session, url, *, platform=None, source_key=None, title=None, preview_url=None) -> Video` | returns the model, not an int id |
+| `get_video` (454) | `get_video(session, video_id) -> Video \| None` | attaches `versions` for library rows (`_video_with_versions`, db.py:270) |
+| `get_all_videos` (466) | `get_all_videos(session, classification=None) -> list[Video]` | attaches versions via `_attach_versions` (db.py:483) |
+| `delete_video` (460) | `delete_video(session, video_id) -> None` | cascade-delete versions |
+| `update_video` (543) | `update_video(session, video_id, status, *, filename=None, error_msg=None, title=None, preview_url=None) -> None` | status == "error" still deletes the row |
+| `get_completed_video_by_source` (529) | same name | |
+| `set_video_classification` (518) | same name | |
+| `set_hls_status` (523) | same name | |
+| `set_audio_lang` (441) | same name | writes `videos.audio_lang` |
+| `set_version_audio_langs` (446) | same name | writes `video_versions.audio_langs` (JSON) |
+| `youtube_preview_url` (570) | same name -> `str \| None` | pure function, no session |
+| `get_video_versions` (300) | same name -> `list[VideoVersion]` | |
+| `get_video_version` (326) | same name -> `VideoVersion \| None` | sets `.is_chosen` — see note below |
+| `set_chosen_version` (412) | same name -> `bool` | |
+| `get_version_labels` (305) | same name -> `dict[str, str]` | |
+| `upsert_library_video` (658) | same name -> `tuple[int, str]` | |
+| `tombstone_video` (749) | same name | |
+| `get_converted_paths` (757) | same name -> `set[str]` | |
+| `set_library_state` (774) | same name | |
+| `_ensure_chosen_version` (373) | `_ensure_chosen_version(session, video_id) -> int \| None` | private helper, same file |
+| `_sync_video_from_chosen` (348) | `_sync_video_from_chosen(session, video_id) -> None` | private helper |
+| `_sync_versions` (613) | `_sync_versions(session, video_id, item) -> None` | private helper |
+| `_incoming_versions` (598) | `_incoming_versions(item) -> list[dict]` | pure function, no session |
+| `_video_with_versions` (270), `_get_video_versions` (279), `_attach_versions` (483) | private helpers | fold into the repo (used by `get_video`/`get_all_videos`) |
+
+**Note — `move_video` is gone:** manual reorder was removed from the app. Do not port `move_video`, and do not add an `apply_move`/`api_move_video`/move route anywhere in this refactor.
 
 **`is_chosen` note:** today `get_video_version`/`_get_video_versions` set `version["is_chosen"] = ...` on the dict. `VideoVersion` is a persisted SQLModel — do **not** persist a transient `is_chosen` flag on it. Set it as a plain Python attribute after fetch (SQLModel instances allow arbitrary attribute assignment even though it's not a mapped column): `version.is_chosen = ...`. This is a stopgap only inside the repository layer for `get_video_version`/`get_video_versions`, matching current behavior; Chunk 3's `VideoOut` schema recomputes `is_chosen` independently from `chosen_version_id` and does not rely on this attribute, per the design doc.
 
@@ -618,12 +638,12 @@ def test_get_all_videos_orders_by_position_desc_then_created_at_desc():
 def test_get_all_videos_filters_by_classification():
     session = _session()
     v1 = repo.add_video(session, "https://x.com/a/status/1")
-    v1.classification = "education"
+    v1.classification = "tv"
     session.add(v1)
     session.commit()
     repo.add_video(session, "https://x.com/a/status/2")
 
-    videos = repo.get_all_videos(session, classification="education")
+    videos = repo.get_all_videos(session, classification="tv")
     assert [v.id for v in videos] == [v1.id]
 
 
@@ -718,11 +738,13 @@ git add repositories/videos.py tests/test_repositories_videos.py
 git commit -m "feat: repositories.videos get_all_videos/delete_video/update_video"
 ```
 
-### Task 2.3: `get_completed_video_by_source`, `move_video`, `set_video_classification`, `set_hls_status`
+### Task 2.3: `get_completed_video_by_source`, `set_video_classification`, `set_hls_status`, `set_audio_lang`, `set_version_audio_langs`
 
-Port `db.py:436-475`, `478-489`. Straightforward single/double-statement functions — same TDD loop as Task 2.2 (write tests mirroring the corresponding cases in `tests/test_db.py`, port the function body verbatim adapted to `select`/`session.get`, run, commit). Do **not** skip writing tests for these even though they're small — `move_video`'s neighbor-swap logic (`db.py:447-475`) has an edge case (no neighbor in that direction returns `False` without mutating) worth locking down.
+Port `db.py:518-540` (`set_video_classification`, `set_hls_status`), `529-540` (`get_completed_video_by_source`), and `441-451` (`set_audio_lang`, `set_version_audio_langs`). Straightforward single/double-statement functions — same TDD loop as Task 2.2 (write tests mirroring the corresponding cases in `tests/test_db.py`, port the function body verbatim adapted to `select`/`session.get`, run, commit).
 
-- [ ] Commit message when done: `"feat: repositories.videos move_video/classification/hls_status"`
+(`move_video` used to live here — it was deleted from the app along with manual reorder, so there is nothing to port.)
+
+- [ ] Commit message when done: `"feat: repositories.videos classification/hls_status/audio_lang"`
 
 ### Task 2.4: Version-sync logic — the hard part
 
@@ -767,7 +789,7 @@ Port `db.py:607-698` (`upsert_library_video`, `tombstone_video`), `701-715` (`ge
 
 **Files:** Create `schemas/videos.py`
 
-- [ ] **Step 1:** No test needed — these are pure `BaseModel` field declarations, ported verbatim from `router.py`'s `UploadRequest`/`MoveRequest`/`ClassifyRequest`/`VersionRequest` (currently `router.py:80-131`, moved there in the earlier main.py/router.py split). Write:
+- [ ] **Step 1:** No test needed — these are pure `BaseModel` field declarations, ported verbatim from `router.py`'s `UploadRequest`/`ClassifyRequest`/`VersionRequest` (currently near `router.py:102-112`). There is **no `MoveRequest`** (reorder was removed). If `api_choose_audio` uses a request body, port that model too (check `router.py:653`; it may take a form/query param rather than a body). Write:
 
 ```python
 from pydantic import BaseModel
@@ -775,10 +797,6 @@ from pydantic import BaseModel
 
 class UploadRequest(BaseModel):
     url: str
-
-
-class MoveRequest(BaseModel):
-    direction: str
 
 
 class ClassifyRequest(BaseModel):
@@ -795,7 +813,15 @@ class VersionRequest(BaseModel):
 
 **Files:** Modify `schemas/videos.py`. Test: `tests/test_schemas_videos.py`
 
-Port `views/serializers.py` exactly (`_hls_ready` + `serialize_video`), but operating on a `Video` model instance instead of a dict, and computing `is_chosen` from `video.chosen_version_id` rather than a stored/attached key (per design doc §schemas/).
+Port `views/serializers.py` exactly (`_audio_tracks` + `_hls_ready` + `preview_url_for` + `serialize_video`), but operating on a `Video`/`VideoVersion` model instance instead of a dict, and computing `is_chosen` from `video.chosen_version_id` rather than a stored/attached key (per design doc §schemas/).
+
+**The serializer has grown since this plan was written — port all of it:**
+- `_audio_tracks(version)` — decodes `version.audio_langs` / `version.converted_langs` (JSON), intersects with `library.allowed_audio_langs()`, and marks each track `available`. Emits per-version `audio_tracks`.
+- Library rows also emit `audio_lang` (the row-level chosen language) and `source_filename` (basename of the raw `url`/source_path — the client searches by filename without leaking the server's directory layout).
+- `platform == "upload"` rows redact `url` to `""` just like library rows (the `url` temporarily holds the local upload path).
+- `preview_url_for` is the poster-URL helper (library → `/videos/{id}/preview`, download → `preview_url` column).
+
+Read the current `views/serializers.py` top-to-bottom before porting — the code sketch below is illustrative, not exhaustive.
 
 - [ ] **Step 1:** Write the failing test — port every case in `tests/test_serializers.py` to build `Video`/`VideoVersion` model instances instead of dicts:
 
@@ -854,10 +880,12 @@ def test_video_out_library_redacts_url_and_computes_is_chosen():
     out = VideoOut.from_model(video)
     assert out["url"] == ""
     assert out["preview_url"] == "/videos/9/preview"
+    assert out["source_filename"] == "a.mkv"
     assert out["chosen_version_id"] == 101
+    assert out["audio_lang"] is None
     assert out["versions"] == [
-        {"id": 101, "label": "1080p", "status": "done", "is_chosen": True},
-        {"id": 102, "label": "4K", "status": "unconverted", "is_chosen": False},
+        {"id": 101, "label": "1080p", "status": "done", "is_chosen": True, "audio_tracks": []},
+        {"id": 102, "label": "4K", "status": "unconverted", "is_chosen": False, "audio_tracks": []},
     ]
     assert out["hls_path"] == "/videos/9/hls/master.m3u8"  # a version is done
 
@@ -875,7 +903,34 @@ Port the remaining `test_serializers.py` cases (show_preview_url for `show_ratin
 - [ ] **Step 3:** Write `VideoOut` in `schemas/videos.py`:
 
 ```python
-from models.video import Video
+import json
+
+from library import allowed_audio_langs
+from models.video import Video, VideoVersion
+
+
+def _audio_tracks(version: VideoVersion) -> list[dict]:
+    try:
+        source_tracks = json.loads(version.audio_langs or "[]")
+    except (TypeError, ValueError):
+        return []
+    converted = None
+    if version.converted_langs:
+        try:
+            converted = json.loads(version.converted_langs)
+        except (TypeError, ValueError):
+            converted = None
+    allowed = allowed_audio_langs()
+    first_lang = source_tracks[0]["lang"] if source_tracks else None
+    tracks, seen = [], set()
+    for track in source_tracks:
+        lang = track.get("lang")
+        if lang not in allowed or lang in seen:
+            continue
+        seen.add(lang)
+        available = lang in converted if converted is not None else lang == first_lang
+        tracks.append({"lang": lang, "title": track.get("title") or "", "available": available})
+    return tracks
 
 
 def _hls_ready(video: Video) -> bool:
@@ -911,23 +966,29 @@ class VideoOut:
             data["hls_path"] = f"/videos/{video.id}/hls/master.m3u8"
         if video.source == "library":
             data["chosen_version_id"] = video.chosen_version_id
+            data["audio_lang"] = video.audio_lang
             data["versions"] = [
                 {
                     "id": v.id,
                     "label": v.label,
                     "status": v.status,
                     "is_chosen": v.id == video.chosen_version_id,
+                    "audio_tracks": _audio_tracks(v),
                 }
                 for v in video.versions
             ]
-            data["url"] = ""
             data["preview_url"] = f"/videos/{video.id}/preview"
+            raw_path = video.url or ""
+            data["source_filename"] = raw_path.rsplit("/", 1)[-1] or None
+            data["url"] = ""
             if video.show_rating_key:
                 data["show_preview_url"] = f"/videos/{video.id}/preview?kind=show"
+        if video.platform == "upload":
+            data["url"] = ""
         return data
 ```
 
-Note the behavior difference from `serialize_video`: the old code only added `"versions"`/`"chosen_version_id"` keys `if video.get("versions") is not None` — i.e. only when the caller (repository's `_video_with_versions`) had attached a `versions` list, which it only did for `source == "library"` rows. Here, gating directly on `video.source == "library"` is equivalent because `_video_with_versions` (`db.py:250-256`) used exactly that same condition. Confirm this equivalence is exercised by a download-row test case (no `versions`/`chosen_version_id` keys present) alongside the library-row case above.
+Note the behavior difference from `serialize_video`: the old code only added `"versions"`/`"chosen_version_id"`/`"audio_lang"` keys `if video.get("versions") is not None` — i.e. only when the caller (repository's `_video_with_versions`/`_attach_versions`) had attached a `versions` list, which it only did for `source == "library"` rows. Here, gating directly on `video.source == "library"` is equivalent because those helpers used exactly that same condition. Confirm this equivalence is exercised by a download-row test case (no `versions`/`chosen_version_id`/`audio_lang` keys present) alongside the library-row case above, and add a `platform == "upload"` case asserting `url == ""`.
 
 - [ ] **Step 4:** Run, verify passes.
 
@@ -960,9 +1021,11 @@ Port `_normalize_twitter_url`, `_extract_youtube_id`, `_normalize_youtube_url`, 
 
 ### Task 4.2: `services/videos.py`
 
-Port today's `services.py` (`apply_move`, `apply_classification`, `choose_version`) plus the delete/prepare orchestration currently inline in `router.py`'s `api_delete_video` (`router.py:479-495`) and `api_prepare_video` (`router.py:...`), converting `db.xxx(...)` calls to `repositories.videos.xxx(session, ...)`.
+Port today's `services.py` (`apply_classification`, `choose_version` — note **there is no `apply_move`**, reorder was removed) plus the delete/prepare/audio orchestration currently inline in `router.py`'s `api_delete_video` (`router.py:689`), `api_prepare_video` (`router.py:745`), and `api_choose_audio` (`router.py:653`), converting `db.xxx(...)` calls to `repositories.videos.xxx(session, ...)`.
 
-- [ ] **Step 1:** Write failing tests in `tests/test_services_videos.py`, porting `tests/test_services.py` cases (`fresh_db` fixture becomes a fixture that builds an in-memory `Session` per Chunk 2's pattern) plus new tests for `delete_video_and_files` and `prepare_video` covering the branches currently in `router.py`'s delete/prepare handlers (library file cleanup, download-row deletion, "not found", "not library", "already done", "already converting", passthrough-done, queues background conversion).
+`choose_version` must keep calling `hls.invalidate(video_id)` after a successful `set_chosen_version` (today's `services.py:16` — the chosen version changed, so the cached HLS package is stale). Preserve that; the plan's original sketch dropped it.
+
+- [ ] **Step 1:** Write failing tests in `tests/test_services_videos.py`, porting `tests/test_services.py` cases (`fresh_db` fixture becomes a fixture that builds an in-memory `Session` per Chunk 2's pattern) plus new tests for `delete_video_and_files`, `prepare_video`, and audio selection covering the branches currently in `router.py`'s delete/prepare/audio handlers (library file cleanup, download-row deletion, "not found", "not library", "already done", "already converting", passthrough-done, queues background conversion, audio-lang change invalidates HLS).
 - [ ] **Step 2:** Run, verify fails.
 - [ ] **Step 3:** Write `services/videos.py`:
 
@@ -972,11 +1035,8 @@ from pathlib import Path
 from sqlmodel import Session
 
 import repositories.videos as repo
+import services.hls as hls
 from config import CLASSIFICATIONS, VIDEOS_DIR
-
-
-def apply_move(session: Session, video_id: int, direction: str) -> bool:
-    return repo.move_video(session, video_id, direction)
 
 
 def apply_classification(session: Session, video_id: int, classification: str) -> bool:
@@ -987,7 +1047,10 @@ def apply_classification(session: Session, video_id: int, classification: str) -
 
 
 def choose_version(session: Session, video_id: int, version_id: int) -> bool:
-    return repo.set_chosen_version(session, video_id, version_id)
+    chosen = repo.set_chosen_version(session, video_id, version_id)
+    if chosen:
+        hls.invalidate(video_id)  # chosen version changed → cached HLS is stale
+    return chosen
 
 
 def delete_video_and_files(session: Session, video_id: int) -> None:
@@ -1012,9 +1075,11 @@ def delete_video_and_files(session: Session, video_id: int) -> None:
 - [ ] **Step 4:** Run, verify passes.
 - [ ] **Step 5:** Commit: `"feat: add services.videos (move/classify/choose/delete/prepare)"`
 
-### Task 4.3: Move `downloader.py`, `library.py`, `hls.py`, `subtitles.py`, `plex.py`
+### Task 4.3: Move `downloader.py`, `library.py`, `hls.py`, `subtitles.py`, `plex.py`, `version_namer.py`
 
-Each of these needs only import-path updates (`import db` → `import repositories.videos as repo` + a `Session`), not logic changes, **except** every call site that currently does `db.get_video(id)` / `db.update_video(...)` etc. needs a `Session`. Since these run as FastAPI background tasks (outside request scope), each top-level entry point (`download_video`, `convert_library_video`, `scan_library`, `hls.prepare`) opens its own session via `database.get_session()`'s underlying engine, e.g.:
+`version_namer.py` (LLM version labeler, imported by `library.py`) moves to `services/` too. **`cache.py` stays at root** — it's the Redis cache consumed by `middleware.py`, which is out of scope for this refactor. **`relabel_versions.py` stays at root** — it's a standalone one-shot migration script, not imported by the app.
+
+Each moved module needs only import-path updates (`import db` → `import repositories.videos as repo` + a `Session`), not logic changes, **except** every call site that currently does `db.get_video(id)` / `db.update_video(...)` etc. needs a `Session`. Since these run as FastAPI background tasks (outside request scope), each top-level entry point (`download_video`, `convert_library_video`, `scan_library`, `hls.prepare`) opens its own session via `database.get_session()`'s underlying engine, e.g.:
 
 ```python
 from sqlmodel import Session
@@ -1025,10 +1090,10 @@ def download_video(video_id: int):
         ...
 ```
 
-- [ ] **Step 1:** `git mv downloader.py services/downloader.py`, `git mv library.py services/library.py`, `git mv hls.py services/hls.py`, `git mv subtitles.py services/subtitles.py`, `git mv plex.py services/plex.py`
-- [ ] **Step 2:** `git mv tests/test_downloader.py tests/test_services_downloader.py` (repeat for library/hls/plex/subtitles)
+- [ ] **Step 1:** `git mv downloader.py services/downloader.py`, `git mv library.py services/library.py`, `git mv hls.py services/hls.py`, `git mv subtitles.py services/subtitles.py`, `git mv plex.py services/plex.py`, `git mv version_namer.py services/version_namer.py`
+- [ ] **Step 2:** `git mv tests/test_downloader.py tests/test_services_downloader.py` (repeat for library/hls/plex/subtitles/version_namer)
 - [ ] **Step 3:** For each moved service module, update its `import db` (only `downloader.py` and `library.py` import it) to open a `Session` per top-level function as shown above, and replace each `db.xxx(...)` call with `repo.xxx(session, ...)` — following the same pattern as Chunk 2/4.2. Update the corresponding test file's fixtures (`downloader_env` in `test_services_downloader.py` etc.) to build a `Session`/temp DB via Chunk 2's `_session()` helper instead of `importlib.reload(db)`.
-- [ ] **Step 4:** Update the intra-service imports that changed path: `library.py`'s `from downloader import _probe_media` → `from services.downloader import _probe_media`; anything importing `hls`/`subtitles`/`plex` at their old top-level path needs `services.` prefix.
+- [ ] **Step 4:** Update the intra-service imports that changed path: `library.py`'s `from downloader import _probe_media` → `from services.downloader import _probe_media`, `library.py`'s import of `version_namer` → `from services import version_namer` (or `services.version_namer`); anything importing `hls`/`subtitles`/`plex` at their old top-level path needs `services.` prefix. **Also `schemas/videos.py` (Chunk 3) imports `from library import allowed_audio_langs`** — repoint it to `from services.library import allowed_audio_langs` when `library.py` moves here (or leave a compat shim until this task lands; note the cross-chunk dependency).
 - [ ] **Step 5:** Run each test file individually as it's fixed:
 
 ```bash
@@ -1137,9 +1202,9 @@ def require_token_or_query(request: Request):
 
 ### Task 5.2: `api/v1/videos.py`
 
-Port from `router.py`: `UploadRequest`/`MoveRequest`/`ClassifyRequest`/`VersionRequest` usage (import from `schemas.videos` now), `upload`, `api_classifications`, `api_videos`, `api_move_video`, `api_classify_video`, `api_choose_video_version`, `api_delete_video`, `api_video`, `api_prepare_video`, `_print_bad_request_details`, `_guess_mime` (also used by streaming — put it in `api/v1/streaming.py` and import from there, or a tiny shared `api/v1/_shared.py`; pick one and note it — recommend `api/v1/streaming.py` since that's its primary consumer, imported by `videos.py` only for nothing... actually `_guess_mime` is only used by streaming, not videos — leave it there, not needed in this file).
+Port from `router.py`: `UploadRequest`/`ClassifyRequest`/`VersionRequest` usage (import from `schemas.videos` now — **no `MoveRequest`**), `check_auth`, `upload`, `upload_file` (the `POST /upload/file` direct-upload handler), `api_classifications`, `api_videos`, `api_classify_video`, `api_choose_video_version`, `api_choose_audio` (`POST /api/videos/{id}/audio`), `api_delete_video`, `api_video`, `api_prepare_video`, `_print_bad_request_details`. **Do not port `api_move_video`** (removed). `_guess_mime` is only used by streaming — leave it in `api/v1/streaming.py`, not here.
 
-- [ ] **Step 1:** Write/port failing tests: split `tests/test_api.py`'s upload/classify/move/version/delete/prepare/detail test functions into `tests/test_api_videos.py` (mechanical move, same bodies) with a shared `client` fixture (see Task 5.7).
+- [ ] **Step 1:** Write/port failing tests: split `tests/test_api.py`'s upload/upload-file/classify/version/audio/delete/prepare/detail test functions into `tests/test_api_videos.py` (mechanical move, same bodies) with a shared `client` fixture (see Task 5.7).
 - [ ] **Step 2:** Run, verify fails (endpoints don't exist yet on the new router).
 - [ ] **Step 3:** Write `api/v1/videos.py`, e.g. for `upload` and `api_videos`:
 
@@ -1151,7 +1216,7 @@ import repositories.videos as repo
 import services.videos as video_service
 from api.dependencies import get_session, require_token
 from config import CLASSIFICATIONS
-from schemas.videos import ClassifyRequest, MoveRequest, UploadRequest, VersionRequest, VideoOut
+from schemas.videos import ClassifyRequest, UploadRequest, VersionRequest, VideoOut
 from services.downloader import download_video
 from services.url_classifier import _classify_url, _youtube_preview_url
 
@@ -1218,7 +1283,7 @@ async def api_videos(classification: str | None = None, session: Session = Depen
     return [VideoOut.from_model(v) for v in videos]
 ```
 
-Continue this exact pattern (add `Depends(get_session)`/`Depends(require_token)` params, swap `db.`/`services.` calls, swap `serialize_video` for `VideoOut.from_model`) for `api_move_video`, `api_classify_video`, `api_choose_video_version`, `api_delete_video`, `api_video`, `api_prepare_video` — port each function body from `router.py` one at a time, run its specific test after each, don't batch all of them before testing.
+Continue this exact pattern (add `Depends(get_session)`/`Depends(require_token)` params, swap `db.`/`services.` calls, swap `serialize_video` for `VideoOut.from_model`) for `upload_file`, `api_classify_video`, `api_choose_video_version`, `api_choose_audio`, `api_delete_video`, `api_video`, `api_prepare_video` — port each function body from `router.py` one at a time, run its specific test after each, don't batch all of them before testing.
 
 - [ ] **Step 4:** Run `tests/test_api_videos.py` after every 1-2 ported endpoints, not just at the end.
 - [ ] **Step 5:** Commit once the whole file's tests pass: `"feat: add api.v1.videos router"`
@@ -1237,13 +1302,13 @@ Port `api_library_scan`. Small file.
 
 ### Task 5.5: `api/v1/pages.py`
 
-Port `move_video_endpoint`, `classify_video_endpoint`, `choose_video_version_endpoint`, `videos_page` (SSR form + page routes, un-gated, per design doc).
+Port `classify_video_endpoint`, `choose_video_version_endpoint`, `videos_page` (SSR form + page routes, un-gated, per design doc). **No `move_video_endpoint`** — reorder was removed.
 
 - [ ] Commit: `"feat: add api.v1.pages router"`
 
 ### Task 5.6: `api/v1/assets.py`
 
-Port `ROOT_STATIC_ASSETS`, `_static_asset_cache`, `_load_static_asset_cache`, `_static_asset_response`, `favicon`, `apple_touch_icon`, `apple_splash`, `apple_splash_optimized`, `splash_asset`, `manifest`, `SPLASH_MIME_TYPES`, `SPLASH_ICON`.
+Port `ROOT_STATIC_ASSETS`, `_static_asset_cache`, `_load_static_asset_cache`, `_static_asset_response`, `favicon`, `apple_touch_icon`, `apple_splash`, `apple_splash_optimized`, `splash_asset`, `vendor_asset` (`/assets/vendor/{filename}`), `app_asset` (`/assets/app/{filename}`), `manifest`, `SPLASH_MIME_TYPES`, `SPLASH_ICON`.
 
 - [ ] Commit: `"feat: add api.v1.assets router"`
 
@@ -1304,7 +1369,7 @@ app.include_router(pages.router)
 app.include_router(assets.router)
 ```
 
-- [ ] **Step 2:** Create `repositories/backfills.py` with the five backfill functions ported from `db.py:111-220` and `525-544` (`_backfill_positions`, `_backfill_library_added_at`, `_delete_error_videos`, `_backfill_video_versions`, `_backfill_youtube_preview_urls`), each rewritten against a `Session`/`select` instead of raw SQL, plus a `run_backfills()` entry point that opens one session and runs all five in the same order as today's `init_db` (`db.py:104-108`: youtube preview URLs → positions → library added_at → video versions → delete error videos). Write a test `tests/test_repositories_backfills.py` porting the relevant cases from `tests/test_db.py` (backfill tests) first, TDD as usual.
+- [ ] **Step 2:** Create `repositories/backfills.py` with the five backfill functions ported from `db.py:131-241` (`_backfill_positions`, `_backfill_library_added_at`, `_delete_error_videos`, `_backfill_video_versions`) and `_backfill_youtube_preview_urls` (`db.py:576`), each rewritten against a `Session`/`select` instead of raw SQL, plus a `run_backfills()` entry point that opens one session and runs all five in the same order as today's `init_db` (`db.py:124-128`: youtube preview URLs → positions → library added_at → video versions → delete error videos). Write a test `tests/test_repositories_backfills.py` porting the relevant cases from `tests/test_db.py` (backfill tests) first, TDD as usual.
 
 - [ ] **Step 3:** Delete the old files:
 
@@ -1357,7 +1422,7 @@ Expected: every test passes, no `db`/`router`/`services` (old) imports remain an
 python_env/bin/python -m pytest tests/ -v
 ```
 
-Expected: all green (same total count as pre-refactor, 181, plus whatever net-new test functions this plan added minus retired duplicates — a lower count is a red flag, investigate before proceeding).
+Expected: all green (same total count as pre-refactor — ~235 collected today, though a couple may error at collection if Redis/OpenAI-dependent test deps are missing locally; establish the real baseline count on `main` before starting and compare — plus whatever net-new test functions this plan added minus retired duplicates. A lower count is a red flag, investigate before proceeding).
 
 - [ ] **Step 2:** Manual smoke test against a **copy** of the real DB (never the original):
 
