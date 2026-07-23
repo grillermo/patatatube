@@ -182,6 +182,22 @@ def test_get_json_successful_response(monkeypatch):
     assert result == {"test": "data"}
 
 
+def test_get_json_disables_environment_proxy_discovery(monkeypatch):
+    monkeypatch.setenv("PLEX_TOKEN", "test-token")
+    request_options = {}
+
+    def fake_get(*args, **kwargs):
+        request_options.update(kwargs)
+        request = httpx.Request("GET", "http://localhost:32400/test/path")
+        return httpx.Response(200, text='{"test": "data"}', request=request)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    plex._get_json("/test/path")
+
+    assert request_options["trust_env"] is False
+
+
 def test_fetch_thumb_returns_bytes(monkeypatch):
     """fetch_thumb returns raw bytes on successful response"""
     monkeypatch.setenv("PLEX_TOKEN", "test-token")
@@ -197,6 +213,22 @@ def test_fetch_thumb_returns_bytes(monkeypatch):
     result = plex.fetch_thumb("123")
     assert result == thumb_bytes
     assert isinstance(result, bytes)
+
+
+def test_fetch_thumb_disables_environment_proxy_discovery(monkeypatch):
+    monkeypatch.setenv("PLEX_TOKEN", "test-token")
+    request_options = {}
+
+    def fake_get(*args, **kwargs):
+        request_options.update(kwargs)
+        request = httpx.Request("GET", "http://localhost:32400/library/metadata/123/thumb")
+        return httpx.Response(200, content=b"jpeg", request=request)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    plex.fetch_thumb("123")
+
+    assert request_options["trust_env"] is False
 
 
 def test_fetch_thumb_wraps_timeout_error(monkeypatch):

@@ -38,6 +38,7 @@ def _get_json(path: str, params: dict | None = None) -> dict:
             params=params,
             headers={"Accept": "application/json"},
             timeout=30,
+            trust_env=False,
         )
         resp.raise_for_status()
     except httpx.HTTPError as exc:
@@ -142,6 +143,7 @@ def fetch_thumb(rating_key: str) -> bytes:
             params={"X-Plex-Token": _token()},
             timeout=30,
             follow_redirects=True,
+            trust_env=False,
         )
         resp.raise_for_status()
     except httpx.HTTPError as exc:
