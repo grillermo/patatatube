@@ -247,6 +247,115 @@ private final class ResumableFailureProtocol: URLProtocol {
     }
 }
 
+private final class TransportThenUnsafeFailureProtocol: URLProtocol {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var unsafeResponseSent = false
+    nonisolated(unsafe) private static weak var transportRequest:
+        TransportThenUnsafeFailureProtocol?
+
+    static let resumeMarker = Data([0xFA, 0x12])
+
+    static func reset() {
+        lock.withLock {
+            unsafeResponseSent = false
+            transportRequest = nil
+        }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let range = request.value(forHTTPHeaderField: "Range") else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        if range == "bytes=0-0" {
+            send(
+                range: range,
+                body: Data([0x00]),
+                etag: "\"original\""
+            )
+            return
+        }
+        if range == "bytes=2-3" {
+            send(
+                range: range,
+                body: Data([0x02, 0x03]),
+                etag: "\"changed\""
+            )
+            let transport = Self.lock.withLock {
+                Self.unsafeResponseSent = true
+                return Self.transportRequest
+            }
+            transport?.failTransport()
+            return
+        }
+
+        let response = rangeResponse(
+            range: range,
+            bodyCount: 2,
+            etag: "\"original\""
+        )
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data([0x00]))
+        let shouldFail = Self.lock.withLock {
+            Self.transportRequest = self
+            return Self.unsafeResponseSent
+        }
+        if shouldFail {
+            failTransport()
+        }
+    }
+
+    override func stopLoading() {}
+
+    private func failTransport() {
+        client?.urlProtocol(
+            self,
+            didFailWithError: NSError(
+                domain: NSURLErrorDomain,
+                code: URLError.networkConnectionLost.rawValue,
+                userInfo: [
+                    NSURLSessionDownloadTaskResumeData: Self.resumeMarker,
+                ]
+            )
+        )
+    }
+
+    private func send(range: String, body: Data, etag: String) {
+        let response = rangeResponse(
+            range: range,
+            bodyCount: body.count,
+            etag: etag
+        )
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    private func rangeResponse(
+        range: String,
+        bodyCount: Int,
+        etag: String
+    ) -> HTTPURLResponse {
+        let bounds = range.dropFirst("bytes=".count).split(separator: "-")
+        let start = Int(bounds[0])!
+        let end = Int(bounds[1])!
+        return HTTPURLResponse(
+            url: request.url!,
+            statusCode: 206,
+            httpVersion: nil,
+            headerFields: [
+                "Accept-Ranges": "bytes",
+                "Content-Range": "bytes \(start)-\(end)/4",
+                "Content-Length": "\(bodyCount)",
+                "ETag": etag,
+            ]
+        )!
+    }
+}
+
 private final class SegmentFailureProtocol: URLProtocol {
     private static let condition = NSCondition()
     nonisolated(unsafe) private static var stalledSegmentStarted = false
@@ -854,6 +963,12 @@ private func resumableFailureConfig() -> URLSessionConfiguration {
     return config
 }
 
+private func transportThenUnsafeFailureConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [TransportThenUnsafeFailureProtocol.self]
+    return config
+}
+
 private func cancelThenRetryDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [CancelThenRetryDownloadProtocol.self]
@@ -1404,6 +1519,31 @@ struct CacheManagerTests {
         #expect(manager.state(for: 65) == .notCached)
         #expect(!FileManager.default.fileExists(
             atPath: manager.localURL(for: 65).path
+        ))
+    }
+
+    @Test func unsafeSegmentFailureOverridesTransportPreservation() async {
+        TransportThenUnsafeFailureProtocol.reset()
+        let root = tempRoot()
+        let manager = CacheManager(
+            root: root,
+            configuration: transportThenUnsafeFailureConfig()
+        )
+
+        await #expect(throws: SegmentedDownloadError.changedEntity) {
+            try await manager.download(
+                id: 66,
+                from: URL(string: "https://srv.test/videos/66/stream")!,
+                streamCount: 2
+            )
+        }
+
+        #expect(manager.state(for: 66) == .notCached)
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".downloads/66").path
+        ))
+        #expect(!FileManager.default.fileExists(
+            atPath: manager.localURL(for: 66).path
         ))
     }
 

@@ -884,6 +884,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     ) {
         var owningAttempt: SegmentedAttempt?
         var completionError = error
+        var unsafeCompletionError: Error?
         var directResumeData: Data?
         var directResumeDataNeedsPendingRemoval = false
         var tasksToPreserve: [(
@@ -907,10 +908,15 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             if cancellationFence.isCancellationRequested(cacheKey: context.cacheKey) {
                 completionError = CancellationError()
             }
+            let recordedResult = attempt.completedResults.removeValue(
+                forKey: context.segmentIndex
+            )
+            if case .failure(let segmentError)? = recordedResult {
+                completionError = segmentError
+                unsafeCompletionError = segmentError
+            }
             if completionError == nil {
-                switch attempt.completedResults.removeValue(
-                    forKey: context.segmentIndex
-                ) ?? .failure(URLError(.unknown)) {
+                switch recordedResult ?? .failure(URLError(.unknown)) {
                 case .success:
                     attempt.manifest.segments[context.segmentIndex].isComplete = true
                     attempt.manifest.segments[context.segmentIndex].persistedByteCount =
@@ -922,6 +928,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                     )
                 case .failure(let segmentError):
                     completionError = segmentError
+                    unsafeCompletionError = segmentError
                 }
             }
             if completionError == nil {
@@ -937,10 +944,19 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                     }
                 } catch let persistenceError {
                     completionError = persistenceError
+                    unsafeCompletionError = persistenceError
                 }
             }
             if let completionError {
-                if attempt.terminalError == nil {
+                if let unsafeCompletionError {
+                    if attempt.terminalError == nil || attempt.preservingResumeData {
+                        attempt.terminalError = unsafeCompletionError
+                    }
+                    attempt.preservingResumeData = false
+                    tasksToCancel = attempt.taskIDs.compactMap {
+                        tasksByIdentifier[$0]
+                    }
+                } else if attempt.terminalError == nil {
                     attempt.terminalError = completionError
                     if let transportError = error,
                        isResumableTransportError(
