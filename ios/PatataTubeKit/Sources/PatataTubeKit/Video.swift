@@ -143,7 +143,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
             sourceFilename: sourceFilename, audioLang: audioLang)
     }
 
-    func withChosenVersion(_ versionId: Int) -> Video {
+    public func withChosenVersion(_ versionId: Int) -> Video {
         let selected = versions.first { $0.id == versionId }
         return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
               previewUrl: previewUrl, classification: classification, position: position,

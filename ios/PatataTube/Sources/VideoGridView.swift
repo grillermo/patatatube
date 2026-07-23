@@ -9,6 +9,7 @@ struct VideoGridView: View {
     @State private var classifications: [String] = ["children", "adults", "education", "tv", "movies"]
     @State private var showSettings = false
     @State private var showUpload = false
+    @State private var showDownloads = false
     /// Queue snapshot + start index, built at tap time. A single cover item —
     /// presenting from separate state raced the boot load and could hand the
     /// player an empty queue on the first cold-launch tap (index crash).
@@ -113,6 +114,22 @@ struct VideoGridView: View {
                                 onPlay: { play($0) },
                                 onDownload: { await download($0) })
             }
+            .navigationDestination(isPresented: $showDownloads) {
+                DownloadsView(
+                    active: { model.cache.activeDownloads() },
+                    recent: { model.cache.recentDownloads() },
+                    video: { id, versionID in
+                        guard let stored = store.videos.first(where: { $0.id == id }) else { return nil }
+                        guard let versionID else { return stored }
+                        return stored.versions.contains(where: { $0.id == versionID })
+                            ? stored.withChosenVersion(versionID) : nil
+                    },
+                    onCancel: { activity in
+                        model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
+                    },
+                    onPlay: { video in play(video) }
+                )
+            }
             .navigationTitle("PatataTube")
             .searchable(text: $searchText, prompt: "Search videos")
             .onChange(of: searchText) { _, newValue in
@@ -145,6 +162,12 @@ struct VideoGridView: View {
                             Task { await downloadAll() }
                         } label: { Label("Download all", systemImage: "arrow.down.circle") }
                         .disabled(downloadingAll)
+
+                        Button {
+                            showDownloads = true
+                        } label: {
+                            Label("Downloads", systemImage: "arrow.down.circle")
+                        }
 
                         Button {
                             cellSize = max(cellSize - cellSizeStep, minCellSize)

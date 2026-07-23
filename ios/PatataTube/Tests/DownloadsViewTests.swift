@@ -53,6 +53,29 @@ struct DownloadsViewTests {
         #expect(cancelled == activity.id)
     }
 
+    @Test func versionedActionsKeepTheDownloadIdentity() throws {
+        let activity = DownloadActivity(
+            videoID: 12,
+            versionID: 99,
+            progress: 0.2,
+            transferredByteCount: 200,
+            totalByteCount: 1_000,
+            bytesPerSecond: 100
+        )
+        var cancelled: (Int, Int?)?
+        let sut = DownloadsView(
+            active: { [activity] },
+            recent: { [] },
+            video: { id, _ in sampleVideo(id: id) },
+            onCancel: { cancelled = ($0.videoID, $0.versionID) },
+            onPlay: { _ in }
+        )
+
+        try sut.inspect().find(button: "Cancel").tap()
+        #expect(cancelled?.0 == 12)
+        #expect(cancelled?.1 == 99)
+    }
+
     @Test func completedRowPlaysAndEmptyViewOmitsBothSections() async throws {
         var played: Int?
         let completion = DownloadCompletion(videoID: 8, versionID: nil, completedAt: .now)
