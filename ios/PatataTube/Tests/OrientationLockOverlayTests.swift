@@ -16,6 +16,10 @@ private func eventually(_ message: String, condition: @escaping @MainActor () ->
 @Suite("Orientation lock overlay", .serialized)
 @MainActor
 struct OrientationLockOverlayTests {
+    @Test func buttonIsPositionedTwentyPercentDownThePlayer() {
+        #expect(OrientationLockOverlay.verticalOffsetFraction == 0.20)
+    }
+
     @Test func unlockedAndLockedStatesUseAccessibleSystemSymbols() throws {
         var toggles = 0
         let unlocked = OrientationLockOverlay(

@@ -32,29 +32,34 @@ final class OrientationControlVisibility: ObservableObject {
 }
 
 struct OrientationLockOverlay: View {
+    static let verticalOffsetFraction: CGFloat = 0.20
+
     let isLocked: Bool
     let isVisible: Bool
     let isBlocked: Bool
     let onToggle: () -> Void
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            if isVisible && !isBlocked {
-                Button {
-                    onToggle()
-                } label: {
-                    Image(systemName: isLocked ? "lock.rotation" : "rotate.right")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(isLocked ? Color.accentColor : .white)
-                        .frame(width: 44, height: 44)
-                        .background(.black.opacity(0.55), in: Circle())
+        GeometryReader { geometry in
+            ZStack(alignment: .topTrailing) {
+                if isVisible && !isBlocked {
+                    Button {
+                        onToggle()
+                    } label: {
+                        Image(systemName: isLocked ? "lock.rotation" : "rotate.right")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(isLocked ? Color.accentColor : .white)
+                            .frame(width: 44, height: 44)
+                            .background(.black.opacity(0.55), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isLocked ? "Unlock video orientation" : "Lock video orientation")
+                    .padding(.trailing, 16)
+                    .padding(.top, geometry.size.height * Self.verticalOffsetFraction)
+                    .transition(.opacity)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isLocked ? "Unlock video orientation" : "Lock video orientation")
-                .padding(16)
-                .transition(.opacity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     }
 }
