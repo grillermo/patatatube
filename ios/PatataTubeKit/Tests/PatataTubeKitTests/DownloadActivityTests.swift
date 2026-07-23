@@ -76,7 +76,37 @@ struct DownloadActivityTests {
         )
 
         #expect(accumulator.activity.transferredByteCount == 3_000)
-        #expect(accumulator.activity.bytesPerSecond == 2_000)
+        // Averaged across the 2.5s window: 3_000 bytes over t10→t12 = 1_500 B/s.
+        #expect(accumulator.activity.bytesPerSecond == 1_500)
+    }
+
+    @Test func rateAveragesOverTheTrailingWindowAndDropsStaleSamples() {
+        var accumulator = DownloadActivityAccumulator(
+            videoID: 7,
+            versionID: 2,
+            totalByteCount: 100_000,
+            now: Date(timeIntervalSinceReferenceDate: 0)
+        )
+        // A fast early burst 3s before the last sample must fall out of the 2.5s window.
+        accumulator.record(
+            transferredByteCount: 9_000,
+            progress: 0.09,
+            now: Date(timeIntervalSinceReferenceDate: 1)
+        )
+        // Steady 1_000 B/s from t2 onward.
+        accumulator.record(
+            transferredByteCount: 10_000,
+            progress: 0.1,
+            now: Date(timeIntervalSinceReferenceDate: 2)
+        )
+        accumulator.record(
+            transferredByteCount: 12_000,
+            progress: 0.12,
+            now: Date(timeIntervalSinceReferenceDate: 4)
+        )
+
+        // Window at t4 spans back to t1.5, so only t2→t4 counts: 2_000 / 2 = 1_000 B/s.
+        #expect(accumulator.activity.bytesPerSecond == 1_000)
     }
 
     @Test func historyKeepsNewestThreeAndReloads() throws {

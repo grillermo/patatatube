@@ -42,17 +42,21 @@ public struct DownloadCompletion: Codable, Equatable, Hashable, Identifiable, Se
 }
 
 struct DownloadActivityAccumulator {
+    /// Reported speed is averaged over the most recent samples in this window so
+    /// the UI number stays readable instead of jumping every callback.
+    static let averagingWindow: TimeInterval = 2.5
+
     private let videoID: Int
     private let versionID: Int?
     private var totalByteCount: Int64?
-    private var lastSample: (bytes: Int64, date: Date)
+    private var samples: [(bytes: Int64, date: Date)]
     private(set) var activity: DownloadActivity
 
     init(videoID: Int, versionID: Int?, totalByteCount: Int64?, now: Date) {
         self.videoID = videoID
         self.versionID = versionID
         self.totalByteCount = totalByteCount
-        self.lastSample = (0, now)
+        self.samples = [(0, now)]
         self.activity = DownloadActivity(
             videoID: videoID,
             versionID: versionID,
@@ -68,9 +72,11 @@ struct DownloadActivityAccumulator {
         bytesWritten: Int64
     ) {
         let currentWrite = max(bytesWritten, 0)
-        lastSample.bytes = totalBytesWritten > currentWrite
+        let baseline = totalBytesWritten > currentWrite
             ? totalBytesWritten - currentWrite
             : 0
+        let anchorDate = samples.last?.date ?? Date()
+        samples = [(baseline, anchorDate)]
     }
 
     mutating func record(
@@ -79,12 +85,15 @@ struct DownloadActivityAccumulator {
         totalByteCount: Int64? = nil,
         now: Date
     ) {
-        let elapsed = now.timeIntervalSince(lastSample.date)
         let clampedTransferredByteCount = max(transferredByteCount, 0)
-        let delta = max(0, clampedTransferredByteCount - lastSample.bytes)
-        let rate = elapsed > 0 && delta > 0
-            ? Double(delta) / elapsed
-            : activity.bytesPerSecond
+        // Ignore out-of-order callbacks so the sample window stays monotonic.
+        if now >= (samples.last?.date ?? now) {
+            samples.append((clampedTransferredByteCount, now))
+            let cutoff = now.addingTimeInterval(-Self.averagingWindow)
+            // Keep the newest sample plus everything within the window.
+            samples.removeAll { $0.date < cutoff }
+        }
+        let rate = averagedRate() ?? activity.bytesPerSecond
         activity = DownloadActivity(
             videoID: videoID,
             versionID: versionID,
@@ -94,9 +103,14 @@ struct DownloadActivityAccumulator {
             bytesPerSecond: rate
         )
         self.totalByteCount = totalByteCount ?? self.totalByteCount
-        if elapsed >= 0 {
-            lastSample = (clampedTransferredByteCount, now)
-        }
+    }
+
+    private func averagedRate() -> Double? {
+        guard let oldest = samples.first, let newest = samples.last else { return nil }
+        let span = newest.date.timeIntervalSince(oldest.date)
+        let byteDelta = newest.bytes - oldest.bytes
+        guard span > 0, byteDelta > 0 else { return nil }
+        return Double(byteDelta) / span
     }
 }
 
