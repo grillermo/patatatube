@@ -493,9 +493,24 @@ private final class TrackingCancellationFence:
     @unchecked Sendable
 {
     private let condition = NSCondition()
+    private let blockedMutationCompletion: Int?
+    private let pausesCancellationAfterRequest: Bool
     private var cancellationRequestCounts: [String: Int] = [:]
     private var mutationKeys: Set<String> = []
     private var observedRequests: Set<String> = []
+    private var mutationCompletionCount = 0
+    private var isBlockedAfterMutation = false
+    private var releaseMutationCompletion = false
+    private var releaseCancellation = false
+    private var terminalClaimAttempted = false
+
+    init(
+        blockedMutationCompletion: Int? = nil,
+        pausesCancellationAfterRequest: Bool = false
+    ) {
+        self.blockedMutationCompletion = blockedMutationCompletion
+        self.pausesCancellationAfterRequest = pausesCancellationAfterRequest
+    }
 
     func beginCancellation(cacheKey: String) {
         condition.lock()
@@ -503,6 +518,9 @@ private final class TrackingCancellationFence:
         observedRequests.insert(cacheKey)
         condition.broadcast()
         while mutationKeys.contains(cacheKey) {
+            condition.wait()
+        }
+        while pausesCancellationAfterRequest, !releaseCancellation {
             condition.wait()
         }
         condition.unlock()
@@ -545,6 +563,31 @@ private final class TrackingCancellationFence:
             throw CancellationError()
         }
         try result.get()
+
+        condition.lock()
+        mutationCompletionCount += 1
+        if mutationCompletionCount == blockedMutationCompletion {
+            isBlockedAfterMutation = true
+            condition.broadcast()
+            while !releaseMutationCompletion {
+                condition.wait()
+            }
+        }
+        condition.unlock()
+    }
+
+    func performTerminalClaim(
+        cacheKey: String,
+        _ claim: () -> Bool
+    ) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        terminalClaimAttempted = true
+        condition.broadcast()
+        guard (cancellationRequestCounts[cacheKey] ?? 0) == 0 else {
+            return false
+        }
+        return claim()
     }
 
     func waitForCancellationRequest(cacheKey: String) -> Bool {
@@ -555,6 +598,40 @@ private final class TrackingCancellationFence:
             guard condition.wait(until: deadline) else { return false }
         }
         return true
+    }
+
+    func waitUntilBlockedAfterMutation() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(5)
+        while !isBlockedAfterMutation {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    func releaseBlockedMutationCompletion() {
+        condition.withLock {
+            releaseMutationCompletion = true
+            condition.broadcast()
+        }
+    }
+
+    func waitForTerminalClaimAttempt() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(1)
+        while !terminalClaimAttempted {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    func releasePausedCancellation() {
+        condition.withLock {
+            releaseCancellation = true
+            condition.broadcast()
+        }
     }
 }
 
@@ -892,7 +969,75 @@ struct CacheManagerTests {
         OwnershipRaceProtocol.releaseRetrySegment()
         try await retry.value
         #expect(try Data(contentsOf: manager.localURL(for: 25))
-                == Data([0xB0, 0xB1, 0xB2, 0xB3]))
+            == Data([0xB0, 0xB1, 0xB2, 0xB3]))
+    }
+
+    @Test func cancelAfterFinalMutationWinsBeforeTerminalClaim() async throws {
+        OwnershipRaceProtocol.reset()
+        let root = tempRoot()
+        let cancellationFence = TrackingCancellationFence(
+            blockedMutationCompletion: 3,
+            pausesCancellationAfterRequest: true
+        )
+        let manager = CacheManager(
+            root: root,
+            configuration: ownershipRaceConfig(),
+            fileManager: .default,
+            cancellationFence: cancellationFence
+        )
+        defer {
+            cancellationFence.releaseBlockedMutationCompletion()
+            cancellationFence.releasePausedCancellation()
+            OwnershipRaceProtocol.releaseRetrySegment()
+        }
+
+        let first = Task {
+            try await manager.download(
+                id: 26,
+                from: URL(string: "https://srv.test/videos/26/first")!
+            )
+        }
+        guard cancellationFence.waitUntilBlockedAfterMutation() else {
+            Issue.record("The first attempt never reached the post-mutation window")
+            manager.cancel(id: 26)
+            return
+        }
+
+        let retry = Task {
+            manager.cancel(id: 26)
+            return try await manager.download(
+                id: 26,
+                from: URL(string: "https://srv.test/videos/26/retry")!
+            )
+        }
+        guard cancellationFence.waitForCancellationRequest(cacheKey: "26") else {
+            Issue.record("Cancellation intent was not recorded")
+            return
+        }
+
+        cancellationFence.releaseBlockedMutationCompletion()
+        let terminalClaimWasOrdered =
+            cancellationFence.waitForTerminalClaimAttempt()
+        cancellationFence.releasePausedCancellation()
+
+        #expect(terminalClaimWasOrdered)
+        await #expect(throws: CancellationError.self) { try await first.value }
+        guard OwnershipRaceProtocol.waitForRetrySegmentToStart() else {
+            Issue.record("The retry segment never started")
+            retry.cancel()
+            return
+        }
+        #expect(!FileManager.default.fileExists(
+            atPath: manager.localURL(for: 26).path
+        ))
+        let manifest = try SegmentedDownloadStore(root: root).load(cacheKey: "26")
+        #expect(manifest.remoteURL.lastPathComponent == "retry")
+        #expect(manifest.etag == "\"retry\"")
+
+        OwnershipRaceProtocol.releaseRetrySegment()
+        try await retry.value
+        #expect(try Data(contentsOf: manager.localURL(for: 26))
+            == Data([0xB0, 0xB1, 0xB2, 0xB3]))
     }
 
     @Test func testDownloadSendsBearerToken() async throws {

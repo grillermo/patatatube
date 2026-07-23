@@ -33,6 +33,10 @@ protocol CacheManagerCancellationFencing: Sendable {
         cacheKey: String,
         _ mutation: () throws -> Void
     ) throws
+    func performTerminalClaim(
+        cacheKey: String,
+        _ claim: () -> Bool
+    ) -> Bool
 }
 
 final class CacheManagerCancellationFence:
@@ -89,6 +93,18 @@ final class CacheManagerCancellationFence:
             throw CancellationError()
         }
         try result.get()
+    }
+
+    func performTerminalClaim(
+        cacheKey: String,
+        _ claim: () -> Bool
+    ) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        guard (cancellationRequestCounts[cacheKey] ?? 0) == 0 else {
+            return false
+        }
+        return claim()
     }
 }
 
@@ -738,7 +754,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     ) {
         var owningAttempt: SegmentedAttempt?
         var completionError = error
-        var allSegmentsComplete = false
+        var terminalClaim: (
+            continuation: CheckedContinuation<URL, Error>?,
+            tasks: [URLSessionDownloadTask],
+            error: Error?
+        )?
 
         lock.withLock {
             tasksByIdentifier[taskIdentifier] = nil
@@ -775,17 +795,26 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 do {
                     try cancellationFence.performMutation(
                         cacheKey: context.cacheKey
-                    ) {
-                        try? fileManager.removeItem(at: segmentedStore.resumeURL(
-                            cacheKey: context.cacheKey,
-                            index: context.segmentIndex
-                        ))
-                        try segmentedStore.write(attempt.manifest)
-                    }
-                    allSegmentsComplete = attempt.manifest.segments.allSatisfy(\.isComplete)
-                } catch {
-                    completionError = error
+                ) {
+                    try? fileManager.removeItem(at: segmentedStore.resumeURL(
+                        cacheKey: context.cacheKey,
+                        index: context.segmentIndex
+                    ))
+                    try segmentedStore.write(attempt.manifest)
                 }
+                if attempt.manifest.segments.allSatisfy(\.isComplete) {
+                    _ = cancellationFence.performTerminalClaim(
+                        cacheKey: context.cacheKey
+                    ) {
+                        guard let claim = claimSegmentedAttemptLocked(attempt)
+                        else { return false }
+                        terminalClaim = claim
+                        return true
+                    }
+                }
+            } catch {
+                completionError = error
+            }
             }
         }
 
@@ -795,9 +824,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             return
         }
 
-        guard allSegmentsComplete,
-              let claim = claimSegmentedAttempt(attempt)
-        else { return }
+        guard let claim = terminalClaim else { return }
         let destination = localURL(
             for: attempt.manifest.videoId,
             versionId: attempt.manifest.versionId
@@ -845,22 +872,33 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         error: Error?
     )? {
         lock.withLock {
-            guard let current = segmentedAttempts[attempt.cacheKey],
-                  current.id == attempt.id,
-                  !current.terminalClaimed
-            else { return nil }
-            current.terminalClaimed = true
-            if current.terminalError == nil {
-                current.terminalError = error
-            }
-            let continuation = current.continuation
-            current.continuation = nil
-            return (
-                continuation,
-                current.taskIDs.compactMap { tasksByIdentifier[$0] },
-                current.terminalError
-            )
+            claimSegmentedAttemptLocked(attempt, error: error)
         }
+    }
+
+    private func claimSegmentedAttemptLocked(
+        _ attempt: SegmentedAttempt,
+        error: Error? = nil
+    ) -> (
+        continuation: CheckedContinuation<URL, Error>?,
+        tasks: [URLSessionDownloadTask],
+        error: Error?
+    )? {
+        guard let current = segmentedAttempts[attempt.cacheKey],
+              current.id == attempt.id,
+              !current.terminalClaimed
+        else { return nil }
+        current.terminalClaimed = true
+        if current.terminalError == nil {
+            current.terminalError = error
+        }
+        let continuation = current.continuation
+        current.continuation = nil
+        return (
+            continuation,
+            current.taskIDs.compactMap { tasksByIdentifier[$0] },
+            current.terminalError
+        )
     }
 
     private func completeSegmentedClaim(
