@@ -135,6 +135,53 @@ private actor DownloadGate {
     }
 }
 
+private struct ResolvedVideoPreparationTrackerEnvironment {
+    // Mirrors SwiftUI.Environment.Content.value from the ABI-frozen public interface.
+    let value: VideoPreparationTracker
+    let discriminator: UInt8 = 1
+}
+
+@MainActor
+private func resolvingPreparationTracker(
+    _ tracker: VideoPreparationTracker,
+    in button: DownloadButton
+) -> DownloadButton {
+    let storageLabel = "_preparationTracker"
+    guard let unresolvedStorage = Mirror(reflecting: button).children
+        .first(where: { $0.label == storageLabel })?.value as? Environment<VideoPreparationTracker>
+    else {
+        preconditionFailure("DownloadButton no longer stores \(storageLabel) as a typed environment value")
+    }
+
+    precondition(
+        MemoryLayout<ResolvedVideoPreparationTrackerEnvironment>.size
+            == MemoryLayout<Environment<VideoPreparationTracker>>.size,
+        "SwiftUI.Environment storage layout changed"
+    )
+    let resolvedStorage = unsafeBitCast(
+        ResolvedVideoPreparationTrackerEnvironment(value: tracker),
+        to: Environment<VideoPreparationTracker>.self
+    )
+    var resolvedButton = button
+    let didResolve = withUnsafeBytes(of: unresolvedStorage) { unresolvedBytes in
+        withUnsafeMutableBytes(of: &resolvedButton) { buttonBytes in
+            let lastOffset = buttonBytes.count - unresolvedBytes.count
+            let alignment = MemoryLayout<Environment<VideoPreparationTracker>>.alignment
+            for offset in stride(from: 0, through: lastOffset, by: alignment)
+            where buttonBytes[offset..<offset + unresolvedBytes.count].elementsEqual(unresolvedBytes) {
+                let pointer = buttonBytes.baseAddress! + offset
+                pointer.assumingMemoryBound(
+                    to: Environment<VideoPreparationTracker>.self
+                ).pointee = resolvedStorage
+                return true
+            }
+            return false
+        }
+    }
+    precondition(didResolve, "Could not resolve DownloadButton's typed environment storage")
+    return resolvedButton
+}
+
 @MainActor
 private func eventually(
     _ message: String,
@@ -157,7 +204,7 @@ private func makeDownloadButton(
     onCancel: @escaping () -> Void = {},
     onDeleteCache: @escaping () -> Void = {}
 ) -> some View {
-    DownloadButton(
+    let button = DownloadButton(
         identity: DownloadButtonIdentity(videoID: 7, versionID: 3, audioLanguage: "eng"),
         refreshToken: refreshToken,
         currentCacheState: { cache.read() },
@@ -166,6 +213,7 @@ private func makeDownloadButton(
         onDeleteCache: onDeleteCache,
         state: state
     )
+    return resolvingPreparationTracker(tracker, in: button)
     .environment(tracker)
 }
 
