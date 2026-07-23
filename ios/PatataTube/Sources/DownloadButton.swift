@@ -143,6 +143,7 @@ struct DownloadButton: View {
     let onDeleteCache: () -> Void
 
     @Environment(\.continuousClock) private var clock
+    @Environment(VideoPreparationTracker.self) private var preparationTracker
     @State private var state: DownloadButtonState
 
     private struct ObservationID: Hashable {
@@ -189,6 +190,17 @@ struct DownloadButton: View {
 
     @ViewBuilder
     private var control: some View {
+        if preparationTracker.isPreparing(videoID: identity.videoID) {
+            ProgressView()
+                .frame(width: 44, height: 44)
+                .accessibilityLabel("Preparing video")
+        } else {
+            cacheControl
+        }
+    }
+
+    @ViewBuilder
+    private var cacheControl: some View {
         switch state.effectiveState {
         case .cached:
             Button {
