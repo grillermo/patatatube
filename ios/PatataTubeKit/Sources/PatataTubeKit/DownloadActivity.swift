@@ -8,6 +8,22 @@ public struct DownloadActivity: Equatable, Identifiable, Sendable {
     public let totalByteCount: Int64?
     public let bytesPerSecond: Double?
 
+    public init(
+        videoID: Int,
+        versionID: Int?,
+        progress: Double,
+        transferredByteCount: Int64,
+        totalByteCount: Int64?,
+        bytesPerSecond: Double?
+    ) {
+        self.videoID = videoID
+        self.versionID = versionID
+        self.progress = progress
+        self.transferredByteCount = transferredByteCount
+        self.totalByteCount = totalByteCount
+        self.bytesPerSecond = bytesPerSecond
+    }
+
     public var id: String { versionID.map { "\(videoID):\($0)" } ?? "\(videoID)" }
 }
 
@@ -15,6 +31,12 @@ public struct DownloadCompletion: Codable, Equatable, Hashable, Identifiable, Se
     public let videoID: Int
     public let versionID: Int?
     public let completedAt: Date
+
+    public init(videoID: Int, versionID: Int?, completedAt: Date) {
+        self.videoID = videoID
+        self.versionID = versionID
+        self.completedAt = completedAt
+    }
 
     public var id: String { versionID.map { "\(videoID):\($0)" } ?? "\(videoID)" }
 }
