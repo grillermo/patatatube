@@ -362,6 +362,7 @@ struct DownloadButtonViewTests {
         await eventually("Hosted view never started polling") { source.readCount > 0 }
         ViewHosting.expel()
         await Task.yield()
+        await clock.run()
         let readsAfterExpel = source.readCount
         await clock.advance(by: .seconds(1))
         await Task.yield()
