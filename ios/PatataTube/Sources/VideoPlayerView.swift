@@ -10,7 +10,7 @@ struct VideoPlayerView: View {
     /// Play-and-sleep: play only this item, then black out so the device can lock.
     let sleepMode: Bool
     @State private var currentIndex: Int
-    @StateObject private var orientationLock = OrientationLockCoordinator.shared
+    @StateObject private var orientationLock: OrientationLockCoordinator
     @StateObject private var orientationControlVisibility = OrientationControlVisibility()
 
     init(videos: [Video], startIndex: Int, sleepMode: Bool = false) {
@@ -18,14 +18,10 @@ struct VideoPlayerView: View {
         self.startIndex = startIndex
         self.sleepMode = sleepMode
         _currentIndex = State(initialValue: startIndex)
+        _orientationLock = StateObject(wrappedValue: OrientationLockCoordinator())
     }
 
     private var video: Video { videos[currentIndex] }
-    private var activeWindowScene: UIWindowScene? {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first(where: { $0.activationState == .foregroundActive })
-    }
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -56,7 +52,8 @@ struct VideoPlayerView: View {
                     player: player,
                     attached: attached,
                     resumeAfterDetaching: resumeAfterDetaching,
-                    onPlayerTap: { orientationControlVisibility.reveal() }
+                    onPlayerTap: { orientationControlVisibility.reveal() },
+                    onSceneAvailable: { orientationLock.beginPlayerSession(in: $0) }
                 )
                     .ignoresSafeArea()
                     .offset(y: dragOffset)
@@ -69,7 +66,7 @@ struct VideoPlayerView: View {
                 isVisible: orientationControlVisibility.isVisible,
                 isBlocked: showingSleepOverlay,
                 onToggle: {
-                    orientationLock.toggle(in: activeWindowScene)
+                    orientationLock.toggle()
                     orientationControlVisibility.reveal()
                 }
             )
@@ -84,10 +81,7 @@ struct VideoPlayerView: View {
             }
         }
         .simultaneousGesture(pullDownToDismiss)
-        .task {
-            orientationLock.beginPlayerSession(in: activeWindowScene)
-            await setup()
-        }
+        .task { await setup() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .inactive:
@@ -108,7 +102,7 @@ struct VideoPlayerView: View {
         }
         .onDisappear {
             orientationControlVisibility.hide()
-            orientationLock.endPlayerSession(in: activeWindowScene)
+            orientationLock.endPlayerSession()
             player?.pause()
             removePlayToEndObserver()
             readyObserver?.invalidate()
