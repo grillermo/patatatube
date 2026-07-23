@@ -1,3 +1,4 @@
+import PatataTubeKit
 import SwiftUI
 import Testing
 @testable import PatataTube
@@ -35,5 +36,40 @@ struct VideoGridViewErrorBannerTests {
             currentText: "Newer error",
             displayedText: "Original error"
         ))
+    }
+
+    @Test func unversionedDownloadResolvesUnversionedPlaybackIdentity() {
+        let stored = Video(
+            id: 42,
+            url: "/videos/42",
+            title: "Video 42",
+            platform: nil,
+            sourceKey: nil,
+            previewUrl: nil,
+            classification: "movies",
+            position: nil,
+            status: "done",
+            errorMsg: nil,
+            streamPath: "/videos/42/stream",
+            chosenVersionId: 3,
+            versions: [
+                VideoVersion(
+                    id: 3,
+                    label: "Chosen",
+                    status: "done",
+                    isChosen: true
+                )
+            ]
+        )
+
+        let resolved = VideoGridView.downloadVideo(
+            id: stored.id,
+            versionID: nil,
+            videos: [stored]
+        )
+
+        #expect(resolved?.id == stored.id)
+        #expect(resolved?.chosenVersionId == nil)
+        #expect(resolved?.versions.allSatisfy { !$0.isChosen } == true)
     }
 }

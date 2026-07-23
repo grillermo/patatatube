@@ -123,6 +123,15 @@ private final class HangingDownloadProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class PausedLegacyResumeProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {}
+
+    override func stopLoading() {}
+}
+
 private final class HangingRangeProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -1007,6 +1016,12 @@ private func hangingDownloadConfig() -> URLSessionConfiguration {
     return config
 }
 
+private func pausedLegacyResumeConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [PausedLegacyResumeProtocol.self]
+    return config
+}
+
 private func hangingRangeConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [HangingRangeProtocol.self]
@@ -1058,6 +1073,23 @@ private func ownershipRaceConfig() -> URLSessionConfiguration {
 private func tempRoot() -> URL {
     FileManager.default.temporaryDirectory
         .appendingPathComponent("cache-\(UUID().uuidString)")
+}
+
+private final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+
+    init(_ value: Date) {
+        self.value = value
+    }
+
+    func now() -> Date {
+        lock.withLock { value }
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.withLock { value = value.addingTimeInterval(interval) }
+    }
 }
 
 @Suite(.serialized)
@@ -1872,6 +1904,48 @@ struct CacheManagerTests {
 
         manager.cancel(id: 31)
         manager.cancel(id: 32, versionId: 4)
+    }
+
+    @Test func legacyResumeBaselinesItsFirstDelegateSample() async throws {
+        let root = tempRoot()
+        let clock = TestClock(Date(timeIntervalSinceReferenceDate: 10))
+        let manager = CacheManager(
+            root: root,
+            configuration: pausedLegacyResumeConfig(),
+            fileManager: .default,
+            now: { clock.now() }
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data([0xFF, 0xEE]).write(to: root.appendingPathComponent("35.resume"))
+
+        #expect(manager.resumeInterrupted() == [35])
+        let session = try #require(
+            Mirror(reflecting: manager).children.first(where: { $0.label == "session" })?.value
+                as? URLSession
+        )
+        var task: URLSessionDownloadTask?
+        for _ in 0..<100 {
+            if let resumedTask = await session.allTasks.compactMap({ $0 as? URLSessionDownloadTask }).first {
+                task = resumedTask
+                break
+            }
+            await Task.yield()
+        }
+        let resumedTask = try #require(task)
+
+        clock.advance(by: 2)
+        manager.urlSession(
+            URLSession.shared,
+            downloadTask: resumedTask,
+            didWriteData: 1_000,
+            totalBytesWritten: 5_000,
+            totalBytesExpectedToWrite: 10_000
+        )
+
+        let activity = try #require(manager.activeDownloads().first)
+        #expect(activity.transferredByteCount == 5_000)
+        #expect(activity.bytesPerSecond == 500)
+        manager.cancel(id: 35)
     }
 
     @Test func resumeInterruptedDropsStaleResumeWhenAlreadyCached() {
