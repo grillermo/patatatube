@@ -148,4 +148,38 @@ struct SegmentedDownloadTests {
             atPath: store.directory(cacheKey: manifest.cacheKey).path
         ))
     }
+
+    @Test func retryAfterAssemblyFailureUsesCleanScratchFile() throws {
+        let root = root()
+        let store = SegmentedDownloadStore(root: root)
+        var manifest = try SegmentedDownloadManifest.make(
+            videoId: 10,
+            versionId: nil,
+            remoteURL: URL(string: "https://srv.test/video")!,
+            requestedStreamCount: 2,
+            totalByteCount: 6,
+            etag: "\"v1\""
+        )
+        manifest.segments.indices.forEach { manifest.segments[$0].isComplete = true }
+        try store.write(manifest)
+        try Data([1, 1, 1]).write(
+            to: store.partURL(cacheKey: manifest.cacheKey, index: 0)
+        )
+
+        let assembly = store.assemblyURL(cacheKey: manifest.cacheKey)
+        try Data([9, 9, 9, 9, 9, 9]).write(to: assembly)
+        let destination = root.appendingPathComponent("10.mp4")
+
+        #expect(throws: SegmentedDownloadError.missingSegment(index: 1)) {
+            try store.assemble(manifest: manifest, destination: destination)
+        }
+        #expect(!FileManager.default.fileExists(atPath: assembly.path))
+
+        try Data([2, 2, 2]).write(
+            to: store.partURL(cacheKey: manifest.cacheKey, index: 1)
+        )
+        try store.assemble(manifest: manifest, destination: destination)
+
+        #expect(try Data(contentsOf: destination) == Data([1, 1, 1, 2, 2, 2]))
+    }
 }

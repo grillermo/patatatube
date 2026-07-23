@@ -292,7 +292,18 @@ struct SegmentedDownloadStore: @unchecked Sendable {
             withIntermediateDirectories: true
         )
         let assembly = assemblyURL(cacheKey: validated.cacheKey)
-        fileManager.createFile(atPath: assembly.path, contents: nil)
+        if fileManager.fileExists(atPath: assembly.path) {
+            try fileManager.removeItem(at: assembly)
+        }
+        guard fileManager.createFile(atPath: assembly.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        var assembled = false
+        defer {
+            if !assembled {
+                try? fileManager.removeItem(at: assembly)
+            }
+        }
         do {
             let output = try FileHandle(forWritingTo: assembly)
             defer { try? output.close() }
@@ -330,6 +341,7 @@ struct SegmentedDownloadStore: @unchecked Sendable {
         }
         try? fileManager.removeItem(at: destination)
         try fileManager.moveItem(at: assembly, to: destination)
+        assembled = true
         remove(cacheKey: validated.cacheKey)
     }
 
