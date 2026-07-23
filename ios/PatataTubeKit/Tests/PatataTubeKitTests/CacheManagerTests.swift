@@ -164,6 +164,89 @@ private final class HangingRangeProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class ResumableFailureProtocol: URLProtocol {
+    private static let condition = NSCondition()
+    nonisolated(unsafe) private static var stalledSegmentStopped = false
+    private var isStalledSegment = false
+
+    static let resumeMarker = Data([0xFA, 0x11])
+
+    static func reset() {
+        condition.withLock {
+            stalledSegmentStopped = false
+        }
+    }
+
+    static func waitForStalledSegmentToStop() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(5)
+        while !stalledSegmentStopped {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let value = request.value(forHTTPHeaderField: "Range"),
+              value.hasPrefix("bytes=")
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let bounds = value.dropFirst("bytes=".count).split(separator: "-")
+        guard bounds.count == 2,
+              let start = Int(bounds[0]),
+              let end = Int(bounds[1])
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 206,
+            httpVersion: nil,
+            headerFields: [
+                "Accept-Ranges": "bytes",
+                "Content-Range": "bytes \(start)-\(end)/12",
+                "Content-Length": "\(end - start + 1)",
+                "ETag": "\"resumable\"",
+            ]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data([UInt8(start % 255)]))
+
+        if start == 0 && end == 0 {
+            client?.urlProtocolDidFinishLoading(self)
+        } else if start == 0 {
+            Thread.sleep(forTimeInterval: 0.02)
+            client?.urlProtocol(
+                self,
+                didFailWithError: NSError(
+                    domain: NSURLErrorDomain,
+                    code: URLError.networkConnectionLost.rawValue,
+                    userInfo: [
+                        NSURLSessionDownloadTaskResumeData: Self.resumeMarker,
+                    ]
+                )
+            )
+        } else {
+            isStalledSegment = true
+        }
+    }
+
+    override func stopLoading() {
+        guard isStalledSegment else { return }
+        Self.condition.withLock {
+            Self.stalledSegmentStopped = true
+            Self.condition.broadcast()
+        }
+    }
+}
+
 private final class SegmentFailureProtocol: URLProtocol {
     private static let condition = NSCondition()
     nonisolated(unsafe) private static var stalledSegmentStarted = false
@@ -765,6 +848,12 @@ private func segmentFailureConfig() -> URLSessionConfiguration {
     return config
 }
 
+private func resumableFailureConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [ResumableFailureProtocol.self]
+    return config
+}
+
 private func cancelThenRetryDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [CancelThenRetryDownloadProtocol.self]
@@ -884,6 +973,27 @@ struct CacheManagerTests {
         await #expect(throws: Error.self) { try await task.value }
         #expect(manager.state(for: 21) == .notCached)
         #expect(!FileManager.default.fileExists(atPath: manager.localURL(for: 21).path))
+    }
+
+    @Test func explicitCancelRemovesSegmentedScratchAndRetryStartsFresh() async {
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: hangingRangeConfig())
+        let task = Task {
+            try await manager.download(
+                id: 63,
+                from: URL(string: "https://srv.test/videos/63/stream")!,
+                streamCount: 3
+            )
+        }
+        while manager.state(for: 63) == .notCached { await Task.yield() }
+
+        manager.cancel(id: 63)
+
+        await #expect(throws: Error.self) { try await task.value }
+        #expect(manager.state(for: 63) == .notCached)
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".downloads/63").path
+        ))
     }
 
     @Test func cancelThenImmediateSameKeyRetryCompletesIndependently() async throws {
@@ -1272,6 +1382,31 @@ struct CacheManagerTests {
         ))
     }
 
+    @Test func transportFailurePreservesManifestAndResumeDataAfterSiblingsStop() async throws {
+        ResumableFailureProtocol.reset()
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: resumableFailureConfig())
+
+        await #expect(throws: Error.self) {
+            try await manager.download(
+                id: 65,
+                from: URL(string: "https://srv.test/videos/65/stream")!,
+                streamCount: 2
+            )
+        }
+
+        #expect(ResumableFailureProtocol.waitForStalledSegmentToStop())
+        let store = SegmentedDownloadStore(root: root)
+        let manifest = try store.load(cacheKey: "65")
+        #expect(!manifest.segments[0].isComplete)
+        #expect(try Data(contentsOf: store.resumeURL(cacheKey: "65", index: 0))
+                == ResumableFailureProtocol.resumeMarker)
+        #expect(manager.state(for: 65) == .notCached)
+        #expect(!FileManager.default.fileExists(
+            atPath: manager.localURL(for: 65).path
+        ))
+    }
+
     @Test func removeCachedDeletesOnlyRequestedVersion() throws {
         let root = tempRoot()
         let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
@@ -1315,6 +1450,27 @@ struct CacheManagerTests {
         for name in keep + remove {
             try Data([0x01]).write(to: root.appendingPathComponent(name))
         }
+        let store = SegmentedDownloadStore(root: root)
+        for versionId in [nil, 4] as [Int?] {
+            let manifest = try SegmentedDownloadManifest.make(
+                videoId: 23,
+                versionId: versionId,
+                remoteURL: URL(string: "https://srv.test/videos/23/stream")!,
+                requestedStreamCount: 2,
+                totalByteCount: 4,
+                etag: "\"remove\""
+            )
+            try store.write(manifest)
+        }
+        let keptManifest = try SegmentedDownloadManifest.make(
+            videoId: 24,
+            versionId: 1,
+            remoteURL: URL(string: "https://srv.test/videos/24/stream")!,
+            requestedStreamCount: 2,
+            totalByteCount: 4,
+            etag: "\"keep\""
+        )
+        try store.write(keptManifest)
 
         manager.removeAllCached(id: 23)
 
@@ -1326,7 +1482,98 @@ struct CacheManagerTests {
             #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(name).path),
                     "should have kept \(name)")
         }
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".downloads/23").path
+        ))
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".downloads/23:4").path
+        ))
+        #expect(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".downloads/24:1").path
+        ))
         #expect(manager.state(for: 23) == .notCached)
+    }
+
+    @Test func resumeInterruptedRequestsOnlyIncompleteManifestSegments() async throws {
+        let payload = Data("abcdefghijkl".utf8)
+        RangeDownloadProtocol.reset(payload: payload)
+        let root = tempRoot()
+        let store = SegmentedDownloadStore(root: root)
+        var manifest = try SegmentedDownloadManifest.make(
+            videoId: 62,
+            versionId: nil,
+            remoteURL: URL(string: "https://srv.test/videos/62/stream")!,
+            requestedStreamCount: 3,
+            totalByteCount: 12,
+            etag: "\"test-video\""
+        )
+        manifest.segments[0].isComplete = true
+        manifest.segments[0].persistedByteCount = 4
+        try store.write(manifest)
+        try payload.subdata(in: 0..<4).write(
+            to: store.partURL(cacheKey: "62", index: 0)
+        )
+        try store.write(manifest)
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
+
+        #expect(manager.resumeInterrupted(bearerToken: "secret") == [62])
+
+        for _ in 0..<500 where manager.state(for: 62) != .cached {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(manager.state(for: 62) == .cached)
+        let ranges = RangeDownloadProtocol.recordedRequests().compactMap {
+            $0.value(forHTTPHeaderField: "Range")
+        }
+        #expect(!ranges.contains("bytes=0-3"))
+        #expect(Set(ranges) == Set(["bytes=4-7", "bytes=8-11"]))
+        let requests = RangeDownloadProtocol.recordedRequests()
+        #expect(requests.allSatisfy {
+            $0.value(forHTTPHeaderField: "Authorization") == "Bearer secret"
+        })
+        #expect(requests.allSatisfy {
+            $0.value(forHTTPHeaderField: "If-Range") == "\"test-video\""
+        })
+        #expect(try Data(contentsOf: manager.localURL(for: 62)) == payload)
+    }
+
+    @Test func downloadResumesStoredManifestUsingOriginalRanges() async throws {
+        let payload = Data("abcdefghijkl".utf8)
+        RangeDownloadProtocol.reset(payload: payload)
+        let root = tempRoot()
+        let store = SegmentedDownloadStore(root: root)
+        var manifest = try SegmentedDownloadManifest.make(
+            videoId: 64,
+            versionId: nil,
+            remoteURL: URL(string: "https://srv.test/videos/64/original")!,
+            requestedStreamCount: 3,
+            totalByteCount: 12,
+            etag: "\"test-video\""
+        )
+        manifest.segments[0].isComplete = true
+        manifest.segments[0].persistedByteCount = 4
+        try store.write(manifest)
+        try payload.subdata(in: 0..<4).write(
+            to: store.partURL(cacheKey: "64", index: 0)
+        )
+        try store.write(manifest)
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
+
+        try await manager.download(
+            id: 64,
+            from: URL(string: "https://srv.test/videos/64/new")!,
+            streamCount: 1
+        )
+
+        let requests = RangeDownloadProtocol.recordedRequests()
+        let ranges = requests.compactMap {
+            $0.value(forHTTPHeaderField: "Range")
+        }
+        #expect(Set(ranges) == Set(["bytes=4-7", "bytes=8-11"]))
+        #expect(requests.allSatisfy {
+            $0.url?.lastPathComponent == "original"
+        })
+        #expect(try Data(contentsOf: manager.localURL(for: 64)) == payload)
     }
 
     @Test func resumeInterruptedRestartsPendingResumeFiles() {

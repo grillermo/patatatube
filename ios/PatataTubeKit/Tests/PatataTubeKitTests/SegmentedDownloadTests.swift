@@ -71,6 +71,31 @@ struct SegmentedDownloadTests {
         ])
     }
 
+    @Test func storedManifestKeepsOriginalRangesAfterPreferenceChanges() throws {
+        let store = SegmentedDownloadStore(root: root())
+        var manifest = try SegmentedDownloadManifest.make(
+            videoId: 61,
+            versionId: nil,
+            remoteURL: URL(string: "https://srv.test/videos/61/stream")!,
+            requestedStreamCount: 3,
+            totalByteCount: 12,
+            etag: "\"stable\""
+        )
+        manifest.segments[0].isComplete = true
+        manifest.segments[0].persistedByteCount = 4
+        try store.write(manifest)
+        try Data(repeating: 0xAA, count: 4).write(
+            to: store.partURL(cacheKey: "61", index: 0)
+        )
+        try store.write(manifest)
+
+        let loaded = try store.load(cacheKey: "61")
+
+        #expect(loaded.requestedStreamCount == 3)
+        #expect(loaded.segments.map(\.range) == manifest.segments.map(\.range))
+        #expect(loaded.segments[0].isComplete)
+    }
+
     @Test func validatesProbeAndRejectsAFullResponse() throws {
         let url = URL(string: "https://srv.test/video")!
         let valid = HTTPURLResponse(
