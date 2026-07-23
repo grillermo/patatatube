@@ -140,7 +140,8 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private let fileManager: FileManager
     private let lock = NSLock()
     private let cancellationFence: any CacheManagerCancellationFencing
-    private var inFlight: [String: Double] = [:]
+    private var inFlight: [String: DownloadActivityAccumulator] = [:]
+    private var completionHistory: DownloadCompletionHistoryStore
     private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
     private var idByTask: [Int: String] = [:]
     private var tasksByKey: [String: URLSessionDownloadTask] = [:]
@@ -174,6 +175,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         self.root = root ?? fileManager
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("videos")
+        self.completionHistory = DownloadCompletionHistoryStore(
+            root: self.root,
+            fileManager: fileManager
+        )
         self.segmentedStore = SegmentedDownloadStore(
             root: self.root,
             fileManager: fileManager
@@ -230,7 +235,22 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let key = cacheKey(videoId: id, versionId: versionId)
         if fileManager.fileExists(atPath: localURL(for: id, versionId: versionId).path) { return .cached }
         return lock.withLock {
-            inFlight[key].map { .downloading($0) } ?? .notCached
+            inFlight[key].map { .downloading($0.activity.progress) } ?? .notCached
+        }
+    }
+
+    public func activeDownloads() -> [DownloadActivity] {
+        lock.withLock { inFlight.values.map(\.activity).sorted { $0.id < $1.id } }
+    }
+
+    public func recentDownloads() -> [DownloadCompletion] {
+        lock.withLock {
+            completionHistory.prune { completion in
+                fileManager.fileExists(atPath: localURL(
+                    for: completion.videoID,
+                    versionId: completion.versionID
+                ).path)
+            }
         }
     }
 
@@ -290,7 +310,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                       probeAttempts[key] == nil
                 else { return false }
                 segmentedAttempts[key] = attempt
-                inFlight[key] = SegmentedDownloadStore.progress(
+                inFlight[key] = activityAccumulator(
                     manifest: manifest,
                     activeByteCounts: [:]
                 )
@@ -324,7 +344,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             guard let data = try? Data(contentsOf: resumeURL(for: key)), !data.isEmpty else { continue }
             let task = session.downloadTask(withResumeData: data)
             lock.withLock {
-                inFlight[key] = 0
+                inFlight[key] = DownloadActivityAccumulator(
+                    videoID: id,
+                    versionID: vid,
+                    totalByteCount: nil,
+                    now: Date()
+                )
                 idByTask[task.taskIdentifier] = key
                 tasksByKey[key] = task
             }
@@ -433,7 +458,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
         lock.withLock {
             guard tasksByKey[key]?.taskIdentifier == downloadTask.taskIdentifier else { return }
-            inFlight[key] = progress
+            inFlight[key]?.record(
+                transferredByteCount: totalBytesWritten,
+                progress: progress,
+                totalByteCount: totalBytesExpectedToWrite > 0
+                    ? totalBytesExpectedToWrite
+                    : nil,
+                now: Date()
+            )
         }
     }
 
@@ -533,7 +565,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                   probeAttempts[key] == nil
             else { return false }
             probeAttempts[key] = probeAttempt
-            inFlight[key] = 0
+            inFlight[key] = DownloadActivityAccumulator(
+                videoID: id,
+                versionID: versionId,
+                totalByteCount: nil,
+                now: Date()
+            )
             return true
         }
         guard canProbe else { throw CancellationError() }
@@ -679,7 +716,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                       probeAttempts[manifest.cacheKey] == nil
                 else { return false }
                 segmentedAttempts[manifest.cacheKey] = attempt
-                inFlight[manifest.cacheKey] = SegmentedDownloadStore.progress(
+                inFlight[manifest.cacheKey] = activityAccumulator(
                     manifest: manifest,
                     activeByteCounts: [:]
                 )
@@ -722,7 +759,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 }
                 probeAttempts[manifest.cacheKey] = nil
                 segmentedAttempts[manifest.cacheKey] = attempt
-                inFlight[manifest.cacheKey] = SegmentedDownloadStore.progress(
+                inFlight[manifest.cacheKey] = activityAccumulator(
                     manifest: manifest,
                     activeByteCounts: [:]
                 )
@@ -804,7 +841,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         try await withCheckedThrowingContinuation { continuation in
             let task = session.downloadTask(withResumeData: resumeData)
             lock.withLock {
-                inFlight[key] = 0
+                inFlight[key] = DownloadActivityAccumulator(
+                    videoID: videoId(from: key),
+                    versionID: versionId(from: key),
+                    totalByteCount: nil,
+                    now: Date()
+                )
                 continuations[task.taskIdentifier] = continuation
                 idByTask[task.taskIdentifier] = key
                 tasksByKey[key] = task
@@ -824,11 +866,52 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             else { return }
             attempt.activeByteCounts[context.segmentIndex, default: 0]
                 += max(bytesWritten, 0)
-            inFlight[context.cacheKey] = SegmentedDownloadStore.progress(
-                manifest: attempt.manifest,
-                activeByteCounts: attempt.activeByteCounts
+            inFlight[context.cacheKey]?.record(
+                transferredByteCount: transferredByteCount(
+                    manifest: attempt.manifest,
+                    activeByteCounts: attempt.activeByteCounts
+                ),
+                progress: SegmentedDownloadStore.progress(
+                    manifest: attempt.manifest,
+                    activeByteCounts: attempt.activeByteCounts
+                ),
+                now: Date()
             )
         }
+    }
+
+    private func activityAccumulator(
+        manifest: SegmentedDownloadManifest,
+        activeByteCounts: [Int: Int64]
+    ) -> DownloadActivityAccumulator {
+        let progress = SegmentedDownloadStore.progress(
+            manifest: manifest,
+            activeByteCounts: activeByteCounts
+        )
+        let now = Date()
+        var accumulator = DownloadActivityAccumulator(
+            videoID: manifest.videoId,
+            versionID: manifest.versionId,
+            totalByteCount: manifest.totalByteCount,
+            now: now
+        )
+        accumulator.record(
+            transferredByteCount: transferredByteCount(
+                manifest: manifest,
+                activeByteCounts: activeByteCounts
+            ),
+            progress: progress,
+            now: now
+        )
+        return accumulator
+    }
+
+    private func transferredByteCount(
+        manifest: SegmentedDownloadManifest,
+        activeByteCounts: [Int: Int64]
+    ) -> Int64 {
+        manifest.segments.reduce(0) { $0 + $1.persistedByteCount }
+            + activeByteCounts.values.reduce(0, +)
     }
 
     private func recordSegmentFile(
@@ -916,9 +999,16 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                     attempt.manifest.segments[context.segmentIndex].persistedByteCount =
                         attempt.manifest.segments[context.segmentIndex].range.length
                     attempt.activeByteCounts[context.segmentIndex] = nil
-                    inFlight[context.cacheKey] = SegmentedDownloadStore.progress(
-                        manifest: attempt.manifest,
-                        activeByteCounts: attempt.activeByteCounts
+                    inFlight[context.cacheKey]?.record(
+                        transferredByteCount: transferredByteCount(
+                            manifest: attempt.manifest,
+                            activeByteCounts: attempt.activeByteCounts
+                        ),
+                        progress: SegmentedDownloadStore.progress(
+                            manifest: attempt.manifest,
+                            activeByteCounts: attempt.activeByteCounts
+                        ),
+                        now: Date()
                     )
                 case .failure(let segmentError):
                     completionError = segmentError
@@ -1251,6 +1341,13 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                   current.id == attempt.id,
                   current.terminalClaimed
             else { return }
+            if case .success = result {
+                completionHistory.record(DownloadCompletion(
+                    videoID: attempt.manifest.videoId,
+                    versionID: attempt.manifest.versionId,
+                    completedAt: Date()
+                ))
+            }
             segmentedAttempts[attempt.cacheKey] = nil
             inFlight[attempt.cacheKey] = nil
         }
@@ -1267,6 +1364,13 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             idByTask[taskIdentifier] = nil
             completedResults[taskIdentifier] = nil
             if tasksByKey[key]?.taskIdentifier == taskIdentifier {
+                if case .success = result {
+                    completionHistory.record(DownloadCompletion(
+                        videoID: videoId(from: key),
+                        versionID: versionId(from: key),
+                        completedAt: Date()
+                    ))
+                }
                 inFlight[key] = nil
                 tasksByKey[key] = nil
             }
