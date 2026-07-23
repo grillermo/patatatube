@@ -141,6 +141,8 @@ struct DownloadButton: View {
     let onDownload: () async -> Bool
     let onCancel: () -> Void
     let onDeleteCache: () -> Void
+    // Optional lifecycle seam for hosted inspection of SwiftUI-resolved environment values.
+    var didAppear: ((Self) -> Void)? = nil
 
     @Environment(\.continuousClock) private var clock
     @Environment(VideoPreparationTracker.self) private var preparationTracker
@@ -171,7 +173,17 @@ struct DownloadButton: View {
         ))
     }
 
+    @ViewBuilder
     var body: some View {
+        if let didAppear {
+            control
+                .onAppear { didAppear(self) }
+        } else {
+            activeControl
+        }
+    }
+
+    private var activeControl: some View {
         control
             .task(id: ObservationID(identity: identity, refreshToken: refreshToken)) {
                 state.reset(to: currentCacheState())

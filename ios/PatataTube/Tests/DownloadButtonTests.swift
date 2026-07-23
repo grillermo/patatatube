@@ -135,53 +135,6 @@ private actor DownloadGate {
     }
 }
 
-private struct ResolvedVideoPreparationTrackerEnvironment {
-    // Mirrors SwiftUI.Environment.Content.value from the ABI-frozen public interface.
-    let value: VideoPreparationTracker
-    let discriminator: UInt8 = 1
-}
-
-@MainActor
-private func resolvingPreparationTracker(
-    _ tracker: VideoPreparationTracker,
-    in button: DownloadButton
-) -> DownloadButton {
-    let storageLabel = "_preparationTracker"
-    guard let unresolvedStorage = Mirror(reflecting: button).children
-        .first(where: { $0.label == storageLabel })?.value as? Environment<VideoPreparationTracker>
-    else {
-        preconditionFailure("DownloadButton no longer stores \(storageLabel) as a typed environment value")
-    }
-
-    precondition(
-        MemoryLayout<ResolvedVideoPreparationTrackerEnvironment>.size
-            == MemoryLayout<Environment<VideoPreparationTracker>>.size,
-        "SwiftUI.Environment storage layout changed"
-    )
-    let resolvedStorage = unsafeBitCast(
-        ResolvedVideoPreparationTrackerEnvironment(value: tracker),
-        to: Environment<VideoPreparationTracker>.self
-    )
-    var resolvedButton = button
-    let didResolve = withUnsafeBytes(of: unresolvedStorage) { unresolvedBytes in
-        withUnsafeMutableBytes(of: &resolvedButton) { buttonBytes in
-            let lastOffset = buttonBytes.count - unresolvedBytes.count
-            let alignment = MemoryLayout<Environment<VideoPreparationTracker>>.alignment
-            for offset in stride(from: 0, through: lastOffset, by: alignment)
-            where buttonBytes[offset..<offset + unresolvedBytes.count].elementsEqual(unresolvedBytes) {
-                let pointer = buttonBytes.baseAddress! + offset
-                pointer.assumingMemoryBound(
-                    to: Environment<VideoPreparationTracker>.self
-                ).pointee = resolvedStorage
-                return true
-            }
-            return false
-        }
-    }
-    precondition(didResolve, "Could not resolve DownloadButton's typed environment storage")
-    return resolvedButton
-}
-
 @MainActor
 private func eventually(
     _ message: String,
@@ -200,29 +153,46 @@ private func makeDownloadButton(
     cache: CacheStateSource = CacheStateSource(.notCached),
     refreshToken: Int = 0,
     tracker: VideoPreparationTracker = VideoPreparationTracker(),
+    clock: any Clock<Duration> = ContinuousClock(),
     onDownload: @escaping () async -> Bool = { false },
     onCancel: @escaping () -> Void = {},
-    onDeleteCache: @escaping () -> Void = {}
-) -> some View {
-    let button = DownloadButton(
-        identity: DownloadButtonIdentity(videoID: 7, versionID: 3, audioLanguage: "eng"),
-        refreshToken: refreshToken,
-        currentCacheState: { cache.read() },
-        onDownload: onDownload,
-        onCancel: onCancel,
-        onDeleteCache: onDeleteCache,
-        state: state
-    )
-    return resolvingPreparationTracker(tracker, in: button)
-    .environment(tracker)
+    onDeleteCache: @escaping () -> Void = {},
+    function: String = #function
+) async throws -> DownloadButton {
+    return try await withCheckedThrowingContinuation { continuation in
+        var button = DownloadButton(
+            identity: DownloadButtonIdentity(videoID: 7, versionID: 3, audioLanguage: "eng"),
+            refreshToken: refreshToken,
+            currentCacheState: { cache.read() },
+            onDownload: onDownload,
+            onCancel: onCancel,
+            onDeleteCache: onDeleteCache,
+            state: state
+        )
+        _ = button.on(\.didAppear, function: function) { view in
+            do {
+                var resolvedButton = try view.actualView()
+                resolvedButton.didAppear = nil
+                continuation.resume(returning: resolvedButton)
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+        ViewHosting.host(
+            view: button
+                .environment(tracker)
+                .environment(\.continuousClock, clock),
+            function: function
+        )
+    }
 }
 
 @Suite("Download button view", .serialized)
 @MainActor
 struct DownloadButtonViewTests {
-    @Test func matchingPreparationReplacesControlWithBufferingSpinner() throws {
+    @Test func matchingPreparationReplacesControlWithBufferingSpinner() async throws {
         let tracker = VideoPreparationTracker()
-        let sut = makeDownloadButton(
+        let sut = try await makeDownloadButton(
             state: DownloadButtonState(),
             tracker: tracker
         )
@@ -236,9 +206,9 @@ struct DownloadButtonViewTests {
         #expect((try? sut.inspect().find(ViewType.Button.self)) == nil)
     }
 
-    @Test func preparationForAnotherVideoDoesNotReplaceControl() throws {
+    @Test func preparationForAnotherVideoDoesNotReplaceControl() async throws {
         let tracker = VideoPreparationTracker()
-        let sut = makeDownloadButton(
+        let sut = try await makeDownloadButton(
             state: DownloadButtonState(),
             tracker: tracker
         )
@@ -249,10 +219,10 @@ struct DownloadButtonViewTests {
         #expect(try button.accessibilityLabel().string() == "Download")
     }
 
-    @Test func completedPreparationRevealsCacheDownloadProgress() throws {
+    @Test func completedPreparationRevealsCacheDownloadProgress() async throws {
         let tracker = VideoPreparationTracker()
         let state = DownloadButtonState(initialCacheState: .downloading(0.35))
-        let sut = makeDownloadButton(state: state, tracker: tracker)
+        let sut = try await makeDownloadButton(state: state, tracker: tracker)
 
         tracker.begin(videoID: 7)
         #expect((try? sut.inspect().find(ViewType.ProgressView.self)) != nil)
@@ -263,11 +233,11 @@ struct DownloadButtonViewTests {
         #expect(try button.accessibilityValue().string() == "35%")
     }
 
-    @Test func failedPreparationRestoresIdleDownloadControl() throws {
+    @Test func failedPreparationRestoresIdleDownloadControl() async throws {
         let tracker = VideoPreparationTracker()
         let state = DownloadButtonState()
         let attemptID = state.begin()
-        let sut = makeDownloadButton(state: state, tracker: tracker)
+        let sut = try await makeDownloadButton(state: state, tracker: tracker)
 
         tracker.begin(videoID: 7)
         #expect((try? sut.inspect().find(ViewType.ProgressView.self)) != nil)
@@ -278,9 +248,9 @@ struct DownloadButtonViewTests {
         #expect(try button.accessibilityLabel().string() == "Download")
     }
 
-    @Test func rendersAccessibleIdleActiveAndCachedStates() throws {
+    @Test func rendersAccessibleIdleActiveAndCachedStates() async throws {
         let state = DownloadButtonState()
-        let sut = makeDownloadButton(state: state)
+        let sut = try await makeDownloadButton(state: state)
 
         var control = try sut.inspect().find(ViewType.Button.self)
         #expect(try control.accessibilityLabel().string() == "Download")
@@ -298,7 +268,10 @@ struct DownloadButtonViewTests {
     @Test func tappingDownloadShowsLoadingThenAppliesSuccess() async throws {
         let state = DownloadButtonState()
         let gate = DownloadGate()
-        let sut = makeDownloadButton(state: state, onDownload: { await gate.wait() })
+        let sut = try await makeDownloadButton(
+            state: state,
+            onDownload: { await gate.wait() }
+        )
 
         try sut.inspect().find(ViewType.Button.self).tap()
         await eventually("Download tap never entered loading") {
@@ -314,7 +287,10 @@ struct DownloadButtonViewTests {
     @Test func tappingDownloadReturnsToIdleOnFailure() async throws {
         let state = DownloadButtonState()
         let gate = DownloadGate()
-        let sut = makeDownloadButton(state: state, onDownload: { await gate.wait() })
+        let sut = try await makeDownloadButton(
+            state: state,
+            onDownload: { await gate.wait() }
+        )
 
         try sut.inspect().find(ViewType.Button.self).tap()
         await eventually("Download tap never entered loading") { state.isDownloading }
@@ -324,11 +300,11 @@ struct DownloadButtonViewTests {
         }
     }
 
-    @Test func tappingRingInvalidatesAttemptBeforeCallingCancel() throws {
+    @Test func tappingRingInvalidatesAttemptBeforeCallingCancel() async throws {
         let state = DownloadButtonState(initialCacheState: .downloading(0.35))
         var cancelCount = 0
         var attemptWasInvalidated = false
-        let sut = makeDownloadButton(state: state, onCancel: {
+        let sut = try await makeDownloadButton(state: state, onCancel: {
             cancelCount += 1
             attemptWasInvalidated = state.activeAttemptID == nil
         })
@@ -370,17 +346,17 @@ struct DownloadButtonViewTests {
         await clock.run()
     }
 
-    @Test func removingHostedViewStopsPollingWithoutCancellingDownload() async {
+    @Test func removingHostedViewStopsPollingWithoutCancellingDownload() async throws {
         let state = DownloadButtonState()
         let source = CacheStateSource(.downloading(0.2))
         let clock = TestClock()
         var cancelCount = 0
-        let sut = makeDownloadButton(
+        let sut = try await makeDownloadButton(
             state: state,
             cache: source,
+            clock: clock,
             onCancel: { cancelCount += 1 }
         )
-        .environment(\.continuousClock, clock)
 
         ViewHosting.host(view: sut)
         await eventually("Hosted view never started polling") { source.readCount > 0 }
@@ -394,9 +370,9 @@ struct DownloadButtonViewTests {
         #expect(cancelCount == 0)
     }
 
-    @Test func tappingCachedArmsDeletePrompt() throws {
+    @Test func tappingCachedArmsDeletePrompt() async throws {
         let state = DownloadButtonState(initialCacheState: .cached)
-        let sut = makeDownloadButton(state: state)
+        let sut = try await makeDownloadButton(state: state)
 
         var control = try sut.inspect().find(ViewType.Button.self)
         #expect(try control.accessibilityLabel().string() == "Downloaded")
@@ -408,10 +384,13 @@ struct DownloadButtonViewTests {
         #expect(try control.accessibilityLabel().string() == "Delete download")
     }
 
-    @Test func tappingArmedDeletesCacheAndReturnsToDownload() throws {
+    @Test func tappingArmedDeletesCacheAndReturnsToDownload() async throws {
         let state = DownloadButtonState(initialCacheState: .cached)
         var deleteCount = 0
-        let sut = makeDownloadButton(state: state, onDeleteCache: { deleteCount += 1 })
+        let sut = try await makeDownloadButton(
+            state: state,
+            onDeleteCache: { deleteCount += 1 }
+        )
 
         state.arm()
         try sut.inspect().find(ViewType.Button.self).tap()
@@ -424,11 +403,14 @@ struct DownloadButtonViewTests {
         #expect(try control.accessibilityLabel().string() == "Download")
     }
 
-    @Test func armedStateAutoRevertsAfterTimeout() async {
+    @Test func armedStateAutoRevertsAfterTimeout() async throws {
         let state = DownloadButtonState(initialCacheState: .cached)
         let clock = TestClock()
-        let sut = makeDownloadButton(state: state, cache: CacheStateSource(.cached))
-            .environment(\.continuousClock, clock)
+        let sut = try await makeDownloadButton(
+            state: state,
+            cache: CacheStateSource(.cached),
+            clock: clock
+        )
 
         ViewHosting.host(view: sut)
         state.arm()
