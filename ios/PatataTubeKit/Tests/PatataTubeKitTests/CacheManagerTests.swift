@@ -2,29 +2,102 @@ import Testing
 import Foundation
 @testable import PatataTubeKit
 
-// Dedicated protocol so CacheManagerTests never shares the handler global
-// with APIClientTests (which runs concurrently as a separate top-level suite).
-private final class MockDownloadProtocol: URLProtocol {
-    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+private final class RangeDownloadProtocol: URLProtocol {
+    private static let lock = NSLock()
+    nonisolated(unsafe) static var payload = Data("0123456789".utf8)
+    nonisolated(unsafe) static var etag = "\"test-video\""
+    nonisolated(unsafe) static var requests: [URLRequest] = []
+    nonisolated(unsafe) static var delayByRange: [String: TimeInterval] = [:]
+    nonisolated(unsafe) static var responseOverride:
+        ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    static func reset(payload: Data = Data("0123456789".utf8)) {
+        lock.withLock {
+            self.payload = payload
+            etag = "\"test-video\""
+            requests = []
+            delayByRange = [:]
+            responseOverride = nil
+        }
+    }
+
+    static func setDelays(_ delays: [String: TimeInterval]) {
+        lock.withLock { delayByRange = delays }
+    }
+
+    static func recordedRequests() -> [URLRequest] {
+        lock.withLock { requests }
+    }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        guard let handler = MockDownloadProtocol.handler else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
-            return
-        }
         do {
-            let (response, data) = try handler(request)
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
+            let result = try Self.lock.withLock {
+                Self.requests.append(request)
+                if let responseOverride = Self.responseOverride {
+                    return try responseOverride(request)
+                }
+                return try Self.response(for: request)
+            }
+            let delay = Self.lock.withLock {
+                Self.delayByRange[
+                    request.value(forHTTPHeaderField: "Range") ?? ""
+                ] ?? 0
+            }
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            client?.urlProtocol(self, didReceive: result.0, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: result.1)
             client?.urlProtocolDidFinishLoading(self)
         } catch {
             client?.urlProtocol(self, didFailWithError: error)
         }
     }
+
     override func stopLoading() {}
+
+    static func response(for request: URLRequest) throws -> (HTTPURLResponse, Data) {
+        if request.value(forHTTPHeaderField: "Range") == nil {
+            let data = Data([0xAA, 0xBB])
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Length": "\(data.count)"]
+                )!,
+                data
+            )
+        }
+
+        guard let header = request.value(forHTTPHeaderField: "Range"),
+              header.hasPrefix("bytes=")
+        else { throw URLError(.badServerResponse) }
+        let parts = header.dropFirst("bytes=".count).split(separator: "-")
+        guard parts.count == 2,
+              let start = Int(parts[0]),
+              let end = Int(parts[1]),
+              start >= 0,
+              end >= start,
+              end < payload.count
+        else { throw URLError(.badServerResponse) }
+        let body = payload.subdata(in: start..<(end + 1))
+        return (
+            HTTPURLResponse(
+                url: request.url!,
+                statusCode: 206,
+                httpVersion: nil,
+                headerFields: [
+                    "Accept-Ranges": "bytes",
+                    "Content-Range": "bytes \(start)-\(end)/\(payload.count)",
+                    "Content-Length": "\(body.count)",
+                    "ETag": etag,
+                ]
+            )!,
+            body
+        )
+    }
 }
 
 // Sends a response + partial body but never finishes, so a download stays
@@ -50,19 +123,60 @@ private final class HangingDownloadProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class HangingRangeProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let value = request.value(forHTTPHeaderField: "Range"),
+              value.hasPrefix("bytes=")
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let bounds = value.dropFirst("bytes=".count).split(separator: "-")
+        guard bounds.count == 2,
+              let start = Int(bounds[0]),
+              let end = Int(bounds[1])
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let body = Data([UInt8(start % 255)])
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 206,
+            httpVersion: nil,
+            headerFields: [
+                "Accept-Ranges": "bytes",
+                "Content-Range": "bytes \(start)-\(end)/12",
+                "Content-Length": "\(end - start + 1)",
+                "ETag": "\"hanging\"",
+            ]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        if start == 0 && end == 0 {
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
 // Ensures the first request has started before cancellation, then holds the
 // retry response until the first protocol instance stops. The cancelled task's
 // completion can therefore collide with the registered retry before it ends.
 private final class CancelThenRetryDownloadProtocol: URLProtocol {
     private static let condition = NSCondition()
-    nonisolated(unsafe) private static var requestCount = 0
+    nonisolated(unsafe) private static var segmentRequestCount = 0
     nonisolated(unsafe) private static var firstRequestStopped = false
 
     private var requestNumber = 0
 
     static func reset() {
         condition.withLock {
-            requestCount = 0
+            segmentRequestCount = 0
             firstRequestStopped = false
         }
     }
@@ -71,7 +185,7 @@ private final class CancelThenRetryDownloadProtocol: URLProtocol {
         condition.lock()
         defer { condition.unlock() }
         let deadline = Date().addingTimeInterval(2)
-        while requestCount == 0 {
+        while segmentRequestCount == 0 {
             guard condition.wait(until: deadline) else { return false }
         }
         return true
@@ -81,18 +195,27 @@ private final class CancelThenRetryDownloadProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        requestNumber = Self.condition.withLock {
-            Self.requestCount += 1
-            Self.condition.broadcast()
-            return Self.requestCount
+        guard let range = request.value(forHTTPHeaderField: "Range") else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        if range == "bytes=0-0" {
+            let body = Data([0x01])
+            let response = rangeResponse(range: range, bodyCount: body.count)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
+            client?.urlProtocolDidFinishLoading(self)
+            return
         }
 
-        let response = HTTPURLResponse(
-            url: request.url!,
-            statusCode: 200,
-            httpVersion: nil,
-            headerFields: ["Content-Length": "4"]
-        )!
+        requestNumber = Self.condition.withLock {
+            Self.segmentRequestCount += 1
+            Self.condition.broadcast()
+            return Self.segmentRequestCount
+        }
+
+        let body = Data([0x01, 0x02, 0x03, 0x04])
+        let response = rangeResponse(range: range, bodyCount: body.count)
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
 
         if requestNumber == 1 {
@@ -107,7 +230,7 @@ private final class CancelThenRetryDownloadProtocol: URLProtocol {
         Self.condition.unlock()
 
         Thread.sleep(forTimeInterval: 0.1)
-        client?.urlProtocol(self, didLoad: Data([0x01, 0x02, 0x03, 0x04]))
+        client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
     }
 
@@ -119,17 +242,40 @@ private final class CancelThenRetryDownloadProtocol: URLProtocol {
             Self.condition.broadcast()
         }
     }
+
+    private func rangeResponse(range: String, bodyCount: Int) -> HTTPURLResponse {
+        let bounds = range.dropFirst("bytes=".count).split(separator: "-")
+        let start = Int(bounds[0])!
+        let end = Int(bounds[1])!
+        return HTTPURLResponse(
+            url: request.url!,
+            statusCode: 206,
+            httpVersion: nil,
+            headerFields: [
+                "Accept-Ranges": "bytes",
+                "Content-Range": "bytes \(start)-\(end)/4",
+                "Content-Length": "\(bodyCount)",
+                "ETag": "\"retry\"",
+            ]
+        )!
+    }
 }
 
-private func mockDownloadConfig() -> URLSessionConfiguration {
+private func rangeDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
-    config.protocolClasses = [MockDownloadProtocol.self]
+    config.protocolClasses = [RangeDownloadProtocol.self]
     return config
 }
 
 private func hangingDownloadConfig() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [HangingDownloadProtocol.self]
+    return config
+}
+
+private func hangingRangeConfig() -> URLSessionConfiguration {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [HangingRangeProtocol.self]
     return config
 }
 
@@ -148,18 +294,16 @@ private func tempRoot() -> URL {
 struct CacheManagerTests {
 
     @Test func localURLUsesIdAndMp4() {
-        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        let manager = CacheManager(root: tempRoot(), configuration: rangeDownloadConfig())
         #expect(manager.localURL(for: 5).lastPathComponent == "5.mp4")
     }
 
     @Test func stateIsNotCachedThenCachedAfterDownload() async throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
         #expect(manager.state(for: 11) == .notCached)
 
-        MockDownloadProtocol.handler = { req in
-            (jsonResponse(req.url!), Data([0x00, 0x01, 0x02, 0x03]))
-        }
+        RangeDownloadProtocol.reset(payload: Data([0x00, 0x01, 0x02, 0x03]))
         try await manager.download(id: 11, from: URL(string: "https://srv.test/videos/11/stream")!)
 
         #expect(manager.state(for: 11) == .cached)
@@ -170,13 +314,10 @@ struct CacheManagerTests {
 
     @Test func downloadAlsoCachesPreview() async throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
         #expect(manager.cachedPreviewURL(for: 12) == nil)
 
-        MockDownloadProtocol.handler = { req in
-            let bytes: [UInt8] = req.url!.pathExtension == "jpg" ? [0xAA, 0xBB] : [0x00, 0x01]
-            return (jsonResponse(req.url!), Data(bytes))
-        }
+        RangeDownloadProtocol.reset(payload: Data([0x00, 0x01]))
         try await manager.download(
             id: 12,
             from: URL(string: "https://srv.test/videos/12/stream")!,
@@ -189,7 +330,7 @@ struct CacheManagerTests {
     }
 
     @Test func previewStoreAndLookupUsesMovieID() throws {
-        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        let manager = CacheManager(root: tempRoot(), configuration: rangeDownloadConfig())
         #expect(manager.cachedPreviewURL(for: 44) == nil)
 
         manager.storePreview(Data([0xAA, 0xBB]), for: 44,
@@ -203,10 +344,11 @@ struct CacheManagerTests {
 
     @Test func previewFailureStillCachesVideo() async throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
-        MockDownloadProtocol.handler = { req in
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
+        RangeDownloadProtocol.reset(payload: Data([0x09]))
+        RangeDownloadProtocol.responseOverride = { req in
             if req.url!.host == "img.test" { throw URLError(.timedOut) }
-            return (jsonResponse(req.url!), Data([0x09]))
+            return try RangeDownloadProtocol.response(for: req)
         }
         try await manager.download(
             id: 13,
@@ -218,8 +360,11 @@ struct CacheManagerTests {
     }
 
     @Test func downloadThrowsOnBadStatus() async {
-        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
-        MockDownloadProtocol.handler = { req in (jsonResponse(req.url!, status: 404), Data()) }
+        let manager = CacheManager(root: tempRoot(), configuration: rangeDownloadConfig())
+        RangeDownloadProtocol.reset()
+        RangeDownloadProtocol.responseOverride = {
+            (jsonResponse($0.url!, status: 404), Data())
+        }
         await #expect(throws: APIError.badStatus(404)) {
             try await manager.download(id: 1, from: URL(string: "https://srv.test/x")!)
         }
@@ -227,7 +372,7 @@ struct CacheManagerTests {
 
     @Test func cancelThrowsAndReturnsToNotCached() async {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: hangingDownloadConfig())
+        let manager = CacheManager(root: root, configuration: hangingRangeConfig())
 
         let task = Task {
             try await manager.download(id: 21, from: URL(string: "https://srv.test/videos/21/stream")!)
@@ -274,25 +419,94 @@ struct CacheManagerTests {
     }
 
     @Test func testDownloadSendsBearerToken() async throws {
-        var seenAuth: [String?] = []
-        MockDownloadProtocol.handler = { request in
-            seenAuth.append(request.value(forHTTPHeaderField: "Authorization"))
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200,
-                                           httpVersion: nil, headerFields: nil)!
-            return (response, Data("video".utf8))
-        }
+        RangeDownloadProtocol.reset(payload: Data("video".utf8))
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
         try await manager.download(id: 7,
                                    from: URL(string: "https://example.test/videos/7/stream")!,
                                    preview: URL(string: "https://example.test/videos/7/preview")!,
                                    bearerToken: "secret")
-        #expect(seenAuth == ["Bearer secret", "Bearer secret"])
+        let requests = RangeDownloadProtocol.recordedRequests()
+        #expect(requests.count == 3)
+        #expect(requests.allSatisfy {
+            $0.value(forHTTPHeaderField: "Authorization") == "Bearer secret"
+        })
+    }
+
+    @Test func fourStreamsSendExactRangesAndAssembleOriginalBytes() async throws {
+        let payload = Data((0..<23).map { UInt8($0) })
+        RangeDownloadProtocol.reset(payload: payload)
+        RangeDownloadProtocol.setDelays([
+            "bytes=0-4": 0.04,
+            "bytes=5-10": 0.03,
+            "bytes=11-16": 0.02,
+            "bytes=17-22": 0.01,
+        ])
+        let root = tempRoot()
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
+
+        try await manager.download(
+            id: 50,
+            from: URL(string: "https://srv.test/videos/50/stream")!,
+            bearerToken: "secret",
+            streamCount: 4
+        )
+
+        let requests = RangeDownloadProtocol.recordedRequests()
+        let ranges = requests.compactMap {
+            $0.value(forHTTPHeaderField: "Range")
+        }
+        #expect(ranges.first == "bytes=0-0")
+        #expect(Set(ranges.dropFirst()) == Set([
+            "bytes=0-4",
+            "bytes=5-10",
+            "bytes=11-16",
+            "bytes=17-22",
+        ]))
+        let segmentRequests = requests.dropFirst()
+        #expect(segmentRequests.allSatisfy {
+            $0.value(forHTTPHeaderField: "If-Range") == "\"test-video\""
+        })
+        #expect(segmentRequests.allSatisfy {
+            $0.value(forHTTPHeaderField: "Authorization") == "Bearer secret"
+        })
+        #expect(try Data(contentsOf: manager.localURL(for: 50)) == payload)
+        #expect(manager.state(for: 50) == .cached)
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".downloads/50").path
+        ))
+    }
+
+    @Test func rejectsServerThatIgnoresRangesWithoutPublishingAFile() async {
+        RangeDownloadProtocol.reset()
+        RangeDownloadProtocol.responseOverride = { request in
+            let data = Data("full body".utf8)
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Length": "\(data.count)"]
+                )!,
+                data
+            )
+        }
+        let manager = CacheManager(root: tempRoot(), configuration: rangeDownloadConfig())
+
+        await #expect(throws: SegmentedDownloadError.invalidProbe) {
+            try await manager.download(
+                id: 51,
+                from: URL(string: "https://srv.test/videos/51/stream")!,
+                streamCount: 2
+            )
+        }
+        #expect(manager.state(for: 51) == .notCached)
+        #expect(!FileManager.default.fileExists(atPath: manager.localURL(for: 51).path))
     }
 
     @Test func removeCachedDeletesOnlyRequestedVersion() throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
         let base = manager.localURL(for: 7)
         let version = manager.localURL(for: 7, versionId: 2)
         try Data([0x01]).write(to: base)
@@ -306,7 +520,7 @@ struct CacheManagerTests {
 
     @Test func hasAnyCachedFindsBaseAndVersionedFiles() throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
         #expect(manager.hasAnyCached(id: 21) == false)
 
         try Data([0x01]).write(to: root.appendingPathComponent("21.v3.mp4"))
@@ -320,14 +534,14 @@ struct CacheManagerTests {
 
     @Test func hasAnyCachedIgnoresPreviewFiles() throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
         try Data([0x01]).write(to: root.appendingPathComponent("22.preview.jpg"))
         #expect(manager.hasAnyCached(id: 22) == false)
     }
 
     @Test func removeAllCachedDeletesVideosAndResumeDataKeepsPreviews() throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
         let keep = ["23.preview.jpg", "poster.abc123.jpg", "24.mp4", "24:1.resume"]
         let remove = ["23.mp4", "23.v1.mp4", "23.v12.mp4", "23.resume", "23:4.resume"]
         for name in keep + remove {
@@ -366,7 +580,7 @@ struct CacheManagerTests {
 
     @Test func resumeInterruptedDropsStaleResumeWhenAlreadyCached() {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try? Data([0x01]).write(to: root.appendingPathComponent("33.mp4"))
         try? Data([0xFF]).write(to: root.appendingPathComponent("33.resume"))
@@ -380,7 +594,7 @@ struct CacheManagerTests {
 
     @Test func resumeInterruptedSkipsLiveInFlightTask() async {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: hangingDownloadConfig())
+        let manager = CacheManager(root: root, configuration: hangingRangeConfig())
         let task = Task {
             try await manager.download(id: 34, from: URL(string: "https://srv.test/videos/34/stream")!)
         }
@@ -395,7 +609,7 @@ struct CacheManagerTests {
     }
 
     @Test func showPosterStoreAndLookup() throws {
-        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        let manager = CacheManager(root: tempRoot(), configuration: rangeDownloadConfig())
         let key = "/library/shows/bluey/poster.png"
         #expect(manager.cachedShowPosterURL(for: key) == nil)
 
@@ -409,7 +623,7 @@ struct CacheManagerTests {
     }
 
     @Test func showPosterStoreAndLookupUsesShowID() throws {
-        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        let manager = CacheManager(root: tempRoot(), configuration: rangeDownloadConfig())
         manager.storeShowPoster(Data([0x01]), for: "Bluey")
 
         let url = try #require(manager.cachedShowPosterURL(for: "Bluey"))
@@ -419,7 +633,7 @@ struct CacheManagerTests {
 
     @Test func showPosterKeyIsStableAndExtSanitized() throws {
         let root = tempRoot()
-        let manager = CacheManager(root: root, configuration: mockDownloadConfig())
+        let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
         let key = "https://img.test/poster?size=big"
         manager.storeShowPoster(Data([0xAA]), for: key)
         manager.storeShowPoster(Data([0xBB]), for: key)
@@ -433,10 +647,13 @@ struct CacheManagerTests {
     }
 
     @Test func downloadAlsoCachesShowPoster() async throws {
-        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
-        MockDownloadProtocol.handler = { req in
-            let bytes: [UInt8] = req.url!.host == "img.test" ? [0xCC] : [0x00]
-            return (jsonResponse(req.url!), Data(bytes))
+        let manager = CacheManager(root: tempRoot(), configuration: rangeDownloadConfig())
+        RangeDownloadProtocol.reset(payload: Data([0x00]))
+        RangeDownloadProtocol.responseOverride = { req in
+            if req.url!.host == "img.test" {
+                return (jsonResponse(req.url!), Data([0xCC]))
+            }
+            return try RangeDownloadProtocol.response(for: req)
         }
         try await manager.download(
             id: 31,
@@ -449,10 +666,11 @@ struct CacheManagerTests {
     }
 
     @Test func showPosterFailureStillCachesVideo() async throws {
-        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
-        MockDownloadProtocol.handler = { req in
+        let manager = CacheManager(root: tempRoot(), configuration: rangeDownloadConfig())
+        RangeDownloadProtocol.reset(payload: Data([0x09]))
+        RangeDownloadProtocol.responseOverride = { req in
             if req.url!.host == "img.test" { throw URLError(.timedOut) }
-            return (jsonResponse(req.url!), Data([0x09]))
+            return try RangeDownloadProtocol.response(for: req)
         }
         try await manager.download(
             id: 32,
@@ -465,12 +683,13 @@ struct CacheManagerTests {
     }
 
     @Test func downloadSkipsPosterFetchWhenAlreadyCached() async throws {
-        let manager = CacheManager(root: tempRoot(), configuration: mockDownloadConfig())
+        let manager = CacheManager(root: tempRoot(), configuration: rangeDownloadConfig())
         manager.storeShowPoster(Data([0x01]), for: "k2")
         var posterRequests = 0
-        MockDownloadProtocol.handler = { req in
+        RangeDownloadProtocol.reset(payload: Data([0x00]))
+        RangeDownloadProtocol.responseOverride = { req in
             if req.url!.host == "img.test" { posterRequests += 1 }
-            return (jsonResponse(req.url!), Data([0x00]))
+            return try RangeDownloadProtocol.response(for: req)
         }
         try await manager.download(
             id: 33,

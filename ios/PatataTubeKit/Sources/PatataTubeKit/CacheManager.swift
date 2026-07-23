@@ -7,8 +7,39 @@ public enum CacheState: Equatable, Sendable {
     case cached
 }
 
+private struct SegmentTaskContext {
+    let attemptID: UUID
+    let cacheKey: String
+    let segmentIndex: Int
+    let resumed: Bool
+}
+
+private final class SegmentedAttempt {
+    let id = UUID()
+    let cacheKey: String
+    var manifest: SegmentedDownloadManifest
+    var continuation: CheckedContinuation<URL, Error>?
+    var taskIDs: Set<Int> = []
+    var activeByteCounts: [Int: Int64] = [:]
+    var completedResults: [Int: Result<URL, Error>] = [:]
+    var terminalError: Error?
+    var explicitlyCancelled = false
+    var terminalClaimed = false
+
+    init(
+        cacheKey: String,
+        manifest: SegmentedDownloadManifest,
+        continuation: CheckedContinuation<URL, Error>?
+    ) {
+        self.cacheKey = cacheKey
+        self.manifest = manifest
+        self.continuation = continuation
+    }
+}
+
 public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let root: URL
+    private let segmentedStore: SegmentedDownloadStore
     private var session: URLSession!
     private let fileManager = FileManager.default
     private let lock = NSLock()
@@ -17,11 +48,16 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var idByTask: [Int: String] = [:]
     private var tasksByKey: [String: URLSessionDownloadTask] = [:]
     private var completedResults: [Int: Result<URL, Error>] = [:]
+    private var segmentedAttempts: [String: SegmentedAttempt] = [:]
+    private var probeIDByKey: [String: UUID] = [:]
+    private var segmentContextByTask: [Int: SegmentTaskContext] = [:]
+    private var tasksByIdentifier: [Int: URLSessionDownloadTask] = [:]
 
     public init(root: URL? = nil, configuration: URLSessionConfiguration = .default) {
         self.root = root ?? FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("videos")
+        self.segmentedStore = SegmentedDownloadStore(root: self.root)
         super.init()
         self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         try? fileManager.createDirectory(at: self.root, withIntermediateDirectories: true)
@@ -80,8 +116,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
 
     public func download(id: Int, versionId: Int? = nil, from remote: URL, preview: URL? = nil,
                          showPosterKey: String? = nil, showPoster: URL? = nil,
-                         bearerToken: String? = nil) async throws {
-        _ = try await downloadVideo(id: id, versionId: versionId, from: remote, bearerToken: bearerToken)
+                         bearerToken: String? = nil, streamCount: Int = 1) async throws {
+        _ = try await downloadVideo(
+            id: id,
+            versionId: versionId,
+            from: remote,
+            bearerToken: bearerToken,
+            streamCount: min(max(streamCount, 1), 4)
+        )
         // Best-effort: a missing preview must not fail the cached video.
         if let preview { try? await cachePreview(id: id, from: preview, bearerToken: bearerToken) }
         // Show poster is shared across episodes: fetch once, skip when cached.
@@ -112,7 +154,13 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 continue
             }
             // A live task already owns this key (e.g. the user re-tapped download).
-            if lock.withLock({ tasksByKey[key] != nil }) { continue }
+            if lock.withLock({
+                tasksByKey[key] != nil
+                    || segmentedAttempts[key] != nil
+                    || probeIDByKey[key] != nil
+            }) {
+                continue
+            }
             guard let data = try? Data(contentsOf: resumeURL(for: key)), !data.isEmpty else { continue }
             let task = session.downloadTask(withResumeData: data)
             lock.withLock {
@@ -131,8 +179,25 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Explicit cancel restarts from scratch - it does not persist resume data.
     public func cancel(id: Int, versionId: Int? = nil) {
         let key = cacheKey(videoId: id, versionId: versionId)
-        let task = lock.withLock { tasksByKey[key] }
-        task?.cancel()
+        let segmentedAttempt = lock.withLock {
+            if probeIDByKey.removeValue(forKey: key) != nil,
+               segmentedAttempts[key] == nil {
+                inFlight[key] = nil
+            }
+            return segmentedAttempts[key]
+        }
+        if let attempt = segmentedAttempt,
+           let claim = claimSegmentedAttempt(attempt) {
+            lock.withLock { attempt.explicitlyCancelled = true }
+            segmentedStore.remove(cacheKey: key)
+            claim.tasks.forEach { $0.cancel() }
+            completeSegmentedClaim(
+                attempt,
+                continuation: claim.continuation,
+                result: .failure(CancellationError())
+            )
+        }
+        lock.withLock({ tasksByKey[key] })?.cancel()
     }
 
     /// Deletes a cached MP4. Used when the server re-converts a file with a
@@ -169,6 +234,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                            didWriteData bytesWritten: Int64,
                            totalBytesWritten: Int64,
                            totalBytesExpectedToWrite: Int64) {
+        if let context = lock.withLock({
+            segmentContextByTask[downloadTask.taskIdentifier]
+        }) {
+            updateSegmentProgress(context: context, bytesWritten: bytesWritten)
+            return
+        }
         guard let key = lock.withLock({ idByTask[downloadTask.taskIdentifier] }) else { return }
         let progress: Double
         if totalBytesExpectedToWrite > 0 {
@@ -185,6 +256,20 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                            didFinishDownloadingTo location: URL) {
         let taskIdentifier = downloadTask.taskIdentifier
+        if let context = lock.withLock({ segmentContextByTask[taskIdentifier] }) {
+            let result = recordSegmentFile(
+                context: context,
+                task: downloadTask,
+                location: location
+            )
+            lock.withLock {
+                guard let attempt = segmentedAttempts[context.cacheKey],
+                      attempt.id == context.attemptID
+                else { return }
+                attempt.completedResults[context.segmentIndex] = result
+            }
+            return
+        }
         guard let key = lock.withLock({ idByTask[taskIdentifier] }) else { return }
 
         let result: Result<URL, Error>
@@ -209,6 +294,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     public func urlSession(_ session: URLSession, task: URLSessionTask,
                            didCompleteWithError error: Error?) {
         let taskIdentifier = task.taskIdentifier
+        if let context = lock.withLock({ segmentContextByTask[taskIdentifier] }) {
+            completeSegmentTask(
+                context: context,
+                taskIdentifier: taskIdentifier,
+                error: error
+            )
+            return
+        }
         guard let key = lock.withLock({ idByTask[taskIdentifier] }) else { return }
 
         if let error {
@@ -223,11 +316,150 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         finish(key: key, taskIdentifier: taskIdentifier, result: result)
     }
 
-    private func downloadVideo(id: Int, versionId: Int? = nil, from remote: URL,
-                               bearerToken: String? = nil) async throws -> URL {
+    private func downloadVideo(
+        id: Int,
+        versionId: Int?,
+        from remote: URL,
+        bearerToken: String?,
+        streamCount: Int
+    ) async throws -> URL {
         let key = cacheKey(videoId: id, versionId: versionId)
-        return try await withCheckedThrowingContinuation { continuation in
-            let task = downloadTask(key: key, from: remote, bearerToken: bearerToken)
+        if let data = try? Data(contentsOf: resumeURL(for: key)), !data.isEmpty {
+            return try await downloadLegacy(key: key, resumeData: data)
+        }
+
+        let probeID = UUID()
+        let canProbe = lock.withLock {
+            guard segmentedAttempts[key] == nil,
+                  probeIDByKey[key] == nil
+            else { return false }
+            probeIDByKey[key] = probeID
+            inFlight[key] = 0
+            return true
+        }
+        guard canProbe else { throw CancellationError() }
+
+        do {
+            let probe = try await probe(remote: remote, bearerToken: bearerToken)
+            guard lock.withLock({ probeIDByKey[key] == probeID }) else {
+                throw CancellationError()
+            }
+            let manifest = try SegmentedDownloadManifest.make(
+                videoId: id,
+                versionId: versionId,
+                remoteURL: remote,
+                requestedStreamCount: streamCount,
+                totalByteCount: probe.totalByteCount,
+                etag: probe.etag
+            )
+            try segmentedStore.write(manifest)
+            return try await startSegmentedAttempt(
+                manifest: manifest,
+                bearerToken: bearerToken,
+                probeID: probeID
+            )
+        } catch {
+            lock.withLock {
+                guard probeIDByKey[key] == probeID else { return }
+                probeIDByKey[key] = nil
+                inFlight[key] = nil
+                segmentedStore.remove(cacheKey: key)
+            }
+            throw error
+        }
+    }
+
+    private func probe(
+        remote: URL,
+        bearerToken: String?
+    ) async throws -> DownloadProbe {
+        var request = URLRequest(url: remote)
+        request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        if let bearerToken {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SegmentedDownloadError.invalidProbe
+        }
+        if (400..<600).contains(http.statusCode) {
+            throw APIError.badStatus(http.statusCode)
+        }
+        return try SegmentedDownloadStore.validateProbe(http, bodyCount: data.count)
+    }
+
+    private func startSegmentedAttempt(
+        manifest: SegmentedDownloadManifest,
+        bearerToken: String?,
+        probeID: UUID
+    ) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            let attempt = SegmentedAttempt(
+                cacheKey: manifest.cacheKey,
+                manifest: manifest,
+                continuation: continuation
+            )
+            let registered = lock.withLock {
+                guard probeIDByKey[manifest.cacheKey] == probeID,
+                      segmentedAttempts[manifest.cacheKey] == nil
+                else { return false }
+                probeIDByKey[manifest.cacheKey] = nil
+                segmentedAttempts[manifest.cacheKey] = attempt
+                inFlight[manifest.cacheKey] = SegmentedDownloadStore.progress(
+                    manifest: manifest,
+                    activeByteCounts: [:]
+                )
+                return true
+            }
+            guard registered else {
+                lock.withLock {
+                    guard probeIDByKey[manifest.cacheKey] == nil,
+                          segmentedAttempts[manifest.cacheKey] == nil
+                    else { return }
+                    segmentedStore.remove(cacheKey: manifest.cacheKey)
+                }
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+
+            for segment in manifest.segments where !segment.isComplete {
+                var request = URLRequest(url: manifest.remoteURL)
+                request.setValue(segment.range.headerValue, forHTTPHeaderField: "Range")
+                request.setValue(manifest.etag, forHTTPHeaderField: "If-Range")
+                if let bearerToken {
+                    request.setValue(
+                        "Bearer \(bearerToken)",
+                        forHTTPHeaderField: "Authorization"
+                    )
+                }
+                let task = session.downloadTask(with: request)
+                let context = SegmentTaskContext(
+                    attemptID: attempt.id,
+                    cacheKey: attempt.cacheKey,
+                    segmentIndex: segment.index,
+                    resumed: false
+                )
+                let shouldResume = lock.withLock {
+                    guard let current = segmentedAttempts[attempt.cacheKey],
+                          current.id == attempt.id
+                    else { return false }
+                    attempt.taskIDs.insert(task.taskIdentifier)
+                    segmentContextByTask[task.taskIdentifier] = context
+                    tasksByIdentifier[task.taskIdentifier] = task
+                    return true
+                }
+                guard shouldResume else {
+                    task.cancel()
+                    break
+                }
+                task.resume()
+            }
+        }
+    }
+
+    private func downloadLegacy(key: String, resumeData: Data) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            let task = session.downloadTask(withResumeData: resumeData)
             lock.withLock {
                 inFlight[key] = 0
                 continuations[task.taskIdentifier] = continuation
@@ -238,17 +470,209 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
     }
 
-    private func downloadTask(key: String, from remote: URL,
-                              bearerToken: String? = nil) -> URLSessionDownloadTask {
-        if let resumeData = try? Data(contentsOf: resumeURL(for: key)), !resumeData.isEmpty {
-            return session.downloadTask(withResumeData: resumeData)
+    private func updateSegmentProgress(
+        context: SegmentTaskContext,
+        bytesWritten: Int64
+    ) {
+        lock.withLock {
+            guard let attempt = segmentedAttempts[context.cacheKey],
+                  attempt.id == context.attemptID,
+                  !attempt.terminalClaimed
+            else { return }
+            attempt.activeByteCounts[context.segmentIndex, default: 0]
+                += max(bytesWritten, 0)
+            inFlight[context.cacheKey] = SegmentedDownloadStore.progress(
+                manifest: attempt.manifest,
+                activeByteCounts: attempt.activeByteCounts
+            )
+        }
+    }
+
+    private func recordSegmentFile(
+        context: SegmentTaskContext,
+        task: URLSessionDownloadTask,
+        location: URL
+    ) -> Result<URL, Error> {
+        guard let attempt = lock.withLock({
+            segmentedAttempts[context.cacheKey].flatMap {
+                $0.id == context.attemptID && !$0.terminalClaimed ? $0 : nil
+            }
+        }) else {
+            return .failure(CancellationError())
         }
 
-        var request = URLRequest(url: remote)
-        if let bearerToken {
-            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        do {
+            guard let response = task.response as? HTTPURLResponse else {
+                throw SegmentedDownloadError.invalidSegmentResponse(
+                    index: context.segmentIndex
+                )
+            }
+            let record = attempt.manifest.segments[context.segmentIndex]
+            let size = ((try fileManager.attributesOfItem(
+                atPath: location.path
+            )[.size]) as? NSNumber)?.int64Value ?? -1
+            try SegmentedDownloadStore.validateSegment(
+                response,
+                planned: record,
+                etag: attempt.manifest.etag,
+                totalByteCount: attempt.manifest.totalByteCount,
+                fileSize: size,
+                resumed: context.resumed
+            )
+            let part = segmentedStore.partURL(
+                cacheKey: context.cacheKey,
+                index: context.segmentIndex
+            )
+            try? fileManager.removeItem(at: part)
+            try fileManager.moveItem(at: location, to: part)
+            return .success(part)
+        } catch {
+            return .failure(error)
         }
-        return session.downloadTask(with: request)
+    }
+
+    private func completeSegmentTask(
+        context: SegmentTaskContext,
+        taskIdentifier: Int,
+        error: Error?
+    ) {
+        var owningAttempt: SegmentedAttempt?
+        var completionError = error
+
+        lock.withLock {
+            tasksByIdentifier[taskIdentifier] = nil
+            segmentContextByTask[taskIdentifier] = nil
+
+            guard let attempt = segmentedAttempts[context.cacheKey],
+                  attempt.id == context.attemptID,
+                  !attempt.terminalClaimed
+            else { return }
+            owningAttempt = attempt
+            attempt.taskIDs.remove(taskIdentifier)
+
+            if completionError == nil {
+                switch attempt.completedResults.removeValue(
+                    forKey: context.segmentIndex
+                ) ?? .failure(URLError(.unknown)) {
+                case .success:
+                    attempt.manifest.segments[context.segmentIndex].isComplete = true
+                    attempt.manifest.segments[context.segmentIndex].persistedByteCount =
+                        attempt.manifest.segments[context.segmentIndex].range.length
+                    attempt.activeByteCounts[context.segmentIndex] = nil
+                    inFlight[context.cacheKey] = SegmentedDownloadStore.progress(
+                        manifest: attempt.manifest,
+                        activeByteCounts: attempt.activeByteCounts
+                    )
+                case .failure(let segmentError):
+                    completionError = segmentError
+                }
+            }
+        }
+
+        guard let attempt = owningAttempt else { return }
+        if let completionError {
+            failSegmentedAttempt(attempt, error: completionError)
+            return
+        }
+
+        do {
+            try? fileManager.removeItem(at: segmentedStore.resumeURL(
+                cacheKey: context.cacheKey,
+                index: context.segmentIndex
+            ))
+            try segmentedStore.write(attempt.manifest)
+        } catch {
+            failSegmentedAttempt(attempt, error: error)
+            return
+        }
+
+        guard attempt.manifest.segments.allSatisfy(\.isComplete),
+              let claim = claimSegmentedAttempt(attempt)
+        else { return }
+        let destination = localURL(
+            for: attempt.manifest.videoId,
+            versionId: attempt.manifest.versionId
+        )
+        do {
+            try segmentedStore.assemble(
+                manifest: attempt.manifest,
+                destination: destination
+            )
+            completeSegmentedClaim(
+                attempt,
+                continuation: claim.continuation,
+                result: .success(destination)
+            )
+        } catch {
+            segmentedStore.remove(cacheKey: attempt.cacheKey)
+            completeSegmentedClaim(
+                attempt,
+                continuation: claim.continuation,
+                result: .failure(error)
+            )
+        }
+    }
+
+    private func failSegmentedAttempt(
+        _ attempt: SegmentedAttempt,
+        error: Error
+    ) {
+        guard let claim = claimSegmentedAttempt(attempt, error: error) else { return }
+        segmentedStore.remove(cacheKey: attempt.cacheKey)
+        claim.tasks.forEach { $0.cancel() }
+        completeSegmentedClaim(
+            attempt,
+            continuation: claim.continuation,
+            result: .failure(claim.error ?? error)
+        )
+    }
+
+    private func claimSegmentedAttempt(
+        _ attempt: SegmentedAttempt,
+        error: Error? = nil
+    ) -> (
+        continuation: CheckedContinuation<URL, Error>?,
+        tasks: [URLSessionDownloadTask],
+        error: Error?
+    )? {
+        lock.withLock {
+            guard let current = segmentedAttempts[attempt.cacheKey],
+                  current.id == attempt.id,
+                  !current.terminalClaimed
+            else { return nil }
+            current.terminalClaimed = true
+            if current.terminalError == nil {
+                current.terminalError = error
+            }
+            let continuation = current.continuation
+            current.continuation = nil
+            return (
+                continuation,
+                current.taskIDs.compactMap { tasksByIdentifier[$0] },
+                current.terminalError
+            )
+        }
+    }
+
+    private func completeSegmentedClaim(
+        _ attempt: SegmentedAttempt,
+        continuation: CheckedContinuation<URL, Error>?,
+        result: Result<URL, Error>
+    ) {
+        lock.withLock {
+            guard let current = segmentedAttempts[attempt.cacheKey],
+                  current.id == attempt.id,
+                  current.terminalClaimed
+            else { return }
+            segmentedAttempts[attempt.cacheKey] = nil
+            inFlight[attempt.cacheKey] = nil
+        }
+        switch result {
+        case .success(let url):
+            continuation?.resume(returning: url)
+        case .failure(let error):
+            continuation?.resume(throwing: error)
+        }
     }
 
     private func finish(key: String, taskIdentifier: Int, result: Result<URL, Error>) {
