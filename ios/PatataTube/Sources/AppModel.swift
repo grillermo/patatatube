@@ -10,10 +10,12 @@ final class AppModel: ObservableObject {
     let store: VideoStore
     let api: APIClient
     private let downloadSettings: DownloadStreamSettings
+    private let simultaneousSettings: SimultaneousDownloadSettings
 
     @Published var baseURLText: String
     @Published var tokenText: String
     @Published var downloadStreamCount: Int
+    @Published var downloadConcurrency: Int
 
     /// When on, a finished video rolls into the next one in the queue. Session-only
     /// by design — it resets to off on relaunch, so a long queue can never keep
@@ -23,7 +25,8 @@ final class AppModel: ObservableObject {
     init(
         credentials: CredentialStore = KeychainCredentialStore(),
         cache: CacheManager = CacheManager(),
-        downloadSettings: DownloadStreamSettings = DownloadStreamSettings()
+        downloadSettings: DownloadStreamSettings = DownloadStreamSettings(),
+        simultaneousSettings: SimultaneousDownloadSettings = SimultaneousDownloadSettings()
     ) {
         let api = APIClient(store: credentials)
         self.credentials = credentials
@@ -31,9 +34,12 @@ final class AppModel: ObservableObject {
         self.api = api
         self.store = VideoStore(api: api, cache: VideoListCache())
         self.downloadSettings = downloadSettings
+        self.simultaneousSettings = simultaneousSettings
         self.downloadStreamCount = downloadSettings.load()
+        self.downloadConcurrency = simultaneousSettings.load()
         self.baseURLText = credentials.baseURL?.absoluteString ?? ""
         self.tokenText = credentials.token ?? ""
+        cache.setMaxConcurrentDownloads(self.downloadConcurrency)
     }
 
     func saveSettings() {
@@ -44,6 +50,12 @@ final class AppModel: ObservableObject {
             DownloadStreamSettings.allowedCounts.upperBound
         )
         downloadSettings.save(downloadStreamCount)
+        downloadConcurrency = min(
+            max(downloadConcurrency, SimultaneousDownloadSettings.allowedCounts.lowerBound),
+            SimultaneousDownloadSettings.allowedCounts.upperBound
+        )
+        simultaneousSettings.save(downloadConcurrency)
+        cache.setMaxConcurrentDownloads(downloadConcurrency)
     }
 
     /// Absolute stream/download URL for a video's `streamPath`.
