@@ -46,6 +46,15 @@ struct SettingsView: View {
                             value: "\(model.downloadStreamCount)"
                         )
                     }
+                    Stepper(
+                        value: $model.downloadConcurrency,
+                        in: SimultaneousDownloadSettings.allowedCounts
+                    ) {
+                        LabeledContent(
+                            "Simultaneous downloads",
+                            value: "\(model.downloadConcurrency)"
+                        )
+                    }
                 }
 
                 Section {
