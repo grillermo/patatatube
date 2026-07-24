@@ -150,6 +150,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private let now: @Sendable () -> Date
     private let lock = NSLock()
     private let cancellationFence: any CacheManagerCancellationFencing
+    private let concurrencyGate: any DownloadConcurrencyGating
     private var inFlight: [String: DownloadActivityAccumulator] = [:]
     private var completionHistory: DownloadCompletionHistoryStore
     private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
@@ -180,11 +181,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         fileManager: FileManager,
         now: @escaping @Sendable () -> Date = Date.init,
         cancellationFence: any CacheManagerCancellationFencing =
-            CacheManagerCancellationFence()
+            CacheManagerCancellationFence(),
+        concurrencyGate: any DownloadConcurrencyGating =
+            DownloadConcurrencyGate(limit: 3)
     ) {
         self.fileManager = fileManager
         self.now = now
         self.cancellationFence = cancellationFence
+        self.concurrencyGate = concurrencyGate
         self.root = root ?? fileManager
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("videos")
@@ -205,6 +209,16 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         values.isExcludedFromBackup = true
         var dir = self.root
         try? dir.setResourceValues(values)
+    }
+
+    /// Sets the global cap on how many videos download at once.
+    public func setMaxConcurrentDownloads(_ n: Int) {
+        concurrencyGate.setLimit(n)
+    }
+
+    /// Current global simultaneous-download cap.
+    public var maxConcurrentDownloads: Int {
+        concurrencyGate.currentLimit
     }
 
     public func localURL(for id: Int, versionId: Int? = nil) -> URL {
@@ -270,6 +284,8 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     public func download(id: Int, versionId: Int? = nil, from remote: URL, preview: URL? = nil,
                          showPosterKey: String? = nil, showPoster: URL? = nil,
                          bearerToken: String? = nil, streamCount: Int = 1) async throws {
+        await concurrencyGate.acquire()
+        defer { concurrencyGate.release() }
         _ = try await downloadVideo(
             id: id,
             versionId: versionId,
