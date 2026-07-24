@@ -72,7 +72,14 @@ struct VideoGridView: View {
         NavigationStack {
             ScrollView {
                 filterTabs
-                if store.filter == "tv" {
+                if store.isLoading && filteredVideos.isEmpty {
+                    if store.filter == "tv" || store.filter == "movies" {
+                        SkeletonGrid(columns: columns, aspectRatio: 2.0/3.0,
+                                     showsTextBars: store.filter == "tv")
+                    } else {
+                        SkeletonGrid(columns: columns, aspectRatio: 16.0/9.0)
+                    }
+                } else if store.filter == "tv" {
                     ShowsView(
                         videos: filteredVideos,
                         onPlay: { video, queue in
@@ -213,8 +220,7 @@ struct VideoGridView: View {
 
     private func tab(title: String, value: String?) -> some View {
         Button(title) {
-            store.filter = value
-            Task { await store.load() }
+            Task { await store.switchFilter(to: value) }
         }
         .buttonStyle(.borderedProminent)
         .tint(store.filter == value ? .accentColor : .gray)
