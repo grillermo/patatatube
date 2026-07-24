@@ -352,10 +352,35 @@ def test_scan_library(fresh_db, tmp_path, monkeypatch):
     db.set_library_state(vid, "done", converted_path=str(converted))
 
     result = library.scan_library()
-    assert result == {"added": 1, "updated": 0, "skipped": 2}
+    assert result == {"added": 1, "updated": 0, "skipped": 2, "removed": 0}
 
     result = library.scan_library()
-    assert result == {"added": 0, "updated": 1, "skipped": 2}
+    assert result == {"added": 0, "updated": 1, "skipped": 2, "removed": 0}
+
+
+def test_scan_library_tombstones_plex_deletions(fresh_db, tmp_path, monkeypatch):
+    import db
+    import plex
+    keep = tmp_path / "keep.mkv"
+    keep.write_bytes(b"x")
+    goner = tmp_path / "goner.mkv"
+    goner.write_bytes(b"x")
+
+    def item(path):
+        return {"source_path": str(path), "title": path.stem, "classification": "movies",
+                "show_title": None, "season": None, "episode": None, "summary": None,
+                "plex_rating_key": path.stem, "show_rating_key": None}
+
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item(keep), item(goner)])
+    assert library.scan_library()["added"] == 2
+    assert {v["plex_rating_key"] for v in db.get_all_videos("movies")} == {"keep", "goner"}
+
+    # Delete goner from Plex: no longer returned by the scan.
+    goner.unlink()
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item(keep)])
+    result = library.scan_library()
+    assert result["removed"] == 1
+    assert {v["plex_rating_key"] for v in db.get_all_videos("movies")} == {"keep"}
 
 
 def test_scan_library_filters_versions_per_file(fresh_db, tmp_path, monkeypatch):

@@ -767,6 +767,27 @@ def tombstone_video(video_id: int) -> None:
         )
 
 
+def tombstone_missing_library_videos(seen_rating_keys: set[str]) -> int:
+    """Tombstone live library rows whose Plex rating key vanished from the latest scan.
+
+    Rows without a plex_rating_key are left alone (nothing to reconcile against);
+    already-tombstoned rows are skipped. Returns the number newly tombstoned.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT id, plex_rating_key FROM videos "
+            "WHERE source = 'library' AND deleted_at IS NULL "
+            "AND plex_rating_key IS NOT NULL"
+        ).fetchall()
+        stale = [r["id"] for r in rows if r["plex_rating_key"] not in seen_rating_keys]
+        for vid in stale:
+            conn.execute(
+                "UPDATE videos SET deleted_at = ? WHERE id = ?", (now, vid)
+            )
+        return len(stale)
+
+
 def get_converted_paths() -> set[str]:
     with _conn() as conn:
         rows = conn.execute(

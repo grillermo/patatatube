@@ -942,7 +942,7 @@ def test_scan_success(client, monkeypatch, tmp_path):
     ])
     resp = client.post("/api/library/scan", headers=AUTH)
     assert resp.status_code == 200
-    assert resp.json() == {"added": 1, "updated": 0, "skipped": 0}
+    assert resp.json() == {"added": 1, "updated": 0, "skipped": 0, "removed": 0}
 
     videos = client.get("/api/videos").json()
     lib = [v for v in videos if v["source"] == "library"]

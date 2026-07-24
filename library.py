@@ -258,6 +258,11 @@ def scan_library() -> dict:
     """
     items = plex.fetch_library_items()
     converted = db.get_converted_paths()
+    # Every rating key Plex still returns (even items we later skip for a missing
+    # file). Anything live in our DB but absent here was deleted in Plex.
+    seen_rating_keys = {
+        item["plex_rating_key"] for item in items if item.get("plex_rating_key")
+    }
     added = updated = skipped = 0
     for item in items:
         raw_versions = item.get("versions") or (
@@ -295,4 +300,5 @@ def scan_library() -> dict:
             skipped += 1
             continue
         _probe_missing_audio_langs(video_id)
-    return {"added": added, "updated": updated, "skipped": skipped}
+    removed = db.tombstone_missing_library_videos(seen_rating_keys)
+    return {"added": added, "updated": updated, "skipped": skipped, "removed": removed}
