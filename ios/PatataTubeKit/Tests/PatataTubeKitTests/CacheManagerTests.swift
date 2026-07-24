@@ -1191,7 +1191,7 @@ struct CacheManagerTests {
     @Test func downloadAlsoCachesPreview() async throws {
         let root = tempRoot()
         let manager = CacheManager(root: root, configuration: rangeDownloadConfig())
-        #expect(manager.cachedPreviewURL(for: 12) == nil)
+        #expect(manager.cachedPreviewURL(for: 12, path: "https://img.test/thumb.jpg") == nil)
 
         RangeDownloadProtocol.reset(payload: Data([0x00, 0x01]))
         try await manager.download(
@@ -1200,22 +1200,22 @@ struct CacheManagerTests {
             preview: URL(string: "https://img.test/thumb.jpg")!
         )
 
-        let previewURL = try #require(manager.cachedPreviewURL(for: 12))
+        let previewURL = try #require(manager.cachedPreviewURL(for: 12, path: "https://img.test/thumb.jpg"))
         #expect(previewURL.pathExtension == "jpg")
         #expect(try Data(contentsOf: previewURL) == Data([0xAA, 0xBB]))
     }
 
     @Test func previewStoreAndLookupUsesMovieID() throws {
         let manager = CacheManager(root: tempRoot(), configuration: rangeDownloadConfig())
-        #expect(manager.cachedPreviewURL(for: 44) == nil)
+        #expect(manager.cachedPreviewURL(for: 44, path: "/videos/44/preview.jpg") == nil)
 
         manager.storePreview(Data([0xAA, 0xBB]), for: 44,
                              path: "/videos/44/preview.jpg")
 
-        let url = try #require(manager.cachedPreviewURL(for: 44))
+        let url = try #require(manager.cachedPreviewURL(for: 44, path: "/videos/44/preview.jpg"))
         #expect(url.lastPathComponent == "44.preview.jpg")
         #expect(try Data(contentsOf: url) == Data([0xAA, 0xBB]))
-        #expect(manager.cachedPreviewURL(for: 45) == nil)
+        #expect(manager.cachedPreviewURL(for: 45, path: "/videos/44/preview.jpg") == nil)
     }
 
     @Test func previewFailureStillCachesVideo() async throws {
@@ -1232,7 +1232,7 @@ struct CacheManagerTests {
             preview: URL(string: "https://img.test/thumb.jpg")!
         )
         #expect(manager.state(for: 13) == .cached)
-        #expect(manager.cachedPreviewURL(for: 13) == nil)
+        #expect(manager.cachedPreviewURL(for: 13, path: "https://img.test/thumb.jpg") == nil)
     }
 
     @Test func downloadThrowsOnBadStatus() async {
