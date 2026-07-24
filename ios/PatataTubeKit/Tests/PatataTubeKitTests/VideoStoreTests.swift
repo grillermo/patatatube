@@ -576,3 +576,31 @@ private func tempCache() -> VideoListCache {
     await store.switchFilter(to: "children")
     #expect(store.videos.map(\.id) == [7])
 }
+
+// Two rapid taps -> two overlapping switchFilter() tasks with no cancellation
+// between them. The first (slower) fetch must not clobber the second (faster,
+// later) one's result once it finally resolves -- the generation guard should
+// discard the stale "adults" result in favor of the current "children" tab.
+@MainActor @Test func switchFilterRapidDoubleSwitchResolvesToLastTab() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, classification: "adults"),
+                          makeVideo(id: 2, classification: "children")]
+    let store = VideoStore(api: api, cache: tempCache())
+
+    // Delay only the "adults" fetch, so it's still in flight when the
+    // "children" switch lands and finishes first.
+    api.beforeVideosReturn = { @MainActor in
+        if store.filter == "adults" {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    async let first: Void = store.switchFilter(to: "adults")
+    try? await Task.sleep(nanoseconds: 5_000_000)
+    async let second: Void = store.switchFilter(to: "children")
+    _ = await (first, second)
+
+    #expect(store.filter == "children")
+    #expect(store.videos.map(\.id) == [2])
+    #expect(store.isLoading == false)
+}

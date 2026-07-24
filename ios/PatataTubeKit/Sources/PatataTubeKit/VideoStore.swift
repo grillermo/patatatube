@@ -19,6 +19,11 @@ public final class VideoStore: ObservableObject {
     private let defaults: UserDefaults
     private static let filterKey = "selectedClassification"
 
+    /// Bumped by every switchFilter()/load() invocation so a stale, still-in-flight
+    /// call can tell it's been superseded and must not clobber `videos`/`isLoading`
+    /// with results that no longer match the current tab/request.
+    private var loadGeneration = 0
+
     public init(api: VideoAPI, cache: VideoListCaching? = nil, defaults: UserDefaults = .standard) {
         self.api = api
         self.cache = cache
@@ -50,20 +55,37 @@ public final class VideoStore: ObservableObject {
     /// (or an empty list, which the grid renders as skeletons), then refresh
     /// from the network. Mirrors bootLoad()'s cache-first behavior so switching
     /// tabs never lingers on the previous classification's videos.
+    ///
+    /// `filter`, `videos`, and `isLoading` are all updated synchronously, in that
+    /// order, before the first `await`. This closes the MainActor-visible window
+    /// where `filter` already reflects the new tab but `videos`/`isLoading` still
+    /// reflect the old one -- `loadCache()` hops to a background thread internally,
+    /// so any state left stale going into that suspension could otherwise render.
+    ///
+    /// `loadGeneration` guards against a second, faster tab switch landing while
+    /// this one is still awaiting its cache read or network fetch: each call
+    /// captures its own generation and only applies what it fetches if no newer
+    /// switchFilter()/load() call has started in the meantime.
     public func switchFilter(to value: String?) async {
+        loadGeneration += 1
+        let generation = loadGeneration
         filter = value
-        let cached = await loadCache()   // loadCache() reads `filter`, now updated
-        videos = cached ?? []
+        videos = []
+        isLoading = true
+        let cached = await loadCache()
+        guard generation == loadGeneration else { return }   // superseded meanwhile
+        if let cached { videos = cached }
         await load()
     }
 
     public func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
         isLoading = true
         errorText = nil
-        defer { isLoading = false }
+        defer { if generation == loadGeneration { isLoading = false } }
         do {
             let fetched = try await api.videos(classification: filter)
-            videos = fetched
             // Encode + atomic disk write off the main actor: doing it inline here
             // (this method is @MainActor) blocked the main thread long enough to
             // trip Sentry's app-hang detector (PATATATUBE-2, NSFileHandle.write).
@@ -78,16 +100,23 @@ public final class VideoStore: ObservableObject {
                     cache.save(toSave, classification: classification)
                 }.value
             }
+            // Only apply this fetch if nothing newer has started since -- a stale,
+            // slower call must never overwrite a faster/later one's results.
+            if generation == loadGeneration {
+                videos = fetched
+            }
         } catch {
             // A cancelled fetch is routine SwiftUI lifecycle (.task and .refreshable
             // cancel their work on view updates, and a newer load supersedes an older
             // one). It says nothing about the server, so leave the list and errorText
             // untouched rather than banner it or fall back to stale cache.
             if Self.isCancellation(error) { return }
-            if let cached = await loadCache() {
+            if let cached = await loadCache(), generation == loadGeneration {
                 videos = cached
             }
-            report(error)
+            if generation == loadGeneration {
+                report(error)
+            }
         }
     }
 
