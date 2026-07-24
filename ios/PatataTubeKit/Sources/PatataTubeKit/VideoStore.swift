@@ -46,6 +46,17 @@ public final class VideoStore: ObservableObject {
         await load()
     }
 
+    /// Tab-switch path: swap to the new classification's cached list instantly
+    /// (or an empty list, which the grid renders as skeletons), then refresh
+    /// from the network. Mirrors bootLoad()'s cache-first behavior so switching
+    /// tabs never lingers on the previous classification's videos.
+    public func switchFilter(to value: String?) async {
+        filter = value
+        let cached = await loadCache()   // loadCache() reads `filter`, now updated
+        videos = cached ?? []
+        await load()
+    }
+
     public func load() async {
         isLoading = true
         errorText = nil

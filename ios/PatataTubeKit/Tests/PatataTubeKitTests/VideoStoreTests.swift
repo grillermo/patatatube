@@ -19,9 +19,14 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     var throwOnVideos = false
     var videosError: Error?
     private(set) var loadCount = 0
+    /// Fires inside videos(...) before it returns, so a test can observe
+    /// VideoStore's state after the synchronous cache swap but before the
+    /// network result lands.
+    var beforeVideosReturn: (@Sendable () async -> Void)?
 
     func videos(classification: String?) async throws -> [Video] {
         loadCount += 1
+        if let beforeVideosReturn { await beforeVideosReturn() }
         if let videosError { throw videosError }
         if throwOnVideos { throw APIError.badStatus(503) }
         if let c = classification { return videosToReturn.filter { $0.classification == c } }
@@ -513,4 +518,61 @@ private func tempCache() -> VideoListCache {
 
     #expect(store.videos.isEmpty)
     #expect(cache.load(classification: nil) == nil)
+}
+
+@MainActor @Test func switchFilterShowsCachedListBeforeNetworkReturns() async {
+    let cache = tempCache()
+    cache.save([makeVideo(id: 9, classification: "adults")], classification: "adults")
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, classification: "adults"),
+                          makeVideo(id: 2, classification: "adults")]
+    let store = VideoStore(api: api, cache: cache)
+
+    api.beforeVideosReturn = { @MainActor in
+        // Cache swap already happened; network result not yet applied.
+        #expect(store.filter == "adults")
+        #expect(store.videos.map(\.id) == [9])
+        #expect(store.isLoading == true)
+    }
+    await store.switchFilter(to: "adults")
+
+    // After the network returns, the API result replaces the cached list.
+    #expect(store.videos.map(\.id) == [1, 2])
+    #expect(store.isLoading == false)
+    #expect(cache.load(classification: "adults")?.map(\.id) == [1, 2])
+}
+
+@MainActor @Test func switchFilterShowsEmptyThenFillsWhenNoCache() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 5, classification: "children")]
+    let store = VideoStore(api: api, cache: tempCache())
+
+    api.beforeVideosReturn = { @MainActor in
+        // No cache for "children" -> grid empty (skeletons) while loading.
+        #expect(store.videos.isEmpty)
+        #expect(store.isLoading == true)
+    }
+    await store.switchFilter(to: "children")
+
+    #expect(store.videos.map(\.id) == [5])
+    #expect(store.filter == "children")
+}
+
+@MainActor @Test func switchFilterNeverShowsPreviousFiltersVideos() async {
+    let cache = tempCache()
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, classification: "adults"),
+                          makeVideo(id: 7, classification: "children")]
+    let store = VideoStore(api: api, cache: cache)
+
+    // Land on "adults" first (populates videos with id 1 and caches it).
+    await store.switchFilter(to: "adults")
+    #expect(store.videos.map(\.id) == [1])
+
+    // Switch to "children" (no cache): must not keep showing adults' [1].
+    api.beforeVideosReturn = { @MainActor in
+        #expect(store.videos.isEmpty)
+    }
+    await store.switchFilter(to: "children")
+    #expect(store.videos.map(\.id) == [7])
 }
