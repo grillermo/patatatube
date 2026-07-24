@@ -226,18 +226,27 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     }
 
     /// Local file URL of a cached preview image, or nil if none is cached.
-    public func cachedPreviewURL(for id: Int) -> URL? {
-        let prefix = "\(id).preview."
+    ///
+    /// Version-aware: the filename embeds a hash of the preview URL, which carries
+    /// Plex's thumb version (`?v=`). A poster changed on Plex gets a new URL → new
+    /// hash → this returns nil → the caller refetches the current poster. Passing
+    /// `path: nil` falls back to a plain id match (no URL to key on).
+    public func cachedPreviewURL(for id: Int, path: String?) -> URL? {
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        let prefix = path.map { "\(id).preview.\(posterHash($0))." } ?? "\(id).preview."
         guard let name = contents.first(where: { $0.hasPrefix(prefix) }) else { return nil }
         return root.appendingPathComponent(name)
     }
 
     /// Writes preview bytes for a movie. Best-effort: failures leave the preview uncached.
+    /// Any prior poster version for this movie is dropped so only the current one remains.
     public func storePreview(_ data: Data, for id: Int, path: String) {
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        let destination = root.appendingPathComponent("\(id).preview.\(safeExt(from: path))")
-        try? fileManager.removeItem(at: destination)
+        let prefix = "\(id).preview."
+        for name in (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? [] where name.hasPrefix(prefix) {
+            try? fileManager.removeItem(at: root.appendingPathComponent(name))
+        }
+        let destination = root.appendingPathComponent("\(id).preview.\(posterHash(path)).\(safeExt(from: path))")
         try? data.write(to: destination)
     }
 

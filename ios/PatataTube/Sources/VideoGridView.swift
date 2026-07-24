@@ -85,7 +85,7 @@ struct VideoGridView: View {
                         ForEach(filteredVideos) { video in
                             MovieCell(
                                 video: video,
-                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id)
+                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl)
                             )
                         }
                     }
@@ -100,7 +100,7 @@ struct VideoGridView: View {
                                 video: video,
                                 cacheState: cache.state(for: videoId, versionId: versionId),
                                 currentCacheState: { cache.state(for: videoId, versionId: versionId) },
-                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id),
+                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl),
                                 localFileURL: cache.localURL(for: videoId, versionId: versionId),
                                 classifications: classifications,
                                 onPlay: { play(video) },

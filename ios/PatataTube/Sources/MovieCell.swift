@@ -29,7 +29,7 @@ struct MovieCell: View {
                             AuthedImage(path: video.previewUrl, localFileURL: cachedPreviewURL,
                                         onNetworkLoad: { data in
                                             guard let path = video.previewUrl,
-                                                  model.cache.cachedPreviewURL(for: video.id) == nil else { return }
+                                                  model.cache.cachedPreviewURL(for: video.id, path: path) == nil else { return }
                                             model.cache.storePreview(data, for: video.id, path: path)
                                         })
                         }

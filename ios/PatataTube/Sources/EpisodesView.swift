@@ -145,7 +145,7 @@ struct EpisodesView: View {
                 HStack(spacing: 12) {
                     AuthedImage(
                         path: episode.previewUrl,
-                        localFileURL: model.cache.cachedPreviewURL(for: episode.id)
+                        localFileURL: model.cache.cachedPreviewURL(for: episode.id, path: episode.previewUrl)
                     )
                     .frame(width: 120, height: 68)
                     .background(.secondary.opacity(0.2))

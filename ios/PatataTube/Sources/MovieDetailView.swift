@@ -33,11 +33,11 @@ struct MovieDetailView: View {
                 HStack {
                     Spacer()
                     AuthedImage(path: currentVideo.previewUrl,
-                                localFileURL: model.cache.cachedPreviewURL(for: currentVideo.id),
+                                localFileURL: model.cache.cachedPreviewURL(for: currentVideo.id, path: currentVideo.previewUrl),
                                 fill: false,
                                 onNetworkLoad: { data in
                                     guard let path = currentVideo.previewUrl,
-                                          model.cache.cachedPreviewURL(for: currentVideo.id) == nil else { return }
+                                          model.cache.cachedPreviewURL(for: currentVideo.id, path: path) == nil else { return }
                                     model.cache.storePreview(data, for: currentVideo.id, path: path)
                                 })
                         .aspectRatio(2.0/3.0, contentMode: .fit)
