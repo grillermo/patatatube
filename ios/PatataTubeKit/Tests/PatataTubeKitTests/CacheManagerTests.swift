@@ -2192,4 +2192,22 @@ struct CacheManagerTests {
         let url = try #require(manager.cachedShowPosterURL(for: "k2"))
         #expect(try Data(contentsOf: url) == Data([0x01]))
     }
+
+    @Test func clearAllCoversRemovesImagesAndKeepsVideos() throws {
+        let root = tempRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let files = ["1.preview.jpg", "poster.abc123.png", "1.mp4", "1.resume"]
+        for name in files {
+            try Data("x".utf8).write(to: root.appendingPathComponent(name))
+        }
+        let manager = CacheManager(root: root)
+
+        manager.clearAllCovers()
+
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        #expect(!remaining.contains("1.preview.jpg"))
+        #expect(!remaining.contains("poster.abc123.png"))
+        #expect(remaining.contains("1.mp4"))
+        #expect(remaining.contains("1.resume"))
+    }
 }

@@ -483,6 +483,15 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         lock.withLock { completionHistory.clear() }
     }
 
+    /// Clears every cached preview image and show poster. Videos, resume data,
+    /// manifests, and history are kept (see `clearAllVideos()`).
+    public func clearAllCovers() {
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        for name in contents where name.contains(".preview.") || name.hasPrefix("poster.") {
+            try? fileManager.removeItem(at: root.appendingPathComponent(name))
+        }
+    }
+
     private func cachedVideoFilenames(id: Int) -> [String] {
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         return contents.filter {
