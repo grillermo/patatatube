@@ -500,3 +500,17 @@ private func tempCache() -> VideoListCache {
         Issue.record("wrong error: \(error)")
     }
 }
+
+@MainActor @Test func clearListCacheEmptiesVideosAndDiskCache() async {
+    let cache = tempCache()
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
+    let store = VideoStore(api: api, cache: cache)
+    await store.load()
+    #expect(!store.videos.isEmpty)
+    #expect(cache.load(classification: nil) != nil)
+
+    store.clearListCache()
+
+    #expect(store.videos.isEmpty)
+    #expect(cache.load(classification: nil) == nil)
+}

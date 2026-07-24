@@ -193,4 +193,11 @@ public final class VideoStore: ObservableObject {
             try await Task.sleep(nanoseconds: UInt64(pollIntervalSeconds * 1_000_000_000))
         }
     }
+
+    /// Wipes the on-disk offline list cache and empties the in-memory list.
+    /// The next `load()` repopulates both from the server.
+    public func clearListCache() {
+        cache?.clear()
+        videos = []
+    }
 }
