@@ -60,12 +60,21 @@ struct SettingsView: View {
                 Section {
                     Button("Cache all videos") {
                         Task {
-                            for video in model.store.videos {
-                                if let url = model.streamURL(for: video) {
+                            await withTaskGroup(of: Void.self) { group in
+                                for video in model.store.videos {
+                                    guard let url = model.streamURL(for: video) else { continue }
                                     let preview = video.previewUrl.flatMap(URL.init(string:))
-                                try? await model.cache.download(id: video.id, versionId: video.chosenVersionId, from: url, preview: preview,
-                                                                bearerToken: model.credentials.token,
-                                                                streamCount: model.downloadStreamCount)
+                                    let versionId = video.chosenVersionId
+                                    let id = video.id
+                                    let streamCount = model.downloadStreamCount
+                                    let token = model.credentials.token
+                                    group.addTask {
+                                        try? await model.cache.download(
+                                            id: id, versionId: versionId, from: url,
+                                            preview: preview, bearerToken: token,
+                                            streamCount: streamCount
+                                        )
+                                    }
                                 }
                             }
                         }

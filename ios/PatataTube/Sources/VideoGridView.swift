@@ -327,8 +327,15 @@ struct VideoGridView: View {
     private func downloadAll() async {
         downloadingAll = true
         defer { downloadingAll = false }
-        for video in store.videos where model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached {
-            await download(video)
+        // Snapshot the not-cached targets, then let them run concurrently — the
+        // CacheManager gate bounds how many actually download at once.
+        let targets = store.videos.filter {
+            model.cache.state(for: $0.id, versionId: $0.chosenVersionId) == .notCached
+        }
+        await withTaskGroup(of: Void.self) { group in
+            for video in targets {
+                group.addTask { await download(video) }
+            }
         }
     }
 
