@@ -3,6 +3,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -29,6 +30,14 @@ router = APIRouter()
 
 VIDEOS_DIR = Path("videos")
 PREVIEWS_DIR = Path("data/previews")
+# Longest-edge cap for cached Plex posters. Plex serves full-resolution thumbs
+# (often 1000s of px), which bloated the iPad's memory when decoded across a
+# whole grid (Sentry PATATATUBE-6 OOM). 1200px stays crisp on iPad mini 6 (@2x)
+# and iPhone 16e (@3x) for both grid and detail views. The suffix versions the
+# cache so previously-cached full-size files regenerate at the new size.
+PREVIEW_MAX_EDGE = 1200
+PREVIEW_CACHE_SUFFIX = f"r{PREVIEW_MAX_EDGE}"
+FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 VIDEO_CHUNK_SIZE = 1024 * 1024
 DEFAULT_VIDEO_STREAM_LIMIT = 16
 VIDEO_CACHE_CONTROL = "public, max-age=31536000, immutable"
@@ -382,24 +391,70 @@ async def _iter_file_range(
         print(f"video {completion_title} uploaded", flush=True)
 
 
+def _resize_jpeg(content: bytes, max_edge: int) -> bytes:
+    """Downscale JPEG bytes so the longest edge is <= max_edge (aspect preserved,
+    never upscaled) via ffmpeg. Returns the original bytes untouched if ffmpeg is
+    missing or fails — a slightly-too-large poster beats a broken one."""
+    cmd = [
+        FFMPEG_BIN, "-loglevel", "error", "-i", "pipe:0",
+        "-vf", (
+            f"scale='min({max_edge},iw)':'min({max_edge},ih)':"
+            "force_original_aspect_ratio=decrease"
+        ),
+        "-q:v", "3", "-f", "mjpeg", "pipe:1",
+    ]
+    try:
+        proc = subprocess.run(cmd, input=content, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError:
+        return content
+    if proc.returncode != 0 or not proc.stdout:
+        return content
+    return proc.stdout
+
+
+def _build_preview(rating_key: str, max_edge: int) -> bytes:
+    """Fetch the Plex thumb and downscale it. Runs in a worker thread."""
+    content = plex.fetch_thumb(rating_key)
+    return _resize_jpeg(content, max_edge)
+
+
 @router.get("/videos/{video_id}/preview")
 async def video_preview(video_id: int, request: Request, kind: str = "item"):
     _check_token_or_query(request)
     video = db.get_video(video_id)
     if not video or video.get("source") != "library" or video.get("deleted_at"):
         raise HTTPException(status_code=404, detail="No preview")
-    rating_key = video.get("show_rating_key") if kind == "show" else video.get("plex_rating_key")
+    if kind == "show":
+        rating_key = video.get("show_rating_key")
+        version = video.get("show_preview_version")
+    else:
+        rating_key = video.get("plex_rating_key")
+        version = video.get("preview_version")
     if not rating_key:
         raise HTTPException(status_code=404, detail="No preview")
 
-    cache_file = PREVIEWS_DIR / f"{rating_key}.jpg"
+    # Cache filename carries the resize size + the Plex thumb version, so a poster
+    # changed on Plex (new version) misses the cache and regenerates, while an
+    # unchanged one is a pure local disk read.
+    stem = f"{rating_key}_{version}" if version else str(rating_key)
+    cache_file = PREVIEWS_DIR / f"{stem}.{PREVIEW_CACHE_SUFFIX}.jpg"
     if not cache_file.exists():
         try:
-            content = await asyncio.to_thread(plex.fetch_thumb, rating_key)
+            content = await asyncio.to_thread(
+                _build_preview, rating_key, PREVIEW_MAX_EDGE
+            )
         except plex.PlexError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
-        cache_file.write_bytes(content)
+        # Atomic write so a concurrent reader never sees a half-written file.
+        tmp = cache_file.with_suffix(".jpg.tmp")
+        tmp.write_bytes(content)
+        tmp.replace(cache_file)
+        # Drop superseded versions (and the pre-resize full-size file) for this key.
+        for stale in PREVIEWS_DIR.glob(f"{rating_key}_*.{PREVIEW_CACHE_SUFFIX}.jpg"):
+            if stale != cache_file:
+                stale.unlink(missing_ok=True)
+        (PREVIEWS_DIR / f"{rating_key}.jpg").unlink(missing_ok=True)
 
     return Response(
         content=cache_file.read_bytes(),

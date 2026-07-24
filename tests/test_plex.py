@@ -14,6 +14,7 @@ MOVIES = {"MediaContainer": {"Metadata": [
         "ratingKey": "42",
         "title": "Akira",
         "summary": "Neo-Tokyo.",
+        "thumb": "/library/metadata/42/thumb/1712345678",
         "Media": [{"Part": [{"file": "/Volumes/Media/media/movies/Akira/Akira.mkv"}]}],
     },
 ]}}
@@ -29,6 +30,8 @@ EPISODES = {"MediaContainer": {"Metadata": [
         "parentIndex": 1,
         "index": 1,
         "summary": "Carmy retrains the crew.",
+        "thumb": "/library/metadata/1264/thumb/1699000001",
+        "grandparentThumb": "/library/metadata/1262/thumb/1699000002",
         "Media": [{"Part": [{"file": "/Volumes/Media/media/tv/The.Bear/S01E01.mkv"}]}],
     },
 ]}}
@@ -62,6 +65,8 @@ def test_fetch_library_items(monkeypatch):
         "summary": "Neo-Tokyo.",
         "plex_rating_key": "42",
         "show_rating_key": None,
+        "preview_version": "1712345678",
+        "show_preview_version": None,
         "added_at": None,
         "versions": [{"source_path": "/Volumes/Media/media/movies/Akira/Akira.mkv", "label": "Version 1"}],
     }
@@ -77,6 +82,8 @@ def test_fetch_library_items(monkeypatch):
         "summary": "Carmy retrains the crew.",
         "plex_rating_key": "1264",
         "show_rating_key": "1262",
+        "preview_version": "1699000001",
+        "show_preview_version": "1699000002",
         "added_at": None,
         "versions": [{"source_path": "/Volumes/Media/media/tv/The.Bear/S01E01.mkv", "label": "Version 1"}],
     }

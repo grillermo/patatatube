@@ -73,6 +73,16 @@ def _part_versions(meta: dict) -> list[dict]:
     return versions
 
 
+def _thumb_version(thumb: str | None) -> str | None:
+    """The trailing version token in a Plex thumb path (`/library/metadata/45/
+    thumb/1712345678` → `1712345678`). Plex bumps it whenever the poster art
+    changes, so it doubles as a cache key for the resized preview."""
+    if not thumb:
+        return None
+    token = thumb.rstrip("/").rsplit("/", 1)[-1]
+    return token or None
+
+
 def _movie_item(meta: dict) -> dict | None:
     path = _part_file(meta)
     if not path:
@@ -87,6 +97,8 @@ def _movie_item(meta: dict) -> dict | None:
         "summary": meta.get("summary"),
         "plex_rating_key": str(meta["ratingKey"]),
         "show_rating_key": None,
+        "preview_version": _thumb_version(meta.get("thumb")),
+        "show_preview_version": None,
         "added_at": meta.get("addedAt"),
         "versions": _part_versions(meta),
     }
@@ -108,6 +120,8 @@ def _episode_item(meta: dict) -> dict | None:
         "show_rating_key": (
             str(meta["grandparentRatingKey"]) if meta.get("grandparentRatingKey") else None
         ),
+        "preview_version": _thumb_version(meta.get("thumb")),
+        "show_preview_version": _thumb_version(meta.get("grandparentThumb")),
         "added_at": meta.get("addedAt"),
         "versions": _part_versions(meta),
     }

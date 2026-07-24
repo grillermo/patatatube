@@ -50,7 +50,14 @@ def preview_url_for(video: dict) -> str | None:
     (YouTube) carry an external thumbnail URL straight in the column.
     """
     if (video.get("source") or "download") == "library":
-        return f"/videos/{video['id']}/preview"
+        url = f"/videos/{video['id']}/preview"
+        # Embed the Plex thumb version so the URL changes whenever the poster
+        # changes on Plex. Every cache layer keyed on the URL — the server-side
+        # Redis GET cache, the client's Cache-Control, the iOS in-memory image
+        # cache (keyed by path) — then busts automatically; an unchanged poster
+        # keeps a stable URL and stays cached.
+        version = video.get("preview_version")
+        return f"{url}?v={version}" if version else url
     return video.get("preview_url")
 
 
@@ -106,7 +113,11 @@ def serialize_video(video: dict) -> dict:
         data["source_filename"] = raw_path.rsplit("/", 1)[-1] or None
         data["url"] = ""
         if video.get("show_rating_key"):
-            data["show_preview_url"] = f"/videos/{video['id']}/preview?kind=show"
+            show_url = f"/videos/{video['id']}/preview?kind=show"
+            show_version = video.get("show_preview_version")
+            if show_version:
+                show_url += f"&v={show_version}"
+            data["show_preview_url"] = show_url
     if video.get("platform") == "upload":
         # `url` temporarily holds the local upload path until the background
         # processor moves it into videos/{id}.mp4. Treat it like library paths.

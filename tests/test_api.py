@@ -1349,6 +1349,56 @@ def test_preview_proxies_and_caches(client, tmp_path, monkeypatch):
     assert resp.status_code == 200 and calls == ["1264", "1262"]
 
 
+async def _cache_miss(key):
+    return None
+
+
+async def _cache_noop(*args, **kwargs):
+    return None
+
+
+def test_preview_resizes_and_keys_cache_on_plex_version(client, tmp_path, monkeypatch):
+    import db, plex, router
+    # Disable the Redis response cache so we exercise the endpoint every request.
+    monkeypatch.setattr("cache.get", _cache_miss)
+    monkeypatch.setattr("cache.put", _cache_noop)
+    src = tmp_path / "ep.mkv"
+    src.write_bytes(b"fake")
+    vid, _ = db.upsert_library_video({
+        **LIB_ITEM_API, "source_path": str(src), "preview_version": "v1",
+    })
+    previews = tmp_path / "previews"
+    monkeypatch.setattr("router.PREVIEWS_DIR", previews)
+    monkeypatch.setattr(plex, "fetch_thumb", lambda rating_key: b"RAWTHUMB")
+    resize_calls = []
+
+    def fake_resize(content, max_edge):
+        resize_calls.append((content, max_edge))
+        return b"SMALL"
+
+    monkeypatch.setattr(router, "_resize_jpeg", fake_resize)
+
+    # The serializer publishes the version in the URL, so the client requests it.
+    resp = client.get(f"/videos/{vid}/preview?v=v1", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.content == b"SMALL"                       # served the resized bytes
+    assert resize_calls == [(b"RAWTHUMB", router.PREVIEW_MAX_EDGE)]
+    # Cache filename carries the Plex thumb version.
+    v1_file = previews / f"1264_v1.{router.PREVIEW_CACHE_SUFFIX}.jpg"
+    assert v1_file.exists()
+
+    # Same version → pure disk read, no refetch/resize.
+    client.get(f"/videos/{vid}/preview?v=v1", headers=AUTH)
+    assert len(resize_calls) == 1
+
+    # Plex changes the art → new version → regenerate, and the stale file is purged.
+    db.upsert_library_video({**LIB_ITEM_API, "source_path": str(src), "preview_version": "v2"})
+    resp = client.get(f"/videos/{vid}/preview?v=v2", headers=AUTH)
+    assert resp.status_code == 200 and len(resize_calls) == 2
+    assert (previews / f"1264_v2.{router.PREVIEW_CACHE_SUFFIX}.jpg").exists()
+    assert not v1_file.exists()
+
+
 def test_preview_404_for_download_rows(client, monkeypatch):
     import db
     vid = db.add_video("https://twitter.com/x/status/77", platform="twitter")

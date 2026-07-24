@@ -143,6 +143,19 @@ def test_serialize_library_episode():
     assert data["url"] == ""
 
 
+def test_serialize_library_preview_urls_carry_plex_version():
+    row = {
+        "id": 7, "url": "/vol/tv/ep.mkv", "title": "System", "status": "unconverted",
+        "source": "library", "show_title": "The Bear", "season": 1, "episode": 1,
+        "plex_rating_key": "1264", "show_rating_key": "1262",
+        "preview_version": "1699000001", "show_preview_version": "1699000002",
+    }
+    data = serialize_video(row)
+    # Version in the URL busts every URL-keyed cache when Plex changes the art.
+    assert data["preview_url"] == "/videos/7/preview?v=1699000001"
+    assert data["show_preview_url"] == "/videos/7/preview?kind=show&v=1699000002"
+
+
 def test_serialize_download_row_defaults():
     row = {"id": 1, "url": "https://x.com/s/1", "status": "done"}
     data = serialize_video(row)

@@ -1,5 +1,6 @@
 // ios/PatataTube/Sources/AuthedImage.swift
 import SwiftUI
+import ImageIO
 import PatataTubeKit
 import Sentry
 import os
@@ -14,6 +15,11 @@ struct AuthedImage: View {
     /// Called with the raw bytes when the image was fetched from the network
     /// (never for local-file loads). Lets callers persist it to a cache.
     var onNetworkLoad: ((Data) -> Void)? = nil
+    /// Longest-edge pixel cap for the decoded bitmap. Grid cells are ≤420pt, so
+    /// 1024px stays crisp at 2–3x while bounding each poster's decoded footprint
+    /// to ~a few MB instead of the full source resolution (Sentry PATATATUBE-6
+    /// OOM: full-res movie posters pushed the app past 1.5 GB).
+    var maxPixelSize: CGFloat = 1024
     @EnvironmentObject var model: AppModel
     @State private var image: UIImage?
 
@@ -31,81 +37,74 @@ struct AuthedImage: View {
 
     private static let log = os.Logger(subsystem: "com.patatatube.app", category: "AuthedImage")
 
-    /// Runs a synchronous, main-thread block and reports how long it took. App
-    /// hangs (Sentry PATATATUBE-3) point at blocking file reads / image decodes
-    /// happening on the main actor here; this pins which step and how big.
-    @discardableResult
-    private func timedMainThreadWork<T>(_ step: String, bytes: Int? = nil, _ body: () -> T) -> T {
-        let start = DispatchTime.now()
-        let result = body()
-        let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-        let kb = bytes.map { Double($0) / 1024 }
-        Self.log.log("main-thread \(step, privacy: .public) took \(ms, privacy: .public)ms bytes=\(bytes ?? -1, privacy: .public) path=\(self.path ?? "-", privacy: .public)")
-        let crumb = Breadcrumb(level: ms >= 500 ? .warning : .info, category: "AuthedImage")
-        crumb.message = "\(step) \(String(format: "%.0f", ms))ms"
-        crumb.data = ["step": step, "ms": ms, "bytes": bytes ?? -1, "path": path ?? "-", "kb": kb ?? -1]
-        SentrySDK.addBreadcrumb(crumb)
-        // Blocking the main thread past ~500ms is what accumulates into an app
-        // hang; surface those as their own Sentry event so we can catch the file.
-        if ms >= 500 {
-            SentrySDK.capture(message: "AuthedImage main-thread \(step) slow: \(String(format: "%.0f", ms))ms") { scope in
-                scope.setContext(value: [
-                    "step": step,
-                    "ms": ms,
-                    "bytes": bytes ?? -1,
-                    "path": self.path ?? "-",
-                    "localFileURL": self.localFileURL?.lastPathComponent ?? "-"
-                ], key: "authed_image")
-            }
-        }
-        return result
-    }
-
     private func loadImage() async {
         // .task(id:) re-fires every time a lazy container brings the cell back
         // on screen; without these guards each scroll re-hits the server.
         if image != nil { return }
+        let maxPixel = maxPixelSize
+
+        // Memory-cached raw bytes: still downsample (off the main actor) rather
+        // than full-res `UIImage(data:)`.
         if let path, let cached = ImageMemoryCache.shared.data(for: path) {
-            image = timedMainThreadWork("decode-memcache", bytes: cached.count) { UIImage(data: cached) }
-            reportDecodedImage("decode-memcache", compressedBytes: cached.count)
+            image = await Self.decode(cached, maxPixel: maxPixel)
             return
         }
+
+        // Cached poster on disk. Reading the whole file AND decoding it happened
+        // on the main actor before (Sentry PATATATUBE-3: NSFileHandle.read at the
+        // bottom of the app-hang stack). Do both on a detached task so the main
+        // thread keeps rendering; hop back only to publish the small bitmap.
         if let localFileURL {
-            let data = timedMainThreadWork("read-localfile") { try? Data(contentsOf: localFileURL) }
-            if let data {
-                image = timedMainThreadWork("decode-localfile", bytes: data.count) { UIImage(data: data) }
-                reportDecodedImage("decode-localfile", compressedBytes: data.count)
-                if let path { ImageMemoryCache.shared.store(data, for: path) }
+            let decoded = await Task.detached(priority: .userInitiated) { () -> (UIImage, Data)? in
+                guard let data = try? Data(contentsOf: localFileURL),
+                      let img = Self.downsample(data, maxPixel: maxPixel) else { return nil }
+                return (img, data)
+            }.value
+            if let decoded {
+                image = decoded.0
+                if let path { ImageMemoryCache.shared.store(decoded.1, for: path) }
                 return
             }
         }
+
         guard let path else { return }
         if let data = try? await model.api.imageData(path: path) {
-            image = timedMainThreadWork("decode-network", bytes: data.count) { UIImage(data: data) }
-            reportDecodedImage("decode-network", compressedBytes: data.count)
+            image = await Self.decode(data, maxPixel: maxPixel)
             ImageMemoryCache.shared.store(data, for: path)
             onNetworkLoad?(data)
         }
     }
 
-    /// Records the decoded image's pixel dimensions and the resulting bitmap
-    /// footprint. `UIImage(data:)` here does NOT downsample, so a large source
-    /// poster is held at full resolution (~width*height*scale²*4 bytes) even in a
-    /// small grid cell — the leading suspect for the OOM watchdog kills
-    /// (PATATATUBE-6). This makes the per-image cost, and the running total
-    /// footprint, visible in Sentry.
-    private func reportDecodedImage(_ step: String, compressedBytes: Int) {
-        guard let image else { return }
-        let pixelW = image.size.width * image.scale
-        let pixelH = image.size.height * image.scale
-        let bitmapBytes = Int(pixelW * pixelH * 4)
-        MemoryProbe.snapshot("authedimage-\(step)", extra: [
-            "pixel_w": Int(pixelW),
-            "pixel_h": Int(pixelH),
-            "bitmap_bytes": bitmapBytes,
-            "bitmap_mb": Double(bitmapBytes) / (1024 * 1024),
-            "compressed_bytes": compressedBytes,
-            "path": path ?? "-",
-        ])
+    /// Downsamples `data` off the main actor and returns the resulting bitmap.
+    private nonisolated static func decode(_ data: Data, maxPixel: CGFloat) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) {
+            downsample(data, maxPixel: maxPixel)
+        }.value
+    }
+
+    /// Decodes `data` directly to a thumbnail no larger than `maxPixel` on its
+    /// longest edge via ImageIO, so the in-memory bitmap is bounded regardless of
+    /// the source poster's resolution. `kCGImageSourceShouldCacheImmediately`
+    /// forces the decode here (off the main thread) instead of lazily during the
+    /// first render. This is the fix for both the OOM (PATATATUBE-6, full-res
+    /// bitmaps) and the main-thread decode hang (PATATATUBE-3, -2).
+    nonisolated static func downsample(_ data: Data, maxPixel: CGFloat) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+            return UIImage(data: data)
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return UIImage(data: data)
+        }
+        let image = UIImage(cgImage: cgImage)
+        let bytes = cgImage.width * cgImage.height * 4
+        Self.log.log("downsample \(cgImage.width, privacy: .public)x\(cgImage.height, privacy: .public) bitmap=\(Double(bytes) / (1024 * 1024), privacy: .public)MB from=\(data.count, privacy: .public)B")
+        return image
     }
 }

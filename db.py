@@ -94,6 +94,13 @@ def init_db():
             _add_column(conn, "ALTER TABLE videos ADD COLUMN hls_status TEXT NOT NULL DEFAULT 'none'")
         if "audio_lang" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN audio_lang TEXT")
+        # Plex thumb version tokens (the trailing id in the /thumb/<version> path),
+        # used to cache resized posters and only regenerate when Plex changes the
+        # art. NULL until the next scan repopulates them.
+        if "preview_version" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN preview_version TEXT")
+        if "show_preview_version" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN show_preview_version TEXT")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS video_versions (
@@ -694,6 +701,7 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
                 UPDATE videos
                 SET url = ?, title = ?, classification = ?, show_title = ?, season = ?,
                     episode = ?, summary = ?, plex_rating_key = ?, show_rating_key = ?,
+                    preview_version = ?, show_preview_version = ?,
                     created_at = COALESCE(?, created_at),
                     position = COALESCE(?, position)
                 WHERE id = ?
@@ -708,6 +716,8 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
                     item.get("summary"),
                     item.get("plex_rating_key"),
                     item.get("show_rating_key"),
+                    item.get("preview_version"),
+                    item.get("show_preview_version"),
                     created_at if added_at else None,
                     position,
                     row["id"],
@@ -723,9 +733,10 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
             INSERT INTO videos (
                 url, title, status, classification, source, source_path,
                 show_title, season, episode, summary, plex_rating_key,
-                show_rating_key, created_at, position
+                show_rating_key, preview_version, show_preview_version,
+                created_at, position
             )
-            VALUES (?, ?, 'unconverted', ?, 'library', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, 'unconverted', ?, 'library', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item["source_path"],
@@ -738,6 +749,8 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
                 item.get("summary"),
                 item.get("plex_rating_key"),
                 item.get("show_rating_key"),
+                item.get("preview_version"),
+                item.get("show_preview_version"),
                 created_at,
                 position,
             ),
