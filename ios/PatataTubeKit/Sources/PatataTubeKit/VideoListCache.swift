@@ -4,6 +4,7 @@ import Foundation
 public protocol VideoListCaching: Sendable {
     func save(_ videos: [Video], classification: String?)
     func load(classification: String?) -> [Video]?
+    func clear()
 }
 
 public final class VideoListCache: VideoListCaching, @unchecked Sendable {
@@ -30,5 +31,10 @@ public final class VideoListCache: VideoListCaching, @unchecked Sendable {
     public func load(classification: String?) -> [Video]? {
         guard let data = try? Data(contentsOf: fileURL(classification)) else { return nil }
         return try? JSONDecoder().decode([Video].self, from: data)
+    }
+
+    public func clear() {
+        try? fileManager.removeItem(at: root)
+        try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
     }
 }

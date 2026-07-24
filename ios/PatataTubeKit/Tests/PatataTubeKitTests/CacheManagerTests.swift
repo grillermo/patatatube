@@ -1862,6 +1862,31 @@ struct CacheManagerTests {
         #expect(manager.state(for: 23) == .notCached)
     }
 
+    @Test func clearAllVideosRemovesVideosAndKeepsCovers() throws {
+        let root = tempRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let files = [
+            "1.mp4", "2.v5.mp4", "1.resume", "2:5.resume",
+            "download-completions.json",
+            "1.preview.jpg", "poster.abc123.jpg",
+        ]
+        for name in files {
+            try Data("x".utf8).write(to: root.appendingPathComponent(name))
+        }
+        let manager = CacheManager(root: root)
+
+        manager.clearAllVideos()
+
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        #expect(!remaining.contains("1.mp4"))
+        #expect(!remaining.contains("2.v5.mp4"))
+        #expect(!remaining.contains("1.resume"))
+        #expect(!remaining.contains("2:5.resume"))
+        #expect(!remaining.contains("download-completions.json"))
+        #expect(remaining.contains("1.preview.jpg"))
+        #expect(remaining.contains("poster.abc123.jpg"))
+    }
+
     @Test func resumeInterruptedRequestsOnlyIncompleteManifestSegments() async throws {
         let payload = Data("abcdefghijkl".utf8)
         RangeDownloadProtocol.reset(payload: payload)
@@ -2166,5 +2191,23 @@ struct CacheManagerTests {
         #expect(posterRequests == 0)
         let url = try #require(manager.cachedShowPosterURL(for: "k2"))
         #expect(try Data(contentsOf: url) == Data([0x01]))
+    }
+
+    @Test func clearAllCoversRemovesImagesAndKeepsVideos() throws {
+        let root = tempRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let files = ["1.preview.jpg", "poster.abc123.png", "1.mp4", "1.resume"]
+        for name in files {
+            try Data("x".utf8).write(to: root.appendingPathComponent(name))
+        }
+        let manager = CacheManager(root: root)
+
+        manager.clearAllCovers()
+
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        #expect(!remaining.contains("1.preview.jpg"))
+        #expect(!remaining.contains("poster.abc123.png"))
+        #expect(remaining.contains("1.mp4"))
+        #expect(remaining.contains("1.resume"))
     }
 }

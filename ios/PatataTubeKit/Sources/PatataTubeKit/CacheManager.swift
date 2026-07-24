@@ -466,6 +466,32 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
     }
 
+    /// Clears every downloaded video: cancels in-flight downloads, removes all
+    /// MP4s + resume files + segment manifests + completion history. Preview
+    /// images and show posters are kept (see `clearAllCovers()`).
+    public func clearAllVideos() {
+        for activity in activeDownloads() {
+            cancel(id: activity.videoID, versionId: activity.versionID)
+        }
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        for name in contents where name.hasSuffix(".mp4") || name.hasSuffix(".resume") {
+            try? fileManager.removeItem(at: root.appendingPathComponent(name))
+        }
+        for manifest in segmentedStore.manifests() {
+            segmentedStore.remove(cacheKey: manifest.cacheKey)
+        }
+        lock.withLock { completionHistory.clear() }
+    }
+
+    /// Clears every cached preview image and show poster. Videos, resume data,
+    /// manifests, and history are kept (see `clearAllVideos()`).
+    public func clearAllCovers() {
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        for name in contents where name.contains(".preview.") || name.hasPrefix("poster.") {
+            try? fileManager.removeItem(at: root.appendingPathComponent(name))
+        }
+    }
+
     private func cachedVideoFilenames(id: Int) -> [String] {
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         return contents.filter {
