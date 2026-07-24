@@ -29,7 +29,7 @@ router = APIRouter()
 
 VIDEOS_DIR = Path("videos")
 PREVIEWS_DIR = Path("data/previews")
-VIDEO_CHUNK_SIZE = 64 * 1024
+VIDEO_CHUNK_SIZE = 1024 * 1024
 DEFAULT_VIDEO_STREAM_LIMIT = 16
 VIDEO_CACHE_CONTROL = "public, max-age=31536000, immutable"
 SPLASH_DIR = Path("assets/splash")

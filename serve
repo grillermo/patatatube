@@ -42,7 +42,7 @@ exec 3>&1
   | colorize 35 caddy >&3 &
 
 if [ "$DEV" = "1" ]; then
-  exec > >(colorize 36 dev) 2>&1
+  exec > >(colorize 36 web) 2>&1
   exec "$PYTHON_BIN" -m uvicorn main:app \
     --host 0.0.0.0 \
     --port "$PORT" \
@@ -60,13 +60,13 @@ fi
 
 # gunicorn manages the worker lifecycle (respawn on crash, graceful reload via
 # SIGHUP, staged shutdown); uvicorn workers do the actual ASGI serving.
-# Access and error logs get their own colors via process substitution; anything
-# workers print directly (stdout/stderr) falls through to the "web" label.
+# Access and error logs get their own colors via process substitution but share
+# the "web" label; anything workers print directly (stdout/stderr) also gets it.
 exec > >(colorize 34 web) 2>&1
 exec "$PYTHON_BIN" -m gunicorn main:app \
   --worker-class uvicorn_worker.UvicornWorker \
   --workers "${WEB_CONCURRENCY:-3}" \
   --bind "0.0.0.0:$PORT" \
   --forwarded-allow-ips='*' \
-  --access-logfile >(colorize 32 access >&3) \
-  --error-logfile >(colorize 33 app >&3)
+  --access-logfile >(colorize 32 web >&3) \
+  --error-logfile >(colorize 33 web >&3)
