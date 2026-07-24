@@ -33,6 +33,19 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations: {}
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: com.patatatube.clearVideos
+            UIApplicationShortcutItemTitle: Clear Videos
+            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
+          - UIApplicationShortcutItemType: com.patatatube.clearCovers
+            UIApplicationShortcutItemTitle: Clear Covers
+            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
+          - UIApplicationShortcutItemType: com.patatatube.clearLists
+            UIApplicationShortcutItemTitle: Clear Lists
+            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
+          - UIApplicationShortcutItemType: com.patatatube.resetSettings
+            UIApplicationShortcutItemTitle: Reset Settings
+            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
         UILaunchStoryboardName: LaunchScreen
         "UISupportedInterfaceOrientations~iphone":
           - UIInterfaceOrientationPortrait

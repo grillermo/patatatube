@@ -58,6 +58,44 @@ final class AppModel: ObservableObject {
         cache.setMaxConcurrentDownloads(downloadConcurrency)
     }
 
+    func handle(_ action: QuickAction) async {
+        switch action {
+        case .clearVideos: await clearVideos()
+        case .clearCovers: await clearCovers()
+        case .clearLists: await clearLists()
+        case .resetSettings: resetSettings()
+        }
+    }
+
+    func clearVideos() async {
+        cache.clearAllVideos()
+        await store.load()
+    }
+
+    func clearCovers() async {
+        cache.clearAllCovers()
+        await store.load()
+    }
+
+    func clearLists() async {
+        store.clearListCache()
+        await store.load()
+    }
+
+    /// Logs out (Keychain token + base URL) and resets download settings to
+    /// defaults. Leaves cached files untouched.
+    func resetSettings() {
+        credentials.token = nil
+        credentials.baseURL = nil
+        tokenText = ""
+        baseURLText = ""
+        downloadStreamCount = DownloadStreamSettings.defaultCount
+        downloadConcurrency = SimultaneousDownloadSettings.defaultCount
+        downloadSettings.save(downloadStreamCount)
+        simultaneousSettings.save(downloadConcurrency)
+        cache.setMaxConcurrentDownloads(downloadConcurrency)
+    }
+
     /// Absolute stream/download URL for a video's `streamPath`.
     func streamURL(for video: Video) -> URL? {
         return absoluteURL(for: video, path: video.streamPath)

@@ -15,6 +15,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             default: OrientationLockCoordinator.normalMask
         )
     }
+
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        let config = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        config.delegateClass = SceneDelegate.self
+        return config
+    }
 }
 
 @main
@@ -72,6 +82,12 @@ struct PatataTubeApp: App {
                     // whenever we come back to the foreground (and on launch).
                     if phase == .active {
                         model.cache.resumeInterrupted(bearerToken: model.credentials.token)
+                    }
+                }
+                .onReceive(QuickActionRouter.shared.$pending.compactMap { $0 }) { action in
+                    Task {
+                        await model.handle(action)
+                        QuickActionRouter.shared.pending = nil
                     }
                 }
         }
