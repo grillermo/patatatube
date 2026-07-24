@@ -67,12 +67,14 @@ struct AuthedImage: View {
         if image != nil { return }
         if let path, let cached = ImageMemoryCache.shared.data(for: path) {
             image = timedMainThreadWork("decode-memcache", bytes: cached.count) { UIImage(data: cached) }
+            reportDecodedImage("decode-memcache", compressedBytes: cached.count)
             return
         }
         if let localFileURL {
             let data = timedMainThreadWork("read-localfile") { try? Data(contentsOf: localFileURL) }
             if let data {
                 image = timedMainThreadWork("decode-localfile", bytes: data.count) { UIImage(data: data) }
+                reportDecodedImage("decode-localfile", compressedBytes: data.count)
                 if let path { ImageMemoryCache.shared.store(data, for: path) }
                 return
             }
@@ -80,8 +82,30 @@ struct AuthedImage: View {
         guard let path else { return }
         if let data = try? await model.api.imageData(path: path) {
             image = timedMainThreadWork("decode-network", bytes: data.count) { UIImage(data: data) }
+            reportDecodedImage("decode-network", compressedBytes: data.count)
             ImageMemoryCache.shared.store(data, for: path)
             onNetworkLoad?(data)
         }
+    }
+
+    /// Records the decoded image's pixel dimensions and the resulting bitmap
+    /// footprint. `UIImage(data:)` here does NOT downsample, so a large source
+    /// poster is held at full resolution (~width*height*scale²*4 bytes) even in a
+    /// small grid cell — the leading suspect for the OOM watchdog kills
+    /// (PATATATUBE-6). This makes the per-image cost, and the running total
+    /// footprint, visible in Sentry.
+    private func reportDecodedImage(_ step: String, compressedBytes: Int) {
+        guard let image else { return }
+        let pixelW = image.size.width * image.scale
+        let pixelH = image.size.height * image.scale
+        let bitmapBytes = Int(pixelW * pixelH * 4)
+        MemoryProbe.snapshot("authedimage-\(step)", extra: [
+            "pixel_w": Int(pixelW),
+            "pixel_h": Int(pixelH),
+            "bitmap_bytes": bitmapBytes,
+            "bitmap_mb": Double(bitmapBytes) / (1024 * 1024),
+            "compressed_bytes": compressedBytes,
+            "path": path ?? "-",
+        ])
     }
 }

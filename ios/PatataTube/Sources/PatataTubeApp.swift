@@ -55,6 +55,10 @@ struct PatataTubeApp: App {
             withAPIKey: "GiDZTDyGAIXregVT4+YK7n/iskOtnE+sDmoxpMpusDaGACILRVdwMVdOWUFDeFEouAw=",
             sessionStrategy: .fixed()
         )
+
+        // Memory telemetry for the OOM / watchdog terminations (PATATATUBE-6, -2).
+        MainActor.assumeIsolated { MemoryProbe.installMemoryWarningObserver() }
+        MemoryProbe.snapshot("app-launch")
     }
 
     var body: some Scene {

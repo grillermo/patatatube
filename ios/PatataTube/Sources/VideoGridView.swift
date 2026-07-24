@@ -229,6 +229,12 @@ struct VideoGridView: View {
         let api = APIClient(store: model.credentials)
         if let list = try? await api.classifications() { classifications = list }
         await store.bootLoad()
+        // Footprint after the list lands: correlates library size + in-flight
+        // downloads with the OOM watchdog kills (PATATATUBE-6, -2).
+        MemoryProbe.snapshot("grid-loaded", extra: [
+            "video_count": store.videos.count,
+            "active_downloads": model.cache.activeDownloads().count,
+        ])
     }
 
     private func play(_ video: Video, sleepMode: Bool = false) {
