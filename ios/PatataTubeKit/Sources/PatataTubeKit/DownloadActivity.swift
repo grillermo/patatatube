@@ -148,6 +148,11 @@ struct DownloadCompletionHistoryStore {
         return entries
     }
 
+    mutating func clear() {
+        entries = []
+        try? fileManager.removeItem(at: url)
+    }
+
     private func persist() {
         try? fileManager.createDirectory(
             at: url.deletingLastPathComponent(),
