@@ -152,11 +152,6 @@ struct VideoGridView: View {
                             showUpload = true
                         } label: { Label("New video", systemImage: "plus") }
 
-                        Button {
-                            Task { await store.refreshLibrary() }
-                        } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                        .disabled(store.isLoading)
-
                         Toggle(isOn: $model.autoplay) {
                             Label("Autoplay", systemImage: "play.circle")
                         }
@@ -194,7 +189,7 @@ struct VideoGridView: View {
                     }
                 }
             }
-            .refreshable { await store.load() }
+            .refreshable { await store.refreshLibrary() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
             .fullScreenCover(item: $playing) { request in
