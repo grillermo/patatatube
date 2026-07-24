@@ -236,6 +236,18 @@ def _relabel_versions(versions: list[dict]) -> None:
         v["label"] = label
 
 
+def _heal_missing_conversions(video_id: int) -> None:
+    """Revert 'done' versions whose converted file was deleted from disk.
+
+    Without this a version stays 'done' pointing at a gone .mp4, so /stream 404s
+    forever. Reverting to 'unconverted' lets the next play reconvert it.
+    """
+    for version in db.get_video_versions(video_id):
+        converted = version.get("converted_path")
+        if version.get("status") == "done" and converted and not Path(converted).exists():
+            db.clear_missing_conversion(version["id"])
+
+
 def _probe_missing_audio_langs(video_id: int) -> None:
     """Fill missing per-version audio metadata without aborting a library scan."""
     for version in db.get_video_versions(video_id):
@@ -300,5 +312,6 @@ def scan_library() -> dict:
             skipped += 1
             continue
         _probe_missing_audio_langs(video_id)
+        _heal_missing_conversions(video_id)
     removed = db.tombstone_missing_library_videos(seen_rating_keys)
     return {"added": added, "updated": updated, "skipped": skipped, "removed": removed}

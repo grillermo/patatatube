@@ -767,6 +767,29 @@ def tombstone_video(video_id: int) -> None:
         )
 
 
+def clear_missing_conversion(version_id: int) -> None:
+    """Revert a version to 'unconverted' after its converted file vanished from disk.
+
+    Clears converted_path/langs so the next play reconverts, and re-syncs the parent
+    video row when this is the chosen version. The stale 'done' status is what makes
+    /stream serve a nonexistent file and 404; this undoes it.
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT video_id FROM video_versions WHERE id = ?", (version_id,)
+        ).fetchone()
+        if not row:
+            return
+        conn.execute(
+            "UPDATE video_versions "
+            "SET status = 'unconverted', converted_path = NULL, "
+            "converted_langs = NULL, error_msg = NULL "
+            "WHERE id = ?",
+            (version_id,),
+        )
+        _sync_video_from_chosen(conn, row["video_id"])
+
+
 def tombstone_missing_library_videos(seen_rating_keys: set[str]) -> int:
     """Tombstone live library rows whose Plex rating key vanished from the latest scan.
 

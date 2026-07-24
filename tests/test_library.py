@@ -358,6 +358,31 @@ def test_scan_library(fresh_db, tmp_path, monkeypatch):
     assert result == {"added": 0, "updated": 1, "skipped": 2, "removed": 0}
 
 
+def test_scan_library_heals_missing_conversion(fresh_db, tmp_path, monkeypatch):
+    import db
+    import plex
+    src = tmp_path / "movie.mkv"
+    src.write_bytes(b"x")
+
+    item = {"source_path": str(src), "title": "Movie", "classification": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "7", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+    vid, _ = db.upsert_library_video(item)
+
+    # Mark done pointing at a converted sibling that does NOT exist on disk.
+    ghost = tmp_path / "movie.mp4"  # never created
+    db.set_library_state(vid, "done", converted_path=str(ghost),
+                         converted_langs='["eng"]', version_id=db.get_video_version(vid)["id"])
+    assert db.get_video_version(vid)["status"] == "done"
+
+    library.scan_library()
+
+    healed = db.get_video_version(vid)
+    assert healed["status"] == "unconverted"
+    assert healed["converted_path"] is None
+
+
 def test_scan_library_tombstones_plex_deletions(fresh_db, tmp_path, monkeypatch):
     import db
     import plex
