@@ -170,6 +170,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var segmentContextByTask: [Int: SegmentTaskContext] = [:]
     private var tasksByIdentifier: [Int: URLSessionDownloadTask] = [:]
     private var legacyResumeBaselineTaskIDs: Set<Int> = []
+    /// Live range downloads, keyed by cache key. Cancelling one stops its
+    /// workers and leaves the partial on disk for a later resume.
+    private var downloadTasks: [String: Task<Void, Error>] = [:]
 
     public convenience init(
         root: URL? = nil,
@@ -362,10 +365,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             // A capture-progress callback means the manifest was just written to
             // disk — mirror it so `state(for:)` never has to read it back.
             capturedManifestProgress[key] = progress
-            guard tasksByKey[key] == nil,
-                  segmentedAttempts[key] == nil,
-                  probeAttempts[key] == nil
-            else { return }
+            guard downloadTasks[key] == nil else { return }
             if inFlight[key] == nil {
                 inFlight[key] = DownloadActivityAccumulator(
                     videoID: videoId, versionID: versionId,
@@ -399,13 +399,47 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                          bearerToken: String? = nil, streamCount: Int = 1) async throws {
         await concurrencyGate.acquire()
         defer { concurrencyGate.release() }
-        _ = try await downloadVideo(
-            id: id,
-            versionId: versionId,
-            from: remote,
-            bearerToken: bearerToken,
-            streamCount: min(max(streamCount, 1), 4)
-        )
+        let key = cacheKey(videoId: id, versionId: versionId)
+        let destination = localURL(for: id, versionId: versionId)
+
+        if !fileManager.fileExists(atPath: destination.path) {
+            let fetcher = fetcherRegistry.fetcher(
+                videoId: id, versionId: versionId, remoteURL: remote, bearerToken: bearerToken,
+                onProgress: { [weak self] captured, total in
+                    self?.registerCaptureProgress(
+                        key: key, videoId: id, versionId: versionId,
+                        capturedBytes: captured, totalByteCount: total)
+                })
+            let workers = min(max(streamCount, 1), 4)
+            let task = Task { try await fetcher.downloadAll(
+                concurrency: workers, destination: destination) }
+            lock.withLock {
+                downloadTasks[key] = task
+                if inFlight[key] == nil {
+                    inFlight[key] = DownloadActivityAccumulator(
+                        videoID: id, versionID: versionId, totalByteCount: nil, now: now())
+                }
+            }
+            do {
+                try await task.value
+            } catch {
+                lock.withLock {
+                    downloadTasks[key] = nil
+                    inFlight[key] = nil
+                }
+                throw error
+            }
+            lock.withLock {
+                downloadTasks[key] = nil
+                inFlight[key] = nil
+                // Publishing removed the manifest; drop the mirror so the video
+                // stops reporting as in-progress.
+                capturedManifestProgress[key] = nil
+                completionHistory.record(DownloadCompletion(
+                    videoID: id, versionID: versionId, completedAt: now()))
+            }
+            fetcherRegistry.remove(cacheKey: key)
+        }
         // Best-effort: a missing preview must not fail the cached video.
         if let preview { try? await cachePreview(id: id, from: preview, bearerToken: bearerToken) }
         // Show poster is shared across episodes: fetch once, skip when cached.
@@ -414,94 +448,50 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
     }
 
+    /// Test seam: the live fetcher for a key, so a test can drive playback-side
+    /// captures without an `AVPlayer`.
+    func testFetcher(videoId: Int, versionId: Int?) -> RangeFetcher? {
+        fetcherRegistry.existing(cacheKey: cacheKey(videoId: videoId, versionId: versionId))
+    }
+
     /// Restarts downloads interrupted by app suspension. Call when the app
-    /// returns to the foreground (and on launch): a suspended `.default` session
-    /// cancels its tasks and the OS hands back resume data, which we persisted
-    /// as `{key}.resume`. This picks those files up and continues from the last
-    /// byte. Fire-and-forget — no caller awaits the result; the delegate methods
-    /// move the finished file into place. Returns the video ids it resumed.
+    /// returns to the foreground (and on launch): every partial on disk carries
+    /// a manifest of exactly which bytes it holds, so a restart re-requests only
+    /// the gaps. Fire-and-forget — no caller awaits the result. Returns the
+    /// video ids it resumed.
     @discardableResult
     public func resumeInterrupted(bearerToken: String? = nil) -> [Int] {
         var resumed: [Int] = []
-        var resumedIDs: Set<Int> = []
-
-        func recordResumedID(_ id: Int) {
-            if resumedIDs.insert(id).inserted {
-                resumed.append(id)
-            }
-        }
-
-        let manifests = lock.withLock {
-            segmentedStore.manifests()
-        }
-        for manifest in manifests {
+        for manifest in capturedStore.manifests() {
             let key = manifest.cacheKey
-            let destination = localURL(
-                for: manifest.videoId,
-                versionId: manifest.versionId
-            )
+            let destination = localURL(for: manifest.videoId, versionId: manifest.versionId)
             if fileManager.fileExists(atPath: destination.path) {
-                segmentedStore.remove(cacheKey: key)
+                capturedStore.remove(cacheKey: key)
+                lock.withLock { capturedManifestProgress[key] = nil }
                 continue
             }
-            let attempt = SegmentedAttempt(
-                cacheKey: key,
+            guard lock.withLock({ downloadTasks[key] == nil }) else { continue }
+            let videoId = manifest.videoId
+            let versionId = manifest.versionId
+            let fetcher = fetcherRegistry.fetcher(
+                videoId: videoId, versionId: versionId, remoteURL: manifest.remoteURL,
                 bearerToken: bearerToken,
-                manifest: manifest,
-                continuation: nil
-            )
-            let registered = lock.withLock {
-                guard segmentedAttempts[key] == nil,
-                      tasksByKey[key] == nil,
-                      probeAttempts[key] == nil
-                else { return false }
-                segmentedAttempts[key] = attempt
-                inFlight[key] = activityAccumulator(
-                    manifest: manifest,
-                    activeByteCounts: [:]
-                )
-                return true
-            }
-            guard registered else { continue }
-            startIncompleteSegments(attempt: attempt, bearerToken: bearerToken)
-            recordResumedID(manifest.videoId)
-        }
-
-        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
-        let keys = contents
-            .filter { $0.hasSuffix(".resume") }
-            .map { String($0.dropLast(".resume".count)) }
-        for key in keys {
-            let id = videoId(from: key)
-            let vid = versionId(from: key)
-            // Finished while we were away — drop the stale resume file.
-            if fileManager.fileExists(atPath: localURL(for: id, versionId: vid).path) {
-                try? fileManager.removeItem(at: resumeURL(for: key))
-                continue
-            }
-            // A live task already owns this key (e.g. the user re-tapped download).
-            if lock.withLock({
-                tasksByKey[key] != nil
-                    || segmentedAttempts[key] != nil
-                    || probeAttempts[key] != nil
-            }) {
-                continue
-            }
-            guard let data = try? Data(contentsOf: resumeURL(for: key)), !data.isEmpty else { continue }
-            let task = session.downloadTask(withResumeData: data)
+                onProgress: { [weak self] captured, total in
+                    self?.registerCaptureProgress(
+                        key: key, videoId: videoId, versionId: versionId,
+                        capturedBytes: captured, totalByteCount: total)
+                })
+            let task = Task { try await fetcher.downloadAll(
+                concurrency: 1, destination: destination) }
             lock.withLock {
-                inFlight[key] = DownloadActivityAccumulator(
-                    videoID: id,
-                    versionID: vid,
-                    totalByteCount: nil,
-                    now: now()
-                )
-                idByTask[task.taskIdentifier] = key
-                tasksByKey[key] = task
-                legacyResumeBaselineTaskIDs.insert(task.taskIdentifier)
+                downloadTasks[key] = task
+                if inFlight[key] == nil {
+                    inFlight[key] = DownloadActivityAccumulator(
+                        videoID: videoId, versionID: versionId,
+                        totalByteCount: manifest.totalByteCount, now: now())
+                }
             }
-            task.resume()
-            recordResumedID(id)
+            resumed.append(videoId)
         }
         return resumed
     }
