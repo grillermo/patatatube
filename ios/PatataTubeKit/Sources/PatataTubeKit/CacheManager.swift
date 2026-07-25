@@ -352,8 +352,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     }
 
     /// Publishes capture progress into `inFlight` so the grid shows a capturing
-    /// video as `.downloading`. A manual download always wins: if one already
-    /// owns the key, capture never claims it.
+    /// video as `.downloading`. This is also the `onProgress` callback for an
+    /// explicit `download()`/`resumeInterrupted()` fetch: the registry hands out
+    /// one `RangeFetcher` per cache key, so any progress report for a key that
+    /// has a `downloadTasks` entry is necessarily that same download's own
+    /// progress, not an unrelated capture racing it — always update `inFlight`.
     private func registerCaptureProgress(
         key: String, videoId: Int, versionId: Int?,
         capturedBytes: Int64, totalByteCount: Int64
@@ -365,7 +368,6 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             // A capture-progress callback means the manifest was just written to
             // disk — mirror it so `state(for:)` never has to read it back.
             capturedManifestProgress[key] = progress
-            guard downloadTasks[key] == nil else { return }
             if inFlight[key] == nil {
                 inFlight[key] = DownloadActivityAccumulator(
                     videoID: videoId, versionID: versionId,
@@ -454,6 +456,13 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         fetcherRegistry.existing(cacheKey: cacheKey(videoId: videoId, versionId: versionId))
     }
 
+    /// Test seam: whether `downloadTasks` still tracks a live download for this
+    /// key, so a test can confirm a `resumeInterrupted`-spawned task cleaned up
+    /// after itself instead of leaking the bookkeeping forever.
+    func hasDownloadTask(videoId: Int, versionId: Int?) -> Bool {
+        lock.withLock { downloadTasks[cacheKey(videoId: videoId, versionId: versionId)] != nil }
+    }
+
     /// Restarts downloads interrupted by app suspension. Call when the app
     /// returns to the foreground (and on launch): every partial on disk carries
     /// a manifest of exactly which bytes it holds, so a restart re-requests only
@@ -489,6 +498,33 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                     inFlight[key] = DownloadActivityAccumulator(
                         videoID: videoId, versionID: versionId,
                         totalByteCount: manifest.totalByteCount, now: now())
+                }
+            }
+            // `task` above is otherwise fire-and-forget: nothing else awaits it, so
+            // without this the bookkeeping `download()` normally clears on both
+            // success and failure (`downloadTasks`/`inFlight`, completion history)
+            // would leak forever for a resumed download. Each video gets its own
+            // local completion task so one failure can't propagate out of
+            // `resumeInterrupted` and abort the scan of the rest of the list.
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await task.value
+                    self.lock.withLock {
+                        self.downloadTasks[key] = nil
+                        self.inFlight[key] = nil
+                        // Publishing removed the manifest; drop the mirror so the
+                        // video stops reporting as in-progress.
+                        self.capturedManifestProgress[key] = nil
+                        self.completionHistory.record(DownloadCompletion(
+                            videoID: videoId, versionID: versionId, completedAt: self.now()))
+                    }
+                    self.fetcherRegistry.remove(cacheKey: key)
+                } catch {
+                    self.lock.withLock {
+                        self.downloadTasks[key] = nil
+                        self.inFlight[key] = nil
+                    }
                 }
             }
             resumed.append(videoId)
