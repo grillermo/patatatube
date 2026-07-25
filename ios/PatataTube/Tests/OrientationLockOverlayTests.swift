@@ -24,25 +24,53 @@ struct OrientationLockOverlayTests {
         var toggles = 0
         let unlocked = OrientationLockOverlay(
             isLocked: false, isVisible: true, isBlocked: false,
-            onToggle: { toggles += 1 }
+            onToggle: { toggles += 1 }, isSleepOn: false, onToggleSleep: {}
         )
-        let unlockedButton = try unlocked.inspect().find(ViewType.Button.self)
-        #expect(try unlockedButton.accessibilityLabel().string() == "Lock video orientation")
-        #expect(try unlocked.inspect().find(ViewType.Image.self).actualImage().name() == "rotate.right")
+        let unlockedButton = try unlocked.inspect().find(
+            ViewType.Button.self, where: { try $0.accessibilityLabel().string() == "Lock video orientation" }
+        )
+        #expect(try unlockedButton.find(ViewType.Image.self).actualImage().name() == "rotate.right")
         try unlockedButton.tap()
         #expect(toggles == 1)
 
         let locked = OrientationLockOverlay(
             isLocked: true, isVisible: true, isBlocked: false,
-            onToggle: {}
+            onToggle: {}, isSleepOn: false, onToggleSleep: {}
         )
-        #expect(try locked.inspect().find(ViewType.Button.self).accessibilityLabel().string() == "Unlock video orientation")
-        #expect(try locked.inspect().find(ViewType.Image.self).actualImage().name() == "lock.rotation")
+        let lockedButton = try locked.inspect().find(
+            ViewType.Button.self, where: { try $0.accessibilityLabel().string() == "Unlock video orientation" }
+        )
+        #expect(try lockedButton.find(ViewType.Image.self).actualImage().name() == "lock.rotation")
+    }
+
+    @Test func sleepButtonTogglesAndTintsWhenOn() throws {
+        var sleepToggles = 0
+        let off = OrientationLockOverlay(
+            isLocked: false, isVisible: true, isBlocked: false,
+            onToggle: {}, isSleepOn: false, onToggleSleep: { sleepToggles += 1 }
+        )
+        let offButton = try off.inspect().find(
+            ViewType.Button.self, where: { try $0.accessibilityLabel().string() == "Sleep after this video" }
+        )
+        #expect(try offButton.find(ViewType.Image.self).actualImage().name() == "moon.fill")
+        try offButton.tap()
+        #expect(sleepToggles == 1)
+
+        let on = OrientationLockOverlay(
+            isLocked: false, isVisible: true, isBlocked: false,
+            onToggle: {}, isSleepOn: true, onToggleSleep: {}
+        )
+        #expect(throws: Never.self) {
+            try on.inspect().find(
+                ViewType.Button.self, where: { try $0.accessibilityLabel().string() == "Cancel sleep after this video" }
+            )
+        }
     }
 
     @Test func blockedOverlayContainsNoButton() throws {
         let sut = OrientationLockOverlay(
-            isLocked: false, isVisible: true, isBlocked: true, onToggle: {}
+            isLocked: false, isVisible: true, isBlocked: true,
+            onToggle: {}, isSleepOn: false, onToggleSleep: {}
         )
         #expect(throws: InspectionError.self) {
             try sut.inspect().find(ViewType.Button.self)
@@ -51,7 +79,8 @@ struct OrientationLockOverlayTests {
 
     @Test func hiddenOverlayContainsNoButton() throws {
         let sut = OrientationLockOverlay(
-            isLocked: false, isVisible: false, isBlocked: false, onToggle: {}
+            isLocked: false, isVisible: false, isBlocked: false,
+            onToggle: {}, isSleepOn: false, onToggleSleep: {}
         )
         #expect(throws: InspectionError.self) {
             try sut.inspect().find(ViewType.Button.self)

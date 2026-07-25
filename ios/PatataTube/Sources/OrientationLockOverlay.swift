@@ -38,22 +38,31 @@ struct OrientationLockOverlay: View {
     let isVisible: Bool
     let isBlocked: Bool
     let onToggle: () -> Void
+    let isSleepOn: Bool
+    let onToggleSleep: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topTrailing) {
                 if isVisible && !isBlocked {
-                    Button {
-                        onToggle()
-                    } label: {
-                        Image(systemName: isLocked ? "lock.rotation" : "rotate.right")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(isLocked ? Color.accentColor : .white)
-                            .frame(width: 44, height: 44)
-                            .background(.black.opacity(0.55), in: Circle())
+                    VStack(spacing: 12) {
+                        Button {
+                            onToggle()
+                        } label: {
+                            controlIcon(isLocked ? "lock.rotation" : "rotate.right",
+                                        active: isLocked)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isLocked ? "Unlock video orientation" : "Lock video orientation")
+
+                        Button {
+                            onToggleSleep()
+                        } label: {
+                            controlIcon("moon.fill", active: isSleepOn)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isSleepOn ? "Cancel sleep after this video" : "Sleep after this video")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(isLocked ? "Unlock video orientation" : "Lock video orientation")
                     .padding(.trailing, 16)
                     .padding(.top, geometry.size.height * Self.verticalOffsetFraction)
                     .transition(.opacity)
@@ -61,5 +70,13 @@ struct OrientationLockOverlay: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         }
+    }
+
+    private func controlIcon(_ systemName: String, active: Bool) -> some View {
+        Image(systemName: systemName)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(active ? Color.accentColor : .white)
+            .frame(width: 44, height: 44)
+            .background(.black.opacity(0.55), in: Circle())
     }
 }

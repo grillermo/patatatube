@@ -128,6 +128,7 @@ On first launch grid is empty / errors — need server config:
 4. On the black overlay: single taps and swipes do nothing (no player controls appear, pull-down doesn't dismiss).
 5. Press and hold ~3s anywhere on the black overlay → returns to the grid.
 6. (Device only) Leave the overlay untouched → device auto-locks after the system auto-lock interval.
+7. In-player moon toggle: start a normal video, tap it → moon button appears below the orientation-lock button. Tap it (turns accent) → current video blacks out at its end even with autoplay ON. Tap again to cancel. A video launched from the grid wedge shows the moon already on.
 
 ### Plex library
 

@@ -27,6 +27,7 @@ struct VideoPlayerView: View {
         self.sleepMode = sleepMode
         self.randomize = randomize
         _currentIndex = State(initialValue: startIndex)
+        _sleepAfterCurrent = State(initialValue: sleepMode)
         _orientationLock = StateObject(wrappedValue: OrientationLockCoordinator())
     }
 
@@ -52,6 +53,11 @@ struct VideoPlayerView: View {
     @State private var dragOffset: CGFloat = 0
     /// Set when sleep-mode playback finishes; only a 3s long-press clears it.
     @State private var showingSleepOverlay = false
+    /// Runtime sleep intent, seeded from `sleepMode`. When true, the current
+    /// video blacks out at its end instead of advancing — this wins over the
+    /// autoplay toggle (see `playbackEndAction`). Toggled by the in-player moon
+    /// button; `sleepMode` stays the immutable launch seed.
+    @State private var sleepAfterCurrent: Bool
 
     var body: some View {
         ZStack {
@@ -76,6 +82,11 @@ struct VideoPlayerView: View {
                 isBlocked: showingSleepOverlay,
                 onToggle: {
                     orientationLock.toggle()
+                    orientationControlVisibility.reveal()
+                },
+                isSleepOn: sleepAfterCurrent,
+                onToggleSleep: {
+                    sleepAfterCurrent.toggle()
                     orientationControlVisibility.reveal()
                 }
             )
@@ -249,7 +260,7 @@ struct VideoPlayerView: View {
                 switch playbackEndAction(
                     autoplay: model.autoplay,
                     isForeground: UIApplication.shared.applicationState == .active,
-                    sleepMode: sleepMode
+                    sleepMode: sleepAfterCurrent
                 ) {
                 case .advance:
                     advance(by: 1)
