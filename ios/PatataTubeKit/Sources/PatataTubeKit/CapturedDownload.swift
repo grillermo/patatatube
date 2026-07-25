@@ -92,8 +92,6 @@ struct CapturedDownloadStore: @unchecked Sendable {
     func remove(cacheKey: String) {
         try? fileManager.removeItem(at: manifestURL(cacheKey: cacheKey))
         try? fileManager.removeItem(at: partURL(cacheKey: cacheKey))
-        // Leave the directory if the segmented downloader also uses it.
-        try? fileManager.removeItem(at: directory(cacheKey: cacheKey))
     }
 
     func ensureSparseFile(cacheKey: String, totalByteCount: Int64) throws {
