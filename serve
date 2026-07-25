@@ -34,6 +34,12 @@ colorize() {
       '{ print p, $0; fflush(); print plain, $0 >> logf; fflush(logf) }'
 }
 
+# Gunicorn emits this lifecycle signal when workers are parked. It is not
+# actionable, so discard it before any web output is shown or mirrored to disk.
+filter_winch_events() {
+  awk '!/Handling signal: winch/'
+}
+
 # fd 3 preserves the real stdout so Caddy lines bypass the dev/web labels.
 exec 3>&1
 "$LOG_PYTHON_BIN" -u caddy_access.py \
@@ -42,7 +48,7 @@ exec 3>&1
   | colorize 35 caddy >&3 &
 
 if [ "$DEV" = "1" ]; then
-  exec > >(colorize 36 web) 2>&1
+  exec > >(filter_winch_events | colorize 36 web) 2>&1
   exec "$PYTHON_BIN" -m uvicorn main:app \
     --host 0.0.0.0 \
     --port "$PORT" \
@@ -62,11 +68,11 @@ fi
 # SIGHUP, staged shutdown); uvicorn workers do the actual ASGI serving.
 # Access and error logs get their own colors via process substitution but share
 # the "web" label; anything workers print directly (stdout/stderr) also gets it.
-exec > >(colorize 34 web) 2>&1
+exec > >(filter_winch_events | colorize 34 web) 2>&1
 exec "$PYTHON_BIN" -m gunicorn main:app \
   --worker-class uvicorn_worker.UvicornWorker \
   --workers "${WEB_CONCURRENCY:-3}" \
   --bind "0.0.0.0:$PORT" \
   --forwarded-allow-ips='*' \
-  --access-logfile >(colorize 32 web >&3) \
-  --error-logfile >(colorize 33 web >&3)
+  --access-logfile >(filter_winch_events | colorize 32 web >&3) \
+  --error-logfile >(filter_winch_events | colorize 33 web >&3)

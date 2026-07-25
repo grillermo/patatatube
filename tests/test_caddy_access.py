@@ -138,3 +138,21 @@ def test_serve_wires_caddy_follower_before_dev_and_production_branches():
     assert 'CADDY_ACCESS_LOG="${CADDY_ACCESS_LOG:-log/caddy_access.log}"' in source
     assert 'colorize 35 caddy >&3' in source
     assert '--watch-pid "$$"' in source
+
+
+def test_serve_winch_filter_discards_winch_events_and_preserves_other_lines():
+    source = Path("serve").read_text()
+    start = source.index("filter_winch_events()")
+    end = source.index("\n}\n", start) + 2
+    function = source[start:end]
+
+    result = subprocess.run(
+        ["bash", "-c", function + "\nfilter_winch_events"],
+        input="[INFO] Handling signal: winch\n[INFO] Worker ready\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout == "[INFO] Worker ready\n"
+    assert 'filter_winch_events | colorize 34 web' in source

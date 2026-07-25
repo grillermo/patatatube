@@ -122,9 +122,19 @@ video {
 }
 .card-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
   margin-top: 8px;
-  justify-content: flex-end
+  justify-content: space-between
+}
+.video-title {
+  color: #ccc;
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0
 }
 .download-btn {
   background: #2a2a2a;

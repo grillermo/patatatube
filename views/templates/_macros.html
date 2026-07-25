@@ -47,6 +47,7 @@
 <p style="color:#aaa;font-size:0.85em">Video is {{ v.status }}…</p>
 {%- endif %}
 <div class="card-actions">
+  <span class="video-title">{{ v | display_name }}</span>
   {% if v.status == "done" -%}
   <a class="download-btn" href="/videos/{{ v.id }}/stream?token={{ upload_token }}" download="{{ v | download_name }}.mp4" aria-label="Download video">&#8681;</a>
   {%- endif %}
