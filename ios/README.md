@@ -124,11 +124,9 @@ On first launch grid is empty / errors — need server config:
 ### Play-and-sleep
 1. Grid: children's videos with status `done` show the dark bottom-right wedge with play+moon; adults/education/tv/movies cells and non-`done` children's rows do not.
 2. Tap the wedge → video plays full screen. Tap elsewhere on the thumbnail → normal playback (autoplay behavior unchanged).
-3. With autoplay ON, let a play-and-sleep video finish → screen goes black, no next video starts.
-4. On the black overlay: single taps and swipes do nothing (no player controls appear, pull-down doesn't dismiss).
-5. Press and hold ~3s anywhere on the black overlay → returns to the grid.
-6. (Device only) Leave the overlay untouched → device auto-locks after the system auto-lock interval.
-7. In-player moon toggle: start a normal video, tap it → moon button appears below the orientation-lock button. Tap it (turns accent) → current video blacks out at its end even with autoplay ON. Tap again to cancel. A video launched from the grid wedge shows the moon already on.
+3. Requires a user Shortcut named `black-screen` (Shortcuts app). With autoplay ON, let a play-and-sleep video finish → PatataTube pauses and the `black-screen` Shortcut runs, no next video starts.
+4. If the Shortcut is missing, iOS shows its "shortcut not found" prompt — create one named exactly `black-screen`.
+5. In-player moon toggle: start a normal video, tap it → moon button appears below the orientation-lock button. Tap it (turns accent) → at the current video's end the `black-screen` Shortcut runs even with autoplay ON. Tap again to cancel. A video launched from the grid wedge shows the moon already on.
 
 ### Plex library
 
