@@ -227,7 +227,11 @@ struct VideoPlayerView: View {
                 videoId: video.id,
                 versionId: video.chosenVersionId,
                 remoteURL: url,
-                bearerToken: model.credentials.token)
+                bearerToken: model.credentials.token,
+                // Only non-library, non-HLS videos can finalize into a cached MP4.
+                // The finalize-on-end hook uses the same gate; keeping them aligned
+                // stops a library/HLS video from orphaning a capture partial.
+                isEligibleForCapture: !video.isLibrary && (video.hlsPath?.isEmpty ?? true))
             return AVPlayerItem(asset: asset)
         }
         return nil

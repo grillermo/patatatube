@@ -154,6 +154,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private let cancellationFence: any CacheManagerCancellationFencing
     private let concurrencyGate: any DownloadConcurrencyGating
     private var inFlight: [String: DownloadActivityAccumulator] = [:]
+    /// In-memory mirror of which cache keys have a persisted capture manifest on
+    /// disk, mapped to their last-known progress. Read by `state(for:)` under the
+    /// lock so a grid render never does per-cell disk I/O. Seeded once at init
+    /// from `capturedStore.manifests()`, then kept current incrementally as
+    /// capture progress is written and as manifests are removed.
+    private var capturedManifestProgress: [String: Double] = [:]
     private var completionHistory: DownloadCompletionHistoryStore
     private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
     private var idByTask: [Int: String] = [:]
@@ -215,6 +221,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         values.isExcludedFromBackup = true
         var dir = self.root
         try? dir.setResourceValues(values)
+        // Seed the capture-manifest cache once (an O(n) disk scan at startup, not
+        // per render) so `state(for:)` can answer from memory afterward.
+        for manifest in capturedStore.manifests() {
+            capturedManifestProgress[manifest.cacheKey] = manifest.progress
+        }
     }
 
     /// Sets the global cap on how many videos download at once.
@@ -278,8 +289,8 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         if fileManager.fileExists(atPath: localURL(for: id, versionId: versionId).path) { return .cached }
         return lock.withLock {
             if let accumulator = inFlight[key] { return .downloading(accumulator.activity.progress) }
-            if let manifest = try? capturedStore.load(cacheKey: key) {
-                return .downloading(manifest.progress)
+            if let progress = capturedManifestProgress[key] {
+                return .downloading(progress)
             }
             return .notCached
         }
@@ -297,9 +308,23 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Builds an `AVURLAsset` that plays the remote video while capturing every
     /// fetched byte to a partial on disk. Capture progress is surfaced through
     /// `inFlight`/`state(for:)` — but only when no manual download owns the key.
+    /// `isEligibleForCapture` must be false for any video whose watch can never
+    /// be finalized into a cached MP4 — library rows and HLS-packaged videos.
+    /// Capturing those would accumulate a partial on disk that the finalize hook
+    /// deliberately skips, orphaning a `.downloading` state forever. The gate
+    /// lives here (not only at the call site) so no future caller can bypass it:
+    /// when ineligible we hand back a plain authed asset that captures nothing.
     public func captureAsset(
-        videoId: Int, versionId: Int? = nil, remoteURL: URL, bearerToken: String?
+        videoId: Int, versionId: Int? = nil, remoteURL: URL, bearerToken: String?,
+        isEligibleForCapture: Bool = true
     ) -> AVURLAsset {
+        guard isEligibleForCapture else {
+            var options: [String: Any] = [:]
+            if let bearerToken {
+                options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(bearerToken)"]
+            }
+            return AVURLAsset(url: remoteURL, options: options)
+        }
         let key = cacheKey(videoId: videoId, versionId: versionId)
         return captureManager.asset(
             videoId: videoId, versionId: versionId, remoteURL: remoteURL, bearerToken: bearerToken,
@@ -315,8 +340,13 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let key = cacheKey(videoId: videoId, versionId: versionId)
         guard let fetcher = captureManager.fetcher(forCacheKey: key) else { return }
         let destination = localURL(for: videoId, versionId: versionId)
-        try? await fetcher.finalize(destination: destination)
-        lock.withLock { inFlight[key] = nil }
+        let finalized = (try? await fetcher.finalize(destination: destination)) != nil
+        lock.withLock {
+            inFlight[key] = nil
+            // Publishing removes the on-disk manifest; drop the mirror so a
+            // completed capture stops reporting as `.downloading`.
+            if finalized { capturedManifestProgress[key] = nil }
+        }
     }
 
     /// Publishes capture progress into `inFlight` so the grid shows a capturing
@@ -324,6 +354,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// owns the key (task, segmented attempt, or probe), capture never claims it.
     private func registerCaptureProgress(key: String, videoId: Int, versionId: Int?, progress: Double) {
         lock.withLock {
+            // A capture-progress callback means the manifest was just written to
+            // disk — mirror it so `state(for:)` never has to read it back.
+            capturedManifestProgress[key] = progress
             guard tasksByKey[key] == nil,
                   segmentedAttempts[key] == nil,
                   probeAttempts[key] == nil
@@ -513,8 +546,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Deletes a cached MP4. Used when the server re-converts a file with a
     /// different audio track set, making the cached copy stale.
     public func removeCached(id: Int, versionId: Int? = nil) {
+        let key = cacheKey(videoId: id, versionId: versionId)
         try? fileManager.removeItem(at: localURL(for: id, versionId: versionId))
-        capturedStore.remove(cacheKey: cacheKey(videoId: id, versionId: versionId))
+        capturedStore.remove(cacheKey: key)
+        lock.withLock { capturedManifestProgress[key] = nil }
     }
 
     /// True when any cached MP4 (any version) exists for this video.
@@ -537,6 +572,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
         for manifest in capturedStore.manifests() where manifest.videoId == id {
             capturedStore.remove(cacheKey: manifest.cacheKey)
+            lock.withLock { capturedManifestProgress[manifest.cacheKey] = nil }
         }
     }
 
@@ -557,7 +593,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         for manifest in capturedStore.manifests() {
             capturedStore.remove(cacheKey: manifest.cacheKey)
         }
-        lock.withLock { completionHistory.clear() }
+        lock.withLock {
+            capturedManifestProgress.removeAll()
+            completionHistory.clear()
+        }
     }
 
     /// Clears every cached preview image and show poster. Videos, resume data,

@@ -107,10 +107,24 @@ public final class CaptureManager: NSObject, AVAssetResourceLoaderDelegate, @unc
                     let end = dataRequest.requestsAllDataToEndOfResource
                         ? info.totalByteCount - 1
                         : min(start + Int64(dataRequest.requestedLength) - 1, info.totalByteCount - 1)
-                    if end >= start {
+                    // Stream the requested range to the player in ≤1 MiB chunks
+                    // rather than buffering the whole (possibly multi-GB) remainder
+                    // in RAM: fetch one sub-chunk, respond with it, repeat.
+                    // `respond(with:)` may be called repeatedly to deliver partial
+                    // data incrementally.
+                    let chunk: Int64 = 1_048_576
+                    var offset = start
+                    while offset <= end {
+                        if Task.isCancelled {
+                            // AVFoundation already dropped interest — finish quietly.
+                            loadingRequest.finishLoading()
+                            return
+                        }
+                        let chunkEnd = min(offset + chunk - 1, end)
                         let data = try await fetcher.data(
-                            for: DownloadByteRange(start: start, end: end))
+                            for: DownloadByteRange(start: offset, end: chunkEnd))
                         dataRequest.respond(with: data)
+                        offset = chunkEnd + 1
                     }
                 }
 
