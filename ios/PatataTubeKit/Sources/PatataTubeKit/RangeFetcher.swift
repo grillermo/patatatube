@@ -113,6 +113,24 @@ actor RangeFetcher {
         onProgress(m.progress)
         return data
     }
+
+    /// Fetch every uncaptured range, then publish the completed file. Leaves the
+    /// partial intact and rethrows on any failure (never publishes a partial).
+    func finalize(destination: URL) async throws {
+        guard let m0 = manifest else { _ = try await loadContentInfo(); return try await finalize(destination: destination) }
+        let chunk: Int64 = 4 * 1_048_576
+        for gap in CapturedRanges.complement(of: m0.capturedRanges, over: m0.totalByteCount) {
+            var start = gap.start
+            while start <= gap.end {
+                let end = min(start + chunk - 1, gap.end)
+                _ = try await data(for: DownloadByteRange(start: start, end: end))
+                start = end + 1
+            }
+        }
+        guard let m = manifest, m.isComplete else { throw RangeFetcherError.lengthMismatch }
+        try store.publish(cacheKey: cacheKey, to: destination)
+        manifest = nil
+    }
 }
 
 /// Strong ETag: quoted, not weak (`W/`-prefixed).
