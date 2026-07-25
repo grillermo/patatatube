@@ -154,7 +154,9 @@ struct VideoPlayerView: View {
             return
         }
         if randomize {
-            playbackOrder = shuffledPlaybackOrder(count: videos.count, pinFirst: currentIndex)
+            let playable = playableVideoIndices
+            let order = shuffledPlaybackOrder(count: playable.count, pinFirst: playable.firstIndex(of: currentIndex))
+            playbackOrder = order.map { playable[$0] }
             orderPosition = 0
         }
         activateAudioSession()
@@ -281,45 +283,39 @@ struct VideoPlayerView: View {
         videos.contains { playerItem(for: $0) != nil }
     }
 
-    /// Random-mode step: walks `playbackOrder`'s cursor in `direction`,
-    /// skipping unplayable entries, growing the order with a fresh reshuffle
-    /// (excluding the wrap point, so autoplay's loop never repeats a video
-    /// back-to-back) whenever a forward step runs off the end. Returns the
-    /// resulting `videos` index, or nil if nothing playable was found — a
-    /// bounded attempt count guards against spinning forever when nothing
-    /// in the queue is playable. Advancing forward commits the step (mutates
+    /// Indices of videos that currently have a playable source — the pool
+    /// `playbackOrder` is drawn from and reshuffled over in random mode.
+    /// Excluding unplayable entries here (rather than skipping them during
+    /// stepping) keeps `orderPosition == 0` an accurate "nothing before me"
+    /// check, the same guarantee sequential mode gets from `playableIndex`.
+    private var playableVideoIndices: [Int] {
+        videos.indices.filter { playerItem(for: videos[$0]) != nil }
+    }
+
+    /// Random-mode step: walks `playbackOrder`'s cursor in `direction`.
+    /// Forward, grows the order with a fresh reshuffle over the currently
+    /// playable pool (excluding the wrap point, so autoplay's loop never
+    /// repeats a video back-to-back) whenever the step runs off the end.
+    /// Returns the resulting `videos` index, or nil if no playable video
+    /// exists to grow into. Advancing forward commits the step (mutates
     /// `orderPosition`/`playbackOrder`); this must only be called when the
     /// caller intends to actually move, never as a peek.
     private func randomStep(direction: Int) -> Int? {
-        guard !videos.isEmpty else { return nil }
         if direction > 0 {
-            var position = orderPosition
-            var attempts = 0
-            while attempts < videos.count * 2 {
-                let nextPosition = position + 1
-                if nextPosition >= playbackOrder.count {
-                    playbackOrder += shuffledPlaybackOrder(count: videos.count, avoidFirst: playbackOrder.last)
-                }
-                position = nextPosition
-                let candidate = playbackOrder[position]
-                if playerItem(for: videos[candidate]) != nil {
-                    orderPosition = position
-                    return candidate
-                }
-                attempts += 1
+            let nextPosition = orderPosition + 1
+            if nextPosition >= playbackOrder.count {
+                let playable = playableVideoIndices
+                guard !playable.isEmpty else { return nil }
+                let avoidPosition = playbackOrder.last.flatMap { playable.firstIndex(of: $0) }
+                playbackOrder += shuffledPlaybackOrder(count: playable.count, avoidFirst: avoidPosition).map { playable[$0] }
             }
-            return nil
+            guard nextPosition < playbackOrder.count else { return nil }
+            orderPosition = nextPosition
+            return playbackOrder[nextPosition]
         } else {
-            var position = orderPosition
-            while position > 0 {
-                position -= 1
-                let candidate = playbackOrder[position]
-                if playerItem(for: videos[candidate]) != nil {
-                    orderPosition = position
-                    return candidate
-                }
-            }
-            return nil
+            guard orderPosition > 0 else { return nil }
+            orderPosition -= 1
+            return playbackOrder[orderPosition]
         }
     }
 
