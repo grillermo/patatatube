@@ -221,6 +221,15 @@ On first launch grid is empty / errors — need server config:
 5. Relaunch the app → the switch is back to off (it is session-only by design).
 6. Lock-screen next/previous keep working with the switch in either position.
 
+### Watch-to-cache (direct-MP4 videos)
+1. Ensure a Twitter/YouTube video is NOT cached (grid ring empty).
+2. Play it start-to-finish without seeking. Let it reach the end.
+3. Return to the grid: the video shows a full ring / cached badge.
+4. Enable Airplane Mode, reopen the video: it plays offline from the cached file.
+5. Repeat but CLOSE at ~50%: the grid ring shows a partial. Reopen and play to
+   the end: it completes to cached.
+6. Confirm an HLS library movie does NOT auto-cache from watching (out of scope).
+
 ## Notes
 
 - `PatataTubeTests` covers the shared download button's state, rendering,

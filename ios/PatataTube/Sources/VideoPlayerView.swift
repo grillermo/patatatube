@@ -220,8 +220,15 @@ struct VideoPlayerView: View {
             return AVPlayerItem(asset: authedAsset(url: hlsURL))
         }
         if let url = model.streamURL(for: video) {
-            // Direct MP4 fallback for rows without an HLS package.
-            return AVPlayerItem(asset: authedAsset(url: url))
+            // Direct MP4 (no HLS package): play through the capturing asset so a full
+            // watch also downloads the file. Falls back to a plain authed asset if a
+            // capture URL can't be formed.
+            let asset = model.cache.captureAsset(
+                videoId: video.id,
+                versionId: video.chosenVersionId,
+                remoteURL: url,
+                bearerToken: model.credentials.token)
+            return AVPlayerItem(asset: asset)
         }
         return nil
     }
@@ -248,6 +255,11 @@ struct VideoPlayerView: View {
             object: player?.currentItem, queue: .main
         ) { _ in
             Task { @MainActor in
+                let finished = video   // the item that reached end
+                if !finished.isLibrary, finished.hlsPath?.isEmpty ?? true {
+                    Task { await model.cache.finalizeCapture(
+                        videoId: finished.id, versionId: finished.chosenVersionId) }
+                }
                 switch playbackEndAction(
                     autoplay: model.autoplay,
                     isForeground: UIApplication.shared.applicationState == .active,
