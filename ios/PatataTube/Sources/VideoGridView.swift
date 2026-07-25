@@ -163,6 +163,10 @@ struct VideoGridView: View {
                             Label("Autoplay", systemImage: "play.circle")
                         }
 
+                        Toggle(isOn: model.randomizeBinding(for: store.filter)) {
+                            Label("Randomize", systemImage: "shuffle")
+                        }
+
                         Divider()
 
                         Button {

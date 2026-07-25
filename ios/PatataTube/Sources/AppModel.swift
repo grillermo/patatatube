@@ -1,6 +1,7 @@
 // ios/PatataTube/Sources/AppModel.swift
 import Foundation
 import Combine
+import SwiftUI
 import PatataTubeKit
 
 @MainActor
@@ -21,6 +22,22 @@ final class AppModel: ObservableObject {
     /// by design — it resets to off on relaunch, so a long queue can never keep
     /// playing across launches unnoticed.
     @Published var autoplay: Bool = false
+
+    /// Keyed by classification (`store.filter`, `"all"` for the unfiltered
+    /// tab). Session-only, same lifetime as `autoplay` — not persisted
+    /// across relaunch.
+    @Published var randomizeByClassification: [String: Bool] = [:]
+
+    func randomize(for classification: String?) -> Bool {
+        randomizeByClassification[classification ?? "all"] ?? false
+    }
+
+    func randomizeBinding(for classification: String?) -> Binding<Bool> {
+        Binding(
+            get: { self.randomize(for: classification) },
+            set: { self.randomizeByClassification[classification ?? "all"] = $0 }
+        )
+    }
 
     init(
         credentials: CredentialStore = KeychainCredentialStore(),
