@@ -67,6 +67,20 @@ struct DownloadActivityAccumulator {
         )
     }
 
+    /// Stamps a progress value directly, preserving the other activity fields.
+    /// Used by watch-to-cache capture, whose progress comes from a manifest's
+    /// covered-byte ratio rather than byte-rate sampling.
+    mutating func overrideProgress(_ progress: Double) {
+        activity = DownloadActivity(
+            videoID: videoID,
+            versionID: versionID,
+            progress: min(max(progress, 0), 1),
+            transferredByteCount: activity.transferredByteCount,
+            totalByteCount: activity.totalByteCount,
+            bytesPerSecond: activity.bytesPerSecond
+        )
+    }
+
     mutating func establishResumeSamplingBaseline(
         totalBytesWritten: Int64,
         bytesWritten: Int64

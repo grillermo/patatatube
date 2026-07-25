@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import AVFoundation
 
 public enum CacheState: Equatable, Sendable {
     case notCached
@@ -145,6 +146,7 @@ private final class SegmentedAttempt: @unchecked Sendable {
 public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let root: URL
     private let segmentedStore: SegmentedDownloadStore
+    private let capturedStore: CapturedDownloadStore
     private var session: URLSession!
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
@@ -197,6 +199,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             fileManager: fileManager
         )
         self.segmentedStore = SegmentedDownloadStore(
+            root: self.root,
+            fileManager: fileManager
+        )
+        self.capturedStore = CapturedDownloadStore(
             root: self.root,
             fileManager: fileManager
         )
@@ -271,7 +277,62 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let key = cacheKey(videoId: id, versionId: versionId)
         if fileManager.fileExists(atPath: localURL(for: id, versionId: versionId).path) { return .cached }
         return lock.withLock {
-            inFlight[key].map { .downloading($0.activity.progress) } ?? .notCached
+            if let accumulator = inFlight[key] { return .downloading(accumulator.activity.progress) }
+            if let manifest = try? capturedStore.load(cacheKey: key) {
+                return .downloading(manifest.progress)
+            }
+            return .notCached
+        }
+    }
+
+    // MARK: Watch-to-cache capture
+
+    /// A capturing `AVURLAsset` served through an in-process `CaptureManager`.
+    /// Loaded so a fresh manager is created only once `session` is wired up.
+    private lazy var captureManager = CaptureManager(
+        store: capturedStore,
+        session: session
+    )
+
+    /// Builds an `AVURLAsset` that plays the remote video while capturing every
+    /// fetched byte to a partial on disk. Capture progress is surfaced through
+    /// `inFlight`/`state(for:)` — but only when no manual download owns the key.
+    public func captureAsset(
+        videoId: Int, versionId: Int? = nil, remoteURL: URL, bearerToken: String?
+    ) -> AVURLAsset {
+        let key = cacheKey(videoId: videoId, versionId: versionId)
+        return captureManager.asset(
+            videoId: videoId, versionId: versionId, remoteURL: remoteURL, bearerToken: bearerToken,
+            onProgress: { [weak self] progress in
+                self?.registerCaptureProgress(
+                    key: key, videoId: videoId, versionId: versionId, progress: progress)
+            })
+    }
+
+    /// Fetches every uncaptured byte and publishes the completed MP4 into the
+    /// cache. Best-effort; leaves the partial intact on failure.
+    public func finalizeCapture(videoId: Int, versionId: Int? = nil) async {
+        let key = cacheKey(videoId: videoId, versionId: versionId)
+        guard let fetcher = captureManager.fetcher(forCacheKey: key) else { return }
+        let destination = localURL(for: videoId, versionId: versionId)
+        try? await fetcher.finalize(destination: destination)
+        lock.withLock { inFlight[key] = nil }
+    }
+
+    /// Publishes capture progress into `inFlight` so the grid shows a capturing
+    /// video as `.downloading`. A manual download always wins: if one already
+    /// owns the key (task, segmented attempt, or probe), capture never claims it.
+    private func registerCaptureProgress(key: String, videoId: Int, versionId: Int?, progress: Double) {
+        lock.withLock {
+            guard tasksByKey[key] == nil,
+                  segmentedAttempts[key] == nil,
+                  probeAttempts[key] == nil
+            else { return }
+            if inFlight[key] == nil {
+                inFlight[key] = DownloadActivityAccumulator(
+                    videoID: videoId, versionID: versionId, totalByteCount: nil, now: now())
+            }
+            inFlight[key]?.overrideProgress(progress)
         }
     }
 
@@ -453,6 +514,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// different audio track set, making the cached copy stale.
     public func removeCached(id: Int, versionId: Int? = nil) {
         try? fileManager.removeItem(at: localURL(for: id, versionId: versionId))
+        capturedStore.remove(cacheKey: cacheKey(videoId: id, versionId: versionId))
     }
 
     /// True when any cached MP4 (any version) exists for this video.
@@ -473,6 +535,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         for manifest in segmentedStore.manifests() where manifest.videoId == id {
             segmentedStore.remove(cacheKey: manifest.cacheKey)
         }
+        for manifest in capturedStore.manifests() where manifest.videoId == id {
+            capturedStore.remove(cacheKey: manifest.cacheKey)
+        }
     }
 
     /// Clears every downloaded video: cancels in-flight downloads, removes all
@@ -488,6 +553,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
         for manifest in segmentedStore.manifests() {
             segmentedStore.remove(cacheKey: manifest.cacheKey)
+        }
+        for manifest in capturedStore.manifests() {
+            capturedStore.remove(cacheKey: manifest.cacheKey)
         }
         lock.withLock { completionHistory.clear() }
     }
