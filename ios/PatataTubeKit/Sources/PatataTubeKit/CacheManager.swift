@@ -300,10 +300,8 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
 
     /// A capturing `AVURLAsset` served through an in-process `CaptureManager`.
     /// Loaded so a fresh manager is created only once `session` is wired up.
-    private lazy var captureManager = CaptureManager(
-        store: capturedStore,
-        session: session
-    )
+    private lazy var fetcherRegistry = RangeFetcherRegistry(store: capturedStore, session: session)
+    private lazy var captureManager = CaptureManager(registry: fetcherRegistry)
 
     /// Builds an `AVURLAsset` that plays the remote video while capturing every
     /// fetched byte to a partial on disk. Capture progress is surfaced through

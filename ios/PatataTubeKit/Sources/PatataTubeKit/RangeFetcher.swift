@@ -12,6 +12,13 @@ enum RangeFetcherError: Error, Equatable {
     case lengthMismatch
 }
 
+/// Who asked for a range. Player requests are latency-sensitive and throttle
+/// any concurrent background download of the same video.
+enum FetchOrigin: Sendable {
+    case player
+    case downloader
+}
+
 /// Serves inclusive byte ranges of a remote MP4, capturing every fetched byte
 /// to a sparse file tracked by a `CapturedDownloadManifest`. One instance per
 /// playing video; serialized via `actor`.
@@ -25,6 +32,10 @@ actor RangeFetcher {
     private let session: URLSession
     private let onProgress: @Sendable (Int64, Int64) -> Void
     private var manifest: CapturedDownloadManifest?
+    /// When the resource loader last asked for bytes. Drives back-pressure on a
+    /// concurrent background download of the same video.
+    private var lastPlayerRequestAt: Date?
+    private let now: @Sendable () -> Date
 
     /// Gap-fill request size. Also the maximum work lost when the app is
     /// suspended mid-transfer.
@@ -38,7 +49,8 @@ actor RangeFetcher {
         versionId: Int?,
         store: CapturedDownloadStore,
         session: URLSession,
-        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.cacheKey = cacheKey
         self.remoteURL = remoteURL
@@ -48,6 +60,7 @@ actor RangeFetcher {
         self.store = store
         self.session = session
         self.onProgress = onProgress
+        self.now = now
     }
 
     var manifestSnapshot: CapturedDownloadManifest? { manifest }
@@ -91,7 +104,8 @@ actor RangeFetcher {
         return ContentInfo(totalByteCount: total, etag: etag)
     }
 
-    func data(for range: DownloadByteRange) async throws -> Data {
+    func data(for range: DownloadByteRange, origin: FetchOrigin = .downloader) async throws -> Data {
+        if origin == .player { lastPlayerRequestAt = now() }
         guard let m = manifest else {
             _ = try await loadContentInfo()
             return try await data(for: range)
@@ -122,12 +136,29 @@ actor RangeFetcher {
         return data
     }
 
+    /// A background download yields to a live playhead: while the resource
+    /// loader has asked for bytes within this window, only one worker runs.
+    static let playbackBackPressureWindow: TimeInterval = 10
+
+    static func effectiveConcurrency(
+        requested: Int, lastPlayerRequestAt: Date?, now: Date
+    ) -> Int {
+        let clamped = min(max(requested, 1), 4)
+        guard let lastPlayerRequestAt,
+              now.timeIntervalSince(lastPlayerRequestAt) < playbackBackPressureWindow
+        else { return clamped }
+        return 1
+    }
+
     /// Fetches every uncaptured byte using `concurrency` parallel workers,
     /// ascending by offset so the file head (and its faststart `moov`) lands
     /// first and playback can start off disk immediately.
     func fetchAll(concurrency: Int) async throws {
         let info = try await loadContentInfo()
-        let workers = min(max(concurrency, 1), 4)
+        func workerBudget() -> Int {
+            Self.effectiveConcurrency(
+                requested: concurrency, lastPlayerRequestAt: lastPlayerRequestAt, now: now())
+        }
         var chunks: [DownloadByteRange] = []
         for gap in CapturedRanges.complement(
             of: manifest?.capturedRanges ?? [], over: info.totalByteCount
@@ -149,10 +180,12 @@ actor RangeFetcher {
                 next += 1
                 group.addTask { _ = try await self.data(for: range) }
             }
-            for _ in 0..<min(workers, chunks.count) { addNext() }
+            for _ in 0..<min(workerBudget(), chunks.count) { addNext() }
             while try await group.next() != nil {
                 try Task.checkCancellation()
-                addNext()
+                // One completion frees one slot; add a replacement only while the
+                // budget allows, so a playing video shrinks the pool live.
+                if workerBudget() > 0 { addNext() }
             }
         }
     }

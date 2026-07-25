@@ -12,23 +12,17 @@ import AVFoundation
 public final class CaptureManager: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
     public static let scheme = "ptcapture"
 
-    private let store: CapturedDownloadStore
-    private let session: URLSession
+    private let registry: RangeFetcherRegistry
     private let delegateQueue = DispatchQueue(label: "patatatube.capture.loader")
     private let lock = NSLock()
-    private var fetchers: [String: RangeFetcher] = [:]
     /// Maps a capturing asset's URL back to the cache key of its fetcher.
     /// Populated in `asset(...)` and read in the delegate — this is how a
     /// loading request finds its fetcher without reverse-matching remote URLs
     /// or re-parsing video/version ids out of the URL.
     private var keysByCaptureURL: [URL: String] = [:]
 
-    init(
-        store: CapturedDownloadStore,
-        session: URLSession = .shared
-    ) {
-        self.store = store
-        self.session = session
+    init(registry: RangeFetcherRegistry) {
+        self.registry = registry
     }
 
     // MARK: Scheme helpers (unit-tested)
@@ -48,7 +42,7 @@ public final class CaptureManager: NSObject, AVAssetResourceLoaderDelegate, @unc
     // MARK: Registry
 
     func fetcher(forCacheKey key: String) -> RangeFetcher? {
-        lock.withLock { fetchers[key] }
+        registry.existing(cacheKey: key)
     }
 
     /// Builds a capturing asset for a video, registering a `RangeFetcher` keyed
@@ -62,20 +56,12 @@ public final class CaptureManager: NSObject, AVAssetResourceLoaderDelegate, @unc
         onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) -> AVURLAsset {
         let key = versionId.map { "\(videoId):\($0)" } ?? "\(videoId)"
-        let fetcher = RangeFetcher(
-            cacheKey: key,
-            remoteURL: remoteURL,
-            bearerToken: bearerToken,
-            videoId: videoId,
-            versionId: versionId,
-            store: store,
-            session: session,
-            onProgress: onProgress)
+        let fetcher = registry.fetcher(
+            videoId: videoId, versionId: versionId, remoteURL: remoteURL,
+            bearerToken: bearerToken, onProgress: onProgress)
+        _ = fetcher
         let captureURL = Self.captureURL(from: remoteURL) ?? remoteURL
-        lock.withLock {
-            fetchers[key] = fetcher
-            keysByCaptureURL[captureURL] = key
-        }
+        lock.withLock { keysByCaptureURL[captureURL] = key }
         let asset = AVURLAsset(url: captureURL)
         asset.resourceLoader.setDelegate(self, queue: delegateQueue)
         return asset
@@ -122,7 +108,8 @@ public final class CaptureManager: NSObject, AVAssetResourceLoaderDelegate, @unc
                         }
                         let chunkEnd = min(offset + chunk - 1, end)
                         let data = try await fetcher.data(
-                            for: DownloadByteRange(start: offset, end: chunkEnd))
+                            for: DownloadByteRange(start: offset, end: chunkEnd),
+                            origin: .player)
                         dataRequest.respond(with: data)
                         offset = chunkEnd + 1
                     }
