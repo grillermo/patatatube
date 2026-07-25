@@ -97,6 +97,94 @@ struct RangeFetcherFetchAllTests {
         #expect(data == body.subdata(in: 30..<40))
         #expect(recorder.covered().isEmpty)
     }
+
+    /// Regression test: `fetchAll`'s worker pool must actually converge down to
+    /// `workerBudget()` once a player starts requesting bytes on the same
+    /// video mid-download, not just stay pinned at the concurrency it started
+    /// with (the pre-fix bug — see RangeFetcher.fetchAll's drain loop).
+    ///
+    /// `MockURLProtocol` serializes handler *execution*, so wall-clock overlap
+    /// between two requests can't distinguish the bug from the fix — both look
+    /// serialized at that level. `URLSession.allTasks` doesn't have that
+    /// problem: it reflects every task that has been dispatched and not yet
+    /// completed, regardless of when the mock gets around to running its
+    /// handler. So this test gates the handler on a semaphore to hold requests
+    /// "in flight" on demand and asserts on `allTasks.count`.
+    @Test func fetchAllShrinksConcurrencyOncePlaybackStartsMidDownload() async throws {
+        let session = mockSession()
+        // 180 bytes: every other 10-byte segment is pre-captured, leaving 9
+        // ten-byte gaps — each its own chunk (well under chunkSize) — so
+        // fetchAll has more chunks than the initial worker budget and a
+        // measurable "after the shrink" phase.
+        let content = Data((0..<180).map { UInt8($0 % 256) })
+        func respond(_ request: URLRequest) -> (HTTPURLResponse, Data) {
+            let spec = (request.value(forHTTPHeaderField: "Range") ?? "bytes=0-0")
+                .replacingOccurrences(of: "bytes=", with: "")
+            let parts = spec.split(separator: "-")
+            let start = Int(parts[0])!
+            let end = parts.count > 1 && !parts[1].isEmpty ? Int(parts[1])! : content.count - 1
+            let slice = content.subdata(in: start..<(end + 1))
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 206, httpVersion: nil,
+                headerFields: [
+                    "Accept-Ranges": "bytes",
+                    "ETag": "\"v1\"",
+                    "Content-Range": "bytes \(start)-\(end)/\(content.count)",
+                    "Content-Length": "\(slice.count)",
+                ])!
+            return (response, slice)
+        }
+        // Phase 1: respond immediately, so probing and pre-capturing every
+        // other 10-byte segment doesn't block.
+        MockURLProtocol.handler = { respond($0) }
+        let fetcher = RangeFetcher(
+            cacheKey: "1", remoteURL: remote, bearerToken: "t",
+            videoId: 1, versionId: nil,
+            store: CapturedDownloadStore(root: root()), session: session,
+            onProgress: { _, _ in })
+        _ = try await fetcher.loadContentInfo()
+        for s in stride(from: 0, to: 180, by: 20) {
+            _ = try await fetcher.data(for: .init(start: Int64(s), end: Int64(s + 9)))
+        }
+
+        // Phase 2: every further request (fetchAll's 9 gap chunks) blocks
+        // until released, so the test can hold an exact number "in flight".
+        let sem = DispatchSemaphore(value: 0)
+        MockURLProtocol.handler = { request in
+            sem.wait()
+            return respond(request)
+        }
+
+        async let run: Void = fetcher.fetchAll(concurrency: 4)
+
+        // Wait for the initial batch — min(concurrency, chunkCount) = 4 — to
+        // be dispatched and blocked in the handler.
+        var inFlight = await session.allTasks.count
+        for _ in 0..<100 where inFlight < 4 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            inFlight = await session.allTasks.count
+        }
+        #expect(inFlight == 4)
+
+        // Playback starts mid-download. This range is already fully captured,
+        // so it's served from disk (no network call) — it only records the
+        // player-request timestamp that should push the live budget to 1.
+        _ = try await fetcher.data(for: .init(start: 0, end: 9), origin: .player)
+
+        // Release exactly one in-flight worker and give the drain loop a
+        // moment to react. A pool pinned at 4 (the pre-fix bug: it refills
+        // 1-for-1 regardless of budget) would immediately dispatch a
+        // replacement; the fix must not, because runningCount (3) is not
+        // below the shrunk budget (1).
+        sem.signal()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let afterOneCompletion = await session.allTasks.count
+        #expect(afterOneCompletion == 3)
+
+        // Drain the rest so fetchAll can finish.
+        for _ in 0..<20 { sem.signal() }
+        try await run
+    }
 }
 
 /// Collects requested ranges and merges them into minimal closed ranges so a

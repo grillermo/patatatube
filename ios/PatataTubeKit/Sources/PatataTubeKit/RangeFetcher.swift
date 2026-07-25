@@ -173,19 +173,23 @@ actor RangeFetcher {
         guard !chunks.isEmpty else { return }
 
         var next = 0
+        var runningCount = 0
         try await withThrowingTaskGroup(of: Void.self) { group in
             func addNext() {
                 guard next < chunks.count else { return }
                 let range = chunks[next]
                 next += 1
+                runningCount += 1
                 group.addTask { _ = try await self.data(for: range) }
             }
             for _ in 0..<min(workerBudget(), chunks.count) { addNext() }
             while try await group.next() != nil {
+                runningCount -= 1
                 try Task.checkCancellation()
-                // One completion frees one slot; add a replacement only while the
-                // budget allows, so a playing video shrinks the pool live.
-                if workerBudget() > 0 { addNext() }
+                // One completion frees one slot; only refill up to the live budget,
+                // so a worker pool actually shrinks when playback starts mid-download
+                // instead of staying pinned at whatever count fetchAll started with.
+                while runningCount < workerBudget() && next < chunks.count { addNext() }
             }
         }
     }
