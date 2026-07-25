@@ -20,6 +20,34 @@ private actor AsyncTestSignal {
     }
 }
 
+private actor PublicationTestGate {
+    private var arrived = false
+    private var released = false
+    private var arrivalWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitBeforePublication() async {
+        arrived = true
+        let waiters = arrivalWaiters
+        arrivalWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitForArrival() async {
+        guard !arrived else { return }
+        await withCheckedContinuation { arrivalWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 @Suite("Cache manager range download", .serialized)
 struct CacheManagerRangeDownloadTests {
     private let body = Data((0..<100).map { UInt8($0) })
@@ -51,10 +79,15 @@ struct CacheManagerRangeDownloadTests {
         }
     }
 
-    private func makeManager(root: URL) -> CacheManager {
+    private func makeManager(
+        root: URL,
+        waitBeforePublication: @escaping @Sendable () async -> Void = {}
+    ) -> CacheManager {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
-        return CacheManager(root: root, configuration: config)
+        return CacheManager(
+            root: root, configuration: config, fileManager: .default,
+            waitBeforePublication: waitBeforePublication)
     }
 
     @Test func downloadWritesCompleteFileAndReportsCached() async throws {
@@ -446,6 +479,42 @@ struct CacheManagerRangeDownloadTests {
         #expect(manager.state(for: 1) == .notCached)
         #expect(!FileManager.default.fileExists(atPath: store.partURL(cacheKey: "1").path))
         #expect(!FileManager.default.fileExists(atPath: store.manifestURL(cacheKey: "1").path))
+    }
+
+    @Test func cancelAfterFinalCancellationCheckCannotPublish() async throws {
+        installHandler()
+        let root = root()
+        let gate = PublicationTestGate()
+        let manager = makeManager(root: root) { await gate.waitBeforePublication() }
+        let download = Task {
+            try await manager.download(id: 1, from: remote, bearerToken: "t")
+        }
+        await gate.waitForArrival()
+
+        manager.cancel(id: 1)
+        await gate.release()
+
+        await #expect(throws: Error.self) { try await download.value }
+        #expect(!FileManager.default.fileExists(atPath: manager.localURL(for: 1).path))
+        #expect(manager.state(for: 1) == .paused(1))
+    }
+
+    @Test func removePartialAfterFinalCancellationCheckCannotPublish() async throws {
+        installHandler()
+        let root = root()
+        let gate = PublicationTestGate()
+        let manager = makeManager(root: root) { await gate.waitBeforePublication() }
+        let download = Task {
+            try await manager.download(id: 1, from: remote, bearerToken: "t")
+        }
+        await gate.waitForArrival()
+
+        await Task { manager.removePartial(id: 1) }.value
+        await gate.release()
+
+        await #expect(throws: Error.self) { try await download.value }
+        #expect(!FileManager.default.fileExists(atPath: manager.localURL(for: 1).path))
+        #expect(manager.state(for: 1) == .notCached)
     }
 }
 }

@@ -27,10 +27,12 @@ final class RangeFetcherLifetime: @unchecked Sendable {
     private let condition = NSCondition()
     private var invalidated = false
     private var mutationCount = 0
+    private var publicationGeneration: UInt64 = 0
 
     func invalidate() {
         condition.lock()
         invalidated = true
+        publicationGeneration &+= 1
         while mutationCount > 0 {
             condition.wait()
         }
@@ -57,6 +59,41 @@ final class RangeFetcherLifetime: @unchecked Sendable {
         if wasInvalidated { throw CancellationError() }
         return try result.get()
     }
+
+    /// Starts a publication attempt. Cancelling or evicting the fetcher revokes
+    /// this generation; only the current generation can atomically commit a
+    /// completed part into the cache.
+    func beginPublicationAttempt() -> UInt64 {
+        condition.withLock {
+            publicationGeneration &+= 1
+            return publicationGeneration
+        }
+    }
+
+    func cancelPublicationAttempt() {
+        condition.withLock { publicationGeneration &+= 1 }
+    }
+
+    func performPublication<T>(
+        attempt: UInt64, _ publication: () throws -> T
+    ) throws -> T {
+        condition.lock()
+        guard !invalidated, publicationGeneration == attempt else {
+            condition.unlock()
+            throw CancellationError()
+        }
+        mutationCount += 1
+        condition.unlock()
+
+        let result = Result { try publication() }
+
+        condition.lock()
+        mutationCount -= 1
+        condition.broadcast()
+        condition.unlock()
+
+        return try result.get()
+    }
 }
 
 /// Serves inclusive byte ranges of a remote MP4, capturing every fetched byte
@@ -71,6 +108,7 @@ actor RangeFetcher {
     private let store: CapturedDownloadStore
     private let session: URLSession
     private let onProgress: @Sendable (Int64, Int64) -> Void
+    private let waitBeforePublication: @Sendable () async -> Void
     private let lifetime: RangeFetcherLifetime
     private var manifest: CapturedDownloadManifest?
     /// When the resource loader last asked for bytes. Drives back-pressure on a
@@ -92,7 +130,8 @@ actor RangeFetcher {
         session: URLSession,
         onProgress: @escaping @Sendable (Int64, Int64) -> Void,
         now: @escaping @Sendable () -> Date = Date.init,
-        lifetime: RangeFetcherLifetime = RangeFetcherLifetime()
+        lifetime: RangeFetcherLifetime = RangeFetcherLifetime(),
+        waitBeforePublication: @escaping @Sendable () async -> Void = {}
     ) {
         self.cacheKey = cacheKey
         self.remoteURL = remoteURL
@@ -102,6 +141,7 @@ actor RangeFetcher {
         self.store = store
         self.session = session
         self.onProgress = onProgress
+        self.waitBeforePublication = waitBeforePublication
         self.now = now
         self.lifetime = lifetime
     }
@@ -252,10 +292,12 @@ actor RangeFetcher {
     /// `fetchAll` plus publication into the cache. Leaves the partial intact and
     /// rethrows on any failure (never publishes a partial).
     func downloadAll(concurrency: Int, destination: URL) async throws {
+        let publicationAttempt = lifetime.beginPublicationAttempt()
         try await fetchAll(concurrency: concurrency)
         try Task.checkCancellation()
         guard let m = manifest, m.isComplete else { throw RangeFetcherError.lengthMismatch }
-        try lifetime.performMutation {
+        await waitBeforePublication()
+        try lifetime.performPublication(attempt: publicationAttempt) {
             try store.publish(cacheKey: cacheKey, to: destination)
         }
         manifest = nil

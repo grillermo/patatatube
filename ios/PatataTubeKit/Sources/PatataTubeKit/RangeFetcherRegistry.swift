@@ -6,12 +6,18 @@ import Foundation
 final class RangeFetcherRegistry: @unchecked Sendable {
     private let store: CapturedDownloadStore
     private let session: URLSession
+    private let waitBeforePublication: @Sendable () async -> Void
     private let lock = NSLock()
     private var fetchers: [String: (fetcher: RangeFetcher, lifetime: RangeFetcherLifetime)] = [:]
 
-    init(store: CapturedDownloadStore, session: URLSession) {
+    init(
+        store: CapturedDownloadStore,
+        session: URLSession,
+        waitBeforePublication: @escaping @Sendable () async -> Void = {}
+    ) {
         self.store = store
         self.session = session
+        self.waitBeforePublication = waitBeforePublication
     }
 
     static func cacheKey(videoId: Int, versionId: Int?) -> String {
@@ -36,7 +42,7 @@ final class RangeFetcherRegistry: @unchecked Sendable {
                 cacheKey: key, remoteURL: remoteURL, bearerToken: bearerToken,
                 videoId: videoId, versionId: versionId,
                 store: store, session: session, onProgress: onProgress,
-                lifetime: lifetime)
+                lifetime: lifetime, waitBeforePublication: waitBeforePublication)
             fetchers[key] = (fetcher, lifetime)
             return fetcher
         }
@@ -51,5 +57,10 @@ final class RangeFetcherRegistry: @unchecked Sendable {
             fetchers.removeValue(forKey: cacheKey)?.lifetime
         }
         lifetime?.invalidate()
+    }
+
+    func cancelPublication(cacheKey: String) {
+        let lifetime = lock.withLock { fetchers[cacheKey]?.lifetime }
+        lifetime?.cancelPublicationAttempt()
     }
 }

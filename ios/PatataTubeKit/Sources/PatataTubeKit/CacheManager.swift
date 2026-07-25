@@ -165,6 +165,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private let lock = NSLock()
     private let cancellationFence: any CacheManagerCancellationFencing
     private let concurrencyGate: any DownloadConcurrencyGating
+    private let waitBeforePublication: @Sendable () async -> Void
     private var inFlight: [String: DownloadActivityAccumulator] = [:]
     /// In-memory mirror of which cache keys have a persisted capture manifest on
     /// disk, mapped to their last-known progress. Read by `state(for:)` under the
@@ -206,12 +207,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         cancellationFence: any CacheManagerCancellationFencing =
             CacheManagerCancellationFence(),
         concurrencyGate: any DownloadConcurrencyGating =
-            DownloadConcurrencyGate(limit: 3)
+            DownloadConcurrencyGate(limit: 3),
+        waitBeforePublication: @escaping @Sendable () async -> Void = {}
     ) {
         self.fileManager = fileManager
         self.now = now
         self.cancellationFence = cancellationFence
         self.concurrencyGate = concurrencyGate
+        self.waitBeforePublication = waitBeforePublication
         self.root = root ?? fileManager
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("videos")
@@ -315,7 +318,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
 
     /// A capturing `AVURLAsset` served through an in-process `CaptureManager`.
     /// Loaded so a fresh manager is created only once `session` is wired up.
-    private lazy var fetcherRegistry = RangeFetcherRegistry(store: capturedStore, session: session)
+    private lazy var fetcherRegistry = RangeFetcherRegistry(
+        store: capturedStore, session: session,
+        waitBeforePublication: waitBeforePublication)
     private lazy var captureManager = CaptureManager(registry: fetcherRegistry)
 
     /// Builds an `AVURLAsset` that plays the remote video while capturing every
@@ -620,6 +625,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             return (task, continuation)
         }
         if let rangeTask {
+            fetcherRegistry.cancelPublication(cacheKey: key)
             rangeTask.continuation?.resume(throwing: CancellationError())
             rangeTask.task.task.cancel()
             return
