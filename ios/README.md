@@ -116,6 +116,14 @@ On first launch grid is empty / errors — need server config:
 - [ ] Upgrade over an existing single-task `.resume` file and verify it
       completes as a legacy one-stream transfer.
 - [ ] Cached video: tap the green checkmark → it turns into a red X; tap again → the local file is deleted and the button returns to the download arrow. Wait ~3s after arming without a second tap → it reverts to the green checkmark.
+- [ ] Download an MP4 to ~30%, then play it — playback starts immediately with no
+      buffering spinner, and the download ring keeps advancing.
+- [ ] Play an uncached MP4 halfway, exit, then tap download — the ring starts near
+      50% and only the remaining bytes transfer.
+- [ ] Cancel a download mid-way — the ring stays at its progress (paused), and a
+      second tap resumes rather than restarting.
+- [ ] Tap a paused ring twice — the partial is deleted and the button returns to
+      the download arrow.
 - **Cache all**: Settings → "Cache all videos" → downloads every visible video
 - **Upload**: tap + (top-right) → paste video URL → Add → new video appears in grid after processing
 - **Error banner**: point Base URL at unreachable host → red error banner appears at bottom of grid
