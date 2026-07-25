@@ -88,7 +88,7 @@ actor RangeFetcher {
     }
 
     func data(for range: DownloadByteRange) async throws -> Data {
-        guard var m = manifest else {
+        guard let m = manifest else {
             _ = try await loadContentInfo()
             return try await data(for: range)
         }
@@ -107,10 +107,14 @@ actor RangeFetcher {
         guard Int64(data.count) == range.length else { throw RangeFetcherError.lengthMismatch }
 
         try store.writeRange(cacheKey: cacheKey, offset: range.start, data: data)
-        m.capture(range)
-        try store.write(m)
-        manifest = m
-        onProgress(m.progress)
+        // Re-read after the await: this actor is reentrant, so another caller may
+        // have captured ranges while this fetch was in flight. Mutating the
+        // pre-await snapshot would silently drop their work.
+        guard var current = manifest else { return data }
+        current.capture(range)
+        try store.write(current)
+        manifest = current
+        onProgress(current.progress)
         return data
     }
 
