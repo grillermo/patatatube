@@ -34,27 +34,6 @@ struct DownloadActivityTests {
         #expect(accumulator.activity.progress == 0.5)
     }
 
-    @Test func resumedBytesDoNotInflateTheNextRateSample() {
-        let resumedAt = Date(timeIntervalSinceReferenceDate: 10)
-        var accumulator = DownloadActivityAccumulator(
-            videoID: 7,
-            versionID: 2,
-            totalByteCount: 10_000,
-            now: resumedAt
-        )
-        accumulator.establishResumeSamplingBaseline(
-            totalBytesWritten: 5_000,
-            bytesWritten: 1_000
-        )
-        accumulator.record(
-            transferredByteCount: 5_000,
-            progress: 0.5,
-            now: Date(timeIntervalSinceReferenceDate: 12)
-        )
-
-        #expect(accumulator.activity.bytesPerSecond == 500)
-    }
-
     @Test func multiplexedSegmentSamplesUseTheAggregateByteCountForRate() {
         var accumulator = DownloadActivityAccumulator(
             videoID: 7,

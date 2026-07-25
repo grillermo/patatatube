@@ -1,5 +1,13 @@
 import Foundation
 
+struct DownloadByteRange: Codable, Equatable, Sendable {
+    let start: Int64
+    let end: Int64
+
+    var length: Int64 { end - start + 1 }
+    var headerValue: String { "bytes=\(start)-\(end)" }
+}
+
 struct ContentInfo: Equatable, Sendable {
     let totalByteCount: Int64
     let etag: String
