@@ -10,7 +10,7 @@ struct CacheManagerCaptureStateTests {
             .appendingPathComponent("cmcapture-\(UUID().uuidString)")
     }
 
-    @Test func persistedPartialReportsDownloadingProgress() throws {
+    @Test func persistedPartialReportsPausedProgress() throws {
         let base = root()
         // Write a half-complete capture manifest to disk BEFORE the manager is
         // created, so its cold-start seed of the in-memory capture cache picks it
@@ -23,10 +23,10 @@ struct CacheManagerCaptureStateTests {
         m.capture(.init(start: 0, end: 49))
         try store.write(m)
         let manager = CacheManager(root: base, configuration: .ephemeral)
-        if case let .downloading(progress) = manager.state(for: 42) {
+        if case let .paused(progress) = manager.state(for: 42) {
             #expect(abs(progress - 0.5) < 0.001)
         } else {
-            Issue.record("expected .downloading, got \(manager.state(for: 42))")
+            Issue.record("expected .paused, got \(manager.state(for: 42))")
         }
     }
 

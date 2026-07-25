@@ -167,4 +167,53 @@ struct CacheManagerRangeDownloadTests {
         #expect(manager.activeDownloads().isEmpty)
         #expect(!manager.hasDownloadTask(videoId: 5, versionId: nil))
     }
+
+    @Test func cancelKeepsPartialAndReportsPaused() async throws {
+        installHandler()
+        let root = root()
+        let manager = makeManager(root: root)
+        let asset = manager.captureAsset(videoId: 1, remoteURL: remote, bearerToken: "t")
+        #expect(asset.url.scheme == CaptureManager.scheme)
+        let fetcher = try #require(manager.testFetcher(videoId: 1, versionId: nil))
+        _ = try await fetcher.data(for: .init(start: 0, end: 39), origin: .player)
+
+        manager.cancel(id: 1)
+
+        #expect(manager.state(for: 1) == .paused(0.4))
+        let partial = CapturedDownloadStore(root: root).partURL(cacheKey: "1")
+        #expect(FileManager.default.fileExists(atPath: partial.path))
+    }
+
+    @Test func resumeAfterCancelCompletesFromGaps() async throws {
+        installHandler()
+        let root = root()
+        let manager = makeManager(root: root)
+        let asset = manager.captureAsset(videoId: 1, remoteURL: remote, bearerToken: "t")
+        #expect(asset.url.scheme == CaptureManager.scheme)
+        let fetcher = try #require(manager.testFetcher(videoId: 1, versionId: nil))
+        _ = try await fetcher.data(for: .init(start: 0, end: 39), origin: .player)
+        manager.cancel(id: 1)
+
+        try await manager.download(id: 1, from: remote, bearerToken: "t", streamCount: 2)
+
+        #expect(manager.state(for: 1) == .cached)
+        #expect(try Data(contentsOf: manager.localURL(for: 1)) == body)
+    }
+
+    @Test func removePartialClearsPausedState() async throws {
+        installHandler()
+        let root = root()
+        let manager = makeManager(root: root)
+        let asset = manager.captureAsset(videoId: 1, remoteURL: remote, bearerToken: "t")
+        #expect(asset.url.scheme == CaptureManager.scheme)
+        let fetcher = try #require(manager.testFetcher(videoId: 1, versionId: nil))
+        _ = try await fetcher.data(for: .init(start: 0, end: 39), origin: .player)
+        manager.cancel(id: 1)
+
+        manager.removePartial(id: 1)
+
+        #expect(manager.state(for: 1) == .notCached)
+        let partial = CapturedDownloadStore(root: root).partURL(cacheKey: "1")
+        #expect(!FileManager.default.fileExists(atPath: partial.path))
+    }
 }

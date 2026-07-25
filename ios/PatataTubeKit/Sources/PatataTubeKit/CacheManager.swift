@@ -5,6 +5,8 @@ import AVFoundation
 public enum CacheState: Equatable, Sendable {
     case notCached
     case downloading(Double)
+    /// Bytes on disk, nothing transferring. Re-downloading resumes from the gaps.
+    case paused(Double)
     case cached
 }
 
@@ -291,10 +293,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let key = cacheKey(videoId: id, versionId: versionId)
         if fileManager.fileExists(atPath: localURL(for: id, versionId: versionId).path) { return .cached }
         return lock.withLock {
+            // An `inFlight` entry means something is transferring right now —
+            // a download task or a live capture.
             if let accumulator = inFlight[key] { return .downloading(accumulator.activity.progress) }
-            if let progress = capturedManifestProgress[key] {
-                return .downloading(progress)
-            }
+            if let progress = capturedManifestProgress[key] { return .paused(progress) }
             return .notCached
         }
     }
@@ -532,51 +534,28 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         return resumed
     }
 
-    /// Cancels an in-flight download for this id/version. The awaiting
-    /// `download` call throws; `state(for:)` returns to `.notCached`.
-    /// Explicit cancel restarts from scratch - it does not persist resume data.
+    /// Stops an in-flight download for this id/version. The awaiting `download`
+    /// call throws. The partial and its manifest stay on disk: `state(for:)`
+    /// reports `.paused(progress)` and a later download resumes from the gaps.
+    /// Use `removePartial` to reclaim the disk.
     public func cancel(id: Int, versionId: Int? = nil) {
         let key = cacheKey(videoId: id, versionId: versionId)
-        cancellationFence.beginCancellation(cacheKey: key)
-        defer {
-            cancellationFence.endCancellation(cacheKey: key)
+        let task = lock.withLock { () -> Task<Void, Error>? in
+            let task = downloadTasks.removeValue(forKey: key)
+            inFlight[key] = nil
+            return task
         }
-        let (probeTask, probeContinuation, segmentedAttempt) = lock.withLock {
-            let probe = probeAttempts.removeValue(forKey: key)
-            if probe != nil, segmentedAttempts[key] == nil {
-                inFlight[key] = nil
-            }
-            let task = probe?.task
-            let continuation = probe?.continuation
-            probe?.task = nil
-            probe?.continuation = nil
-            return (task, continuation, segmentedAttempts[key])
-        }
-        probeTask?.cancel()
-        probeContinuation?.resume(throwing: CancellationError())
-        if let attempt = segmentedAttempt {
-            let claim = lock.withLock { () -> (
-                continuation: CheckedContinuation<URL, Error>?,
-                tasks: [URLSessionDownloadTask],
-                error: Error?
-            )? in
-                attempt.explicitlyCancelled = true
-                return claimSegmentedAttemptLocked(
-                    attempt,
-                    error: CancellationError()
-                )
-            }
-            if let claim {
-                segmentedStore.remove(cacheKey: key)
-                completeSegmentedClaim(
-                    attempt,
-                    continuation: claim.continuation,
-                    result: .failure(CancellationError())
-                )
-                claim.tasks.forEach { $0.cancel() }
-            }
-        }
-        lock.withLock({ tasksByKey[key] })?.cancel()
+        task?.cancel()
+    }
+
+    /// Deletes a partial download and its manifest, reclaiming the disk. Leaves
+    /// any fully cached MP4 alone (see `removeCached`).
+    public func removePartial(id: Int, versionId: Int? = nil) {
+        let key = cacheKey(videoId: id, versionId: versionId)
+        cancel(id: id, versionId: versionId)
+        capturedStore.remove(cacheKey: key)
+        fetcherRegistry.remove(cacheKey: key)
+        lock.withLock { capturedManifestProgress[key] = nil }
     }
 
     /// Deletes a cached MP4. Used when the server re-converts a file with a
@@ -585,6 +564,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let key = cacheKey(videoId: id, versionId: versionId)
         try? fileManager.removeItem(at: localURL(for: id, versionId: versionId))
         capturedStore.remove(cacheKey: key)
+        fetcherRegistry.remove(cacheKey: key)
         lock.withLock { capturedManifestProgress[key] = nil }
     }
 
@@ -608,6 +588,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
         for manifest in capturedStore.manifests() where manifest.videoId == id {
             capturedStore.remove(cacheKey: manifest.cacheKey)
+            fetcherRegistry.remove(cacheKey: manifest.cacheKey)
             lock.withLock { capturedManifestProgress[manifest.cacheKey] = nil }
         }
     }
@@ -628,6 +609,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
         for manifest in capturedStore.manifests() {
             capturedStore.remove(cacheKey: manifest.cacheKey)
+            fetcherRegistry.remove(cacheKey: manifest.cacheKey)
         }
         lock.withLock {
             capturedManifestProgress.removeAll()
