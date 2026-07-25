@@ -7,7 +7,7 @@ final class RangeFetcherRegistry: @unchecked Sendable {
     private let store: CapturedDownloadStore
     private let session: URLSession
     private let lock = NSLock()
-    private var fetchers: [String: RangeFetcher] = [:]
+    private var fetchers: [String: (fetcher: RangeFetcher, lifetime: RangeFetcherLifetime)] = [:]
 
     init(store: CapturedDownloadStore, session: URLSession) {
         self.store = store
@@ -30,21 +30,26 @@ final class RangeFetcherRegistry: @unchecked Sendable {
     ) -> RangeFetcher {
         let key = Self.cacheKey(videoId: videoId, versionId: versionId)
         return lock.withLock {
-            if let existing = fetchers[key] { return existing }
+            if let existing = fetchers[key] { return existing.fetcher }
+            let lifetime = RangeFetcherLifetime()
             let fetcher = RangeFetcher(
                 cacheKey: key, remoteURL: remoteURL, bearerToken: bearerToken,
                 videoId: videoId, versionId: versionId,
-                store: store, session: session, onProgress: onProgress)
-            fetchers[key] = fetcher
+                store: store, session: session, onProgress: onProgress,
+                lifetime: lifetime)
+            fetchers[key] = (fetcher, lifetime)
             return fetcher
         }
     }
 
     func existing(cacheKey: String) -> RangeFetcher? {
-        lock.withLock { fetchers[cacheKey] }
+        lock.withLock { fetchers[cacheKey]?.fetcher }
     }
 
     func remove(cacheKey: String) {
-        lock.withLock { fetchers[cacheKey] = nil }
+        let lifetime = lock.withLock {
+            fetchers.removeValue(forKey: cacheKey)?.lifetime
+        }
+        lifetime?.invalidate()
     }
 }

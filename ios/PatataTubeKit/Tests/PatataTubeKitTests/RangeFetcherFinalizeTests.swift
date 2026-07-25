@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import PatataTubeKit
 
+extension MockURLProtocolTests {
 @Suite("Range fetcher finalize", .serialized)
 struct RangeFetcherFinalizeTests {
     private func root() -> URL {
@@ -47,4 +48,5 @@ struct RangeFetcherFinalizeTests {
         #expect(try Data(contentsOf: dest) == body)
         #expect(store.manifests().isEmpty)   // manifest removed on publish
     }
+}
 }

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import PatataTubeKit
 
+extension MockURLProtocolTests {
 @Suite("Range fetcher fetchAll", .serialized)
 struct RangeFetcherFetchAllTests {
     private func root() -> URL {
@@ -212,4 +213,5 @@ final class RangeRecorder: @unchecked Sendable {
         merged.append(current)
         return merged
     }
+}
 }

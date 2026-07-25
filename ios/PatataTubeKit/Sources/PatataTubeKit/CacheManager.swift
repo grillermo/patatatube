@@ -17,6 +17,16 @@ private struct SegmentTaskContext {
     let resumed: Bool
 }
 
+private final class RangeDownloadTask: @unchecked Sendable {
+    let id = UUID()
+    let task: Task<Void, Error>
+    var completion: CheckedContinuation<Void, Error>?
+
+    init(task: Task<Void, Error>) {
+        self.task = task
+    }
+}
+
 private final class FreshProbeAttempt: @unchecked Sendable {
     let id = UUID()
     let cacheKey: String
@@ -174,7 +184,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var legacyResumeBaselineTaskIDs: Set<Int> = []
     /// Live range downloads, keyed by cache key. Cancelling one stops its
     /// workers and leaves the partial on disk for a later resume.
-    private var downloadTasks: [String: Task<Void, Error>] = [:]
+    private var downloadTasks: [String: RangeDownloadTask] = [:]
 
     public convenience init(
         root: URL? = nil,
@@ -417,31 +427,28 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             let workers = min(max(streamCount, 1), 4)
             let task = Task { try await fetcher.downloadAll(
                 concurrency: workers, destination: destination) }
+            let trackedTask = RangeDownloadTask(task: task)
             lock.withLock {
-                downloadTasks[key] = task
+                downloadTasks[key] = trackedTask
                 if inFlight[key] == nil {
                     inFlight[key] = DownloadActivityAccumulator(
                         videoID: id, versionID: versionId, totalByteCount: nil, now: now())
                 }
             }
             do {
-                try await task.value
+                try await withTaskCancellationHandler(operation: {
+                    try await waitForRangeDownloadAttempt(
+                        key: key, trackedTask: trackedTask)
+                }, onCancel: {
+                    self.cancel(id: id, versionId: versionId)
+                })
             } catch {
-                lock.withLock {
-                    downloadTasks[key] = nil
-                    inFlight[key] = nil
-                }
+                clearRangeDownloadAttempt(key: key, taskID: trackedTask.id)
                 throw error
             }
-            lock.withLock {
-                downloadTasks[key] = nil
-                inFlight[key] = nil
-                // Publishing removed the manifest; drop the mirror so the video
-                // stops reporting as in-progress.
-                capturedManifestProgress[key] = nil
-                completionHistory.record(DownloadCompletion(
-                    videoID: id, versionID: versionId, completedAt: now()))
-            }
+            guard completeRangeDownloadAttempt(
+                key: key, taskID: trackedTask.id, videoID: id, versionID: versionId
+            ) else { throw CancellationError() }
             fetcherRegistry.remove(cacheKey: key)
         }
         // Best-effort: a missing preview must not fail the cached video.
@@ -463,6 +470,76 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// after itself instead of leaking the bookkeeping forever.
     func hasDownloadTask(videoId: Int, versionId: Int?) -> Bool {
         lock.withLock { downloadTasks[cacheKey(videoId: videoId, versionId: versionId)] != nil }
+    }
+
+    private func clearRangeDownloadAttempt(key: String, taskID: UUID) {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+            guard downloadTasks[key]?.id == taskID else { return nil }
+            let continuation = downloadTasks[key]?.completion
+            downloadTasks[key] = nil
+            inFlight[key] = nil
+            return continuation
+        }
+        continuation?.resume(throwing: CancellationError())
+    }
+
+    private func completeRangeDownloadAttempt(
+        key: String, taskID: UUID, videoID: Int, versionID: Int?
+    ) -> Bool {
+        lock.withLock {
+            guard downloadTasks[key]?.id == taskID else { return false }
+            downloadTasks[key] = nil
+            inFlight[key] = nil
+            // Publishing removed the manifest; drop the mirror so the video
+            // stops reporting as in-progress.
+            capturedManifestProgress[key] = nil
+            completionHistory.record(DownloadCompletion(
+                videoID: videoID, versionID: versionID, completedAt: now()))
+            return true
+        }
+    }
+
+    private func waitForRangeDownloadAttempt(
+        key: String, trackedTask: RangeDownloadTask
+    ) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            let registered = lock.withLock { () -> Bool in
+                guard downloadTasks[key]?.id == trackedTask.id else { return false }
+                downloadTasks[key]?.completion = continuation
+                return true
+            }
+            guard registered else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+            Task { [weak self] in
+                do {
+                    try await trackedTask.task.value
+                    self?.resumeRangeDownloadWaiter(
+                        key: key, taskID: trackedTask.id, result: .success(()))
+                } catch {
+                    self?.resumeRangeDownloadWaiter(
+                        key: key, taskID: trackedTask.id, result: .failure(error))
+                }
+            }
+        }
+    }
+
+    private func resumeRangeDownloadWaiter(
+        key: String, taskID: UUID, result: Result<Void, Error>
+    ) {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+            guard downloadTasks[key]?.id == taskID else { return nil }
+            let continuation = downloadTasks[key]?.completion
+            downloadTasks[key]?.completion = nil
+            return continuation
+        }
+        switch result {
+        case .success:
+            continuation?.resume()
+        case .failure(let error):
+            continuation?.resume(throwing: error)
+        }
     }
 
     /// Restarts downloads interrupted by app suspension. Call when the app
@@ -494,8 +571,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 })
             let task = Task { try await fetcher.downloadAll(
                 concurrency: 1, destination: destination) }
+            let trackedTask = RangeDownloadTask(task: task)
             lock.withLock {
-                downloadTasks[key] = task
+                downloadTasks[key] = trackedTask
                 if inFlight[key] == nil {
                     inFlight[key] = DownloadActivityAccumulator(
                         videoID: videoId, versionID: versionId,
@@ -512,21 +590,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 guard let self else { return }
                 do {
                     try await task.value
-                    self.lock.withLock {
-                        self.downloadTasks[key] = nil
-                        self.inFlight[key] = nil
-                        // Publishing removed the manifest; drop the mirror so the
-                        // video stops reporting as in-progress.
-                        self.capturedManifestProgress[key] = nil
-                        self.completionHistory.record(DownloadCompletion(
-                            videoID: videoId, versionID: versionId, completedAt: self.now()))
+                    if self.completeRangeDownloadAttempt(
+                        key: key, taskID: trackedTask.id,
+                        videoID: videoId, versionID: versionId
+                    ) {
+                        self.fetcherRegistry.remove(cacheKey: key)
                     }
-                    self.fetcherRegistry.remove(cacheKey: key)
                 } catch {
-                    self.lock.withLock {
-                        self.downloadTasks[key] = nil
-                        self.inFlight[key] = nil
-                    }
+                    self.clearRangeDownloadAttempt(key: key, taskID: trackedTask.id)
                 }
             }
             resumed.append(videoId)
@@ -540,12 +611,61 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Use `removePartial` to reclaim the disk.
     public func cancel(id: Int, versionId: Int? = nil) {
         let key = cacheKey(videoId: id, versionId: versionId)
-        let task = lock.withLock { () -> Task<Void, Error>? in
-            let task = downloadTasks.removeValue(forKey: key)
+        let rangeTask = lock.withLock {
+            () -> (task: RangeDownloadTask, continuation: CheckedContinuation<Void, Error>?)? in
+            guard let task = downloadTasks.removeValue(forKey: key) else { return nil }
             inFlight[key] = nil
-            return task
+            let continuation = task.completion
+            task.completion = nil
+            return (task, continuation)
         }
-        task?.cancel()
+        if let rangeTask {
+            rangeTask.continuation?.resume(throwing: CancellationError())
+            rangeTask.task.task.cancel()
+            return
+        }
+
+        // Task 7 still owns the legacy segmented/probe implementation. Preserve
+        // its cancellation behaviour until that machinery is removed, but do
+        // not touch `inFlight` when this key belongs only to a live capture.
+        cancellationFence.beginCancellation(cacheKey: key)
+        defer { cancellationFence.endCancellation(cacheKey: key) }
+        let (probeTask, probeContinuation, segmentedAttempt) = lock.withLock {
+            let probe = probeAttempts.removeValue(forKey: key)
+            if probe != nil, segmentedAttempts[key] == nil {
+                inFlight[key] = nil
+            }
+            let task = probe?.task
+            let continuation = probe?.continuation
+            probe?.task = nil
+            probe?.continuation = nil
+            return (task, continuation, segmentedAttempts[key])
+        }
+        probeTask?.cancel()
+        probeContinuation?.resume(throwing: CancellationError())
+        if let attempt = segmentedAttempt {
+            let claim = lock.withLock { () -> (
+                continuation: CheckedContinuation<URL, Error>?,
+                tasks: [URLSessionDownloadTask],
+                error: Error?
+            )? in
+                attempt.explicitlyCancelled = true
+                return claimSegmentedAttemptLocked(
+                    attempt,
+                    error: CancellationError()
+                )
+            }
+            if let claim {
+                segmentedStore.remove(cacheKey: key)
+                completeSegmentedClaim(
+                    attempt,
+                    continuation: claim.continuation,
+                    result: .failure(CancellationError())
+                )
+                claim.tasks.forEach { $0.cancel() }
+            }
+        }
+        lock.withLock({ tasksByKey[key] })?.cancel()
     }
 
     /// Deletes a partial download and its manifest, reclaiming the disk. Leaves
@@ -553,19 +673,19 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     public func removePartial(id: Int, versionId: Int? = nil) {
         let key = cacheKey(videoId: id, versionId: versionId)
         cancel(id: id, versionId: versionId)
-        capturedStore.remove(cacheKey: key)
         fetcherRegistry.remove(cacheKey: key)
-        lock.withLock { capturedManifestProgress[key] = nil }
+        capturedStore.remove(cacheKey: key)
+        lock.withLock {
+            inFlight[key] = nil
+            capturedManifestProgress[key] = nil
+        }
     }
 
     /// Deletes a cached MP4. Used when the server re-converts a file with a
     /// different audio track set, making the cached copy stale.
     public func removeCached(id: Int, versionId: Int? = nil) {
-        let key = cacheKey(videoId: id, versionId: versionId)
+        removePartial(id: id, versionId: versionId)
         try? fileManager.removeItem(at: localURL(for: id, versionId: versionId))
-        capturedStore.remove(cacheKey: key)
-        fetcherRegistry.remove(cacheKey: key)
-        lock.withLock { capturedManifestProgress[key] = nil }
     }
 
     /// True when any cached MP4 (any version) exists for this video.
@@ -576,6 +696,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Deletes every cached MP4 and resume file for this video, all versions.
     /// Preview images and show posters are kept — small, still useful offline.
     public func removeAllCached(id: Int) {
+        for activity in activeDownloads() where activity.videoID == id {
+            removePartial(id: activity.videoID, versionId: activity.versionID)
+        }
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         let resumes = contents.filter {
             $0 == "\(id).resume" || ($0.hasPrefix("\(id):") && $0.hasSuffix(".resume"))
@@ -587,9 +710,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             segmentedStore.remove(cacheKey: manifest.cacheKey)
         }
         for manifest in capturedStore.manifests() where manifest.videoId == id {
-            capturedStore.remove(cacheKey: manifest.cacheKey)
-            fetcherRegistry.remove(cacheKey: manifest.cacheKey)
-            lock.withLock { capturedManifestProgress[manifest.cacheKey] = nil }
+            removePartial(id: manifest.videoId, versionId: manifest.versionId)
         }
     }
 
@@ -598,7 +719,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// images and show posters are kept (see `clearAllCovers()`).
     public func clearAllVideos() {
         for activity in activeDownloads() {
-            cancel(id: activity.videoID, versionId: activity.versionID)
+            removePartial(id: activity.videoID, versionId: activity.versionID)
         }
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         for name in contents where name.hasSuffix(".mp4") || name.hasSuffix(".resume") {
@@ -608,8 +729,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             segmentedStore.remove(cacheKey: manifest.cacheKey)
         }
         for manifest in capturedStore.manifests() {
-            capturedStore.remove(cacheKey: manifest.cacheKey)
-            fetcherRegistry.remove(cacheKey: manifest.cacheKey)
+            removePartial(id: manifest.videoId, versionId: manifest.versionId)
         }
         lock.withLock {
             capturedManifestProgress.removeAll()

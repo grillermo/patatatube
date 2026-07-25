@@ -19,6 +19,46 @@ enum FetchOrigin: Sendable {
     case downloader
 }
 
+/// Coordinates an actor's file mutations with registry eviction. Eviction waits
+/// for any current mutation, then permanently rejects every later mutation from
+/// the retired actor so a deleted partial cannot reappear after a URL request
+/// resumes.
+final class RangeFetcherLifetime: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var invalidated = false
+    private var mutationCount = 0
+
+    func invalidate() {
+        condition.lock()
+        invalidated = true
+        while mutationCount > 0 {
+            condition.wait()
+        }
+        condition.unlock()
+    }
+
+    func performMutation<T>(_ mutation: () throws -> T) throws -> T {
+        condition.lock()
+        guard !invalidated else {
+            condition.unlock()
+            throw CancellationError()
+        }
+        mutationCount += 1
+        condition.unlock()
+
+        let result = Result { try mutation() }
+
+        condition.lock()
+        mutationCount -= 1
+        let wasInvalidated = invalidated
+        condition.broadcast()
+        condition.unlock()
+
+        if wasInvalidated { throw CancellationError() }
+        return try result.get()
+    }
+}
+
 /// Serves inclusive byte ranges of a remote MP4, capturing every fetched byte
 /// to a sparse file tracked by a `CapturedDownloadManifest`. One instance per
 /// playing video; serialized via `actor`.
@@ -31,6 +71,7 @@ actor RangeFetcher {
     private let store: CapturedDownloadStore
     private let session: URLSession
     private let onProgress: @Sendable (Int64, Int64) -> Void
+    private let lifetime: RangeFetcherLifetime
     private var manifest: CapturedDownloadManifest?
     /// When the resource loader last asked for bytes. Drives back-pressure on a
     /// concurrent background download of the same video.
@@ -50,7 +91,8 @@ actor RangeFetcher {
         store: CapturedDownloadStore,
         session: URLSession,
         onProgress: @escaping @Sendable (Int64, Int64) -> Void,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        lifetime: RangeFetcherLifetime = RangeFetcherLifetime()
     ) {
         self.cacheKey = cacheKey
         self.remoteURL = remoteURL
@@ -61,6 +103,7 @@ actor RangeFetcher {
         self.session = session
         self.onProgress = onProgress
         self.now = now
+        self.lifetime = lifetime
     }
 
     var manifestSnapshot: CapturedDownloadManifest? { manifest }
@@ -88,19 +131,24 @@ actor RangeFetcher {
               total > 0, data.count == 1
         else { throw RangeFetcherError.invalidProbe }
 
-        // Resume an existing partial only if the entity is unchanged.
-        var loaded = try? store.load(cacheKey: cacheKey)
-        if let existing = loaded, existing.etag != etag {
-            store.remove(cacheKey: cacheKey)
-            loaded = nil
+        let m = try lifetime.performMutation {
+            // Resume an existing partial only if the entity is unchanged.
+            var loaded = try? store.load(cacheKey: cacheKey)
+            if let existing = loaded, existing.etag != etag {
+                store.remove(cacheKey: cacheKey)
+                loaded = nil
+            }
+            let manifest = loaded ?? CapturedDownloadManifest.make(
+                videoId: videoId, versionId: versionId, remoteURL: remoteURL,
+                totalByteCount: total, etag: etag)
+            try store.ensureSparseFile(cacheKey: cacheKey, totalByteCount: total)
+            try store.write(manifest)
+            onProgress(
+                CapturedRanges.coveredBytes(manifest.capturedRanges),
+                manifest.totalByteCount)
+            return manifest
         }
-        let m = loaded ?? CapturedDownloadManifest.make(
-            videoId: videoId, versionId: versionId, remoteURL: remoteURL,
-            totalByteCount: total, etag: etag)
-        try store.ensureSparseFile(cacheKey: cacheKey, totalByteCount: total)
-        try store.write(m)
         manifest = m
-        onProgress(CapturedRanges.coveredBytes(m.capturedRanges), m.totalByteCount)
         return ContentInfo(totalByteCount: total, etag: etag)
     }
 
@@ -113,7 +161,9 @@ actor RangeFetcher {
         // Fully captured already → serve from disk.
         if CapturedRanges.complement(of: m.capturedRanges, over: m.totalByteCount)
             .allSatisfy({ $0.end < range.start || $0.start > range.end }) {
-            return try store.readRange(cacheKey: cacheKey, range: range)
+            return try lifetime.performMutation {
+                try store.readRange(cacheKey: cacheKey, range: range)
+            }
         }
         // Fetch the requested range from the network (simple whole-range fetch;
         // overlaps with existing captured bytes are harmless — same content).
@@ -124,15 +174,20 @@ actor RangeFetcher {
         guard http.value(forHTTPHeaderField: "ETag") == m.etag else { throw RangeFetcherError.changedEntity }
         guard Int64(data.count) == range.length else { throw RangeFetcherError.lengthMismatch }
 
-        try store.writeRange(cacheKey: cacheKey, offset: range.start, data: data)
         // Re-read after the await: this actor is reentrant, so another caller may
         // have captured ranges while this fetch was in flight. Mutating the
         // pre-await snapshot would silently drop their work.
         guard var current = manifest else { return data }
-        current.capture(range)
-        try store.write(current)
+        try Task.checkCancellation()
+        try lifetime.performMutation {
+            try store.writeRange(cacheKey: cacheKey, offset: range.start, data: data)
+            current.capture(range)
+            try store.write(current)
+            onProgress(
+                CapturedRanges.coveredBytes(current.capturedRanges),
+                current.totalByteCount)
+        }
         manifest = current
-        onProgress(CapturedRanges.coveredBytes(current.capturedRanges), current.totalByteCount)
         return data
     }
 
@@ -198,8 +253,11 @@ actor RangeFetcher {
     /// rethrows on any failure (never publishes a partial).
     func downloadAll(concurrency: Int, destination: URL) async throws {
         try await fetchAll(concurrency: concurrency)
+        try Task.checkCancellation()
         guard let m = manifest, m.isComplete else { throw RangeFetcherError.lengthMismatch }
-        try store.publish(cacheKey: cacheKey, to: destination)
+        try lifetime.performMutation {
+            try store.publish(cacheKey: cacheKey, to: destination)
+        }
         manifest = nil
     }
 

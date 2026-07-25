@@ -9,6 +9,7 @@ private func makeClient(token: String? = "tok") -> APIClient {
 
 // All API client tests share MockURLProtocol.handler (a global static), so the entire
 // parent suite is serialized to prevent cross-suite interference.
+extension MockURLProtocolTests {
 @Suite(.serialized)
 struct APIClientTests {
 
@@ -139,4 +140,5 @@ struct APIClientTests {
             }
         }
     }
+}
 }

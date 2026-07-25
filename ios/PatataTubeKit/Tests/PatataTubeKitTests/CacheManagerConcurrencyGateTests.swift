@@ -18,7 +18,7 @@ private final class SpyGate: DownloadConcurrencyGating, @unchecked Sendable {
 // suite's `.serialized` trait — MockURLProtocol.handler is a global static shared by every
 // test that sets it, and a sibling top-level suite would otherwise run concurrently with it
 // and race on the handler (observed as intermittent APIClientLibraryTests failures).
-extension APIClientTests {
+extension MockURLProtocolTests.APIClientTests {
 struct CacheManagerConcurrencyGateTests {
     private func temporaryRoot() -> URL {
         FileManager.default.temporaryDirectory

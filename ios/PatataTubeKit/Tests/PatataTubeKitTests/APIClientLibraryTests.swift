@@ -11,7 +11,7 @@ private func makeClient(token: String? = "secret") -> APIClient {
 // suite's `.serialized` trait — MockURLProtocol.handler is a global static shared by every
 // API client test, and a sibling top-level suite would otherwise run concurrently with it
 // and race on the handler.
-extension APIClientTests {
+extension MockURLProtocolTests.APIClientTests {
     struct LibraryTests {
         @Test func scanLibrary() async throws {
             MockURLProtocol.handler = { req in

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import PatataTubeKit
 
+extension MockURLProtocolTests {
 @Suite("Range fetcher", .serialized)
 struct RangeFetcherTests {
     private func root() -> URL {
@@ -74,4 +75,5 @@ struct RangeFetcherTests {
             _ = try await fetcher.data(for: .init(start: 0, end: 9))
         }
     }
+}
 }

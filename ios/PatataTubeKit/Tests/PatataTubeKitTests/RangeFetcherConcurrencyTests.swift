@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import PatataTubeKit
 
+extension MockURLProtocolTests {
 @Suite("Range fetcher concurrency", .serialized)
 struct RangeFetcherConcurrencyTests {
     private func root() -> URL {
@@ -87,4 +88,5 @@ final class Reports: @unchecked Sendable {
         lock.withLock { values.append(Pair(captured: captured, total: total)) }
     }
     func last() -> Pair? { lock.withLock { values.last } }
+}
 }

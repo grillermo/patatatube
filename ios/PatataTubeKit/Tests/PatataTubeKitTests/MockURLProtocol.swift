@@ -1,4 +1,11 @@
 import Foundation
+import Testing
+
+/// Every suite that mutates `MockURLProtocol.handler` is nested below this one.
+/// `.serialized` then covers those sibling suites too, rather than merely the
+/// individual test methods within each leaf suite.
+@Suite("Mock URL protocol", .serialized)
+struct MockURLProtocolTests {}
 
 final class MockURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
