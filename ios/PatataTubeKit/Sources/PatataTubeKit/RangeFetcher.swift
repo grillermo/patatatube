@@ -26,6 +26,10 @@ actor RangeFetcher {
     private let onProgress: @Sendable (Int64, Int64) -> Void
     private var manifest: CapturedDownloadManifest?
 
+    /// Gap-fill request size. Also the maximum work lost when the app is
+    /// suspended mid-transfer.
+    static let chunkSize: Int64 = 4 * 1_048_576
+
     init(
         cacheKey: String,
         remoteURL: URL,
@@ -118,22 +122,53 @@ actor RangeFetcher {
         return data
     }
 
-    /// Fetch every uncaptured range, then publish the completed file. Leaves the
-    /// partial intact and rethrows on any failure (never publishes a partial).
-    func finalize(destination: URL) async throws {
-        guard let m0 = manifest else { _ = try await loadContentInfo(); return try await finalize(destination: destination) }
-        let chunk: Int64 = 4 * 1_048_576
-        for gap in CapturedRanges.complement(of: m0.capturedRanges, over: m0.totalByteCount) {
+    /// Fetches every uncaptured byte using `concurrency` parallel workers,
+    /// ascending by offset so the file head (and its faststart `moov`) lands
+    /// first and playback can start off disk immediately.
+    func fetchAll(concurrency: Int) async throws {
+        let info = try await loadContentInfo()
+        let workers = min(max(concurrency, 1), 4)
+        var chunks: [DownloadByteRange] = []
+        for gap in CapturedRanges.complement(
+            of: manifest?.capturedRanges ?? [], over: info.totalByteCount
+        ) {
             var start = gap.start
             while start <= gap.end {
-                let end = min(start + chunk - 1, gap.end)
-                _ = try await data(for: DownloadByteRange(start: start, end: end))
+                let end = min(start + Self.chunkSize - 1, gap.end)
+                chunks.append(DownloadByteRange(start: start, end: end))
                 start = end + 1
             }
         }
+        guard !chunks.isEmpty else { return }
+
+        var next = 0
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            func addNext() {
+                guard next < chunks.count else { return }
+                let range = chunks[next]
+                next += 1
+                group.addTask { _ = try await self.data(for: range) }
+            }
+            for _ in 0..<min(workers, chunks.count) { addNext() }
+            while try await group.next() != nil {
+                try Task.checkCancellation()
+                addNext()
+            }
+        }
+    }
+
+    /// `fetchAll` plus publication into the cache. Leaves the partial intact and
+    /// rethrows on any failure (never publishes a partial).
+    func downloadAll(concurrency: Int, destination: URL) async throws {
+        try await fetchAll(concurrency: concurrency)
         guard let m = manifest, m.isComplete else { throw RangeFetcherError.lengthMismatch }
         try store.publish(cacheKey: cacheKey, to: destination)
         manifest = nil
+    }
+
+    /// Watch-to-cache finalisation: single-worker completion of a partial.
+    func finalize(destination: URL) async throws {
+        try await downloadAll(concurrency: 1, destination: destination)
     }
 }
 
