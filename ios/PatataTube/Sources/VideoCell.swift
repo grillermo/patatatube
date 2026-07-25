@@ -18,6 +18,7 @@ struct VideoCell: View {
     let onDownload: () async -> Bool
     let onCancel: () -> Void
     let onDeleteCache: () -> Void
+    let onDeletePartial: () -> Void
     let onClassify: (String) -> Void
     let onChooseVersion: (Int) -> Void
     let onDelete: () -> Void
@@ -101,7 +102,8 @@ struct VideoCell: View {
                     currentCacheState: currentCacheState,
                     onDownload: onDownload,
                     onCancel: onCancel,
-                    onDeleteCache: onDeleteCache
+                    onDeleteCache: onDeleteCache,
+                    onDeletePartial: onDeletePartial
                 )
                 Spacer()
                 if video.versions.count > 1 {
@@ -238,6 +240,7 @@ struct VideoInfoView: View {
         case .cached: return "Cached"
         case .notCached: return "Not cached"
         case .downloading(let p): return "Downloading (\(Int(p * 100))%)"
+        case .paused(let p): return "Paused (\(Int(p * 100))%)"
         }
     }
 

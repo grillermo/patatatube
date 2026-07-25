@@ -93,6 +93,12 @@ struct MovieDetailView: View {
                                 id: currentVideo.id,
                                 versionId: currentVideo.chosenVersionId
                             )
+                        },
+                        onDeletePartial: {
+                            model.cache.removePartial(
+                                id: currentVideo.id,
+                                versionId: currentVideo.chosenVersionId
+                            )
                         }
                     )
 

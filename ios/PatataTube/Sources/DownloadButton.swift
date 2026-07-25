@@ -45,9 +45,10 @@ final class DownloadButtonState {
 
     var clampedProgress: Double {
         let value: Double
-        if case .downloading(let progress) = effectiveState {
+        switch effectiveState {
+        case .downloading(let progress), .paused(let progress):
             value = progress
-        } else {
+        default:
             value = self.progress
         }
         return min(max(value, 0), 1)
@@ -59,7 +60,9 @@ final class DownloadButtonState {
     }
 
     var showsArmedDelete: Bool {
-        isArmed && effectiveState == .cached
+        guard isArmed else { return false }
+        if case .paused = effectiveState { return true }
+        return effectiveState == .cached
     }
 
     @discardableResult
@@ -101,6 +104,8 @@ final class DownloadButtonState {
         switch cacheState {
         case .downloading(let progress):
             self.progress = progress
+        case .paused(let progress):
+            self.progress = progress
         case .cached:
             progress = 1
         case .notCached:
@@ -141,6 +146,7 @@ struct DownloadButton: View {
     let onDownload: () async -> Bool
     let onCancel: () -> Void
     let onDeleteCache: () -> Void
+    let onDeletePartial: () -> Void
     // Optional lifecycle seam for hosted inspection of SwiftUI-resolved environment values.
     var didAppear: ((Self) -> Void)? = nil
 
@@ -160,6 +166,7 @@ struct DownloadButton: View {
         onDownload: @escaping () async -> Bool,
         onCancel: @escaping () -> Void,
         onDeleteCache: @escaping () -> Void,
+        onDeletePartial: @escaping () -> Void,
         state: DownloadButtonState? = nil
     ) {
         self.identity = identity
@@ -168,6 +175,7 @@ struct DownloadButton: View {
         self.onDownload = onDownload
         self.onCancel = onCancel
         self.onDeleteCache = onDeleteCache
+        self.onDeletePartial = onDeletePartial
         _state = State(initialValue: state ?? DownloadButtonState(
             initialCacheState: currentCacheState()
         ))
@@ -257,6 +265,45 @@ struct DownloadButton: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Cancel download")
             .accessibilityValue("\(Int(state.clampedProgress * 100))%")
+
+        case .paused(let progress):
+            Button {
+                if state.showsArmedDelete {
+                    onDeletePartial()
+                    withAnimation { state.reset(to: .notCached) }
+                } else if state.isArmed {
+                    withAnimation { state.arm() }
+                } else {
+                    Task { @MainActor in
+                        let attemptID = withAnimation { state.begin() }
+                        let succeeded = await onDownload()
+                        withAnimation {
+                            state.finish(attemptID: attemptID, succeeded: succeeded)
+                        }
+                    }
+                }
+            } label: {
+                ZStack {
+                    Circle()
+                        .stroke(Color.gray.opacity(0.25), lineWidth: 4)
+                    Circle()
+                        .trim(from: 0, to: min(max(progress, 0), 1))
+                        .stroke(
+                            Color.secondary,
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                    Image(systemName: state.showsArmedDelete ? "x.circle.fill" : "arrow.down.circle")
+                        .foregroundStyle(state.showsArmedDelete ? .red : Color.accentColor)
+                        .font(.system(size: 18))
+                }
+                .frame(width: 30, height: 30)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(state.showsArmedDelete ? "Delete partial download" : "Resume download")
+            .accessibilityValue("\(Int(min(max(progress, 0), 1) * 100))%")
 
         case .notCached:
             Button {

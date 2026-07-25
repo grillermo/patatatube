@@ -190,6 +190,12 @@ struct EpisodesView: View {
                         id: episode.id,
                         versionId: episode.chosenVersionId
                     )
+                },
+                onDeletePartial: {
+                    model.cache.removePartial(
+                        id: episode.id,
+                        versionId: episode.chosenVersionId
+                    )
                 }
             )
         }

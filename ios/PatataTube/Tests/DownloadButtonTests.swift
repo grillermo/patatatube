@@ -96,6 +96,26 @@ struct DownloadButtonStateTests {
         state.reset(to: .downloading(0.3))
         #expect(!state.isArmed)
     }
+
+    @Test func pausedStateExposesItsProgress() {
+        let state = DownloadButtonState(initialCacheState: .paused(0.4))
+        #expect(state.effectiveState == .paused(0.4))
+        #expect(state.clampedProgress == 0.4)
+        #expect(state.isDownloading == false)
+    }
+
+    @Test func pausedStateArmsForDelete() {
+        let state = DownloadButtonState(initialCacheState: .paused(0.4))
+        #expect(state.showsArmedDelete == false)
+        state.arm()
+        #expect(state.showsArmedDelete == true)
+    }
+
+    @Test func beginningADownloadFromPausedShowsDownloading() {
+        let state = DownloadButtonState(initialCacheState: .paused(0.4))
+        state.begin()
+        #expect(state.isDownloading == true)
+    }
 }
 
 @MainActor
@@ -157,6 +177,7 @@ private func makeDownloadButton(
     onDownload: @escaping () async -> Bool = { false },
     onCancel: @escaping () -> Void = {},
     onDeleteCache: @escaping () -> Void = {},
+    onDeletePartial: @escaping () -> Void = {},
     function: String = #function
 ) async throws -> DownloadButton {
     return try await withCheckedThrowingContinuation { continuation in
@@ -167,6 +188,7 @@ private func makeDownloadButton(
             onDownload: onDownload,
             onCancel: onCancel,
             onDeleteCache: onDeleteCache,
+            onDeletePartial: onDeletePartial,
             state: state
         )
         _ = button.on(\.didAppear, function: function) { view in

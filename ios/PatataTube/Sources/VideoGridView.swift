@@ -115,6 +115,7 @@ struct VideoGridView: View {
                                 onDownload: { await download(video) },
                                 onCancel: { cache.cancel(id: videoId, versionId: versionId) },
                                 onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
+                                onDeletePartial: { cache.removePartial(id: videoId, versionId: versionId) },
                                 onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
                                 onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
                                 onDelete: { Task { await store.delete(id: video.id) } }
