@@ -328,9 +328,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let key = cacheKey(videoId: videoId, versionId: versionId)
         return captureManager.asset(
             videoId: videoId, versionId: versionId, remoteURL: remoteURL, bearerToken: bearerToken,
-            onProgress: { [weak self] progress in
+            onProgress: { [weak self] captured, total in
                 self?.registerCaptureProgress(
-                    key: key, videoId: videoId, versionId: versionId, progress: progress)
+                    key: key, videoId: videoId, versionId: versionId,
+                    capturedBytes: captured, totalByteCount: total)
             })
     }
 
@@ -351,8 +352,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
 
     /// Publishes capture progress into `inFlight` so the grid shows a capturing
     /// video as `.downloading`. A manual download always wins: if one already
-    /// owns the key (task, segmented attempt, or probe), capture never claims it.
-    private func registerCaptureProgress(key: String, videoId: Int, versionId: Int?, progress: Double) {
+    /// owns the key, capture never claims it.
+    private func registerCaptureProgress(
+        key: String, videoId: Int, versionId: Int?,
+        capturedBytes: Int64, totalByteCount: Int64
+    ) {
+        let progress = totalByteCount > 0
+            ? min(max(Double(capturedBytes) / Double(totalByteCount), 0), 1)
+            : 0
         lock.withLock {
             // A capture-progress callback means the manifest was just written to
             // disk — mirror it so `state(for:)` never has to read it back.
@@ -363,9 +370,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             else { return }
             if inFlight[key] == nil {
                 inFlight[key] = DownloadActivityAccumulator(
-                    videoID: videoId, versionID: versionId, totalByteCount: nil, now: now())
+                    videoID: videoId, versionID: versionId,
+                    totalByteCount: totalByteCount, now: now())
             }
-            inFlight[key]?.overrideProgress(progress)
+            inFlight[key]?.record(
+                transferredByteCount: capturedBytes,
+                progress: progress,
+                totalByteCount: totalByteCount,
+                now: now())
         }
     }
 

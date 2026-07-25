@@ -38,7 +38,7 @@ struct RangeFetcherFinalizeTests {
         let fetcher = RangeFetcher(
             cacheKey: "1", remoteURL: remote, bearerToken: "t",
             videoId: 1, versionId: nil,
-            store: store, session: mockSession(), onProgress: { _ in })
+            store: store, session: mockSession(), onProgress: { _, _ in })
         _ = try await fetcher.loadContentInfo()
         _ = try await fetcher.data(for: .init(start: 0, end: 9))   // watch the head only
         let dest = base.appendingPathComponent("1.mp4")

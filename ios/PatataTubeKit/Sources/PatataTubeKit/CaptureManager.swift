@@ -59,7 +59,7 @@ public final class CaptureManager: NSObject, AVAssetResourceLoaderDelegate, @unc
         versionId: Int?,
         remoteURL: URL,
         bearerToken: String?,
-        onProgress: @escaping @Sendable (Double) -> Void
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) -> AVURLAsset {
         let key = versionId.map { "\(videoId):\($0)" } ?? "\(videoId)"
         let fetcher = RangeFetcher(

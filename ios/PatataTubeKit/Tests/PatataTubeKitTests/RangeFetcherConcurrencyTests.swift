@@ -39,7 +39,7 @@ struct RangeFetcherConcurrencyTests {
         RangeFetcher(
             cacheKey: "1", remoteURL: remote, bearerToken: "t",
             videoId: 1, versionId: nil,
-            store: store, session: mockSession(), onProgress: { _ in })
+            store: store, session: mockSession(), onProgress: { _, _ in })
     }
 
     @Test func concurrentFetchesRecordEveryRange() async throws {
@@ -58,4 +58,33 @@ struct RangeFetcherConcurrencyTests {
             .init(start: 50, end: 59),
         ])
     }
+
+    @Test func progressReportsCapturedAndTotalBytes() async throws {
+        installSlowHandler()
+        let reports = Reports()
+        let fetcher = RangeFetcher(
+            cacheKey: "1", remoteURL: remote, bearerToken: "t",
+            videoId: 1, versionId: nil,
+            store: CapturedDownloadStore(root: root()), session: mockSession(),
+            onProgress: { captured, total in reports.append(captured, total) })
+        _ = try await fetcher.loadContentInfo()
+        _ = try await fetcher.data(for: .init(start: 0, end: 39))
+
+        #expect(reports.last() == Pair(captured: 40, total: 100))
+    }
+}
+
+struct Pair: Equatable, Sendable {
+    let captured: Int64
+    let total: Int64
+}
+
+/// Thread-safe collector: `onProgress` is `@Sendable` and fires off-actor.
+final class Reports: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Pair] = []
+    func append(_ captured: Int64, _ total: Int64) {
+        lock.withLock { values.append(Pair(captured: captured, total: total)) }
+    }
+    func last() -> Pair? { lock.withLock { values.last } }
 }

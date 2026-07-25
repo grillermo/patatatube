@@ -40,7 +40,7 @@ struct RangeFetcherTests {
             cacheKey: "1", remoteURL: remote, bearerToken: "t",
             videoId: 1, versionId: nil,
             store: CapturedDownloadStore(root: root()), session: mockSession(),
-            onProgress: { _ in })
+            onProgress: { _, _ in })
         let info = try await fetcher.loadContentInfo()
         #expect(info == ContentInfo(totalByteCount: 100, etag: "\"v1\""))
     }
@@ -51,7 +51,7 @@ struct RangeFetcherTests {
         let fetcher = RangeFetcher(
             cacheKey: "1", remoteURL: remote, bearerToken: "t",
             videoId: 1, versionId: nil,
-            store: store, session: mockSession(), onProgress: { _ in })
+            store: store, session: mockSession(), onProgress: { _, _ in })
         _ = try await fetcher.loadContentInfo()
         let first = try await fetcher.data(for: .init(start: 10, end: 19))
         #expect(first == body.subdata(in: 10..<20))
@@ -67,7 +67,7 @@ struct RangeFetcherTests {
         let fetcher = RangeFetcher(
             cacheKey: "1", remoteURL: remote, bearerToken: "t",
             videoId: 1, versionId: nil,
-            store: store, session: mockSession(), onProgress: { _ in })
+            store: store, session: mockSession(), onProgress: { _, _ in })
         _ = try await fetcher.loadContentInfo()
         installHandler(etag: "\"v2\"")   // server re-encoded
         await #expect(throws: RangeFetcherError.changedEntity) {

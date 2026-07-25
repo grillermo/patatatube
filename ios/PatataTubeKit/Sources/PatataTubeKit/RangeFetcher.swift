@@ -23,7 +23,7 @@ actor RangeFetcher {
     let versionId: Int?
     private let store: CapturedDownloadStore
     private let session: URLSession
-    private let onProgress: @Sendable (Double) -> Void
+    private let onProgress: @Sendable (Int64, Int64) -> Void
     private var manifest: CapturedDownloadManifest?
 
     init(
@@ -34,7 +34,7 @@ actor RangeFetcher {
         versionId: Int?,
         store: CapturedDownloadStore,
         session: URLSession,
-        onProgress: @escaping @Sendable (Double) -> Void
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) {
         self.cacheKey = cacheKey
         self.remoteURL = remoteURL
@@ -83,7 +83,7 @@ actor RangeFetcher {
         try store.ensureSparseFile(cacheKey: cacheKey, totalByteCount: total)
         try store.write(m)
         manifest = m
-        onProgress(m.progress)
+        onProgress(CapturedRanges.coveredBytes(m.capturedRanges), m.totalByteCount)
         return ContentInfo(totalByteCount: total, etag: etag)
     }
 
@@ -114,7 +114,7 @@ actor RangeFetcher {
         current.capture(range)
         try store.write(current)
         manifest = current
-        onProgress(current.progress)
+        onProgress(CapturedRanges.coveredBytes(current.capturedRanges), current.totalByteCount)
         return data
     }
 
