@@ -16,6 +16,7 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 ### Playback
 - Tap a cell to open a fullscreen player that autoplays
 - Auto-dismisses on end of video in the foreground when autoplay is off; with autoplay on, a finished video advances to the next playable queue item (foreground or backgrounded); with autoplay off and backgrounded, playback pauses instead of dismissing
+- Randomize toggle (overflow menu) — per classification tab, works with or without autoplay: "next" (Control Center) and autoplay-on-end pick from a shuffled order instead of the fixed list; the same video doesn't repeat back-to-back when the shuffle loops; toggling it off on a tab reverts that tab's "next" to sequential order immediately (state remembered per tab while the app stays open)
 - Tap to dismiss
 - Pull-down-to-dismiss gesture (the close "X" was removed in favor of gestures)
 

@@ -205,7 +205,7 @@ struct VideoGridView: View {
             .sheet(isPresented: $showUpload) { UploadView() }
             .fullScreenCover(item: $playing) { request in
                 VideoPlayerView(videos: request.videos, startIndex: request.startIndex,
-                                sleepMode: request.sleepMode)
+                                sleepMode: request.sleepMode, randomize: model.randomize(for: store.filter))
             }
             .task { await initialLoad() }
             .overlay { if let error = store.errorText { errorBanner(error) } }
