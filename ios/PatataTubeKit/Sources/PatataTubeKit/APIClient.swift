@@ -120,6 +120,12 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         catch { throw APIError.decoding(String(describing: error)) }
     }
 
+    /// Discards the server's HLS package so the next play repackages it. The
+    /// only escape from `hls_status == "error"`.
+    public func rebuildHLS(id: Int) async throws {
+        _ = try await authedPost("api/videos/\(id)/hls/rebuild", body: [:])
+    }
+
     public func video(id: Int) async throws -> Video {
         let data = try await authedGet("api/videos/\(id)")
         do { return try Self.makeDecoder().decode(Video.self, from: data) }

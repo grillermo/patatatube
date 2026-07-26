@@ -249,9 +249,9 @@ struct VideoGridView: View {
     }
 
     private func play(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false) {
-        // Already downloaded to device: play the local file directly, no network.
-        // ensureReady() would hit /prepare and fail offline (-1009) even though
-        // the cached MP4 is ready to play. VideoPlayerView plays from cache too.
+        // Already downloaded to device: play the local package directly, no
+        // network. ensureReady() would hit /prepare and fail offline (-1009)
+        // even though the cached package is ready to play.
         if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
             startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode)
             return

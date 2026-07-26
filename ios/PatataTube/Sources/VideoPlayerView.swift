@@ -114,6 +114,7 @@ struct VideoPlayerView: View {
             readyObserver = nil
             readyTimeoutTask?.cancel()
             readyTimeoutTask = nil
+            model.cache.notePlaybackEnded(videoId: video.id, versionId: video.chosenVersionId)
             nowPlaying.detach()
             deactivateAudioSession()
         }
@@ -206,35 +207,22 @@ struct VideoPlayerView: View {
     }
 
     /// AVPlayerItem for a queue entry, or nil when it has no playable source
-    /// (skipped during queue navigation). Order matches the original logic:
-    /// cached MP4 → remote HLS → direct MP4.
+    /// (skipped during queue navigation). All sources are HLS now: a cached
+    /// `.movpkg`, a fill-ahead download's asset, or the remote playlist.
     private func playerItem(for video: Video) -> AVPlayerItem? {
-        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
-            // Offline MP4 wins: instant, no network. (HLS offline is a later phase.)
-            return AVPlayerItem(url: model.cache.localURL(for: video.id, versionId: video.chosenVersionId))
-        }
-        // Library rows that haven't been converted server-side have no streamable file yet.
+        // Library rows that haven't been converted server-side have no source yet.
         if video.isLibrary && video.status != "done" { return nil }
-        if let hlsURL = model.hlsURL(for: video) {
-            // Remote HLS exposes native subtitle tracks in the AVKit controls.
-            return AVPlayerItem(asset: authedAsset(url: hlsURL))
-        }
-        if let url = model.streamURL(for: video) {
-            // Direct MP4 (no HLS package): play through the capturing asset so a full
-            // watch also downloads the file. Falls back to a plain authed asset if a
-            // capture URL can't be formed.
-            let asset = model.cache.captureAsset(
-                videoId: video.id,
-                versionId: video.chosenVersionId,
-                remoteURL: url,
-                bearerToken: model.credentials.token,
-                // Only non-library, non-HLS videos can finalize into a cached MP4.
-                // The finalize-on-end hook uses the same gate; keeping them aligned
-                // stops a library/HLS video from orphaning a capture partial.
-                isEligibleForCapture: !video.isLibrary && (video.hlsPath?.isEmpty ?? true))
+        switch model.cache.playbackAsset(
+            for: model.playbackTarget(for: video),
+            isOnWiFi: model.isOnWiFi,
+            hasNetwork: model.hasNetwork
+        ) {
+        case .asset(let asset):
             return AVPlayerItem(asset: asset)
+        case .unplayable(let reason):
+            model.store.errorText = reason
+            return nil
         }
-        return nil
     }
 
     private func title(of video: Video) -> String {
@@ -260,10 +248,8 @@ struct VideoPlayerView: View {
         ) { _ in
             Task { @MainActor in
                 let finished = video   // the item that reached end
-                if !finished.isLibrary, finished.hlsPath?.isEmpty ?? true {
-                    Task { await model.cache.finalizeCapture(
-                        videoId: finished.id, versionId: finished.chosenVersionId) }
-                }
+                model.cache.notePlaybackEnded(
+                    videoId: finished.id, versionId: finished.chosenVersionId)
                 switch playbackEndAction(
                     autoplay: model.autoplay,
                     isForeground: UIApplication.shared.applicationState == .active,

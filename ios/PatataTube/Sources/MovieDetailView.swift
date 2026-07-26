@@ -59,6 +59,23 @@ struct MovieDetailView: View {
                     Text(summary).foregroundStyle(.secondary)
                 }
 
+                if currentVideo.hlsStatus == "error" {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(currentVideo.hlsErrorMsg ?? "Server could not package this video.")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                        Button("Retry packaging") {
+                            Task {
+                                model.cache.removeCached(
+                                    id: currentVideo.id,
+                                    versionId: currentVideo.chosenVersionId)
+                                try? await model.api.rebuildHLS(id: currentVideo.id)
+                                await store.load()
+                            }
+                        }
+                    }
+                }
+
                 HStack(spacing: 16) {
                     Button {
                         onPlay(currentVideo)

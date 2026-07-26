@@ -2,6 +2,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import Network
 import PatataTubeKit
 
 @MainActor
@@ -19,6 +20,10 @@ final class AppModel: ObservableObject {
     @Published var downloadStreamCount: Int
     @Published var downloadConcurrency: Int
     @Published var hlsCacheCapGigabytes: Int = HLSCacheSizeSettings.defaultGigabytes
+
+    @Published private(set) var isOnWiFi = true
+    @Published private(set) var hasNetwork = true
+    private let pathMonitor = NWPathMonitor()
 
     /// When on, a finished video rolls into the next one in the queue. Session-only
     /// by design — it resets to off on relaunch, so a long queue can never keep
@@ -61,6 +66,32 @@ final class AppModel: ObservableObject {
         cache.setMaxConcurrentDownloads(self.downloadConcurrency)
         let capBytes = hlsCacheSettings.load()
         self.hlsCacheCapGigabytes = Int(capBytes / HLSCacheSizeSettings.bytesPerGigabyte)
+        cache.setTempCacheCap(bytes: capBytes)
+        startNetworkMonitor()
+    }
+
+    /// Fill-ahead is Wi-Fi-only, so playback needs the current interface type.
+    private func startNetworkMonitor() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in
+                self?.hasNetwork = path.status == .satisfied
+                self?.isOnWiFi = path.status == .satisfied
+                    && !path.usesInterfaceType(.cellular)
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "patatatube.network.monitor"))
+    }
+
+    /// Everything the cache needs to serve one video.
+    func playbackTarget(for video: Video) -> CacheManager.PlaybackTarget {
+        CacheManager.PlaybackTarget(
+            id: video.id,
+            versionId: video.chosenVersionId,
+            master: hlsURL(for: video),
+            bearerToken: credentials.token,
+            title: video.title ?? video.sourceFilename ?? "PatataTube",
+            audioLang: video.audioLang,
+            hlsStatus: video.hlsStatus)
     }
 
     func saveSettings() {
@@ -83,6 +114,7 @@ final class AppModel: ObservableObject {
         )
         let capBytes = Int64(hlsCacheCapGigabytes) * HLSCacheSizeSettings.bytesPerGigabyte
         hlsCacheSettings.save(capBytes)
+        cache.setTempCacheCap(bytes: capBytes)
     }
 
     func handle(_ action: QuickAction) async {
