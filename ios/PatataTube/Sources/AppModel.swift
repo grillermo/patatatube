@@ -155,11 +155,6 @@ final class AppModel: ObservableObject {
         cache.setMaxConcurrentDownloads(downloadConcurrency)
     }
 
-    /// Absolute stream/download URL for a video's `streamPath`.
-    func streamURL(for video: Video) -> URL? {
-        return absoluteURL(for: video, path: video.streamPath)
-    }
-
     /// HLS master playlist URL, or nil when the server did not advertise one.
     func hlsURL(for video: Video) -> URL? {
         guard let hlsPath = video.hlsPath, !hlsPath.isEmpty else { return nil }

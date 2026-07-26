@@ -302,7 +302,7 @@ struct VideoGridView: View {
                 return false
             }
         }
-        guard let url = model.streamURL(for: target) else {
+        guard let url = model.hlsURL(for: target) else {
             store.errorText = "No server URL configured"
             return false
         }

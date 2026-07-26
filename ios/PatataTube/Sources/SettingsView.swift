@@ -71,7 +71,7 @@ struct SettingsView: View {
                         Task {
                             await withTaskGroup(of: Void.self) { group in
                                 for video in model.store.videos {
-                                    guard let url = model.streamURL(for: video) else { continue }
+                                    guard let url = model.hlsURL(for: video) else { continue }
                                     let preview = video.previewUrl.flatMap(URL.init(string:))
                                     let versionId = video.chosenVersionId
                                     let id = video.id

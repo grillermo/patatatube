@@ -141,14 +141,6 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     #expect(oldVideo.versions.isEmpty)
 }
 
-@Test func cacheLocalURLUsesVersionIdWhenPresent() {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let cache = CacheManager(root: root)
-
-    #expect(cache.localURL(for: 7).lastPathComponent == "7.mp4")
-    #expect(cache.localURL(for: 7, versionId: 20).lastPathComponent == "7.v20.mp4")
-}
-
 @MainActor @Test func loadPopulatesVideos() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
     let store = VideoStore(api: api)

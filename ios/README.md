@@ -26,8 +26,9 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 - Download a single video for offline playback, with visual feedback on the download button
 
 ### Offline / caching
-- Downloaded MP4s stream from a local cache (works with no network to the server)
-- Configurable 1–4 simultaneous byte-range streams per video (default 2)
+- Downloaded HLS packages (`.movpkg`) play from a local cache (works with no network to the server)
+- On Wi-Fi, watching a video downloads it in the background as it plays (fill-ahead); a full watch is promoted to a permanent download automatically
+- Configurable watch-cache size limit (default 10 GB) — the oldest partial downloads are evicted first; explicit downloads are never evicted
 - The videos JSON API response is cached so the grid loads offline
 - Video previews are cached too
 - "Cache all videos" action in Settings downloads every visible video
@@ -229,14 +230,27 @@ On first launch grid is empty / errors — need server config:
 5. Relaunch the app → the switch is back to off (it is session-only by design).
 6. Lock-screen next/previous keep working with the switch in either position.
 
-### Watch-to-cache (direct-MP4 videos)
-1. Ensure a Twitter/YouTube video is NOT cached (grid ring empty).
-2. Play it start-to-finish without seeking. Let it reach the end.
-3. Return to the grid: the video shows a full ring / cached badge.
-4. Enable Airplane Mode, reopen the video: it plays offline from the cached file.
-5. Repeat but CLOSE at ~50%: the grid ring shows a partial. Reopen and play to
-   the end: it completes to cached.
-6. Confirm an HLS library movie does NOT auto-cache from watching (out of scope).
+### HLS stream caching
+
+1. On Wi-Fi, play a video to the end without skipping. The grid shows it as
+   cached; no separate download runs afterwards.
+2. Play another video, skip forward a few times, close the player at ~50%. The
+   grid shows a partial ring.
+3. Tap Download on that partial. Watch `log/backend.log`: segment requests
+   should cover only the parts that were never fetched — no segment appears
+   twice across the two phases.
+4. Enable Airplane Mode. A cached video plays, exposes its subtitle tracks and
+   the audio-track picker, and scrubbing inside the downloaded region works.
+5. In Airplane Mode, open the partial from step 2: the downloaded region plays;
+   seeking past it stops rather than crashing.
+6. Set "Watch cache limit" to 1 GB in Settings and watch enough videos partially
+   to exceed it: the least recently played partial disappears from the grid while
+   every explicitly downloaded video survives.
+7. Switch to cellular and play an uncached video: it streams, and the grid does
+   NOT start showing download progress for it.
+8. Kill the app mid-download, relaunch: progress resumes rather than restarting.
+9. For a video whose server-side packaging failed (`hls_status = "error"`), the
+   detail view shows the error and "Retry packaging" clears it.
 
 ## Notes
 

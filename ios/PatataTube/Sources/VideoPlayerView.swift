@@ -379,16 +379,6 @@ struct VideoPlayerView: View {
         nowPlaying.setArtwork(data, for: expectedPlayer)
     }
 
-    /// AVURLAsset carrying the bearer token; AVPlayer reuses these headers for
-    /// the HLS playlist, segment, and subtitle sub-requests on the same asset.
-    private func authedAsset(url: URL) -> AVURLAsset {
-        var options: [String: Any] = [:]
-        if let token = model.credentials.token {
-            options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(token)"]
-        }
-        return AVURLAsset(url: url, options: options)
-    }
-
     /// Selects the audible option matching the server-side language choice.
     /// mp4 assets carry every allowlisted track; HLS already serves only the
     /// chosen one. No match (or no selection group) leaves the default track.
