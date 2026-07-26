@@ -7,6 +7,9 @@ extension CacheManager {
         id: Int,
         versionId: Int? = nil,
         masterURL: URL,
+        preview: URL? = nil,
+        showPosterKey: String? = nil,
+        showPoster: URL? = nil,
         bearerToken: String?
     ) async throws {
         let key = cacheKey(videoId: id, versionId: versionId)
@@ -165,6 +168,19 @@ extension CacheManager {
                 throw CancellationError()
             }
             throw error
+        }
+        // Best-effort: missing artwork must not fail the cached HLS package.
+        if let preview {
+            try? await cachePreview(id: id, from: preview, bearerToken: bearerToken)
+        }
+        if let showPosterKey, let showPoster,
+           cachedShowPosterURL(for: showPosterKey) == nil
+        {
+            try? await cacheShowPoster(
+                key: showPosterKey,
+                from: showPoster,
+                bearerToken: bearerToken
+            )
         }
     }
 

@@ -15,10 +15,8 @@ struct SettingsViewTests {
         defaults.set(3, forKey: DownloadStreamSettings.key)
         let model = AppModel(
             credentials: InMemoryCredentialStore(),
-            cache: CacheManager(
-                root: FileManager.default.temporaryDirectory
-                    .appendingPathComponent("settings-cache-\(UUID().uuidString)")
-            ),
+            cacheRoot: FileManager.default.temporaryDirectory
+                .appendingPathComponent("settings-cache-\(UUID().uuidString)"),
             downloadSettings: DownloadStreamSettings(defaults: defaults)
         )
         let sut = SettingsView().environmentObject(model)
@@ -37,10 +35,8 @@ struct SettingsViewTests {
         defaults.set(2, forKey: SimultaneousDownloadSettings.key)
         let model = AppModel(
             credentials: InMemoryCredentialStore(),
-            cache: CacheManager(
-                root: FileManager.default.temporaryDirectory
-                    .appendingPathComponent("settings-cache-\(UUID().uuidString)")
-            ),
+            cacheRoot: FileManager.default.temporaryDirectory
+                .appendingPathComponent("settings-cache-\(UUID().uuidString)"),
             simultaneousSettings: SimultaneousDownloadSettings(defaults: defaults)
         )
         let sut = SettingsView().environmentObject(model)

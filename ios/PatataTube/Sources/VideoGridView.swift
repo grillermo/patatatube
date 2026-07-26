@@ -309,10 +309,19 @@ struct VideoGridView: View {
         let posterKey = target.showPreviewUrl
         let poster = resolveImageURL(posterKey)
         do {
-            try await model.cache.download(id: target.id, versionId: target.chosenVersionId, from: url, preview: preview,
-                                           showPosterKey: posterKey, showPoster: poster,
-                                           bearerToken: model.credentials.token,
-                                           streamCount: model.downloadStreamCount)
+            if let master = model.hlsURL(for: target), target.hlsPath?.isEmpty == false {
+                try await model.cache.downloadHLS(
+                    id: target.id, versionId: target.chosenVersionId,
+                    masterURL: master,
+                    preview: preview, showPosterKey: posterKey, showPoster: poster,
+                    bearerToken: model.credentials.token
+                )
+            } else {
+                try await model.cache.download(id: target.id, versionId: target.chosenVersionId, from: url, preview: preview,
+                                               showPosterKey: posterKey, showPoster: poster,
+                                               bearerToken: model.credentials.token,
+                                               streamCount: model.downloadStreamCount)
+            }
             return true
         } catch {
             if isCancellation(error) { return false }

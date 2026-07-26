@@ -206,21 +206,35 @@ struct VideoPlayerView: View {
     }
 
     /// AVPlayerItem for a queue entry, or nil when it has no playable source
-    /// (skipped during queue navigation). Order matches the original logic:
-    /// cached MP4 → remote HLS → direct MP4.
+    /// (skipped during queue navigation).
     private func playerItem(for video: Video) -> AVPlayerItem? {
         if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
-            // Offline MP4 wins: instant, no network. (HLS offline is a later phase.)
-            return AVPlayerItem(url: model.cache.localURL(for: video.id, versionId: video.chosenVersionId))
+            // Offline wins: local MP4 file, else promoted HLS via the proxy.
+            let local = model.cache.localURL(for: video.id, versionId: video.chosenVersionId)
+            if FileManager.default.fileExists(atPath: local.path) {
+                return AVPlayerItem(url: local)
+            }
+            if let offline = model.offlineHLSURL(for: video) {
+                return AVPlayerItem(url: offline)
+            }
         }
         // Library rows that haven't been converted server-side have no streamable file yet.
         if video.isLibrary && video.status != "done" { return nil }
+        if let proxied = model.proxiedHLSURL(for: video) {
+            // Proxied HLS: read-through cache, native subtitle tracks, no headers needed.
+            return AVPlayerItem(url: proxied)
+        }
         if let hlsURL = model.hlsURL(for: video) {
-            // Remote HLS exposes native subtitle tracks in the AVKit controls.
+            // Proxy down: direct remote HLS with authed headers (old behavior).
             return AVPlayerItem(asset: authedAsset(url: hlsURL))
         }
+        if video.hlsPath == nil || video.hlsPath?.isEmpty == true,
+           let proxied = model.proxiedMP4URL(for: video), model.streamURL(for: video) != nil {
+            // Proxied direct MP4 for rows without an HLS package.
+            return AVPlayerItem(url: proxied)
+        }
         if let url = model.streamURL(for: video) {
-            // Direct MP4 fallback for rows without an HLS package.
+            // Proxy down: direct MP4 fallback.
             return AVPlayerItem(asset: authedAsset(url: url))
         }
         return nil

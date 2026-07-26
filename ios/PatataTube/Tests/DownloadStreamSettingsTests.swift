@@ -33,10 +33,8 @@ struct DownloadStreamSettingsTests {
         let settings = DownloadStreamSettings(defaults: defaults)
         let model = AppModel(
             credentials: InMemoryCredentialStore(),
-            cache: CacheManager(
-                root: FileManager.default.temporaryDirectory
-                    .appendingPathComponent("model-cache-\(UUID().uuidString)")
-            ),
+            cacheRoot: FileManager.default.temporaryDirectory
+                .appendingPathComponent("model-cache-\(UUID().uuidString)"),
             downloadSettings: settings
         )
 

@@ -8,6 +8,8 @@ import PatataTubeKit
 final class AppModel: ObservableObject {
     let credentials: CredentialStore
     let cache: CacheManager
+    let streamCache: StreamCache
+    let streamProxy: StreamProxy
     let store: VideoStore
     let api: APIClient
     private let downloadSettings: DownloadStreamSettings
@@ -41,13 +43,21 @@ final class AppModel: ObservableObject {
 
     init(
         credentials: CredentialStore = KeychainCredentialStore(),
-        cache: CacheManager = CacheManager(),
+        cacheRoot: URL? = nil,
         downloadSettings: DownloadStreamSettings = DownloadStreamSettings(),
         simultaneousSettings: SimultaneousDownloadSettings = SimultaneousDownloadSettings()
     ) {
         let api = APIClient(store: credentials)
+        let streamCache = StreamCache()
+        let cache = CacheManager(root: cacheRoot, streamCache: streamCache)
         self.credentials = credentials
+        self.streamCache = streamCache
         self.cache = cache
+        self.streamProxy = StreamProxy(
+            cache: streamCache,
+            credentials: credentials,
+            offlineRoot: cache.videosRoot
+        )
         self.api = api
         self.store = VideoStore(api: api, cache: VideoListCache())
         self.downloadSettings = downloadSettings
@@ -57,6 +67,7 @@ final class AppModel: ObservableObject {
         self.baseURLText = credentials.baseURL?.absoluteString ?? ""
         self.tokenText = credentials.token ?? ""
         cache.setMaxConcurrentDownloads(self.downloadConcurrency)
+        Task { await streamProxy.start() }
     }
 
     func saveSettings() {
@@ -122,6 +133,24 @@ final class AppModel: ObservableObject {
     func hlsURL(for video: Video) -> URL? {
         guard let hlsPath = video.hlsPath, !hlsPath.isEmpty else { return nil }
         return absoluteURL(for: video, path: hlsPath)
+    }
+
+    /// Proxied HLS playback URL; nil when no HLS package or proxy is down.
+    func proxiedHLSURL(for video: Video) -> URL? {
+        guard video.hlsPath?.isEmpty == false else { return nil }
+        return streamProxy.hlsURL(videoId: video.id, versionId: video.chosenVersionId)
+    }
+
+    /// Proxied MP4 playback URL; nil when proxy is down.
+    func proxiedMP4URL(for video: Video) -> URL? {
+        streamProxy.mp4URL(videoId: video.id, versionId: video.chosenVersionId)
+    }
+
+    /// Offline HLS playback URL for a promoted package; nil when absent/proxy down.
+    func offlineHLSURL(for video: Video) -> URL? {
+        guard cache.offlineHLSMasterURL(for: video.id, versionId: video.chosenVersionId) != nil
+        else { return nil }
+        return streamProxy.offlineHLSURL(videoId: video.id, versionId: video.chosenVersionId)
     }
 
     private func absoluteURL(for video: Video, path rawPath: String) -> URL? {

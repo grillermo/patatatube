@@ -1995,7 +1995,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         return Int(parts[1])
     }
 
-    private func cachePreview(id: Int, from remote: URL, bearerToken: String? = nil) async throws {
+    func cachePreview(id: Int, from remote: URL, bearerToken: String? = nil) async throws {
         var request = URLRequest(url: remote)
         if let bearerToken {
             request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
@@ -2007,7 +2007,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         storePreview(data, for: id, path: remote.absoluteString)
     }
 
-    private func cacheShowPoster(key: String, from remote: URL, bearerToken: String? = nil) async throws {
+    func cacheShowPoster(key: String, from remote: URL, bearerToken: String? = nil) async throws {
         var request = URLRequest(url: remote)
         if let bearerToken {
             request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")

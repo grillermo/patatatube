@@ -43,24 +43,21 @@ struct SimultaneousDownloadSettingsTests {
     func appModelSavesAndPushesConcurrencyToCache() throws {
         let defaults = try defaults()
         let settings = SimultaneousDownloadSettings(defaults: defaults)
-        let cache = CacheManager(
-            root: FileManager.default.temporaryDirectory
-                .appendingPathComponent("concurrency-cache-\(UUID().uuidString)")
-        )
         let model = AppModel(
             credentials: InMemoryCredentialStore(),
-            cache: cache,
+            cacheRoot: FileManager.default.temporaryDirectory
+                .appendingPathComponent("concurrency-cache-\(UUID().uuidString)"),
             simultaneousSettings: settings
         )
 
         // Loaded default is pushed to the cache on init.
         #expect(model.downloadConcurrency == 3)
-        #expect(cache.maxConcurrentDownloads == 3)
+        #expect(model.cache.maxConcurrentDownloads == 3)
 
         model.downloadConcurrency = 2
         model.saveSettings()
 
         #expect(settings.load() == 2)
-        #expect(cache.maxConcurrentDownloads == 2)
+        #expect(model.cache.maxConcurrentDownloads == 2)
     }
 }
