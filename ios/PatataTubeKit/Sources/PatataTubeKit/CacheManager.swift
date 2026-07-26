@@ -152,8 +152,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private let now: @Sendable () -> Date
     private let lock = NSLock()
     private let cancellationFence: any CacheManagerCancellationFencing
-    private let concurrencyGate: any DownloadConcurrencyGating
+    let concurrencyGate: any DownloadConcurrencyGating
     private var inFlight: [String: DownloadActivityAccumulator] = [:]
+    private var externalActivityKeys: Set<String> = []
+    private var externalCancellationRequests: Set<String> = []
+    private var externalTasks: [String: Task<Void, Error>] = [:]
     private var completionHistory: DownloadCompletionHistoryStore
     private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
     private var idByTask: [Int: String] = [:]
@@ -231,6 +234,123 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         root.appendingPathComponent(filename(videoId: id, versionId: versionId))
     }
 
+    /// Directory containing a promoted offline HLS package.
+    public func offlineHLSDir(for id: Int, versionId: Int? = nil) -> URL {
+        let suffix = versionId.map { "_v\($0)" } ?? ""
+        return root.appendingPathComponent(
+            "hls-\(id)\(suffix)",
+            isDirectory: true
+        )
+    }
+
+    /// The offline package's master playlist, or nil when not downloaded.
+    public func offlineHLSMasterURL(
+        for id: Int,
+        versionId: Int? = nil
+    ) -> URL? {
+        let url = offlineHLSDir(for: id, versionId: versionId)
+            .appendingPathComponent("master.m3u8")
+        return fileManager.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// Root permanent video store, suitable for StreamProxy's offline root.
+    public var videosRoot: URL { root }
+
+    var urlSession: URLSession { session }
+
+    var streamSegmentCache: SegmentCache? {
+        (streamCache as? StreamCache)?.segments
+    }
+
+    @discardableResult
+    func beginExternalActivity(
+        key: String,
+        videoId: Int,
+        versionId: Int?,
+        totalUnits: Int64
+    ) -> Bool {
+        lock.withLock {
+            guard inFlight[key] == nil,
+                  !externalActivityKeys.contains(key)
+            else { return false }
+            externalActivityKeys.insert(key)
+            externalCancellationRequests.remove(key)
+            inFlight[key] = DownloadActivityAccumulator(
+                videoID: videoId,
+                versionID: versionId,
+                totalByteCount: totalUnits,
+                now: now()
+            )
+            return true
+        }
+    }
+
+    func updateExternalActivity(key: String, completedUnits: Int64) {
+        lock.withLock {
+            guard var accumulator = inFlight[key] else { return }
+            let totalUnits = accumulator.activity.totalByteCount ?? 0
+            let progress = totalUnits > 0
+                ? Double(completedUnits) / Double(totalUnits)
+                : 0
+            accumulator.record(
+                transferredByteCount: completedUnits,
+                progress: progress,
+                totalByteCount: totalUnits,
+                now: now()
+            )
+            inFlight[key] = accumulator
+        }
+    }
+
+    func endExternalActivity(key: String) {
+        lock.withLock {
+            inFlight[key] = nil
+            externalActivityKeys.remove(key)
+            externalCancellationRequests.remove(key)
+            externalTasks[key] = nil
+        }
+    }
+
+    func registerExternalTask(
+        key: String,
+        task: Task<Void, Error>
+    ) {
+        let shouldCancel = lock.withLock {
+            guard externalActivityKeys.contains(key) else { return true }
+            externalTasks[key] = task
+            return externalCancellationRequests.contains(key)
+        }
+        if shouldCancel {
+            task.cancel()
+        }
+    }
+
+    func throwIfExternalActivityCancelled(key: String) throws {
+        if lock.withLock({
+            externalCancellationRequests.contains(key)
+        }) {
+            throw CancellationError()
+        }
+    }
+
+    func promoteExternalActivity(
+        key: String,
+        _ promotion: () throws -> Void
+    ) throws {
+        try lock.withLock {
+            guard externalActivityKeys.contains(key),
+                  !externalCancellationRequests.contains(key)
+            else {
+                throw CancellationError()
+            }
+            try promotion()
+            inFlight[key] = nil
+            externalActivityKeys.remove(key)
+            externalCancellationRequests.remove(key)
+            externalTasks[key] = nil
+        }
+    }
+
     /// Local file URL of a cached preview image, or nil if none is cached.
     ///
     /// Version-aware: the filename embeds a hash of the preview URL, which carries
@@ -276,6 +396,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     public func state(for id: Int, versionId: Int? = nil) -> CacheState {
         let key = cacheKey(videoId: id, versionId: versionId)
         if fileManager.fileExists(atPath: localURL(for: id, versionId: versionId).path) { return .cached }
+        if offlineHLSMasterURL(for: id, versionId: versionId) != nil { return .cached }
         return lock.withLock {
             inFlight[key].map { .downloading($0.activity.progress) } ?? .notCached
         }
@@ -355,7 +476,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             let registered = lock.withLock {
                 guard segmentedAttempts[key] == nil,
                       tasksByKey[key] == nil,
-                      probeAttempts[key] == nil
+                      probeAttempts[key] == nil,
+                      inFlight[key] == nil,
+                      !externalActivityKeys.contains(key)
                 else { return false }
                 segmentedAttempts[key] = attempt
                 inFlight[key] = activityAccumulator(
@@ -382,16 +505,24 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 continue
             }
             // A live task already owns this key (e.g. the user re-tapped download).
-            if lock.withLock({
-                tasksByKey[key] != nil
-                    || segmentedAttempts[key] != nil
-                    || probeAttempts[key] != nil
-            }) {
+        if lock.withLock({
+            tasksByKey[key] != nil
+                || segmentedAttempts[key] != nil
+                || probeAttempts[key] != nil
+                || inFlight[key] != nil
+                || externalActivityKeys.contains(key)
+        }) {
                 continue
             }
             guard let data = try? Data(contentsOf: resumeURL(for: key)), !data.isEmpty else { continue }
             let task = session.downloadTask(withResumeData: data)
-            lock.withLock {
+            let registered = lock.withLock {
+                guard tasksByKey[key] == nil,
+                      segmentedAttempts[key] == nil,
+                      probeAttempts[key] == nil,
+                      inFlight[key] == nil,
+                      !externalActivityKeys.contains(key)
+                else { return false }
                 inFlight[key] = DownloadActivityAccumulator(
                     videoID: id,
                     versionID: vid,
@@ -401,7 +532,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 idByTask[task.taskIdentifier] = key
                 tasksByKey[key] = task
                 legacyResumeBaselineTaskIDs.insert(task.taskIdentifier)
+                return true
             }
+            guard registered else { continue }
             task.resume()
             recordResumedID(id)
         }
@@ -413,6 +546,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Explicit cancel restarts from scratch - it does not persist resume data.
     public func cancel(id: Int, versionId: Int? = nil) {
         let key = cacheKey(videoId: id, versionId: versionId)
+        let externalTask = lock.withLock {
+            if externalActivityKeys.contains(key) {
+                externalCancellationRequests.insert(key)
+                inFlight[key] = nil
+            }
+            return externalTasks[key]
+        }
+        externalTask?.cancel()
         cancellationFence.beginCancellation(cacheKey: key)
         defer {
             cancellationFence.endCancellation(cacheKey: key)
@@ -459,21 +600,28 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// different audio track set, making the cached copy stale.
     public func removeCached(id: Int, versionId: Int? = nil) {
         try? fileManager.removeItem(at: localURL(for: id, versionId: versionId))
+        try? fileManager.removeItem(
+            at: offlineHLSDir(for: id, versionId: versionId)
+        )
     }
 
-    /// True when any cached MP4 (any version) exists for this video.
+    /// True when any cached MP4 or HLS package exists for this video.
     public func hasAnyCached(id: Int) -> Bool {
         !cachedVideoFilenames(id: id).isEmpty
+            || !offlineHLSDirectoryNames(id: id).isEmpty
     }
 
-    /// Deletes every cached MP4 and resume file for this video, all versions.
+    /// Deletes every cached MP4, HLS package, and resume file for this video.
     /// Preview images and show posters are kept — small, still useful offline.
     public func removeAllCached(id: Int) {
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         let resumes = contents.filter {
             $0 == "\(id).resume" || ($0.hasPrefix("\(id):") && $0.hasSuffix(".resume"))
         }
-        for name in cachedVideoFilenames(id: id) + resumes {
+        for name in cachedVideoFilenames(id: id)
+            + resumes
+            + offlineHLSDirectoryNames(id: id)
+        {
             try? fileManager.removeItem(at: root.appendingPathComponent(name))
         }
         for manifest in segmentedStore.manifests() where manifest.videoId == id {
@@ -482,14 +630,18 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     }
 
     /// Clears every downloaded video: cancels in-flight downloads, removes all
-    /// MP4s + resume files + segment manifests + completion history. Preview
+    /// MP4s + HLS packages + resume files + manifests + completion history. Preview
     /// images and show posters are kept (see `clearAllCovers()`).
     public func clearAllVideos() {
         for activity in activeDownloads() {
             cancel(id: activity.videoID, versionId: activity.versionID)
         }
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
-        for name in contents where name.hasSuffix(".mp4") || name.hasSuffix(".resume") {
+        for name in contents where
+            name.hasSuffix(".mp4")
+                || name.hasSuffix(".resume")
+                || name.hasPrefix("hls-")
+        {
             try? fileManager.removeItem(at: root.appendingPathComponent(name))
         }
         for manifest in segmentedStore.manifests() {
@@ -511,6 +663,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         return contents.filter {
             $0 == "\(id).mp4" || ($0.hasPrefix("\(id).v") && $0.hasSuffix(".mp4"))
+        }
+    }
+
+    private func offlineHLSDirectoryNames(id: Int) -> [String] {
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        let base = "hls-\(id)"
+        return contents.filter {
+            $0 == base || $0.hasPrefix("\(base)_v")
         }
     }
 
@@ -643,7 +803,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let probeAttempt = FreshProbeAttempt(cacheKey: key)
         let canProbe = lock.withLock {
             guard segmentedAttempts[key] == nil,
-                  probeAttempts[key] == nil
+                  probeAttempts[key] == nil,
+                  inFlight[key] == nil,
+                  !externalActivityKeys.contains(key)
             else { return false }
             probeAttempts[key] = probeAttempt
             inFlight[key] = DownloadActivityAccumulator(
@@ -818,7 +980,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             )
             let registered = lock.withLock {
                 guard segmentedAttempts[manifest.cacheKey] == nil,
-                      probeAttempts[manifest.cacheKey] == nil
+                      probeAttempts[manifest.cacheKey] == nil,
+                      inFlight[manifest.cacheKey] == nil,
+                      !externalActivityKeys.contains(manifest.cacheKey)
                 else { return false }
                 segmentedAttempts[manifest.cacheKey] = attempt
                 inFlight[manifest.cacheKey] = activityAccumulator(
@@ -1101,7 +1265,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private func downloadLegacy(key: String, resumeData: Data) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             let task = session.downloadTask(withResumeData: resumeData)
-            lock.withLock {
+            let registered = lock.withLock {
+                guard inFlight[key] == nil,
+                      !externalActivityKeys.contains(key)
+                else { return false }
                 inFlight[key] = DownloadActivityAccumulator(
                     videoID: videoId(from: key),
                     versionID: versionId(from: key),
@@ -1112,6 +1279,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 idByTask[task.taskIdentifier] = key
                 tasksByKey[key] = task
                 legacyResumeBaselineTaskIDs.insert(task.taskIdentifier)
+                return true
+            }
+            guard registered else {
+                continuation.resume(throwing: CancellationError())
+                return
             }
             task.resume()
         }
@@ -1794,7 +1966,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         return "\(videoId).mp4"
     }
 
-    private func cacheKey(videoId: Int, versionId: Int?) -> String {
+    func cacheKey(videoId: Int, versionId: Int?) -> String {
         if let versionId {
             return "\(videoId):\(versionId)"
         }
