@@ -22,6 +22,10 @@ mkdir -p "$(dirname "$LOG_FILE")"
 # limit toward the hard cap. Defense in depth on top of closing connections.
 ulimit -n "${FD_LIMIT:-8192}" 2>/dev/null || true
 
+# Python block-buffers stdout when it is a pipe; force line-by-line output so
+# app prints reach the terminal immediately instead of on shutdown.
+export PYTHONUNBUFFERED=1
+
 # Prefix every line with a colored label so interleaved streams are tellable
 # apart. $1: ANSI color code, $2: label. awk (not sed) for line buffering.
 # Each line is also appended, uncolored, to $LOG_FILE so the same interleaved
@@ -37,7 +41,9 @@ colorize() {
 # Gunicorn emits this lifecycle signal when workers are parked. It is not
 # actionable, so discard it before any web output is shown or mirrored to disk.
 filter_winch_events() {
-  awk '!/Handling signal: winch/'
+  # fflush per line: awk block-buffers into a pipe, which would hold output
+  # back until exit.
+  awk '!/Handling signal: winch/ { print; fflush() }'
 }
 
 # fd 3 preserves the real stdout so Caddy lines bypass the dev/web labels.
