@@ -143,6 +143,7 @@ extension CacheManager {
             versionId: versionId
         )
         try Task.checkCancellation()
+        await waitBeforeExternalPromotion()
         try promoteExternalActivity(key: key) {
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(
@@ -157,7 +158,7 @@ extension CacheManager {
             try await withTaskCancellationHandler {
                 try await operation.value
             } onCancel: {
-                operation.cancel()
+                self.cancelExternalActivity(key: key)
             }
         } catch {
             if operation.isCancelled {

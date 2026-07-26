@@ -153,6 +153,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private let lock = NSLock()
     private let cancellationFence: any CacheManagerCancellationFencing
     let concurrencyGate: any DownloadConcurrencyGating
+    private let beforeExternalPromotion: @Sendable () async -> Void
     private var inFlight: [String: DownloadActivityAccumulator] = [:]
     private var externalActivityKeys: Set<String> = []
     private var externalCancellationRequests: Set<String> = []
@@ -191,13 +192,15 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             CacheManagerCancellationFence(),
         concurrencyGate: any DownloadConcurrencyGating =
             DownloadConcurrencyGate(limit: 3),
-        streamCache: (any StreamCacheSeeding)? = nil
+        streamCache: (any StreamCacheSeeding)? = nil,
+        beforeExternalPromotion: @escaping @Sendable () async -> Void = {}
     ) {
         self.fileManager = fileManager
         self.now = now
         self.cancellationFence = cancellationFence
         self.concurrencyGate = concurrencyGate
         self.streamCache = streamCache
+        self.beforeExternalPromotion = beforeExternalPromotion
         self.root = root ?? fileManager
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("videos")
@@ -262,6 +265,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         (streamCache as? StreamCache)?.segments
     }
 
+    func waitBeforeExternalPromotion() async {
+        await beforeExternalPromotion()
+    }
+
     @discardableResult
     func beginExternalActivity(
         key: String,
@@ -323,6 +330,18 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         if shouldCancel {
             task.cancel()
         }
+    }
+
+    func cancelExternalActivity(key: String) {
+        let task = lock.withLock {
+            guard externalActivityKeys.contains(key) else {
+                return nil as Task<Void, Error>?
+            }
+            externalCancellationRequests.insert(key)
+            inFlight[key] = nil
+            return externalTasks[key]
+        }
+        task?.cancel()
     }
 
     func throwIfExternalActivityCancelled(key: String) throws {
@@ -546,14 +565,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Explicit cancel restarts from scratch - it does not persist resume data.
     public func cancel(id: Int, versionId: Int? = nil) {
         let key = cacheKey(videoId: id, versionId: versionId)
-        let externalTask = lock.withLock {
-            if externalActivityKeys.contains(key) {
-                externalCancellationRequests.insert(key)
-                inFlight[key] = nil
-            }
-            return externalTasks[key]
-        }
-        externalTask?.cancel()
+        cancelExternalActivity(key: key)
         cancellationFence.beginCancellation(cacheKey: key)
         defer {
             cancellationFence.endCancellation(cacheKey: key)

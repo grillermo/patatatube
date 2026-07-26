@@ -1,6 +1,34 @@
 import XCTest
 @testable import PatataTubeKit
 
+private actor HLSPromotionGate {
+    private var entered = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { continuation in
+            entryWaiters.append(continuation)
+        }
+    }
+
+    func waitForRelease() async {
+        entered = true
+        let waiters = entryWaiters
+        entryWaiters = []
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
 final class CacheManagerHLSTests: XCTestCase {
     private var root: URL!
     private var cache: CacheManager!
@@ -143,6 +171,18 @@ final class CacheManagerHLSTests: XCTestCase {
     }
 
     func testCallerCancellationAtCompletedProgressPreventsPromotion() async {
+        let promotionGate = HLSPromotionGate()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        cache = CacheManager(
+            root: root.appendingPathComponent("videos"),
+            configuration: configuration,
+            fileManager: .default,
+            streamCache: streamCache,
+            beforeExternalPromotion: {
+                await promotionGate.waitForRelease()
+            }
+        )
         MockURLProtocol.stub(
             path: "/videos/5/hls/master.m3u8",
             data: Data(master.utf8)
@@ -177,24 +217,10 @@ final class CacheManagerHLSTests: XCTestCase {
             )
         }
 
-        var cancelledAtCompletedProgress = false
-        for _ in 0..<10_000 {
-            if case .downloading(let progress) = cache.state(for: 5),
-               progress == 1
-            {
-                cancelledAtCompletedProgress = true
-                download.cancel()
-                break
-            }
-            await Task.yield()
-        }
+        await promotionGate.waitUntilEntered()
+        download.cancel()
+        await promotionGate.release()
 
-        guard cancelledAtCompletedProgress else {
-            download.cancel()
-            _ = try? await download.value
-            XCTFail("did not observe completed progress before promotion")
-            return
-        }
         do {
             try await download.value
             XCTFail("expected cancellation")
