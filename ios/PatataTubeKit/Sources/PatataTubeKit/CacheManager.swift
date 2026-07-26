@@ -145,6 +145,7 @@ private final class SegmentedAttempt: @unchecked Sendable {
 public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let root: URL
     private let segmentedStore: SegmentedDownloadStore
+    let streamCache: StreamCache?
     private var session: URLSession!
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
@@ -165,13 +166,15 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
 
     public convenience init(
         root: URL? = nil,
-        configuration: URLSessionConfiguration = .default
+        configuration: URLSessionConfiguration = .default,
+        streamCache: StreamCache? = nil
     ) {
         self.init(
             root: root,
             configuration: configuration,
             fileManager: .default,
-            cancellationFence: CacheManagerCancellationFence()
+            cancellationFence: CacheManagerCancellationFence(),
+            streamCache: streamCache
         )
     }
 
@@ -183,12 +186,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         cancellationFence: any CacheManagerCancellationFencing =
             CacheManagerCancellationFence(),
         concurrencyGate: any DownloadConcurrencyGating =
-            DownloadConcurrencyGate(limit: 3)
+            DownloadConcurrencyGate(limit: 3),
+        streamCache: StreamCache? = nil
     ) {
         self.fileManager = fileManager
         self.now = now
         self.cancellationFence = cancellationFence
         self.concurrencyGate = concurrencyGate
+        self.streamCache = streamCache
         self.root = root ?? fileManager
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("videos")
@@ -656,7 +661,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 bearerToken: bearerToken,
                 attempt: probeAttempt
             )
-            let manifest = try SegmentedDownloadManifest.make(
+            var manifest = try SegmentedDownloadManifest.make(
                 videoId: id,
                 versionId: versionId,
                 remoteURL: remote,
@@ -664,6 +669,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 totalByteCount: probe.totalByteCount,
                 etag: probe.etag
             )
+            if let streamCache {
+                manifest = await streamCache.seedSegments(
+                    manifest: manifest,
+                    into: segmentedStore
+                )
+            }
             return try await startSegmentedAttempt(
                 manifest: manifest,
                 bearerToken: bearerToken,

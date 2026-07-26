@@ -38,6 +38,80 @@ public final class StreamCache: @unchecked Sendable {
         }
     }
 
+    /// Pre-fills segmented-download part files from streamed bytes. Only
+    /// prefixes count (the resume machinery models "bytes from segment
+    /// start"); only applies when the cached entity matches the probe.
+    func seedSegments(
+        manifest: SegmentedDownloadManifest,
+        into store: SegmentedDownloadStore
+    ) async -> SegmentedDownloadManifest {
+        let key = manifest.cacheKey
+        guard
+            let cached = await ranges.manifest(key: key),
+            cached.etag == manifest.etag,
+            cached.totalByteCount == manifest.totalByteCount
+        else {
+            return manifest
+        }
+
+        var seeded = manifest
+        var didSeed = false
+
+        for index in seeded.segments.indices {
+            let segment = seeded.segments[index]
+            let prefix = cached.ranges.prefixLength(
+                from: segment.range.start,
+                limit: segment.range.length
+            )
+            guard prefix > 0 else { continue }
+
+            let part = store.partURL(cacheKey: key, index: segment.index)
+            do {
+                try FileManager.default.createDirectory(
+                    at: part.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                FileManager.default.createFile(
+                    atPath: part.path,
+                    contents: nil
+                )
+                let handle = try FileHandle(forWritingTo: part)
+                defer { try? handle.close() }
+
+                let range = DownloadByteRange(
+                    start: segment.range.start,
+                    end: segment.range.start + prefix - 1
+                )
+                guard try await ranges.copyRange(
+                    key: key,
+                    range: range,
+                    to: handle
+                ) else {
+                    try? FileManager.default.removeItem(at: part)
+                    continue
+                }
+                try handle.synchronize()
+            } catch {
+                try? FileManager.default.removeItem(at: part)
+                continue
+            }
+
+            seeded.segments[index].persistedByteCount = prefix
+            if prefix == segment.range.length {
+                seeded.segments[index].isComplete = true
+            }
+            didSeed = true
+        }
+
+        guard didSeed else { return manifest }
+        do {
+            try store.write(seeded)
+            return seeded
+        } catch {
+            return manifest
+        }
+    }
+
     public func removeVideo(id: Int) async {
         await segments.removeAll(videoId: id)
         let mp4Root = root.appendingPathComponent("mp4", isDirectory: true)
