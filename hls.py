@@ -276,6 +276,6 @@ def prepare(video_id: int, source_path) -> None:
         audio_lang = video.get("audio_lang") if video else None
         build_hls_package(video_id, source_path, audio_lang=audio_lang)
         db.set_hls_status(video_id, "done")
-    except Exception:  # noqa: BLE001 - background task, must not raise
+    except Exception as exc:  # noqa: BLE001 - background task, must not raise
         traceback.print_exc()
-        db.set_hls_status(video_id, "none")
+        db.set_hls_status(video_id, "error", str(exc).strip()[:500] or "HLS packaging failed")

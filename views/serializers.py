@@ -74,6 +74,8 @@ def serialize_video(video: dict) -> dict:
         "position": video.get("position"),
         "status": video["status"],
         "error_msg": video.get("error_msg"),
+        "hls_status": video.get("hls_status") or "none",
+        "hls_error_msg": video.get("hls_error_msg"),
         "stream_path": f"/videos/{video['id']}/stream",
         "source": source,
         "show_title": video.get("show_title"),

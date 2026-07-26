@@ -591,12 +591,27 @@ async def hls_asset(
     # BackgroundTasks when the endpoint *returns* a response — a raised
     # HTTPException drops them, so the prep task would never fire.
     if asset_path == "master.m3u8":
-        if video.get("hls_status") != "converting":
+        status = video.get("hls_status")
+        if status == "error":
+            return JSONResponse({"detail": "HLS packaging failed"}, status_code=409)
+        if status != "converting":
             db.set_hls_status(video_id, "converting")
             background_tasks.add_task(hls.prepare, video_id, str(source))
         return JSONResponse({"detail": "HLS preparing"}, status_code=409)
 
     raise HTTPException(status_code=404, detail="Not found")
+
+
+@router.post("/api/videos/{video_id}/hls/rebuild")
+async def hls_rebuild(video_id: int, request: Request):
+    """Discard a video's HLS package and clear its status so the next play
+    repackages it. The only way out of hls_status='error'."""
+    _check_token(request)
+    video = db.get_video(video_id)
+    if not video or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Video not found")
+    hls.invalidate(video_id)
+    return {"status": "none"}
 
 
 @router.get("/favicon.ico", include_in_schema=False)

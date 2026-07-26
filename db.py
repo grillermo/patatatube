@@ -92,6 +92,8 @@ def init_db():
             _add_column(conn, "ALTER TABLE videos ADD COLUMN chosen_version_id INTEGER")
         if "hls_status" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN hls_status TEXT NOT NULL DEFAULT 'none'")
+        if "hls_error_msg" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN hls_error_msg TEXT")
         if "audio_lang" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN audio_lang TEXT")
         # Plex thumb version tokens (the trailing id in the /thumb/<version> path),
@@ -527,10 +529,17 @@ def set_video_classification(video_id: int, classification: str) -> None:
         conn.execute("UPDATE videos SET classification = ? WHERE id = ?", (classification, video_id))
 
 
-def set_hls_status(video_id: int, status: str) -> None:
-    """Track HLS package readiness: 'none' | 'converting' | 'done'."""
+def set_hls_status(video_id: int, status: str, error_msg: str | None = None) -> None:
+    """Track HLS package readiness: 'none' | 'converting' | 'done' | 'error'.
+
+    'error' means packaging failed for this source and retrying it unprompted
+    is pointless — only an explicit rebuild clears it.
+    """
     with _conn() as conn:
-        conn.execute("UPDATE videos SET hls_status = ? WHERE id = ?", (status, video_id))
+        conn.execute(
+            "UPDATE videos SET hls_status = ?, hls_error_msg = ? WHERE id = ?",
+            (status, error_msg, video_id),
+        )
 
 
 def get_completed_video_by_source(platform: str, source_key: str) -> dict | None:

@@ -74,6 +74,8 @@ def test_serialize_video_full_shape():
         "position": 3,
         "status": "done",
         "error_msg": None,
+        "hls_status": "none",
+        "hls_error_msg": None,
         "stream_path": "/videos/7/stream",
         "source": "download",
         "show_title": None,
@@ -205,3 +207,21 @@ def test_serialize_upload_video_redacts_tmp_path_from_url():
     assert data["url"] == ""
     assert data["title"] == "My Upload"
     assert data["platform"] == "upload"
+
+
+def test_serialize_video_exposes_hls_status():
+    from views.serializers import serialize_video
+
+    row = {
+        "id": 3, "url": "https://x.test/1", "status": "done",
+        "hls_status": "error", "source": "download",
+    }
+    data = serialize_video(row)
+    assert data["hls_status"] == "error"
+
+
+def test_serialize_video_defaults_hls_status_to_none():
+    from views.serializers import serialize_video
+
+    row = {"id": 4, "url": "https://x.test/2", "status": "queued", "source": "download"}
+    assert serialize_video(row)["hls_status"] == "none"

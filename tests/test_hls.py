@@ -197,3 +197,24 @@ def test_invalidate_removes_dir_and_resets_status(fresh_db, tmp_path, monkeypatc
     hls.invalidate(vid)
     assert not directory.exists()
     assert db.get_video(vid)["hls_status"] == "none"
+
+
+def test_prepare_records_error_status_on_failure(monkeypatch, tmp_path):
+    import db
+    import hls
+
+    statuses = []
+    monkeypatch.setattr(db, "get_video", lambda video_id: {"id": video_id, "audio_lang": None})
+    monkeypatch.setattr(
+        db, "set_hls_status",
+        lambda video_id, status, error_msg=None: statuses.append((status, error_msg)),
+    )
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("ffmpeg exploded")
+
+    monkeypatch.setattr(hls, "build_hls_package", boom)
+
+    hls.prepare(7, str(tmp_path / "in.mp4"))
+
+    assert statuses == [("error", "ffmpeg exploded")]

@@ -1498,3 +1498,50 @@ def test_hls_rejects_path_traversal(client, monkeypatch, tmp_path):
         assert resp2.status_code == 404
     finally:
         p.unlink(missing_ok=True)
+
+
+def test_hls_rebuild_resets_status(client):
+    import db
+
+    video_id = db.add_video("https://twitter.com/x/status/55", "twitter")
+    db.update_video(video_id, status="done", filename=f"{video_id}.mp4")
+    db.set_hls_status(video_id, "error", "ffmpeg exploded")
+
+    resp = client.post(
+        f"/api/videos/{video_id}/hls/rebuild",
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "none"}
+    assert db.get_video(video_id)["hls_status"] == "none"
+
+
+def test_hls_rebuild_requires_token(client):
+    import db
+
+    video_id = db.add_video("https://twitter.com/x/status/56", "twitter")
+    resp = client.post(f"/api/videos/{video_id}/hls/rebuild")
+    assert resp.status_code == 401
+
+
+def test_hls_master_does_not_repackage_while_errored(client, monkeypatch):
+    import db
+    import router
+
+    video_id = db.add_video("https://twitter.com/x/status/57", "twitter")
+    db.update_video(video_id, status="done", filename=f"{video_id}.mp4")
+    db.set_hls_status(video_id, "error", "ffmpeg exploded")
+    (router.VIDEOS_DIR / f"{video_id}.mp4").write_bytes(b"x")
+
+    called = []
+    monkeypatch.setattr(router.hls, "prepare", lambda *a, **k: called.append(a))
+
+    resp = client.get(
+        f"/videos/{video_id}/hls/master.m3u8",
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "HLS packaging failed"
+    assert called == []
