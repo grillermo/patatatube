@@ -61,4 +61,26 @@ final class ByteRangeSetTests: XCTestCase {
 
         XCTAssertThrowsError(try JSONDecoder().decode(ByteRangeSet.self, from: data))
     }
+
+    func testCodableDecodingRejectsOverlappingRuns() {
+        let data = Data(
+            #"{"runs":[{"start":0,"end":9},{"start":5,"end":14}]}"#.utf8
+        )
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ByteRangeSet.self, from: data))
+    }
+
+    func testCodableDecodingRejectsAdjacentRuns() {
+        let data = Data(
+            #"{"runs":[{"start":0,"end":9},{"start":10,"end":19}]}"#.utf8
+        )
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ByteRangeSet.self, from: data))
+    }
+
+    func testCodableDecodingRejectsInvertedRun() {
+        let data = Data(#"{"runs":[{"start":9,"end":0}]}"#.utf8)
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ByteRangeSet.self, from: data))
+    }
 }
