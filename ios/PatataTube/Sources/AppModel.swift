@@ -12,6 +12,7 @@ final class AppModel: ObservableObject {
     let streamProxy: StreamProxy
     let store: VideoStore
     let api: APIClient
+    let videoListCache: VideoListCache
     private let downloadSettings: DownloadStreamSettings
     private let simultaneousSettings: SimultaneousDownloadSettings
 
@@ -59,7 +60,9 @@ final class AppModel: ObservableObject {
             offlineRoot: cache.videosRoot
         )
         self.api = api
-        self.store = VideoStore(api: api, cache: VideoListCache())
+        let videoListCache = VideoListCache()
+        self.videoListCache = videoListCache
+        self.store = VideoStore(api: api, cache: videoListCache)
         self.downloadSettings = downloadSettings
         self.simultaneousSettings = simultaneousSettings
         self.downloadStreamCount = downloadSettings.load()
@@ -122,6 +125,14 @@ final class AppModel: ObservableObject {
         downloadSettings.save(downloadStreamCount)
         simultaneousSettings.save(downloadConcurrency)
         cache.setMaxConcurrentDownloads(downloadConcurrency)
+    }
+
+    func makeCacheStatisticsCollector() -> CacheStatisticsCollector {
+        CacheStatisticsCollector(
+            videosRoot: cache.videosRoot,
+            streamRoot: streamCache.root,
+            videoListRoot: videoListCache.root
+        )
     }
 
     /// Absolute stream/download URL for a video's `streamPath`.

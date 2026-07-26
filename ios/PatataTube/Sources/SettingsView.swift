@@ -10,6 +10,9 @@ struct SettingsView: View {
     @State private var testResult: String?
     @State private var testOK = false
 
+    @State private var stats: [CacheStat]?
+    @State private var calculating = false
+
     var body: some View {
         NavigationStack {
             Form {
@@ -55,6 +58,24 @@ struct SettingsView: View {
                             value: "\(model.downloadConcurrency)"
                         )
                     }
+                }
+
+                Section("Statistics") {
+                    if let stats {
+                        ForEach(stats) { stat in
+                            LabeledContent(stat.label, value: format(stat))
+                                .fontWeight(stat.id == "total" ? .semibold : .regular)
+                        }
+                    }
+                    Button {
+                        calculate()
+                    } label: {
+                        HStack {
+                            Text(stats == nil ? "Calculate" : "Recalculate")
+                            if calculating { Spacer(); ProgressView() }
+                        }
+                    }
+                    .disabled(calculating)
                 }
 
                 Section {
@@ -124,5 +145,27 @@ struct SettingsView: View {
     private func invalidateTest() {
         testOK = false
         testResult = nil
+    }
+
+    private func calculate() {
+        calculating = true
+        let collector = model.makeCacheStatisticsCollector()
+        Task {
+            let result = await collector.collect()
+            stats = result
+            calculating = false
+        }
+    }
+
+    private func format(_ stat: CacheStat) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        let bytes = formatter.string(fromByteCount: stat.byteCount)
+        var value = "\(stat.itemCount) items · \(bytes)"
+        if let budgetBytes = stat.budgetBytes {
+            let budget = formatter.string(fromByteCount: budgetBytes)
+            value += " — \(bytes) of \(budget)"
+        }
+        return value
     }
 }

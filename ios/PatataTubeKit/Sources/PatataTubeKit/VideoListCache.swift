@@ -8,7 +8,7 @@ public protocol VideoListCaching: Sendable {
 }
 
 public final class VideoListCache: VideoListCaching, @unchecked Sendable {
-    private let root: URL
+    public let root: URL
     private let fileManager = FileManager.default
 
     public init(root: URL? = nil) {
