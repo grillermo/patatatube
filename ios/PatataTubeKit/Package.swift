@@ -7,8 +7,14 @@ let package = Package(
     products: [
         .library(name: "PatataTubeKit", targets: ["PatataTubeKit"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/swhitty/FlyingFox.git", .upToNextMajor(from: "0.20.0")),
+    ],
     targets: [
-        .target(name: "PatataTubeKit"),
+        .target(
+            name: "PatataTubeKit",
+            dependencies: [.product(name: "FlyingFox", package: "FlyingFox")]
+        ),
         .testTarget(name: "PatataTubeKitTests", dependencies: ["PatataTubeKit"]),
     ]
 )
