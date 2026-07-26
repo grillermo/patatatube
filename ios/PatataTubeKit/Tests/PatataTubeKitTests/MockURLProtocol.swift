@@ -2,6 +2,9 @@ import Foundation
 
 final class MockURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    nonisolated(unsafe) private static var stubs: [String: (URLRequest) throws -> (HTTPURLResponse, Data)] = [:]
+    nonisolated(unsafe) private static var requestCounts: [String: Int] = [:]
+    private static let lock = NSLock()
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -21,6 +24,93 @@ final class MockURLProtocol: URLProtocol {
         }
     }
     override func stopLoading() {}
+
+    static func stub(path: String, data: Data) {
+        register(path: path) { request in
+            (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                data
+            )
+        }
+    }
+
+    static func stubRanged(path: String, fullBody: Data, etag: String) {
+        register(path: path) { request in
+            guard let header = request.value(forHTTPHeaderField: "Range"),
+                  header.hasPrefix("bytes=")
+            else {
+                throw URLError(.badServerResponse)
+            }
+            let bounds = header.dropFirst("bytes=".count)
+                .split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+            guard bounds.count == 2, let start = Int(bounds[0]) else {
+                throw URLError(.badServerResponse)
+            }
+            let requestedEnd = bounds[1].isEmpty ? fullBody.count - 1 : Int(bounds[1])
+            guard let requestedEnd,
+                  start >= 0,
+                  start < fullBody.count,
+                  requestedEnd >= start
+            else {
+                throw URLError(.badServerResponse)
+            }
+            let end = min(requestedEnd, fullBody.count - 1)
+            let data = fullBody.subdata(in: start..<(end + 1))
+            let headers = [
+                "Content-Range": "bytes \(start)-\(end)/\(fullBody.count)",
+                "ETag": etag,
+                "Accept-Ranges": "bytes",
+                "Content-Length": "\(data.count)",
+            ]
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 206,
+                    httpVersion: nil,
+                    headerFields: headers
+                )!,
+                data
+            )
+        }
+    }
+
+    static func requestCount(path: String) -> Int {
+        lock.withLock { requestCounts[path, default: 0] }
+    }
+
+    static func reset() {
+        lock.withLock {
+            stubs = [:]
+            requestCounts = [:]
+            handler = nil
+        }
+    }
+
+    private static func register(
+        path: String,
+        response: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
+    ) {
+        lock.withLock {
+            stubs[path] = response
+            handler = { request in
+                guard let path = request.url?.path else {
+                    throw URLError(.badURL)
+                }
+                return try lock.withLock {
+                    requestCounts[path, default: 0] += 1
+                    guard let stub = stubs[path] else {
+                        throw URLError(.resourceUnavailable)
+                    }
+                    return try stub(request)
+                }
+            }
+        }
+    }
 }
 
 func mockSession() -> URLSession {
