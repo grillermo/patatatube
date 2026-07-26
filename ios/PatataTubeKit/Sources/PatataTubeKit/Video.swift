@@ -71,6 +71,10 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let chosenVersionId: Int?
     public let versions: [VideoVersion]
     public let hlsPath: String?
+    /// Server-side HLS packaging state: "none" | "converting" | "done" | "error".
+    /// "error" means this source cannot be packaged; only an explicit rebuild retries.
+    public let hlsStatus: String
+    public let hlsErrorMsg: String?
     public let subtitleTracks: [SubtitleTrack]
     public let sourceFilename: String?
     public let audioLang: String?
@@ -78,7 +82,8 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, url, title, platform, sourceKey, previewUrl, classification, position
         case status, errorMsg, streamPath, source, showTitle, season, episode, summary
-        case showPreviewUrl, chosenVersionId, versions, hlsPath, subtitleTracks
+        case showPreviewUrl, chosenVersionId, versions, hlsPath, hlsStatus, hlsErrorMsg
+        case subtitleTracks
         case sourceFilename
         case audioLang
     }
@@ -91,7 +96,8 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
             source: String? = nil, showTitle: String? = nil, season: Int? = nil,
             episode: Int? = nil, summary: String? = nil, showPreviewUrl: String? = nil,
             chosenVersionId: Int? = nil, versions: [VideoVersion] = [],
-            hlsPath: String? = nil, subtitleTracks: [SubtitleTrack] = [],
+            hlsPath: String? = nil, hlsStatus: String = "none", hlsErrorMsg: String? = nil,
+            subtitleTracks: [SubtitleTrack] = [],
             sourceFilename: String? = nil, audioLang: String? = nil) {
         self.id = id; self.url = url; self.title = title; self.platform = platform
         self.sourceKey = sourceKey; self.previewUrl = previewUrl
@@ -100,7 +106,8 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.source = source; self.showTitle = showTitle; self.season = season
         self.episode = episode; self.summary = summary; self.showPreviewUrl = showPreviewUrl
         self.chosenVersionId = chosenVersionId; self.versions = versions
-        self.hlsPath = hlsPath; self.subtitleTracks = subtitleTracks
+        self.hlsPath = hlsPath; self.hlsStatus = hlsStatus; self.hlsErrorMsg = hlsErrorMsg
+        self.subtitleTracks = subtitleTracks
         self.sourceFilename = sourceFilename
         self.audioLang = audioLang
     }
@@ -127,6 +134,8 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.chosenVersionId = try c.decodeIfPresent(Int.self, forKey: .chosenVersionId)
         self.versions = try c.decodeIfPresent([VideoVersion].self, forKey: .versions) ?? []
         self.hlsPath = try c.decodeIfPresent(String.self, forKey: .hlsPath)
+        self.hlsStatus = try c.decodeIfPresent(String.self, forKey: .hlsStatus) ?? "none"
+        self.hlsErrorMsg = try c.decodeIfPresent(String.self, forKey: .hlsErrorMsg)
         self.subtitleTracks = try c.decodeIfPresent([SubtitleTrack].self, forKey: .subtitleTracks) ?? []
         self.sourceFilename = try c.decodeIfPresent(String.self, forKey: .sourceFilename)
         self.audioLang = try c.decodeIfPresent(String.self, forKey: .audioLang)
@@ -139,7 +148,8 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
             source: source, showTitle: showTitle, season: season,
             episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
             chosenVersionId: chosenVersionId, versions: versions,
-            hlsPath: hlsPath, subtitleTracks: subtitleTracks,
+            hlsPath: hlsPath, hlsStatus: hlsStatus, hlsErrorMsg: hlsErrorMsg,
+            subtitleTracks: subtitleTracks,
             sourceFilename: sourceFilename, audioLang: audioLang)
     }
 
@@ -159,7 +169,8 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
                   VideoVersion(id: $0.id, label: $0.label, status: $0.status,
                                isChosen: $0.id == versionId, audioTracks: $0.audioTracks)
               },
-              hlsPath: hlsPath, subtitleTracks: subtitleTracks,
+              hlsPath: hlsPath, hlsStatus: hlsStatus, hlsErrorMsg: hlsErrorMsg,
+              subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: audioLang)
     }
 
@@ -170,7 +181,8 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               source: source, showTitle: showTitle, season: season,
               episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
               chosenVersionId: chosenVersionId, versions: versions,
-              hlsPath: hlsPath, subtitleTracks: subtitleTracks,
+              hlsPath: hlsPath, hlsStatus: hlsStatus, hlsErrorMsg: hlsErrorMsg,
+              subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: lang)
     }
 }

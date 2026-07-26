@@ -95,3 +95,28 @@ private let sampleJSON = """
     #expect(video.versions[1].audioTracks == [AudioTrack(lang: "en", title: "English", available: true)])
     #expect(video.withAudioLang("fr").audioLang == "fr")
 }
+
+@Test func decodesHLSStatusAndError() throws {
+    let json = """
+    {"id": 1, "url": "https://x.test/1", "status": "done",
+     "classification": "children", "stream_path": "/videos/1/stream",
+     "hls_status": "error", "hls_error_msg": "ffmpeg exploded"}
+    """
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let video = try decoder.decode(Video.self, from: Data(json.utf8))
+    #expect(video.hlsStatus == "error")
+    #expect(video.hlsErrorMsg == "ffmpeg exploded")
+}
+
+@Test func defaultsHLSStatusToNoneWhenAbsent() throws {
+    let json = """
+    {"id": 2, "url": "https://x.test/2", "status": "queued",
+     "classification": "children", "stream_path": "/videos/2/stream"}
+    """
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let video = try decoder.decode(Video.self, from: Data(json.utf8))
+    #expect(video.hlsStatus == "none")
+    #expect(video.hlsErrorMsg == nil)
+}
