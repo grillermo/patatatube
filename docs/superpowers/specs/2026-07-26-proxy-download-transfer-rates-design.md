@@ -62,6 +62,14 @@ current read-through behavior but never update offline-download meters.
 available. The download APIs identify a proxy-managed source explicitly; they
 do not infer behavior by inspecting a loopback hostname or URL path.
 
+MP4 manifests continue to persist the stable upstream URL, not the ephemeral
+loopback URL. A live `SegmentedAttempt` carries a separate request URL, which is
+the current proxy URL when proxy measurement is active. On app relaunch,
+`resumeInterrupted` resolves a new proxy URL for the video/version and discards
+opaque URLSession resume blobs that contain the previous launch's port and
+secret; durable completed parts remain resumable through the manifest. Direct
+downloads retain their existing resume-data behavior.
+
 When using a proxy-managed source, `CacheManager` must not reuse `StreamCache`
 directly:
 
@@ -245,6 +253,10 @@ Tests use injected dates and existing `URLProtocol` stubs.
 3. HLS progress units never populate either public speed.
 4. `activeDownloads()` exposes current network and cache snapshots.
 5. Direct fallback leaves both rates unavailable.
+6. A persisted MP4 manifest keeps its upstream URL while a live attempt uses
+   the current proxy URL, including after app relaunch.
+7. Relaunch through a new proxy URL drops stale proxy resume blobs but retains
+   durable completed segment parts.
 
 ### UI tests
 
