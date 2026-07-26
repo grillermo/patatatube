@@ -46,4 +46,31 @@ final class StreamCacheLRUTests: XCTestCase {
         await lru.enforce()
         XCTAssertTrue(FileManager.default.fileExists(atPath: a.path))
     }
+
+    func testContinuesEvictionWhenOldestEntryCannotBeRemoved() async {
+        let protectedRoot = root.appendingPathComponent("protected", isDirectory: true)
+        let removableRoot = root.appendingPathComponent("removable", isDirectory: true)
+        try! FileManager.default.createDirectory(at: protectedRoot, withIntermediateDirectories: true)
+        try! FileManager.default.createDirectory(at: removableRoot, withIntermediateDirectories: true)
+        let protected = protectedRoot.appendingPathComponent("a", isDirectory: true)
+        let removable = removableRoot.appendingPathComponent("b", isDirectory: true)
+        try! FileManager.default.createDirectory(at: protected, withIntermediateDirectories: true)
+        try! FileManager.default.createDirectory(at: removable, withIntermediateDirectories: true)
+        try! Data(repeating: 0, count: 600).write(to: protected.appendingPathComponent("blob"))
+        try! Data(repeating: 0, count: 600).write(to: removable.appendingPathComponent("blob"))
+
+        let lru = StreamCacheLRU(managedDirs: [protectedRoot, removableRoot], budgetBytes: 600)
+        await lru.touch(protected)
+        try? await Task.sleep(for: .milliseconds(50))
+        await lru.touch(removable)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: protectedRoot.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: protectedRoot.path)
+        }
+
+        await lru.enforce()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: protected.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: removable.path))
+    }
 }

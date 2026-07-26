@@ -39,7 +39,7 @@ actor StreamCacheLRU {
         var total = entries.reduce(Int64(0)) { $0 + $1.size }
         guard total > budgetBytes else { return }
         for entry in entries.sorted(by: { $0.accessed < $1.accessed }) {
-            try? fileManager.removeItem(at: entry.dir)
+            guard (try? fileManager.removeItem(at: entry.dir)) != nil else { continue }
             total -= entry.size
             if total <= budgetBytes { break }
         }
