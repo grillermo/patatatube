@@ -77,12 +77,51 @@ ok "xcodegen is available"
 
 use_full_xcode
 
+# --- resolve a free version (auto-bump past any pre-existing tag/release) ----
+# ./deploy bumps off MARKETING_VERSION in project.yml, which can lag reality
+# if a prior run cut a GitHub release/tag but died before committing the bump.
+# Resolve the target version here, against GitHub itself, so that case can't
+# collide — then pass ./deploy an explicit X.Y.Z instead of a bump keyword.
+version_yml="$root/ios/PatataTube/project.yml"
+current_version="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"?([0-9]+\.[0-9]+\.[0-9]+)"?.*/\1/p' "$version_yml" | head -1)"
+[ -n "$current_version" ] || fail "no MARKETING_VERSION in $version_yml"
+
+bump_version() {
+  local ver="$1" kind="$2" maj min pat
+  IFS=. read -r maj min pat <<<"$ver"
+  case "$kind" in
+    major) echo "$((maj + 1)).0.0" ;;
+    minor) echo "$maj.$((min + 1)).0" ;;
+    *)     echo "$maj.$min.$((pat + 1))" ;;
+  esac
+}
+
+version_taken() {
+  local tag="v$1"
+  gh release view "$tag" >/dev/null 2>&1 && return 0
+  [ -n "$(git ls-remote --tags "$remote" "refs/tags/$tag" 2>/dev/null)" ] && return 0
+  return 1
+}
+
+if [[ "$bump" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  candidate="$bump"
+  version_taken "$candidate" && fail "release v$candidate already exists — pick a different version"
+else
+  candidate="$(bump_version "$current_version" "${bump:-patch}")"
+  while version_taken "$candidate"; do
+    echo "release v$candidate already exists — bumping past it"
+    candidate="$(bump_version "$candidate" patch)"
+  done
+fi
+bump="$candidate"
+ok "target version v$bump (from v$current_version)"
+
 echo "--- pending changes ---"
 git status --short
 echo "--- plan ---"
 echo "  1. git add -A && git commit -m \"$msg\"   (skipped if nothing pending)"
 echo "  2. git push $remote $branch"
-echo "  3. ./deploy ${bump:-<patch>}"
+echo "  3. ./deploy $bump"
 
 if [ "$dry_run" -eq 1 ]; then
   ok "dry run — nothing committed, pushed, or deployed"
