@@ -142,6 +142,7 @@ extension CacheManager {
             for: id,
             versionId: versionId
         )
+        try Task.checkCancellation()
         try promoteExternalActivity(key: key) {
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(

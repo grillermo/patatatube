@@ -142,6 +142,69 @@ final class CacheManagerHLSTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: segment), Data([9]))
     }
 
+    func testCallerCancellationAtCompletedProgressPreventsPromotion() async {
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/master.m3u8",
+            data: Data(master.utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/video.m3u8",
+            data: Data(media.utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/subtitles/es.m3u8",
+            data: Data(subtitles.utf8)
+        )
+        MockURLProtocol.stub(path: "/videos/5/hls/init.mp4", data: Data([1]))
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/segment_00000.m4s",
+            data: Data([2])
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/subtitles/es.vtt",
+            data: Data([3])
+        )
+
+        let cache = cache!
+        let download = Task(priority: .background) {
+            try await cache.downloadHLS(
+                id: 5,
+                versionId: nil,
+                masterURL: URL(
+                    string: "https://u.test/videos/5/hls/master.m3u8"
+                )!,
+                bearerToken: "tok"
+            )
+        }
+
+        var cancelledAtCompletedProgress = false
+        for _ in 0..<10_000 {
+            if case .downloading(let progress) = cache.state(for: 5),
+               progress == 1
+            {
+                cancelledAtCompletedProgress = true
+                download.cancel()
+                break
+            }
+            await Task.yield()
+        }
+
+        guard cancelledAtCompletedProgress else {
+            download.cancel()
+            _ = try? await download.value
+            XCTFail("did not observe completed progress before promotion")
+            return
+        }
+        do {
+            try await download.value
+            XCTFail("expected cancellation")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertNil(cache.offlineHLSMasterURL(for: 5, versionId: nil))
+    }
+
     func testRemoveCachedDeletesOfflineHLS() throws {
         let directory = cache.offlineHLSDir(for: 5, versionId: nil)
         try FileManager.default.createDirectory(
