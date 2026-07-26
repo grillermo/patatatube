@@ -267,9 +267,8 @@ final class StreamProxyTests: XCTestCase {
         XCTAssertEqual(manifest?.etag, "\"e2\"")
     }
 
-    func testHLSHashesAndCachedAssetsAreScopedByVersion() async throws {
-        let media1 = Data("#EXTM3U\n#EXTINF:6.0,\nsegment.m4s\n".utf8)
-        let media2 = Data("#EXTM3U\n#EXTINF:6.0,\nsegment.m4s\n#EXT-X-ENDLIST\n".utf8)
+    func testHLSCachedAssetsAreScopedByVersionWhenPlaylistBytesMatch() async throws {
+        let media = Data("#EXTM3U\n#EXTINF:6.0,\nsegment.m4s\n#EXT-X-ENDLIST\n".utf8)
         let segment1 = Data(repeating: 1, count: 32)
         let segment2 = Data(repeating: 2, count: 32)
         MockURLProtocol.handler = { request in
@@ -282,9 +281,9 @@ final class StreamProxyTests: XCTestCase {
             let data: Data
             switch (request.url?.path, version) {
             case ("/videos/5/hls/video.m3u8", "1"):
-                data = media1
+                data = media
             case ("/videos/5/hls/video.m3u8", "2"):
-                data = media2
+                data = media
             case ("/videos/5/hls/segment.m4s", "1"):
                 data = segment1
             case ("/videos/5/hls/segment.m4s", "2"):

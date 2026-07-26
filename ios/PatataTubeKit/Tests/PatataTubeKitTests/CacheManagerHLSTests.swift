@@ -170,6 +170,64 @@ final class CacheManagerHLSTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: segment), Data([9]))
     }
 
+    func testDownloadHLSReusesOnlyMatchingVersionWhenPlaylistBytesMatch() async throws {
+        let packageHash = SegmentCache.packageHash(
+            forPlaylist: Data(media.utf8)
+        )
+        try await streamCache.segments.store(
+            videoId: 5,
+            versionId: 1,
+            hash: packageHash,
+            asset: "segment_00000.m4s",
+            data: Data([1])
+        )
+        try await streamCache.segments.store(
+            videoId: 5,
+            versionId: 2,
+            hash: packageHash,
+            asset: "segment_00000.m4s",
+            data: Data([2])
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/master.m3u8",
+            data: Data(master.utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/video.m3u8",
+            data: Data(media.utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/subtitles/es.m3u8",
+            data: Data(subtitles.utf8)
+        )
+        MockURLProtocol.stub(path: "/videos/5/hls/init.mp4", data: Data([3]))
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/segment_00000.m4s",
+            data: Data([9])
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/subtitles/es.vtt",
+            data: Data([4])
+        )
+
+        try await cache.downloadHLS(
+            id: 5,
+            versionId: 2,
+            masterURL: URL(string: "https://u.test/videos/5/hls/master.m3u8")!,
+            bearerToken: "tok"
+        )
+
+        let segment = cache.offlineHLSDir(for: 5, versionId: 2)
+            .appendingPathComponent("segment_00000.m4s")
+        XCTAssertEqual(try Data(contentsOf: segment), Data([2]))
+        XCTAssertEqual(
+            MockURLProtocol.requestCount(
+                path: "/videos/5/hls/segment_00000.m4s"
+            ),
+            0
+        )
+    }
+
     func testDownloadHLSRejectsTraversalPlaylistBeforeRequestOrWrite() async {
         let maliciousMaster = """
         #EXTM3U

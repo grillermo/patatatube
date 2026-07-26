@@ -57,6 +57,38 @@ final class SegmentCacheTests: XCTestCase {
         XCTAssertNotEqual(a, c)
         XCTAssertEqual(a.count, 16)
     }
+
+    func testVersionedPackagesWithSameHashDoNotAlias() async throws {
+        try await cache.store(
+            videoId: 7,
+            versionId: 1,
+            hash: "same",
+            asset: "segment.m4s",
+            data: Data([1])
+        )
+        try await cache.store(
+            videoId: 7,
+            versionId: 2,
+            hash: "same",
+            asset: "segment.m4s",
+            data: Data([2])
+        )
+
+        let v1 = await cache.cachedData(
+            videoId: 7,
+            versionId: 1,
+            hash: "same",
+            asset: "segment.m4s"
+        )
+        let v2 = await cache.cachedData(
+            videoId: 7,
+            versionId: 2,
+            hash: "same",
+            asset: "segment.m4s"
+        )
+        XCTAssertEqual(v1, Data([1]))
+        XCTAssertEqual(v2, Data([2]))
+    }
 }
 
 func XCTAssertThrowsErrorAsync(

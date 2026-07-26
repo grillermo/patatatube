@@ -6,7 +6,7 @@ enum SegmentCacheError: Error, Equatable {
 }
 
 /// On-disk cache of HLS package assets (init/segments/playlists/subtitles).
-/// Keyed by (videoId, packageHash) where the hash comes from the media
+/// Keyed by (videoId, versionId, packageHash) where the hash comes from the media
 /// playlist bytes — a server-side repackage (e.g. audio-language change)
 /// yields a new hash, so stale segments can never be served.
 actor SegmentCache {
@@ -26,23 +26,57 @@ actor SegmentCache {
         root.appendingPathComponent("\(videoId)", isDirectory: true)
     }
 
-    private func packageDir(videoId: Int, hash: String) -> URL {
-        videoDir(videoId: videoId).appendingPathComponent(hash, isDirectory: true)
+    private func packageScopeDir(videoId: Int, versionId: Int?) -> URL {
+        let videoDirectory = videoDir(videoId: videoId)
+        guard let versionId else { return videoDirectory }
+        return videoDirectory.appendingPathComponent("version-\(versionId)", isDirectory: true)
+    }
+
+    private func packageDir(videoId: Int, versionId: Int?, hash: String) -> URL {
+        packageScopeDir(videoId: videoId, versionId: versionId)
+            .appendingPathComponent(hash, isDirectory: true)
     }
 
     /// Resolves `asset` under the package directory, rejecting path traversal.
-    private func assetURL(videoId: Int, hash: String, asset: String) -> URL? {
+    private func assetURL(
+        videoId: Int,
+        versionId: Int?,
+        hash: String,
+        asset: String
+    ) -> URL? {
         guard !asset.hasPrefix("/"), !asset.contains("..") else { return nil }
-        return packageDir(videoId: videoId, hash: hash).appendingPathComponent(asset)
+        return packageDir(videoId: videoId, versionId: versionId, hash: hash)
+            .appendingPathComponent(asset)
     }
 
-    func cachedData(videoId: Int, hash: String, asset: String) -> Data? {
-        guard let url = assetURL(videoId: videoId, hash: hash, asset: asset) else { return nil }
+    func cachedData(
+        videoId: Int,
+        versionId: Int? = nil,
+        hash: String,
+        asset: String
+    ) -> Data? {
+        guard let url = assetURL(
+            videoId: videoId,
+            versionId: versionId,
+            hash: hash,
+            asset: asset
+        ) else { return nil }
         return try? Data(contentsOf: url)
     }
 
-    func store(videoId: Int, hash: String, asset: String, data: Data) throws {
-        guard let url = assetURL(videoId: videoId, hash: hash, asset: asset) else {
+    func store(
+        videoId: Int,
+        versionId: Int? = nil,
+        hash: String,
+        asset: String,
+        data: Data
+    ) throws {
+        guard let url = assetURL(
+            videoId: videoId,
+            versionId: versionId,
+            hash: hash,
+            asset: asset
+        ) else {
             throw SegmentCacheError.invalidAssetPath
         }
 
@@ -58,8 +92,12 @@ actor SegmentCache {
         }
     }
 
-    func cachedAssets(videoId: Int, hash: String) -> Set<String> {
-        let directory = packageDir(videoId: videoId, hash: hash)
+    func cachedAssets(
+        videoId: Int,
+        versionId: Int? = nil,
+        hash: String
+    ) -> Set<String> {
+        let directory = packageDir(videoId: videoId, versionId: versionId, hash: hash)
         guard let enumerator = fileManager.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey]
@@ -78,16 +116,28 @@ actor SegmentCache {
         return assets
     }
 
-    func dropOtherPackages(videoId: Int, keeping hash: String) {
-        dropOtherPackages(videoId: videoId, keeping: [hash])
+    func dropOtherPackages(
+        videoId: Int,
+        versionId: Int? = nil,
+        keeping hash: String
+    ) {
+        dropOtherPackages(videoId: videoId, versionId: versionId, keeping: [hash])
     }
 
-    func dropOtherPackages(videoId: Int, keeping hashes: Set<String>) {
+    func dropOtherPackages(
+        videoId: Int,
+        versionId: Int? = nil,
+        keeping hashes: Set<String>
+    ) {
+        let scopeDirectory = packageScopeDir(videoId: videoId, versionId: versionId)
         let contents = (try? fileManager.contentsOfDirectory(
-            at: videoDir(videoId: videoId),
+            at: scopeDirectory,
             includingPropertiesForKeys: nil
         )) ?? []
-        for url in contents where !hashes.contains(url.lastPathComponent) {
+        for url in contents
+        where !hashes.contains(url.lastPathComponent)
+            && (versionId != nil || !url.lastPathComponent.hasPrefix("version-"))
+        {
             try? fileManager.removeItem(at: url)
         }
     }

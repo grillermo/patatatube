@@ -115,6 +115,7 @@ extension CacheManager {
                     if let reusablePackageHash,
                        let cached = await segmentCache?.cachedData(
                            videoId: id,
+                           versionId: versionId,
                            hash: reusablePackageHash,
                            asset: asset
                        )

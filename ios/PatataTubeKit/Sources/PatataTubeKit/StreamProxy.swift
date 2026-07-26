@@ -110,16 +110,6 @@ public final class StreamProxy: @unchecked Sendable {
         let versionId: Int?
     }
 
-    private func activePackageHashes(for videoId: Int) -> Set<String> {
-        lock.withLock {
-            Set(
-                currentHash.compactMap { scope, hash in
-                    scope.videoId == videoId ? hash : nil
-                }
-            )
-        }
-    }
-
     private func params(of request: HTTPRequest) -> RouteParams? {
         guard let idText = request.routeParameters["id"],
               let videoId = Int(idText),
@@ -246,7 +236,8 @@ public final class StreamProxy: @unchecked Sendable {
                 }
                 await cache.segments.dropOtherPackages(
                     videoId: params.videoId,
-                    keeping: activePackageHashes(for: params.videoId)
+                    versionId: params.versionId,
+                    keeping: packageHash
                 )
                 hash = packageHash
             } else {
@@ -262,6 +253,7 @@ public final class StreamProxy: @unchecked Sendable {
                 for (asset, pendingData) in pending {
                     await storePlaylist(
                         videoId: params.videoId,
+                        versionId: params.versionId,
                         hash: hash,
                         asset: asset,
                         data: pendingData
@@ -269,6 +261,7 @@ public final class StreamProxy: @unchecked Sendable {
                 }
                 await storePlaylist(
                     videoId: params.videoId,
+                    versionId: params.versionId,
                     hash: hash,
                     asset: params.asset,
                     data: data
@@ -277,11 +270,12 @@ public final class StreamProxy: @unchecked Sendable {
             return HTTPResponse(statusCode: .ok, headers: headers, body: data)
         } catch {
             if let hash = lock.withLock({ currentHash[scope] }),
-               let cached = await cache.segments.cachedData(
-                   videoId: params.videoId,
-                   hash: hash,
-                   asset: params.asset
-               ) {
+                let cached = await cache.segments.cachedData(
+                    videoId: params.videoId,
+                    versionId: params.versionId,
+                    hash: hash,
+                    asset: params.asset
+                ) {
                 cache.touchAndEnforce(
                     entryDir: cache.segments.videoDir(videoId: params.videoId)
                 )
@@ -293,12 +287,14 @@ public final class StreamProxy: @unchecked Sendable {
 
     private func storePlaylist(
         videoId: Int,
+        versionId: Int?,
         hash: String,
         asset: String,
         data: Data
     ) async {
         await storeHLSAssetWithRecovery(
             videoId: videoId,
+            versionId: versionId,
             hash: hash,
             asset: asset,
             data: data
@@ -307,6 +303,7 @@ public final class StreamProxy: @unchecked Sendable {
 
     private func storeHLSAssetWithRecovery(
         videoId: Int,
+        versionId: Int?,
         hash: String,
         asset: String,
         data: Data
@@ -315,6 +312,7 @@ public final class StreamProxy: @unchecked Sendable {
         do {
             try await cache.segments.store(
                 videoId: videoId,
+                versionId: versionId,
                 hash: hash,
                 asset: asset,
                 data: data
@@ -325,6 +323,7 @@ public final class StreamProxy: @unchecked Sendable {
             do {
                 try await cache.segments.store(
                     videoId: videoId,
+                    versionId: versionId,
                     hash: hash,
                     asset: asset,
                     data: data
@@ -362,6 +361,7 @@ public final class StreamProxy: @unchecked Sendable {
 
         if let cached = await cache.segments.cachedData(
             videoId: params.videoId,
+            versionId: params.versionId,
             hash: hash,
             asset: params.asset
         ) {
@@ -390,6 +390,7 @@ public final class StreamProxy: @unchecked Sendable {
             }
             await storeHLSAssetWithRecovery(
                 videoId: params.videoId,
+                versionId: params.versionId,
                 hash: hash,
                 asset: params.asset,
                 data: data
