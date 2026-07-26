@@ -12,6 +12,7 @@ private struct SegmentTaskContext {
     let cacheKey: String
     let segmentIndex: Int
     let resumed: Bool
+    let durablePrefixByteCount: Int64
 }
 
 private final class FreshProbeAttempt: @unchecked Sendable {
@@ -145,7 +146,7 @@ private final class SegmentedAttempt: @unchecked Sendable {
 public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let root: URL
     private let segmentedStore: SegmentedDownloadStore
-    let streamCache: StreamCache?
+    let streamCache: (any StreamCacheSeeding)?
     private var session: URLSession!
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
@@ -187,7 +188,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             CacheManagerCancellationFence(),
         concurrencyGate: any DownloadConcurrencyGating =
             DownloadConcurrencyGate(limit: 3),
-        streamCache: StreamCache? = nil
+        streamCache: (any StreamCacheSeeding)? = nil
     ) {
         self.fileManager = fileManager
         self.now = now
@@ -669,16 +670,33 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 totalByteCount: probe.totalByteCount,
                 etag: probe.etag
             )
+            var seededStore: SegmentedDownloadStore?
             if let streamCache {
-                manifest = await streamCache.seedSegments(
-                    manifest: manifest,
-                    into: segmentedStore
+                let stagingRoot = fileManager.temporaryDirectory
+                    .appendingPathComponent(
+                        "patatatube-seed-\(UUID().uuidString)",
+                        isDirectory: true
+                    )
+                let stagingStore = SegmentedDownloadStore(
+                    root: stagingRoot,
+                    fileManager: fileManager
                 )
+                let seeded = await streamCache.seedSegments(
+                    manifest: manifest,
+                    into: stagingStore
+                )
+                if seeded == manifest {
+                    try? fileManager.removeItem(at: stagingRoot)
+                } else {
+                    manifest = seeded
+                    seededStore = stagingStore
+                }
             }
             return try await startSegmentedAttempt(
                 manifest: manifest,
                 bearerToken: bearerToken,
-                probeAttempt: probeAttempt
+                probeAttempt: probeAttempt,
+                seededStore: seededStore
             )
         } catch {
             lock.withLock {
@@ -820,7 +838,8 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private func startSegmentedAttempt(
         manifest: SegmentedDownloadManifest,
         bearerToken: String?,
-        probeAttempt: FreshProbeAttempt
+        probeAttempt: FreshProbeAttempt,
+        seededStore: SegmentedDownloadStore?
     ) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             let attempt = SegmentedAttempt(
@@ -837,6 +856,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                     try cancellationFence.performMutation(
                         cacheKey: manifest.cacheKey
                     ) {
+                        if let seededStore {
+                            try publishSeededParts(
+                                manifest: manifest,
+                                from: seededStore
+                            )
+                        }
                         try segmentedStore.write(manifest)
                     }
                 } catch {
@@ -853,6 +878,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 )
                 return .success(())
             }
+            if let seededStore {
+                try? fileManager.removeItem(at: seededStore.root)
+            }
             guard case .success = registration else {
                 if case .failure(let error) = registration {
                     continuation.resume(throwing: error)
@@ -860,6 +888,37 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 return
             }
             startIncompleteSegments(attempt: attempt, bearerToken: bearerToken)
+        }
+    }
+
+    private func publishSeededParts(
+        manifest: SegmentedDownloadManifest,
+        from seededStore: SegmentedDownloadStore
+    ) throws {
+        for segment in manifest.segments where segment.persistedByteCount > 0 {
+            let source = seededStore.partURL(
+                cacheKey: manifest.cacheKey,
+                index: segment.index
+            )
+            let sourceSize = ((try fileManager.attributesOfItem(
+                atPath: source.path
+            )[.size]) as? NSNumber)?.int64Value ?? -1
+            guard sourceSize == segment.persistedByteCount else {
+                throw SegmentedDownloadError.lengthMismatch(
+                    expected: segment.persistedByteCount,
+                    actual: sourceSize
+                )
+            }
+            let destination = segmentedStore.partURL(
+                cacheKey: manifest.cacheKey,
+                index: segment.index
+            )
+            try fileManager.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? fileManager.removeItem(at: destination)
+            try fileManager.moveItem(at: source, to: destination)
         }
     }
 
@@ -881,13 +940,31 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 index: segment.index
             )
             let resumeData = try? Data(contentsOf: resumeURL)
+            let part = segmentedStore.partURL(
+                cacheKey: attempt.cacheKey,
+                index: segment.index
+            )
+            let partSize = ((try? fileManager.attributesOfItem(
+                atPath: part.path
+            )[.size]) as? NSNumber)?.int64Value
+            let durablePrefixByteCount: Int64
+            if resumeData?.isEmpty != false,
+               segment.persistedByteCount > 0,
+               partSize == segment.persistedByteCount {
+                durablePrefixByteCount = segment.persistedByteCount
+            } else {
+                durablePrefixByteCount = 0
+            }
             return (
                 segment: segment,
-                resumeData: resumeData?.isEmpty == false ? resumeData : nil
+                resumeData: resumeData?.isEmpty == false ? resumeData : nil,
+                durablePrefixByteCount: durablePrefixByteCount
             )
         }
         let freshSegmentIndexes = starts.compactMap {
-            $0.resumeData == nil ? $0.segment.index : nil
+            $0.resumeData == nil && $0.durablePrefixByteCount == 0
+                ? $0.segment.index
+                : nil
         }
         let resetManifest: SegmentedDownloadManifest? = lock.withLock { () -> SegmentedDownloadManifest? in
             guard let current = segmentedAttempts[attempt.cacheKey],
@@ -939,7 +1016,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 resumed = true
             } else {
                 var request = URLRequest(url: attempt.manifest.remoteURL)
-                request.setValue(segment.range.headerValue, forHTTPHeaderField: "Range")
+                let requestRange = DownloadByteRange(
+                    start: segment.range.start + start.durablePrefixByteCount,
+                    end: segment.range.end
+                )
+                request.setValue(
+                    requestRange.headerValue,
+                    forHTTPHeaderField: "Range"
+                )
                 request.setValue(attempt.manifest.etag, forHTTPHeaderField: "If-Range")
                 if let bearerToken {
                     request.setValue(
@@ -954,7 +1038,8 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 attemptID: attempt.id,
                 cacheKey: attempt.cacheKey,
                 segmentIndex: segment.index,
-                resumed: resumed
+                resumed: resumed,
+                durablePrefixByteCount: start.durablePrefixByteCount
             )
             let shouldResume = lock.withLock {
                 guard let current = segmentedAttempts[attempt.cacheKey],
@@ -993,7 +1078,8 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             attemptID: attempt.id,
             cacheKey: attempt.cacheKey,
             segmentIndex: segmentIndex,
-            resumed: false
+            resumed: false,
+            durablePrefixByteCount: 0
         )
         let shouldResume = lock.withLock {
             guard let current = segmentedAttempts[attempt.cacheKey],
@@ -1113,9 +1199,24 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 let size = ((try fileManager.attributesOfItem(
                     atPath: location.path
                 )[.size]) as? NSNumber)?.int64Value ?? -1
+                let downloadedRecord: DownloadSegmentRecord
+                if context.durablePrefixByteCount > 0 {
+                    downloadedRecord = DownloadSegmentRecord(
+                        index: record.index,
+                        range: DownloadByteRange(
+                            start: record.range.start
+                                + context.durablePrefixByteCount,
+                            end: record.range.end
+                        ),
+                        isComplete: false,
+                        persistedByteCount: 0
+                    )
+                } else {
+                    downloadedRecord = record
+                }
                 try SegmentedDownloadStore.validateSegment(
                     response,
-                    planned: record,
+                    planned: downloadedRecord,
                     etag: attempt.manifest.etag,
                     totalByteCount: attempt.manifest.totalByteCount,
                     fileSize: size,
@@ -1126,13 +1227,73 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                     index: context.segmentIndex
                 )
                 try cancellationFence.performMutation(cacheKey: context.cacheKey) {
-                    try? fileManager.removeItem(at: part)
-                    try fileManager.moveItem(at: location, to: part)
+                    if context.durablePrefixByteCount > 0 {
+                        try combineSegment(
+                            prefix: part,
+                            prefixByteCount: context.durablePrefixByteCount,
+                            suffix: location,
+                            totalByteCount: record.range.length
+                        )
+                    } else {
+                        try? fileManager.removeItem(at: part)
+                        try fileManager.moveItem(at: location, to: part)
+                    }
                 }
                 return .success(part)
             } catch {
                 return .failure(error)
             }
+        }
+    }
+
+    private func combineSegment(
+        prefix: URL,
+        prefixByteCount: Int64,
+        suffix: URL,
+        totalByteCount: Int64
+    ) throws {
+        let prefixSize = ((try fileManager.attributesOfItem(
+            atPath: prefix.path
+        )[.size]) as? NSNumber)?.int64Value ?? -1
+        guard prefixSize == prefixByteCount else {
+            throw SegmentedDownloadError.lengthMismatch(
+                expected: prefixByteCount,
+                actual: prefixSize
+            )
+        }
+
+        let staging = prefix.deletingLastPathComponent()
+            .appendingPathComponent("combined-\(UUID().uuidString).tmp")
+        try? fileManager.removeItem(at: staging)
+        guard fileManager.createFile(atPath: staging.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        do {
+            let output = try FileHandle(forWritingTo: staging)
+            defer { try? output.close() }
+            for source in [prefix, suffix] {
+                let input = try FileHandle(forReadingFrom: source)
+                defer { try? input.close() }
+                while let chunk = try input.read(upToCount: 1_048_576),
+                      !chunk.isEmpty {
+                    try output.write(contentsOf: chunk)
+                }
+            }
+            try output.synchronize()
+            let combinedSize = ((try fileManager.attributesOfItem(
+                atPath: staging.path
+            )[.size]) as? NSNumber)?.int64Value ?? -1
+            guard combinedSize == totalByteCount else {
+                throw SegmentedDownloadError.lengthMismatch(
+                    expected: totalByteCount,
+                    actual: combinedSize
+                )
+            }
+            try fileManager.removeItem(at: prefix)
+            try fileManager.moveItem(at: staging, to: prefix)
+        } catch {
+            try? fileManager.removeItem(at: staging)
+            throw error
         }
     }
 

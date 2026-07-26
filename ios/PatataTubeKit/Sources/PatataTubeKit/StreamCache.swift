@@ -1,9 +1,16 @@
 import Foundation
 
+protocol StreamCacheSeeding: Sendable {
+    func seedSegments(
+        manifest: SegmentedDownloadManifest,
+        into store: SegmentedDownloadStore
+    ) async -> SegmentedDownloadManifest
+}
+
 /// Owner of the temporary stream cache: HLS segment store + MP4 range store +
 /// LRU budget. One instance is shared by the playback proxy (read-through
 /// writes) and the download manager (seeding, promotion).
-public final class StreamCache: @unchecked Sendable {
+public final class StreamCache: StreamCacheSeeding, @unchecked Sendable {
     public static let defaultBudgetBytes: Int64 = 10 * 1024 * 1024 * 1024
 
     public let root: URL
@@ -85,6 +92,8 @@ public final class StreamCache: @unchecked Sendable {
                 guard try await ranges.copyRange(
                     key: key,
                     range: range,
+                    expectedETag: manifest.etag,
+                    expectedTotalByteCount: manifest.totalByteCount,
                     to: handle
                 ) else {
                     try? FileManager.default.removeItem(at: part)

@@ -130,4 +130,52 @@ final class StreamCacheSeedTests: XCTestCase {
 
         XCTAssertEqual(seeded, manifest)
     }
+
+    func testCopyRejectsEntityReplacedAfterManifestRead() async throws {
+        try await cache.ranges.prepare(
+            key: "1",
+            etag: "\"e\"",
+            totalByteCount: 100
+        )
+        try await cache.ranges.write(
+            key: "1",
+            at: 0,
+            data: Data(repeating: 1, count: 10)
+        )
+        let current = await cache.ranges.manifest(key: "1")
+        let observed = try XCTUnwrap(current)
+
+        try await cache.ranges.prepare(
+            key: "1",
+            etag: "\"replacement\"",
+            totalByteCount: 100
+        )
+        try await cache.ranges.write(
+            key: "1",
+            at: 0,
+            data: Data(repeating: 2, count: 10)
+        )
+
+        let destination = root.appendingPathComponent("copied.bin")
+        FileManager.default.createFile(
+            atPath: destination.path,
+            contents: nil
+        )
+        let handle = try FileHandle(forWritingTo: destination)
+        defer { try? handle.close() }
+
+        let copied = try await cache.ranges.copyRange(
+            key: "1",
+            range: DownloadByteRange(start: 0, end: 9),
+            expectedETag: observed.etag,
+            expectedTotalByteCount: observed.totalByteCount,
+            to: handle
+        )
+
+        XCTAssertFalse(copied)
+        XCTAssertEqual(
+            try Data(contentsOf: destination),
+            Data()
+        )
+    }
 }

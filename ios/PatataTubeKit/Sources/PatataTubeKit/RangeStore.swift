@@ -89,11 +89,39 @@ actor RangeStore {
     }
 
     /// Chunked copy of a fully-cached range into `handle` (for download seeding).
-    func copyRange(key: String, range: DownloadByteRange, to handle: FileHandle) throws -> Bool {
+    func copyRange(
+        key: String,
+        range: DownloadByteRange,
+        expectedETag: String,
+        expectedTotalByteCount: Int64,
+        to handle: FileHandle
+    ) throws -> Bool {
+        guard let manifest = manifest(key: key),
+              manifest.etag == expectedETag,
+              manifest.totalByteCount == expectedTotalByteCount,
+              isValid(range, for: manifest),
+              manifest.ranges.contains(range)
+        else { return false }
+        return try copyCachedRange(key: key, range: range, to: handle)
+    }
+
+    func copyRange(
+        key: String,
+        range: DownloadByteRange,
+        to handle: FileHandle
+    ) throws -> Bool {
         guard let manifest = manifest(key: key),
               isValid(range, for: manifest),
               manifest.ranges.contains(range)
         else { return false }
+        return try copyCachedRange(key: key, range: range, to: handle)
+    }
+
+    private func copyCachedRange(
+        key: String,
+        range: DownloadByteRange,
+        to handle: FileHandle
+    ) throws -> Bool {
         let input = try FileHandle(forReadingFrom: dataURL(key: key))
         defer { try? input.close() }
         try input.seek(toOffset: UInt64(range.start))

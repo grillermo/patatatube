@@ -1166,6 +1166,56 @@ private final class TestClock: @unchecked Sendable {
     }
 }
 
+private actor BlockingStreamCacheSeeder: StreamCacheSeeding {
+    private var started = false
+    private var released = false
+    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            startedWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+
+    func seedSegments(
+        manifest: SegmentedDownloadManifest,
+        into store: SegmentedDownloadStore
+    ) async -> SegmentedDownloadManifest {
+        started = true
+        startedWaiters.forEach { $0.resume() }
+        startedWaiters.removeAll()
+        if !released {
+            await withCheckedContinuation { continuation in
+                releaseWaiter = continuation
+            }
+        }
+
+        var seeded = manifest
+        let prefix = Data("abcd".utf8)
+        let part = store.partURL(cacheKey: manifest.cacheKey, index: 0)
+        do {
+            try FileManager.default.createDirectory(
+                at: part.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try prefix.write(to: part)
+            seeded.segments[0].persistedByteCount = Int64(prefix.count)
+            try store.write(seeded)
+            return seeded
+        } catch {
+            return manifest
+        }
+    }
+}
+
 @Suite(.serialized)
 struct CacheManagerTests {
 
@@ -1618,6 +1668,75 @@ struct CacheManagerTests {
         #expect(manager.state(for: 50) == .cached)
         #expect(!FileManager.default.fileExists(
             atPath: root.appendingPathComponent(".downloads/50").path
+        ))
+    }
+
+    @Test func streamedPrefixRequestsOnlyRemainingSegmentSuffix() async throws {
+        let payload = Data("abcdefghij".utf8)
+        RangeDownloadProtocol.reset(payload: payload)
+        let root = tempRoot()
+        let streamCache = StreamCache(
+            root: tempRoot().appendingPathComponent("stream")
+        )
+        try await streamCache.ranges.prepare(
+            key: "72",
+            etag: "\"test-video\"",
+            totalByteCount: 10
+        )
+        try await streamCache.ranges.write(
+            key: "72",
+            at: 0,
+            data: Data("abcd".utf8)
+        )
+        let manager = CacheManager(
+            root: root,
+            configuration: rangeDownloadConfig(),
+            streamCache: streamCache
+        )
+
+        try await manager.download(
+            id: 72,
+            from: URL(string: "https://srv.test/videos/72/stream")!,
+            streamCount: 1
+        )
+
+        #expect(try Data(contentsOf: manager.localURL(for: 72)) == payload)
+        let ranges = RangeDownloadProtocol.recordedRequests().compactMap {
+            $0.value(forHTTPHeaderField: "Range")
+        }
+        #expect(ranges == ["bytes=0-0", "bytes=4-9"])
+    }
+
+    @Test func cancellationDuringSeedingDoesNotPublishDownloadState() async {
+        RangeDownloadProtocol.reset(payload: Data("abcdefghij".utf8))
+        let root = tempRoot()
+        let seeder = BlockingStreamCacheSeeder()
+        let manager = CacheManager(
+            root: root,
+            configuration: rangeDownloadConfig(),
+            fileManager: .default,
+            streamCache: seeder
+        )
+        let download = Task {
+            try await manager.download(
+                id: 73,
+                from: URL(string: "https://srv.test/videos/73/stream")!,
+                streamCount: 1
+            )
+        }
+
+        await seeder.waitUntilStarted()
+        manager.cancel(id: 73)
+        await seeder.release()
+
+        await #expect(throws: CancellationError.self) {
+            try await download.value
+        }
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".downloads/73").path
+        ))
+        #expect(!FileManager.default.fileExists(
+            atPath: manager.localURL(for: 73).path
         ))
     }
 
