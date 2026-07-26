@@ -121,6 +121,76 @@ final class RangeStoreTests: XCTestCase {
         XCTAssertTrue(copied)
         XCTAssertEqual(size, 3_000_000)
     }
+
+    func testConditionalWriteRejectsBytesForStaleIdentity() async throws {
+        try await store.prepare(key: "1", etag: "\"old\"", totalByteCount: 100)
+        try await store.prepare(key: "1", etag: "\"new\"", totalByteCount: 80)
+
+        let committed = try await store.write(
+            key: "1",
+            at: 0,
+            data: Data(repeating: 7, count: 20),
+            expectedETag: "\"old\"",
+            expectedTotalByteCount: 100
+        )
+
+        XCTAssertFalse(committed)
+        let manifest = await store.manifest(key: "1")
+        XCTAssertEqual(manifest?.etag, "\"new\"")
+        XCTAssertEqual(manifest?.ranges.runs, [])
+        let staleData = try await store.read(key: "1", range: r(0, 19))
+        XCTAssertNil(staleData)
+    }
+
+    func testReadCanProceedWhileLargeRangeIsBeingSeeded() async throws {
+        let store = try XCTUnwrap(store)
+        let byteCount = 4 * 1_048_576
+        try await store.prepare(
+            key: "1",
+            etag: "\"a\"",
+            totalByteCount: Int64(byteCount)
+        )
+        try await store.write(
+            key: "1",
+            at: 0,
+            data: Data(repeating: 9, count: byteCount)
+        )
+
+        let pipe = Pipe()
+        let copyStarted = expectation(description: "copy started writing")
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            handle.readabilityHandler = nil
+            copyStarted.fulfill()
+        }
+        let fullRange = DownloadByteRange(start: 0, end: Int64(byteCount - 1))
+        let copyTask = Task {
+            try await store.copyRange(
+                key: "1",
+                range: fullRange,
+                to: pipe.fileHandleForWriting
+            )
+        }
+        await fulfillment(of: [copyStarted], timeout: 1)
+
+        let readFinished = expectation(description: "actor serves read during copy")
+        let readRange = DownloadByteRange(start: 0, end: 15)
+        let readTask = Task {
+            let data = try await store.read(key: "1", range: readRange)
+            readFinished.fulfill()
+            return data
+        }
+        await fulfillment(of: [readFinished], timeout: 0.25)
+
+        let drainTask = Task.detached {
+            pipe.fileHandleForReading.readDataToEndOfFile()
+        }
+        let copied = try await copyTask.value
+        XCTAssertTrue(copied)
+        try pipe.fileHandleForWriting.close()
+        _ = await drainTask.value
+        let readData = try await readTask.value
+        XCTAssertEqual(readData, Data(repeating: 9, count: 16))
+    }
 }
 
 private func XCTAssertThrowsErrorAsync(

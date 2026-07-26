@@ -58,8 +58,53 @@ actor RangeStore {
         )
     }
 
+    /// Recreates an evicted entry for one storage-pressure retry, but never
+    /// rolls a concurrently transitioned entry back to an older identity.
+    func prepareForWriteRetry(
+        key: String,
+        expectedETag: String,
+        expectedTotalByteCount: Int64
+    ) throws -> Bool {
+        if let existing = manifest(key: key) {
+            return existing.etag == expectedETag
+                && existing.totalByteCount == expectedTotalByteCount
+        }
+        try prepare(
+            key: key,
+            etag: expectedETag,
+            totalByteCount: expectedTotalByteCount
+        )
+        return true
+    }
+
     func write(key: String, at offset: Int64, data: Data) throws {
-        guard var manifest = manifest(key: key), !data.isEmpty else { return }
+        guard let manifest = manifest(key: key) else { return }
+        _ = try write(
+            key: key,
+            at: offset,
+            data: data,
+            expectedETag: manifest.etag,
+            expectedTotalByteCount: manifest.totalByteCount
+        )
+    }
+
+    /// Commits bytes only while the entry still represents the entity that
+    /// produced them. The identity check and manifest update are actor-atomic.
+    @discardableResult
+    func write(
+        key: String,
+        at offset: Int64,
+        data: Data,
+        expectedETag: String,
+        expectedTotalByteCount: Int64
+    ) throws -> Bool {
+        guard var manifest = manifest(key: key),
+              manifest.etag == expectedETag,
+              manifest.totalByteCount == expectedTotalByteCount
+        else {
+            return false
+        }
+        guard !data.isEmpty else { return true }
         let (end, overflow) = offset.addingReportingOverflow(Int64(data.count) - 1)
         guard offset >= 0, !overflow, end < manifest.totalByteCount else {
             throw CocoaError(.fileWriteUnknown)
@@ -71,6 +116,7 @@ actor RangeStore {
         try handle.synchronize()
         manifest.ranges.insert(DownloadByteRange(start: offset, end: end))
         try save(manifest, key: key)
+        return true
     }
 
     func read(key: String, range: DownloadByteRange) throws -> Data? {
@@ -95,48 +141,56 @@ actor RangeStore {
         expectedETag: String,
         expectedTotalByteCount: Int64,
         to handle: FileHandle
-    ) throws -> Bool {
+    ) async throws -> Bool {
         guard let manifest = manifest(key: key),
               manifest.etag == expectedETag,
               manifest.totalByteCount == expectedTotalByteCount,
               isValid(range, for: manifest),
               manifest.ranges.contains(range)
         else { return false }
-        return try copyCachedRange(key: key, range: range, to: handle)
+        return try await copyCachedRange(key: key, range: range, to: handle)
     }
 
     func copyRange(
         key: String,
         range: DownloadByteRange,
         to handle: FileHandle
-    ) throws -> Bool {
+    ) async throws -> Bool {
         guard let manifest = manifest(key: key),
               isValid(range, for: manifest),
               manifest.ranges.contains(range)
         else { return false }
-        return try copyCachedRange(key: key, range: range, to: handle)
+        return try await copyCachedRange(key: key, range: range, to: handle)
     }
 
     private func copyCachedRange(
         key: String,
         range: DownloadByteRange,
         to handle: FileHandle
-    ) throws -> Bool {
+    ) async throws -> Bool {
         let input = try FileHandle(forReadingFrom: dataURL(key: key))
-        defer { try? input.close() }
         try input.seek(toOffset: UInt64(range.start))
-
-        var remaining = range.length
-        while remaining > 0 {
-            let chunkSize = Int(min(remaining, 1_048_576))
-            guard let chunk = try input.read(upToCount: chunkSize), chunk.count == chunkSize else {
-                remove(key: key)
-                return false
+        let copyTask = Task.detached(priority: .utility) {
+            defer { try? input.close() }
+            var remaining = range.length
+            while remaining > 0 {
+                try Task.checkCancellation()
+                let chunkSize = Int(min(remaining, 1_048_576))
+                guard let chunk = try input.read(upToCount: chunkSize),
+                      chunk.count == chunkSize
+                else {
+                    return false
+                }
+                try handle.write(contentsOf: chunk)
+                remaining -= Int64(chunk.count)
             }
-            try handle.write(contentsOf: chunk)
-            remaining -= Int64(chunk.count)
+            return true
         }
-        return true
+        return try await withTaskCancellationHandler {
+            try await copyTask.value
+        } onCancel: {
+            copyTask.cancel()
+        }
     }
 
     func remove(key: String) {

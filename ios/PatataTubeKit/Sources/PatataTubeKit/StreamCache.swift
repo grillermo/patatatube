@@ -45,6 +45,16 @@ public final class StreamCache: StreamCacheSeeding, @unchecked Sendable {
         }
     }
 
+    /// Makes one bounded recovery attempt after a cache storage failure.
+    /// Prefer evicting another entry; if none exists, discard the failed entry
+    /// so the caller can recreate it and retry once.
+    func evictForStorageFailure(failedEntry: URL) async {
+        if await lru.evictOldest(excluding: failedEntry) {
+            return
+        }
+        _ = await lru.evictOldest()
+    }
+
     /// Pre-fills segmented-download part files from streamed bytes. Only
     /// prefixes count (the resume machinery models "bytes from segment
     /// start"); only applies when the cached entity matches the probe.

@@ -27,7 +27,7 @@ final class StreamCacheLRUTests: XCTestCase {
         let a = makeEntry("a", bytes: 600)
         let b = makeEntry("b", bytes: 600)
         let c = makeEntry("c", bytes: 600)
-        let lru = StreamCacheLRU(managedDirs: [root], budgetBytes: 1_300)
+        let lru = StreamCacheLRU(managedDirs: [root], budgetBytes: 10_000)
         await lru.touch(a)
         try? await Task.sleep(for: .milliseconds(50))
         await lru.touch(b)
@@ -72,5 +72,31 @@ final class StreamCacheLRUTests: XCTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: protected.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: removable.path))
+    }
+
+    func testSparseTailIsChargedByAllocatedBytesNotLogicalLength() async throws {
+        let entry = root.appendingPathComponent("sparse", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: entry,
+            withIntermediateDirectories: true
+        )
+        let dataURL = entry.appendingPathComponent("data.bin")
+        FileManager.default.createFile(atPath: dataURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: dataURL)
+        try handle.seek(toOffset: 256 * 1024 * 1024)
+        try handle.write(contentsOf: Data(repeating: 1, count: 4_096))
+        try handle.close()
+
+        let logicalSize = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: dataURL.path)[.size]
+                as? NSNumber
+        ).int64Value
+        XCTAssertGreaterThan(logicalSize, 1_000_000)
+
+        let lru = StreamCacheLRU(managedDirs: [root], budgetBytes: 1_000_000)
+        await lru.touch(entry)
+        await lru.enforce()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: entry.path))
     }
 }

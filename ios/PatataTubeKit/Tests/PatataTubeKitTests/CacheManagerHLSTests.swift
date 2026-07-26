@@ -170,6 +170,184 @@ final class CacheManagerHLSTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: segment), Data([9]))
     }
 
+    func testDownloadHLSRejectsTraversalPlaylistBeforeRequestOrWrite() async {
+        let maliciousMaster = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=2000000
+        ../escape.m3u8
+        """
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/master.m3u8",
+            data: Data(maliciousMaster.utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/../escape.m3u8",
+            data: Data("#EXTM3U\n".utf8)
+        )
+
+        do {
+            try await cache.downloadHLS(
+                id: 5,
+                versionId: nil,
+                masterURL: URL(string: "https://u.test/videos/5/hls/master.m3u8")!,
+                bearerToken: "tok"
+            )
+            XCTFail("expected invalid manifest path")
+        } catch {
+            XCTAssertEqual(error as? SegmentCacheError, .invalidAssetPath)
+        }
+
+        XCTAssertEqual(
+            MockURLProtocol.requestCount(path: "/videos/5/hls/../escape.m3u8"),
+            0
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: cache.videosRoot
+                    .appendingPathComponent(".hls-tmp/escape.m3u8")
+                    .path
+            )
+        )
+        XCTAssertNil(cache.offlineHLSMasterURL(for: 5, versionId: nil))
+    }
+
+    func testDownloadHLSRejectsTraversalMediaAssetBeforeRequestOrWrite() async {
+        let maliciousMedia = """
+        #EXTM3U
+        #EXTINF:6.0,
+        ../../escape.m4s
+        #EXT-X-ENDLIST
+        """
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/master.m3u8",
+            data: Data("#EXTM3U\nvideo.m3u8\n".utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/video.m3u8",
+            data: Data(maliciousMedia.utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/../../escape.m4s",
+            data: Data([7])
+        )
+
+        do {
+            try await cache.downloadHLS(
+                id: 5,
+                versionId: nil,
+                masterURL: URL(string: "https://u.test/videos/5/hls/master.m3u8")!,
+                bearerToken: "tok"
+            )
+            XCTFail("expected invalid manifest path")
+        } catch {
+            XCTAssertEqual(error as? SegmentCacheError, .invalidAssetPath)
+        }
+
+        XCTAssertEqual(
+            MockURLProtocol.requestCount(path: "/videos/5/hls/../../escape.m4s"),
+            0
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: cache.videosRoot.appendingPathComponent("escape.m4s").path
+            )
+        )
+        XCTAssertNil(cache.offlineHLSMasterURL(for: 5, versionId: nil))
+    }
+
+    func testPromotionFailurePreservesExistingOfflinePackage() async throws {
+        let videosRoot = root.appendingPathComponent("videos", isDirectory: true)
+        let destination = videosRoot.appendingPathComponent("hls-5", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: destination,
+            withIntermediateDirectories: true
+        )
+        let oldMaster = Data("old-package".utf8)
+        try oldMaster.write(to: destination.appendingPathComponent("master.m3u8"))
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        cache = CacheManager(
+            root: videosRoot,
+            configuration: configuration,
+            fileManager: .default,
+            streamCache: streamCache,
+            beforeExternalPromotion: {
+                try? FileManager.default.removeItem(
+                    at: videosRoot.appendingPathComponent(".hls-tmp/5")
+                )
+            }
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/master.m3u8",
+            data: Data(master.utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/video.m3u8",
+            data: Data(media.utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/subtitles/es.m3u8",
+            data: Data(subtitles.utf8)
+        )
+        MockURLProtocol.stub(path: "/videos/5/hls/init.mp4", data: Data([1]))
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/segment_00000.m4s",
+            data: Data([2])
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/subtitles/es.vtt",
+            data: Data([3])
+        )
+
+        do {
+            try await cache.downloadHLS(
+                id: 5,
+                versionId: nil,
+                masterURL: URL(string: "https://u.test/videos/5/hls/master.m3u8")!,
+                bearerToken: "tok"
+            )
+            XCTFail("expected promotion failure")
+        } catch {}
+
+        XCTAssertEqual(
+            try Data(contentsOf: destination.appendingPathComponent("master.m3u8")),
+            oldMaster
+        )
+    }
+
+    func testPromotionAtomicallyReplacesExistingOfflinePackage() async throws {
+        let destination = cache.offlineHLSDir(for: 5, versionId: nil)
+        try FileManager.default.createDirectory(
+            at: destination,
+            withIntermediateDirectories: true
+        )
+        try Data("old-package".utf8).write(
+            to: destination.appendingPathComponent("master.m3u8")
+        )
+        let newMaster = Data("#EXTM3U\n".utf8)
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/master.m3u8",
+            data: newMaster
+        )
+
+        try await cache.downloadHLS(
+            id: 5,
+            versionId: nil,
+            masterURL: URL(string: "https://u.test/videos/5/hls/master.m3u8")!,
+            bearerToken: "tok"
+        )
+
+        XCTAssertEqual(
+            try Data(contentsOf: destination.appendingPathComponent("master.m3u8")),
+            newMaster
+        )
+        let siblings = try FileManager.default.contentsOfDirectory(
+            atPath: cache.videosRoot.path
+        )
+        XCTAssertFalse(siblings.contains { $0.contains(".hls-5.backup-") })
+    }
+
     func testCallerCancellationAtCompletedProgressPreventsPromotion() async {
         let promotionGate = HLSPromotionGate()
         let configuration = URLSessionConfiguration.ephemeral

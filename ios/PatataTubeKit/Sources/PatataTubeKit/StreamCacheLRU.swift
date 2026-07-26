@@ -45,6 +45,37 @@ actor StreamCacheLRU {
         }
     }
 
+    /// Frees one cache entry after a storage write failure. Prefer another
+    /// entry so a valid in-flight identity remains intact.
+    @discardableResult
+    func evictOldest(excluding excluded: URL? = nil) -> Bool {
+        var entries: [(dir: URL, accessed: Date)] = []
+        for managed in managedDirs {
+            let children = (try? fileManager.contentsOfDirectory(
+                at: managed,
+                includingPropertiesForKeys: [.isDirectoryKey]
+            )) ?? []
+            for child in children {
+                guard (try? child.resourceValues(forKeys: [.isDirectoryKey]))?
+                    .isDirectory == true
+                else {
+                    continue
+                }
+                entries.append((child, accessDate(of: child)))
+            }
+        }
+
+        let excludedPath = excluded?.standardizedFileURL.path
+        for entry in entries.sorted(by: { $0.accessed < $1.accessed })
+        where entry.dir.standardizedFileURL.path != excludedPath
+        {
+            if (try? fileManager.removeItem(at: entry.dir)) != nil {
+                return true
+            }
+        }
+        return false
+    }
+
     private func accessDate(of dir: URL) -> Date {
         let marker = dir.appendingPathComponent(".access")
         let path = fileManager.fileExists(atPath: marker.path) ? marker.path : dir.path
@@ -54,12 +85,16 @@ actor StreamCacheLRU {
 
     private func directorySize(_ dir: URL) -> Int64 {
         guard let enumerator = fileManager.enumerator(
-            at: dir, includingPropertiesForKeys: [.fileSizeKey]
+            at: dir,
+            includingPropertiesForKeys: [.fileAllocatedSizeKey, .fileSizeKey]
         ) else { return 0 }
 
         var total: Int64 = 0
         for case let url as URL in enumerator {
-            total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+            let values = try? url.resourceValues(
+                forKeys: [.fileAllocatedSizeKey, .fileSizeKey]
+            )
+            total += Int64(values?.fileAllocatedSize ?? values?.fileSize ?? 0)
         }
         return total
     }

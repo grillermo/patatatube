@@ -17,8 +17,8 @@ public final class StreamProxy: @unchecked Sendable {
     private var _port: UInt16?
     private var serverTask: Task<Void, Never>?
     private var server: HTTPServer?
-    /// Video ID to the hash of its latest fetched media playlist.
-    private var currentHash: [Int: String] = [:]
+    /// Video/version scope to its latest fetched media-playlist hash.
+    private var currentHash: [PlaylistScope: String] = [:]
     /// Playlists fetched before `video.m3u8` establishes their package hash.
     private var pendingPlaylists: [PlaylistScope: [String: Data]] = [:]
     private let singleFlight = SingleFlight<Data>()
@@ -108,6 +108,16 @@ public final class StreamProxy: @unchecked Sendable {
     private struct PlaylistScope: Hashable {
         let videoId: Int
         let versionId: Int?
+    }
+
+    private func activePackageHashes(for videoId: Int) -> Set<String> {
+        lock.withLock {
+            Set(
+                currentHash.compactMap { scope, hash in
+                    scope.videoId == videoId ? hash : nil
+                }
+            )
+        }
     }
 
     private func params(of request: HTTPRequest) -> RouteParams? {
@@ -210,6 +220,10 @@ public final class StreamProxy: @unchecked Sendable {
         _ params: RouteParams,
         headers: HTTPHeaders
     ) async -> HTTPResponse {
+        let scope = PlaylistScope(
+            videoId: params.videoId,
+            versionId: params.versionId
+        )
         guard let url = upstreamURL(
             path: "videos/\(params.videoId)/hls/\(params.asset)",
             versionId: params.versionId
@@ -222,26 +236,22 @@ public final class StreamProxy: @unchecked Sendable {
             guard isSuccessful(response) else {
                 throw APIError.badStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
             }
-            let scope = PlaylistScope(
-                videoId: params.videoId,
-                versionId: params.versionId
-            )
             var pending: [String: Data] = [:]
             let hash: String?
             if params.asset == "video.m3u8" {
                 let packageHash = SegmentCache.packageHash(forPlaylist: data)
                 pending = lock.withLock {
-                    currentHash[params.videoId] = packageHash
+                    currentHash[scope] = packageHash
                     return pendingPlaylists.removeValue(forKey: scope) ?? [:]
                 }
                 await cache.segments.dropOtherPackages(
                     videoId: params.videoId,
-                    keeping: packageHash
+                    keeping: activePackageHashes(for: params.videoId)
                 )
                 hash = packageHash
             } else {
                 hash = lock.withLock {
-                    if let hash = currentHash[params.videoId] {
+                    if let hash = currentHash[scope] {
                         return hash
                     }
                     pendingPlaylists[scope, default: [:]][params.asset] = data
@@ -266,7 +276,7 @@ public final class StreamProxy: @unchecked Sendable {
             }
             return HTTPResponse(statusCode: .ok, headers: headers, body: data)
         } catch {
-            if let hash = lock.withLock({ currentHash[params.videoId] }),
+            if let hash = lock.withLock({ currentHash[scope] }),
                let cached = await cache.segments.cachedData(
                    videoId: params.videoId,
                    hash: hash,
@@ -287,6 +297,21 @@ public final class StreamProxy: @unchecked Sendable {
         asset: String,
         data: Data
     ) async {
+        await storeHLSAssetWithRecovery(
+            videoId: videoId,
+            hash: hash,
+            asset: asset,
+            data: data
+        )
+    }
+
+    private func storeHLSAssetWithRecovery(
+        videoId: Int,
+        hash: String,
+        asset: String,
+        data: Data
+    ) async {
+        let entry = cache.segments.videoDir(videoId: videoId)
         do {
             try await cache.segments.store(
                 videoId: videoId,
@@ -294,9 +319,20 @@ public final class StreamProxy: @unchecked Sendable {
                 asset: asset,
                 data: data
             )
-            cache.touchAndEnforce(entryDir: cache.segments.videoDir(videoId: videoId))
+            cache.touchAndEnforce(entryDir: entry)
         } catch {
-            // Cache writes are best-effort.
+            await cache.evictForStorageFailure(failedEntry: entry)
+            do {
+                try await cache.segments.store(
+                    videoId: videoId,
+                    hash: hash,
+                    asset: asset,
+                    data: data
+                )
+                cache.touchAndEnforce(entryDir: entry)
+            } catch {
+                // Playback remains pass-through after one bounded retry.
+            }
         }
     }
 
@@ -304,7 +340,11 @@ public final class StreamProxy: @unchecked Sendable {
         _ params: RouteParams,
         headers: HTTPHeaders
     ) async -> HTTPResponse {
-        var hash = lock.withLock { currentHash[params.videoId] }
+        let scope = PlaylistScope(
+            videoId: params.videoId,
+            versionId: params.versionId
+        )
+        var hash = lock.withLock { currentHash[scope] }
         if hash == nil {
             _ = await servePlaylist(
                 RouteParams(
@@ -314,7 +354,7 @@ public final class StreamProxy: @unchecked Sendable {
                 ),
                 headers: [:]
             )
-            hash = lock.withLock { currentHash[params.videoId] }
+            hash = lock.withLock { currentHash[scope] }
         }
         guard let hash else {
             return HTTPResponse(statusCode: .badGateway)
@@ -348,19 +388,12 @@ public final class StreamProxy: @unchecked Sendable {
                 }
                 return data
             }
-            do {
-                try await cache.segments.store(
-                    videoId: params.videoId,
-                    hash: hash,
-                    asset: params.asset,
-                    data: data
-                )
-                cache.touchAndEnforce(
-                    entryDir: cache.segments.videoDir(videoId: params.videoId)
-                )
-            } catch {
-                // The fetched bytes still keep playback alive.
-            }
+            await storeHLSAssetWithRecovery(
+                videoId: params.videoId,
+                hash: hash,
+                asset: params.asset,
+                data: data
+            )
             return HTTPResponse(statusCode: .ok, headers: headers, body: data)
         } catch {
             return HTTPResponse(statusCode: .badGateway)
@@ -401,7 +434,7 @@ public final class StreamProxy: @unchecked Sendable {
                 return HTTPResponse(statusCode: .badGateway)
             }
             do {
-                try await cache.ranges.prepare(
+                try await prepareMP4WithRecovery(
                     key: key,
                     etag: probe.etag,
                     totalByteCount: probe.totalByteCount
@@ -468,7 +501,7 @@ public final class StreamProxy: @unchecked Sendable {
                         }
                         total = contentRange.total
                         window = replacementWindow
-                        try await cache.ranges.prepare(
+                        try await prepareMP4WithRecovery(
                             key: key,
                             etag: responseETag,
                             totalByteCount: total
@@ -481,7 +514,29 @@ public final class StreamProxy: @unchecked Sendable {
                         entityChanged = true
                         break
                     }
-                    try await cache.ranges.write(key: key, at: hole.start, data: body)
+                    let committed = try await writeMP4WithRecovery(
+                        key: key,
+                        offset: hole.start,
+                        data: body,
+                        manifest: manifest
+                    )
+                    guard committed else {
+                        guard
+                            let refreshed = await cache.ranges.manifest(key: key),
+                            let refreshedWindow = boundedWindow(
+                                rangeHeader: rangeHeader,
+                                total: refreshed.totalByteCount
+                            )
+                        else {
+                            throw SegmentedDownloadError.changedEntity
+                        }
+                        manifest = refreshed
+                        total = refreshed.totalByteCount
+                        window = refreshedWindow
+                        missing = refreshed.ranges.missingRanges(in: refreshedWindow)
+                        entityChanged = true
+                        break
+                    }
                     cache.touchAndEnforce(entryDir: cache.ranges.entryDir(key: key))
                 } catch {
                     return await passthroughMP4(window: window, total: total, url: url)
@@ -503,6 +558,62 @@ public final class StreamProxy: @unchecked Sendable {
         } catch {
             return await passthroughMP4(window: window, total: total, url: url)
                 ?? HTTPResponse(statusCode: .badGateway)
+        }
+    }
+
+    private func prepareMP4WithRecovery(
+        key: String,
+        etag: String,
+        totalByteCount: Int64
+    ) async throws {
+        do {
+            try await cache.ranges.prepare(
+                key: key,
+                etag: etag,
+                totalByteCount: totalByteCount
+            )
+        } catch {
+            let entry = cache.ranges.entryDir(key: key)
+            await cache.evictForStorageFailure(failedEntry: entry)
+            _ = try await cache.ranges.prepareForWriteRetry(
+                key: key,
+                expectedETag: etag,
+                expectedTotalByteCount: totalByteCount
+            )
+        }
+    }
+
+    private func writeMP4WithRecovery(
+        key: String,
+        offset: Int64,
+        data: Data,
+        manifest: RangeStoreManifest
+    ) async throws -> Bool {
+        do {
+            return try await cache.ranges.write(
+                key: key,
+                at: offset,
+                data: data,
+                expectedETag: manifest.etag,
+                expectedTotalByteCount: manifest.totalByteCount
+            )
+        } catch {
+            let entry = cache.ranges.entryDir(key: key)
+            await cache.evictForStorageFailure(failedEntry: entry)
+            guard try await cache.ranges.prepareForWriteRetry(
+                key: key,
+                expectedETag: manifest.etag,
+                expectedTotalByteCount: manifest.totalByteCount
+            ) else {
+                return false
+            }
+            return try await cache.ranges.write(
+                key: key,
+                at: offset,
+                data: data,
+                expectedETag: manifest.etag,
+                expectedTotalByteCount: manifest.totalByteCount
+            )
         }
     }
 

@@ -46,7 +46,14 @@ extension CacheManager {
             }
 
         func write(_ data: Data, asset: String) throws {
-            let url = temporaryDirectory.appendingPathComponent(asset)
+            let asset = try validatedHLSAssetPath(asset)
+            let url = temporaryDirectory
+                .appendingPathComponent(asset)
+                .standardizedFileURL
+            let stagingPath = temporaryDirectory.standardizedFileURL.path + "/"
+            guard url.path.hasPrefix(stagingPath) else {
+                throw SegmentCacheError.invalidAssetPath
+            }
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
@@ -64,11 +71,12 @@ extension CacheManager {
 
         var assets: [String] = []
         var packageHash: String?
-        for playlist in HLSManifestParser.referencedPlaylists(
+        let playlists = try HLSManifestParser.referencedPlaylists(
             inMasterPlaylist: masterText
-        ) {
+        ).map(validatedHLSAssetPath)
+        for playlist in playlists {
             let data = try await fetchHLSAsset(
-                hlsAssetURL(playlist, relativeTo: masterURL),
+                try hlsAssetURL(playlist, relativeTo: masterURL),
                 bearerToken: bearerToken
             )
             try throwIfExternalActivityCancelled(key: key)
@@ -80,14 +88,16 @@ extension CacheManager {
             let text = String(decoding: data, as: UTF8.self)
             let playlistDirectory =
                 (playlist as NSString).deletingLastPathComponent
-            for mediaAsset in HLSManifestParser.mediaAssets(
+            let mediaAssets = try HLSManifestParser.mediaAssets(
                 inMediaPlaylist: text
-            ) {
+            ).map(validatedHLSAssetPath)
+            for mediaAsset in mediaAssets {
                 let relative = playlistDirectory.isEmpty
                     ? mediaAsset
                     : "\(playlistDirectory)/\(mediaAsset)"
-                if !assets.contains(relative) {
-                    assets.append(relative)
+                let validatedRelative = try validatedHLSAssetPath(relative)
+                if !assets.contains(validatedRelative) {
+                    assets.append(validatedRelative)
                 }
             }
         }
@@ -113,7 +123,7 @@ extension CacheManager {
                         return (asset, cached)
                     }
                     let data = try await self.fetchHLSAsset(
-                        self.hlsAssetURL(asset, relativeTo: masterURL),
+                        try self.hlsAssetURL(asset, relativeTo: masterURL),
                         bearerToken: bearerToken
                     )
                     try self.throwIfExternalActivityCancelled(key: key)
@@ -148,10 +158,9 @@ extension CacheManager {
         try Task.checkCancellation()
         await waitBeforeExternalPromotion()
         try promoteExternalActivity(key: key) {
-            try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.moveItem(
-                at: temporaryDirectory,
-                to: destination
+            try replaceOfflinePackage(
+                at: destination,
+                with: temporaryDirectory
             )
         }
             finished = true
@@ -209,7 +218,8 @@ extension CacheManager {
     private func hlsAssetURL(
         _ asset: String,
         relativeTo masterURL: URL
-    ) -> URL {
+    ) throws -> URL {
+        let asset = try validatedHLSAssetPath(asset)
         var components = URLComponents(
             url: masterURL,
             resolvingAgainstBaseURL: false
@@ -217,11 +227,74 @@ extension CacheManager {
         let queryItems = components.queryItems
         components.queryItems = nil
         let base = components.url!.deletingLastPathComponent()
+        let resolvedURL = base.appendingPathComponent(asset)
+        let basePath = base.standardized.path + "/"
+        guard resolvedURL.standardized.path.hasPrefix(basePath) else {
+            throw SegmentCacheError.invalidAssetPath
+        }
         var resolved = URLComponents(
-            url: base.appendingPathComponent(asset),
+            url: resolvedURL,
             resolvingAgainstBaseURL: false
         )!
         resolved.queryItems = queryItems
         return resolved.url!
+    }
+
+    private func validatedHLSAssetPath(_ asset: String) throws -> String {
+        guard
+            !asset.isEmpty,
+            !asset.hasPrefix("/"),
+            !asset.hasPrefix("~"),
+            !asset.contains("\\"),
+            let decoded = asset.removingPercentEncoding,
+            decoded == asset
+        else {
+            throw SegmentCacheError.invalidAssetPath
+        }
+
+        let components = asset.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw SegmentCacheError.invalidAssetPath
+        }
+        guard
+            let urlComponents = URLComponents(string: asset),
+            urlComponents.scheme == nil,
+            urlComponents.host == nil,
+            urlComponents.query == nil,
+            urlComponents.fragment == nil
+        else {
+            throw SegmentCacheError.invalidAssetPath
+        }
+        return asset
+    }
+
+    private func replaceOfflinePackage(
+        at destination: URL,
+        with temporaryDirectory: URL
+    ) throws {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: destination.path) else {
+            try fileManager.moveItem(at: temporaryDirectory, to: destination)
+            return
+        }
+
+        let backupName = ".\(destination.lastPathComponent).backup-\(UUID().uuidString)"
+        let backup = destination.deletingLastPathComponent()
+            .appendingPathComponent(backupName, isDirectory: true)
+        do {
+            _ = try fileManager.replaceItemAt(
+                destination,
+                withItemAt: temporaryDirectory,
+                backupItemName: backupName
+            )
+            try? fileManager.removeItem(at: backup)
+        } catch {
+            if !fileManager.fileExists(atPath: destination.path),
+               fileManager.fileExists(atPath: backup.path)
+            {
+                try? fileManager.moveItem(at: backup, to: destination)
+            }
+            throw error
+        }
     }
 }

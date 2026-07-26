@@ -79,11 +79,15 @@ actor SegmentCache {
     }
 
     func dropOtherPackages(videoId: Int, keeping hash: String) {
+        dropOtherPackages(videoId: videoId, keeping: [hash])
+    }
+
+    func dropOtherPackages(videoId: Int, keeping hashes: Set<String>) {
         let contents = (try? fileManager.contentsOfDirectory(
             at: videoDir(videoId: videoId),
             includingPropertiesForKeys: nil
         )) ?? []
-        for url in contents where url.lastPathComponent != hash {
+        for url in contents where !hashes.contains(url.lastPathComponent) {
             try? fileManager.removeItem(at: url)
         }
     }
