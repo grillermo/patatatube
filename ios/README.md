@@ -121,6 +121,16 @@ On first launch grid is empty / errors — need server config:
 - **Error banner**: point Base URL at unreachable host → red error banner appears at bottom of grid
 - **Missing token**: clear upload token in Settings, try Add Video → upload should fail (401 from backend)
 
+### Stream cache / offline HLS
+
+- [ ] Stream an HLS video partway, then tap Download — server access log shows only the *unstreamed* segments being fetched.
+- [ ] Downloaded HLS video plays in airplane mode, with subtitle tracks available.
+- [ ] Stream a Twitter/YouTube MP4 partway, then download — download completes and the file plays; progress starts ahead of 0% when part was streamed.
+- [ ] Scrub backwards in a video you've been streaming — replay is instant (no network stall).
+- [ ] Change a movie's audio language on the server, replay — new audio plays (stale segments not served).
+- [ ] Delete a downloaded HLS video from Downloads — it disappears and re-streams fine.
+- [ ] Kill the app mid-stream, relaunch, replay the same video — previously streamed parts don't refetch (check server log).
+
 ### Play-and-sleep
 1. Grid: children's videos with status `done` show the dark bottom-right wedge with play+moon; adults/education/tv/movies cells and non-`done` children's rows do not.
 2. Tap the wedge → video plays full screen. Tap elsewhere on the thumbnail → normal playback (autoplay behavior unchanged).
