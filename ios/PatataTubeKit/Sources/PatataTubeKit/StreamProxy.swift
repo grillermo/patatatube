@@ -19,7 +19,10 @@ public final class StreamProxy: @unchecked Sendable {
     private var server: HTTPServer?
     /// Video ID to the hash of its latest fetched media playlist.
     private var currentHash: [Int: String] = [:]
-    private let singleFlight = SingleFlight()
+    /// Playlists fetched before `video.m3u8` establishes their package hash.
+    private var pendingPlaylists: [PlaylistScope: [String: Data]] = [:]
+    private let singleFlight = SingleFlight<Data>()
+    private let probeSingleFlight = SingleFlight<DownloadProbe>()
 
     public private(set) var port: UInt16? {
         get { lock.withLock { _port } }
@@ -100,6 +103,11 @@ public final class StreamProxy: @unchecked Sendable {
         let videoId: Int
         let versionId: Int?
         let asset: String
+    }
+
+    private struct PlaylistScope: Hashable {
+        let videoId: Int
+        let versionId: Int?
     }
 
     private func params(of request: HTTPRequest) -> RouteParams? {
@@ -214,25 +222,47 @@ public final class StreamProxy: @unchecked Sendable {
             guard isSuccessful(response) else {
                 throw APIError.badStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
             }
+            let scope = PlaylistScope(
+                videoId: params.videoId,
+                versionId: params.versionId
+            )
+            var pending: [String: Data] = [:]
+            let hash: String?
             if params.asset == "video.m3u8" {
-                let hash = SegmentCache.packageHash(forPlaylist: data)
-                lock.withLock { currentHash[params.videoId] = hash }
-                await cache.segments.dropOtherPackages(videoId: params.videoId, keeping: hash)
+                let packageHash = SegmentCache.packageHash(forPlaylist: data)
+                pending = lock.withLock {
+                    currentHash[params.videoId] = packageHash
+                    return pendingPlaylists.removeValue(forKey: scope) ?? [:]
+                }
+                await cache.segments.dropOtherPackages(
+                    videoId: params.videoId,
+                    keeping: packageHash
+                )
+                hash = packageHash
+            } else {
+                hash = lock.withLock {
+                    if let hash = currentHash[params.videoId] {
+                        return hash
+                    }
+                    pendingPlaylists[scope, default: [:]][params.asset] = data
+                    return nil
+                }
             }
-            if let hash = lock.withLock({ currentHash[params.videoId] }) {
-                do {
-                    try await cache.segments.store(
+            if let hash {
+                for (asset, pendingData) in pending {
+                    await storePlaylist(
                         videoId: params.videoId,
                         hash: hash,
-                        asset: params.asset,
-                        data: data
+                        asset: asset,
+                        data: pendingData
                     )
-                    cache.touchAndEnforce(
-                        entryDir: cache.segments.videoDir(videoId: params.videoId)
-                    )
-                } catch {
-                    // Cache writes are best-effort.
                 }
+                await storePlaylist(
+                    videoId: params.videoId,
+                    hash: hash,
+                    asset: params.asset,
+                    data: data
+                )
             }
             return HTTPResponse(statusCode: .ok, headers: headers, body: data)
         } catch {
@@ -248,6 +278,25 @@ public final class StreamProxy: @unchecked Sendable {
                 return HTTPResponse(statusCode: .ok, headers: headers, body: cached)
             }
             return HTTPResponse(statusCode: .badGateway)
+        }
+    }
+
+    private func storePlaylist(
+        videoId: Int,
+        hash: String,
+        asset: String,
+        data: Data
+    ) async {
+        do {
+            try await cache.segments.store(
+                videoId: videoId,
+                hash: hash,
+                asset: asset,
+                data: data
+            )
+            cache.touchAndEnforce(entryDir: cache.segments.videoDir(videoId: videoId))
+        } catch {
+            // Cache writes are best-effort.
         }
     }
 
@@ -334,27 +383,41 @@ public final class StreamProxy: @unchecked Sendable {
 
         var manifest = await cache.ranges.manifest(key: key)
         if manifest == nil {
+            let probe: DownloadProbe
             do {
-                _ = try await singleFlight.run(key: "probe:\(key)") { [self] in
+                probe = try await probeSingleFlight.run(key: key) { [self] in
                     let (body, response) = try await session.data(
                         for: upstreamRequest(url: url, range: "bytes=0-0")
                     )
                     guard let response = response as? HTTPURLResponse else {
                         throw SegmentedDownloadError.invalidProbe
                     }
-                    let probe = try SegmentedDownloadStore.validateProbe(
+                    return try SegmentedDownloadStore.validateProbe(
                         response,
                         bodyCount: body.count
                     )
-                    try await cache.ranges.prepare(
-                        key: key,
-                        etag: probe.etag,
-                        totalByteCount: probe.totalByteCount
-                    )
-                    return Data()
                 }
             } catch {
                 return HTTPResponse(statusCode: .badGateway)
+            }
+            do {
+                try await cache.ranges.prepare(
+                    key: key,
+                    etag: probe.etag,
+                    totalByteCount: probe.totalByteCount
+                )
+            } catch {
+                guard let window = boundedWindow(
+                    rangeHeader: request.headers[.range],
+                    total: probe.totalByteCount
+                ) else {
+                    return HTTPResponse(statusCode: .rangeNotSatisfiable)
+                }
+                return await passthroughMP4(
+                    window: window,
+                    total: probe.totalByteCount,
+                    url: url
+                ) ?? HTTPResponse(statusCode: .badGateway)
             }
             manifest = await cache.ranges.manifest(key: key)
         }
@@ -362,16 +425,14 @@ public final class StreamProxy: @unchecked Sendable {
             return HTTPResponse(statusCode: .badGateway)
         }
 
-        let total = manifest.totalByteCount
-        let requested = parseRange(request.headers[.range], total: total)
-            ?? DownloadByteRange(start: 0, end: total - 1)
-        guard requested.start >= 0, requested.start < total else {
+        var total = manifest.totalByteCount
+        let rangeHeader = request.headers[.range]
+        guard var window = boundedWindow(
+            rangeHeader: rangeHeader,
+            total: total
+        ) else {
             return HTTPResponse(statusCode: .rangeNotSatisfiable)
         }
-        let window = DownloadByteRange(
-            start: requested.start,
-            end: min(requested.end, min(requested.start + Self.mp4Window - 1, total - 1))
-        )
 
         var missing = manifest.ranges.missingRanges(in: window)
         while !missing.isEmpty {
@@ -392,6 +453,21 @@ public final class StreamProxy: @unchecked Sendable {
                         throw SegmentedDownloadError.changedEntity
                     }
                     if responseETag != manifest.etag {
+                        guard let contentRange = response.value(
+                            forHTTPHeaderField: "Content-Range"
+                        ).flatMap(parseContentRange),
+                            contentRange.range.start == hole.start,
+                            contentRange.range.end
+                                == hole.start + Int64(body.count) - 1,
+                            let replacementWindow = boundedWindow(
+                                rangeHeader: rangeHeader,
+                                total: contentRange.total
+                            )
+                        else {
+                            throw SegmentedDownloadError.changedEntity
+                        }
+                        total = contentRange.total
+                        window = replacementWindow
                         try await cache.ranges.prepare(
                             key: key,
                             etag: responseETag,
@@ -477,6 +553,52 @@ public final class StreamProxy: @unchecked Sendable {
         return DownloadByteRange(start: start, end: min(end, total - 1))
     }
 
+    private struct ParsedContentRange {
+        let range: DownloadByteRange
+        let total: Int64
+    }
+
+    private func parseContentRange(_ value: String) -> ParsedContentRange? {
+        guard value.hasPrefix("bytes "),
+              let slash = value.firstIndex(of: "/"),
+              let total = Int64(value[value.index(after: slash)...]),
+              total > 0
+        else {
+            return nil
+        }
+        let interval = value[value.index(value.startIndex, offsetBy: 6)..<slash]
+        let bounds = interval.split(separator: "-", maxSplits: 1)
+        guard bounds.count == 2,
+              let start = Int64(bounds[0]),
+              let end = Int64(bounds[1]),
+              start >= 0,
+              end >= start,
+              end < total
+        else {
+            return nil
+        }
+        return ParsedContentRange(
+            range: DownloadByteRange(start: start, end: end),
+            total: total
+        )
+    }
+
+    private func boundedWindow(
+        rangeHeader: String?,
+        total: Int64
+    ) -> DownloadByteRange? {
+        let requested = parseRange(rangeHeader, total: total)
+            ?? DownloadByteRange(start: 0, end: total - 1)
+        guard requested.start >= 0, requested.start < total else { return nil }
+        return DownloadByteRange(
+            start: requested.start,
+            end: min(
+                requested.end,
+                min(requested.start + Self.mp4Window - 1, total - 1)
+            )
+        )
+    }
+
     // MARK: - Offline
 
     private func handleOffline(_ request: HTTPRequest) async -> HTTPResponse {
@@ -504,13 +626,13 @@ public final class StreamProxy: @unchecked Sendable {
 }
 
 /// Deduplicates concurrent identical upstream fetches.
-actor SingleFlight {
-    private var inFlight: [String: Task<Data, Error>] = [:]
+actor SingleFlight<Value: Sendable> {
+    private var inFlight: [String: Task<Value, Error>] = [:]
 
     func run(
         key: String,
-        _ operation: @escaping @Sendable () async throws -> Data
-    ) async throws -> Data {
+        _ operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
         if let existing = inFlight[key] {
             return try await existing.value
         }
