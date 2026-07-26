@@ -5,6 +5,30 @@ import Foundation
 struct ByteRangeSet: Codable, Equatable, Sendable {
     private(set) var runs: [DownloadByteRange] = []
 
+    private enum CodingKeys: String, CodingKey {
+        case runs
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedRuns = try container.decode([DownloadByteRange].self, forKey: .runs)
+        guard decodedRuns.allSatisfy({ $0.start <= $0.end }),
+              zip(decodedRuns, decodedRuns.dropFirst()).allSatisfy({ previous, next in
+                  let (followingByte, overflow) = previous.end.addingReportingOverflow(1)
+                  return !overflow && followingByte < next.start
+              })
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .runs,
+                in: container,
+                debugDescription: "ByteRangeSet runs must be sorted, disjoint, and non-adjacent"
+            )
+        }
+        runs = decodedRuns
+    }
+
     var totalBytes: Int64 { runs.reduce(0) { $0 + $1.length } }
 
     mutating func insert(_ range: DownloadByteRange) {

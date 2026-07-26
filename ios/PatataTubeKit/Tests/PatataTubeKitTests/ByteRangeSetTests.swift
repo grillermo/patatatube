@@ -53,4 +53,12 @@ final class ByteRangeSetTests: XCTestCase {
         let decoded = try JSONDecoder().decode(ByteRangeSet.self, from: data)
         XCTAssertEqual(decoded, set)
     }
+
+    func testCodableDecodingRejectsNoncanonicalRuns() {
+        let data = Data(
+            #"{"runs":[{"start":50,"end":59},{"start":0,"end":9}]}"#.utf8
+        )
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ByteRangeSet.self, from: data))
+    }
 }
