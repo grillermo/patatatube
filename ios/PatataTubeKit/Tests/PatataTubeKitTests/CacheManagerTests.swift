@@ -2184,7 +2184,6 @@ struct CacheManagerTests {
 
         let activity = try #require(manager.activeDownloads().first)
         #expect(activity.transferredByteCount == 5_000)
-        #expect(activity.bytesPerSecond == 500)
         manager.cancel(id: 35)
     }
 

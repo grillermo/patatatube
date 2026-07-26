@@ -10,8 +10,7 @@ struct PublicDownloadSnapshotTests {
             versionID: 2,
             progress: 0.5,
             transferredByteCount: 5_000,
-            totalByteCount: 10_000,
-            bytesPerSecond: 1_500
+            totalByteCount: 10_000
         )
         let completedAt = Date(timeIntervalSinceReferenceDate: 42)
         let completion = DownloadCompletion(
@@ -21,7 +20,7 @@ struct PublicDownloadSnapshotTests {
         )
 
         #expect(activity.videoID == 7)
-        #expect(activity.bytesPerSecond == 1_500)
+        #expect(activity.transferredByteCount == 5_000)
         #expect(completion.completedAt == completedAt)
     }
 }

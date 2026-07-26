@@ -23,21 +23,14 @@ private func sampleVideo(id: Int) -> Video {
 @Suite("Downloads view")
 @MainActor
 struct DownloadsViewTests {
-    @Test func rateFormatterUsesCalculatingKilobytesAndMegabytes() {
-        #expect(DownloadRateFormatter.text(bytesPerSecond: nil) == "Calculating…")
-        #expect(DownloadRateFormatter.text(bytesPerSecond: 12_000) == "12 KB/s")
-        #expect(DownloadRateFormatter.text(bytesPerSecond: 2_500_000) == "2.5 MB/s")
-    }
-
-    @Test func activeRowShowsRateAndCancelInvokesIdentity() async throws {
+    @Test func activeRowShowsProgressAndCancelInvokesIdentity() async throws {
         var cancelled: DownloadActivity.ID?
         let activity = DownloadActivity(
             videoID: 7,
             versionID: 2,
             progress: 0.5,
             transferredByteCount: 5_000,
-            totalByteCount: 10_000,
-            bytesPerSecond: 1_500
+            totalByteCount: 10_000
         )
         let sut = DownloadsView(
             active: { [activity] },
@@ -48,7 +41,6 @@ struct DownloadsViewTests {
         )
 
         let inspected = try sut.inspect()
-        #expect(try inspected.find(text: "1.5 KB/s").string() == "1.5 KB/s")
         try inspected.find(button: "Cancel").tap()
         #expect(cancelled == activity.id)
     }
@@ -59,8 +51,7 @@ struct DownloadsViewTests {
             versionID: 99,
             progress: 0.2,
             transferredByteCount: 200,
-            totalByteCount: 1_000,
-            bytesPerSecond: 100
+            totalByteCount: 1_000
         )
         var cancelled: (Int, Int?)?
         let sut = DownloadsView(

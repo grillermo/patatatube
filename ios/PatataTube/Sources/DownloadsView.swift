@@ -1,18 +1,6 @@
 import PatataTubeKit
 import SwiftUI
 
-enum DownloadRateFormatter {
-    static func text(bytesPerSecond: Double?) -> String {
-        guard let bytesPerSecond, bytesPerSecond > 0 else { return "Calculating…" }
-        if bytesPerSecond >= 1_000_000 {
-            return String(format: "%.1f MB/s", bytesPerSecond / 1_000_000)
-                .replacingOccurrences(of: ".0 MB/s", with: " MB/s")
-        }
-        return String(format: "%.1f KB/s", bytesPerSecond / 1_000)
-            .replacingOccurrences(of: ".0 KB/s", with: " KB/s")
-    }
-}
-
 struct DownloadsView: View {
     let active: () -> [DownloadActivity]
     let recent: () -> [DownloadCompletion]
@@ -49,19 +37,15 @@ struct DownloadsView: View {
     }
 
     private func activeRow(_ item: DownloadActivity) -> some View {
-        let rate = DownloadRateFormatter.text(bytesPerSecond: item.bytesPerSecond)
-        return HStack {
+        HStack {
             VStack(alignment: .leading) {
                 Text(video(item.videoID, item.versionID)?.title ?? "Video \(item.videoID)")
                 ProgressView(value: item.progress)
             }
             Spacer()
-            Text(rate)
-                .monospacedDigit()
             Button("Cancel") { onCancel(item) }
                 .buttonStyle(.bordered)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityValue(rate)
     }
 }

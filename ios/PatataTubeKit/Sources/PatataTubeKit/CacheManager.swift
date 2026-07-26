@@ -167,7 +167,6 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var probeAttempts: [String: FreshProbeAttempt] = [:]
     private var segmentContextByTask: [Int: SegmentTaskContext] = [:]
     private var tasksByIdentifier: [Int: URLSessionDownloadTask] = [:]
-    private var legacyResumeBaselineTaskIDs: Set<Int> = []
 
     public convenience init(
         root: URL? = nil,
@@ -285,8 +284,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             inFlight[key] = DownloadActivityAccumulator(
                 videoID: videoId,
                 versionID: versionId,
-                totalByteCount: totalUnits,
-                now: now()
+                totalByteCount: totalUnits
             )
             return true
         }
@@ -302,8 +300,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             accumulator.record(
                 transferredByteCount: completedUnits,
                 progress: progress,
-                totalByteCount: totalUnits,
-                now: now()
+                totalByteCount: totalUnits
             )
             inFlight[key] = accumulator
         }
@@ -545,12 +542,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 inFlight[key] = DownloadActivityAccumulator(
                     videoID: id,
                     versionID: vid,
-                    totalByteCount: nil,
-                    now: now()
+                    totalByteCount: nil
                 )
                 idByTask[task.taskIdentifier] = key
                 tasksByKey[key] = task
-                legacyResumeBaselineTaskIDs.insert(task.taskIdentifier)
                 return true
             }
             guard registered else { continue }
@@ -705,19 +700,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
         lock.withLock {
             guard tasksByKey[key]?.taskIdentifier == downloadTask.taskIdentifier else { return }
-            if legacyResumeBaselineTaskIDs.remove(downloadTask.taskIdentifier) != nil {
-                inFlight[key]?.establishResumeSamplingBaseline(
-                    totalBytesWritten: totalBytesWritten,
-                    bytesWritten: bytesWritten
-                )
-            }
             inFlight[key]?.record(
                 transferredByteCount: totalBytesWritten,
                 progress: progress,
                 totalByteCount: totalBytesExpectedToWrite > 0
                     ? totalBytesExpectedToWrite
-                    : nil,
-                now: now()
+                    : nil
             )
         }
     }
@@ -823,8 +811,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             inFlight[key] = DownloadActivityAccumulator(
                 videoID: id,
                 versionID: versionId,
-                totalByteCount: nil,
-                now: now()
+                totalByteCount: nil
             )
             return true
         }
@@ -1284,13 +1271,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 inFlight[key] = DownloadActivityAccumulator(
                     videoID: videoId(from: key),
                     versionID: versionId(from: key),
-                    totalByteCount: nil,
-                    now: now()
+                    totalByteCount: nil
                 )
                 continuations[task.taskIdentifier] = continuation
                 idByTask[task.taskIdentifier] = key
                 tasksByKey[key] = task
-                legacyResumeBaselineTaskIDs.insert(task.taskIdentifier)
                 return true
             }
             guard registered else {
@@ -1320,8 +1305,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 progress: SegmentedDownloadStore.progress(
                     manifest: attempt.manifest,
                     activeByteCounts: attempt.activeByteCounts
-                ),
-                now: now()
+                )
             )
         }
     }
@@ -1334,20 +1318,17 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             manifest: manifest,
             activeByteCounts: activeByteCounts
         )
-        let now = now()
         var accumulator = DownloadActivityAccumulator(
             videoID: manifest.videoId,
             versionID: manifest.versionId,
-            totalByteCount: manifest.totalByteCount,
-            now: now
+            totalByteCount: manifest.totalByteCount
         )
         accumulator.record(
             transferredByteCount: transferredByteCount(
                 manifest: manifest,
                 activeByteCounts: activeByteCounts
             ),
-            progress: progress,
-            now: now
+            progress: progress
         )
         return accumulator
     }
@@ -1535,8 +1516,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                         progress: SegmentedDownloadStore.progress(
                             manifest: attempt.manifest,
                             activeByteCounts: attempt.activeByteCounts
-                        ),
-                        now: now()
+                        )
                     )
                 case .failure(let segmentError):
                     completionError = segmentError
@@ -1586,8 +1566,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                         progress: SegmentedDownloadStore.progress(
                             manifest: attempt.manifest,
                             activeByteCounts: attempt.activeByteCounts
-                        ),
-                        now: now()
+                        )
                     )
                     segmentToRetry = context.segmentIndex
                 } else if let unsafeCompletionError {
@@ -1935,7 +1914,6 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         let continuation = lock.withLock {
             idByTask[taskIdentifier] = nil
             completedResults[taskIdentifier] = nil
-            legacyResumeBaselineTaskIDs.remove(taskIdentifier)
             if tasksByKey[key]?.taskIdentifier == taskIdentifier {
                 if case .success = result {
                     completionHistory.record(DownloadCompletion(
