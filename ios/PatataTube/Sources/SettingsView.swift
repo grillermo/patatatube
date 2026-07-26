@@ -55,6 +55,15 @@ struct SettingsView: View {
                             value: "\(model.downloadConcurrency)"
                         )
                     }
+                    Stepper(
+                        value: $model.hlsCacheCapGigabytes,
+                        in: HLSCacheSizeSettings.allowedGigabytes
+                    ) {
+                        LabeledContent(
+                            "Watch cache limit",
+                            value: "\(model.hlsCacheCapGigabytes) GB"
+                        )
+                    }
                 }
 
                 Section {

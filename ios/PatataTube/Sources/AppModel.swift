@@ -12,11 +12,13 @@ final class AppModel: ObservableObject {
     let api: APIClient
     private let downloadSettings: DownloadStreamSettings
     private let simultaneousSettings: SimultaneousDownloadSettings
+    private let hlsCacheSettings = HLSCacheSizeSettings()
 
     @Published var baseURLText: String
     @Published var tokenText: String
     @Published var downloadStreamCount: Int
     @Published var downloadConcurrency: Int
+    @Published var hlsCacheCapGigabytes: Int = HLSCacheSizeSettings.defaultGigabytes
 
     /// When on, a finished video rolls into the next one in the queue. Session-only
     /// by design — it resets to off on relaunch, so a long queue can never keep
@@ -57,6 +59,8 @@ final class AppModel: ObservableObject {
         self.baseURLText = credentials.baseURL?.absoluteString ?? ""
         self.tokenText = credentials.token ?? ""
         cache.setMaxConcurrentDownloads(self.downloadConcurrency)
+        let capBytes = hlsCacheSettings.load()
+        self.hlsCacheCapGigabytes = Int(capBytes / HLSCacheSizeSettings.bytesPerGigabyte)
     }
 
     func saveSettings() {
@@ -73,6 +77,12 @@ final class AppModel: ObservableObject {
         )
         simultaneousSettings.save(downloadConcurrency)
         cache.setMaxConcurrentDownloads(downloadConcurrency)
+        hlsCacheCapGigabytes = min(
+            max(hlsCacheCapGigabytes, HLSCacheSizeSettings.allowedGigabytes.lowerBound),
+            HLSCacheSizeSettings.allowedGigabytes.upperBound
+        )
+        let capBytes = Int64(hlsCacheCapGigabytes) * HLSCacheSizeSettings.bytesPerGigabyte
+        hlsCacheSettings.save(capBytes)
     }
 
     func handle(_ action: QuickAction) async {
