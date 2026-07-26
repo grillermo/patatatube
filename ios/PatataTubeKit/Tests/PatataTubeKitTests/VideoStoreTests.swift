@@ -186,7 +186,7 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     #expect(store.errorText != nil)
 }
 
-@MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async {
+@MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async throws {
     let versions = [
         VideoVersion(id: 10, label: "1080p", status: "done", isChosen: true),
         VideoVersion(id: 11, label: "4K", status: "unconverted", isChosen: false),
@@ -195,20 +195,26 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     api.videosToReturn = [
         makeVideo(id: 1, classification: "movies", chosenVersionId: 10, versions: versions)
     ]
-    let store = VideoStore(api: api)
+    let defaultsSuite = "VideoStoreTests.chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess"
+    let defaults = try #require(UserDefaults(suiteName: defaultsSuite))
+    defaults.removePersistentDomain(forName: defaultsSuite)
+    defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+    let store = VideoStore(api: api, defaults: defaults)
     await store.load()
+    _ = try #require(store.videos.first)
 
     await store.chooseVersion(id: 1, versionId: 11)
 
     #expect(api.chosenVersions.count == 1)
-    #expect(api.chosenVersions[0].id == 1)
-    #expect(api.chosenVersions[0].versionId == 11)
+    let chosenVersion = try #require(api.chosenVersions.first)
+    #expect(chosenVersion.id == 1)
+    #expect(chosenVersion.versionId == 11)
     #expect(store.videos[0].chosenVersionId == 11)
     #expect(store.videos[0].status == "unconverted")
     #expect(store.videos[0].versions.map(\.isChosen) == [false, true])
 }
 
-@MainActor @Test func chooseVersionRevertsOnFailure() async {
+@MainActor @Test func chooseVersionRevertsOnFailure() async throws {
     let versions = [
         VideoVersion(id: 10, label: "1080p", status: "done", isChosen: true),
         VideoVersion(id: 11, label: "4K", status: "unconverted", isChosen: false),
@@ -218,8 +224,13 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         makeVideo(id: 1, classification: "movies", chosenVersionId: 10, versions: versions)
     ]
     api.chooseVersionResult = false
-    let store = VideoStore(api: api)
+    let defaultsSuite = "VideoStoreTests.chooseVersionRevertsOnFailure"
+    let defaults = try #require(UserDefaults(suiteName: defaultsSuite))
+    defaults.removePersistentDomain(forName: defaultsSuite)
+    defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+    let store = VideoStore(api: api, defaults: defaults)
     await store.load()
+    _ = try #require(store.videos.first)
 
     await store.chooseVersion(id: 1, versionId: 11)
 
