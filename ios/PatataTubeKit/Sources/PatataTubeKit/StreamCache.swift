@@ -11,7 +11,7 @@ protocol StreamCacheSeeding: Sendable {
 /// LRU budget. One instance is shared by the playback proxy (read-through
 /// writes) and the download manager (seeding, promotion).
 public final class StreamCache: StreamCacheSeeding, @unchecked Sendable {
-    public static let defaultBudgetBytes: Int64 = 10 * 1024 * 1024 * 1024
+    public static let defaultBudgetBytes: Int64 = 50 * 1024 * 1024 * 1024
 
     public let root: URL
     let ranges: RangeStore
