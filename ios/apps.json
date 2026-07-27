@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.1.36",
+          "buildVersion": "91",
+          "date": "2026-07-27T04:24:57Z",
+          "localizedDescription": "Release 1.1.36.",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.1.36/PatataTube-1.1.36.ipa",
+          "size": 3862534,
+          "sha256": "eb1b182f9088d6fb5d6be5ed2e8398c7720eb75e70318428a53e3ba600ae051f",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.1.35",
           "buildVersion": "90",
           "date": "2026-07-26T23:22:03Z",
@@ -844,11 +854,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.1.35",
-      "versionDate": "2026-07-26T23:22:03Z",
-      "versionDescription": "Release 1.1.35.",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.1.35/PatataTube-1.1.35.ipa",
-      "size": 3862541
+      "version": "1.1.36",
+      "versionDate": "2026-07-27T04:24:57Z",
+      "versionDescription": "Release 1.1.36.",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.1.36/PatataTube-1.1.36.ipa",
+      "size": 3862534
     }
   ],
   "news": []
