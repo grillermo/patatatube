@@ -62,7 +62,7 @@ final class AppModel: ObservableObject {
         self.api = api
         let videoListCache = VideoListCache()
         self.videoListCache = videoListCache
-        self.store = VideoStore(api: api, cache: videoListCache)
+        self.store = VideoStore(api: api, cache: videoListCache, mediaCache: cache)
         self.downloadSettings = downloadSettings
         self.simultaneousSettings = simultaneousSettings
         self.downloadStreamCount = downloadSettings.load()

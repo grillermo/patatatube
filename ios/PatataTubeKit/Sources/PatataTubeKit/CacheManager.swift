@@ -2007,3 +2007,5 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         return (1...4).contains(ext.count) && ext.allSatisfy(\.isLetter) ? ext : "jpg"
     }
 }
+
+extension CacheManager: MediaCaching {}

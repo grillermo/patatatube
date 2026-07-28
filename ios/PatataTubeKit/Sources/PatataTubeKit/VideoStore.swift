@@ -5,6 +5,12 @@ public enum PrepareError: Error, Equatable {
     case conversionFailed(String)
 }
 
+/// The one thing VideoStore needs from CacheManager: dropping a video's
+/// downloaded files once the server says the video is gone.
+public protocol MediaCaching: Sendable {
+    func removeAllCached(id: Int)
+}
+
 @MainActor
 public final class VideoStore: ObservableObject {
     @Published public private(set) var videos: [Video] = []
@@ -16,6 +22,7 @@ public final class VideoStore: ObservableObject {
 
     private let api: VideoAPI
     private let cache: VideoListCaching?
+    private let mediaCache: MediaCaching?
     private let defaults: UserDefaults
     private static let filterKey = "selectedClassification"
 
@@ -24,9 +31,11 @@ public final class VideoStore: ObservableObject {
     /// with results that no longer match the current tab/request.
     private var loadGeneration = 0
 
-    public init(api: VideoAPI, cache: VideoListCaching? = nil, defaults: UserDefaults = .standard) {
+    public init(api: VideoAPI, cache: VideoListCaching? = nil,
+                mediaCache: MediaCaching? = nil, defaults: UserDefaults = .standard) {
         self.api = api
         self.cache = cache
+        self.mediaCache = mediaCache
         self.defaults = defaults
         self.filter = defaults.string(forKey: Self.filterKey)
     }
@@ -135,13 +144,21 @@ public final class VideoStore: ObservableObject {
         errorText = String(describing: error)
     }
 
+    /// Optimistically re-buckets the video. A `promoted` response means the
+    /// server moved the file into Plex and deleted the row, so the video is
+    /// dropped from the list and its download purged instead.
     public func classify(id: Int, to classification: String) async {
         guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
         let previous = videos
         videos[index] = videos[index].withClassification(classification)
         do {
             let result = try await api.classify(id: id, classification: classification)
-            if !result.ok { videos = previous }
+            if result.promoted {
+                videos.removeAll { $0.id == id }
+                mediaCache?.removeAllCached(id: id)
+            } else if !result.ok {
+                videos = previous
+            }
         } catch {
             videos = previous
             report(error)
