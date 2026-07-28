@@ -5,9 +5,16 @@ lands in Plex's own directory and the PatataTube row goes away. It comes back
 on a later scan_library() as a normal library row.
 """
 
+import logging
 import os
 import re
+import shutil
 from pathlib import Path
+
+import db
+import hls
+
+logger = logging.getLogger(__name__)
 
 VIDEOS_DIR = Path("videos")
 
@@ -54,3 +61,48 @@ def unique_target(directory: Path, stem: str) -> Path:
         if not target.exists():
             return target
     raise PromotionError(f"no free filename for {stem!r} in {directory}")
+
+
+def _refresh_plex(classification: str) -> None:
+    """Placeholder until Task 3 wires the real Plex scan trigger."""
+
+
+def promote_to_plex(video: dict, classification: str) -> Path:
+    """Move a finished download into its Plex directory and drop its row.
+
+    Returns the new path. On any failure nothing changes: the source file stays
+    in videos/, the row stays, and no classification is written.
+    """
+    if video.get("source") == "library":
+        raise PromotionError("library videos are managed by Plex already")
+    if video.get("status") != "done":
+        raise PromotionError(f"video {video['id']} is not downloaded yet")
+    filename = video.get("filename")
+    if not filename:
+        raise PromotionError(f"video {video['id']} has no file")
+    source = VIDEOS_DIR / filename
+    if not source.exists():
+        raise PromotionError(f"file missing: {source}")
+
+    directory = dest_dir(classification)
+    if not directory.is_dir():
+        raise PromotionError(f"library directory is unavailable: {directory}")
+
+    target = unique_target(directory, sanitize_title(video.get("title"), video["id"]))
+    # videos/ lives on the boot volume and the library on /Volumes/Media, so a
+    # plain os.rename would fail with EXDEV. Copy to a hidden sibling of the
+    # target first: that replace is same-volume and atomic, so Plex never picks
+    # up a half-written file, and the dotfile is invisible to its scanner.
+    tmp = target.with_name(f".{target.name}.part")
+    try:
+        shutil.copyfile(source, tmp)
+        os.replace(tmp, target)
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise PromotionError(f"could not move {source} to {target}: {exc}") from exc
+
+    source.unlink(missing_ok=True)
+    hls.invalidate(video["id"])
+    db.delete_video(video["id"])
+    _refresh_plex(classification)
+    return target
