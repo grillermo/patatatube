@@ -140,8 +140,8 @@ public final class VideoStore: ObservableObject {
         let previous = videos
         videos[index] = videos[index].withClassification(classification)
         do {
-            let ok = try await api.classify(id: id, classification: classification)
-            if !ok { videos = previous }
+            let result = try await api.classify(id: id, classification: classification)
+            if !result.ok { videos = previous }
         } catch {
             videos = previous
             report(error)

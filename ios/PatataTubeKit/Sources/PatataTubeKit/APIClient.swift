@@ -16,10 +16,30 @@ public struct ScanResult: Decodable, Equatable, Sendable {
     }
 }
 
+/// Result of a classify call. `promoted` means the server moved the file into
+/// the Plex library and deleted the row — the video no longer exists here.
+public struct ClassifyResult: Decodable, Equatable, Sendable {
+    public let ok: Bool
+    public let promoted: Bool
+
+    public init(ok: Bool, promoted: Bool = false) {
+        self.ok = ok
+        self.promoted = promoted
+    }
+
+    private enum CodingKeys: String, CodingKey { case ok, promoted }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try c.decode(Bool.self, forKey: .ok)
+        promoted = try c.decodeIfPresent(Bool.self, forKey: .promoted) ?? false
+    }
+}
+
 public protocol VideoAPI: Sendable {
     func videos(classification: String?) async throws -> [Video]
     func classifications() async throws -> [String]
-    func classify(id: Int, classification: String) async throws -> Bool
+    func classify(id: Int, classification: String) async throws -> ClassifyResult
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool
     func chooseAudio(id: Int, lang: String) async throws -> Bool
     func upload(url: String) async throws -> Int
@@ -84,8 +104,10 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         }
     }
 
-    public func classify(id: Int, classification: String) async throws -> Bool {
-        try await postOK("api/videos/\(id)/classify", body: ["classification": classification])
+    public func classify(id: Int, classification: String) async throws -> ClassifyResult {
+        let data = try await authedPost("api/videos/\(id)/classify", body: ["classification": classification])
+        do { return try JSONDecoder().decode(ClassifyResult.self, from: data) }
+        catch { throw APIError.decoding(String(describing: error)) }
     }
 
     public func chooseVersion(id: Int, versionId: Int) async throws -> Bool {

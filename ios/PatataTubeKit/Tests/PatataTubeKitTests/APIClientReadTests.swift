@@ -106,10 +106,26 @@ struct APIClientTests {
                 #expect(req.url?.path == "/api/videos/3/classify")
                 let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: String]
                 #expect(json["classification"] == "education")
-                return (jsonResponse(req.url!), #"{"ok":false}"#.data(using: .utf8)!)
+                return (jsonResponse(req.url!), #"{"ok":false,"promoted":false}"#.data(using: .utf8)!)
             }
-            let ok = try await makeClient().classify(id: 3, classification: "education")
-            #expect(ok == false)
+            let result = try await makeClient().classify(id: 3, classification: "education")
+            #expect(result == ClassifyResult(ok: false, promoted: false))
+        }
+
+        @Test func classifyDefaultsPromotedToFalseWhenAbsent() async throws {
+            MockURLProtocol.handler = { req in
+                (jsonResponse(req.url!), #"{"ok":true}"#.data(using: .utf8)!)
+            }
+            let result = try await makeClient().classify(id: 3, classification: "children")
+            #expect(result == ClassifyResult(ok: true, promoted: false))
+        }
+
+        @Test func classifyReportsAPromotion() async throws {
+            MockURLProtocol.handler = { req in
+                (jsonResponse(req.url!), #"{"ok":true,"promoted":true}"#.data(using: .utf8)!)
+            }
+            let result = try await makeClient().classify(id: 3, classification: "movies")
+            #expect(result == ClassifyResult(ok: true, promoted: true))
         }
 
         @Test func chooseAudioSendsLanguage() async throws {

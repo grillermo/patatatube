@@ -13,7 +13,7 @@ private func makeVideo(id: Int, classification: String = "children", status: Str
 
 private final class FakeAPI: VideoAPI, @unchecked Sendable {
     var videosToReturn: [Video] = []
-    var classifyResult = true
+    var classifyResult = ClassifyResult(ok: true)
     var uploadId = 100
     var throwOnClassify = false
     var throwOnVideos = false
@@ -35,7 +35,7 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     func classifications() async throws -> [String] { ["children", "adults"] }
     /// Thrown by every mutating endpoint, so one hook covers them all.
     var mutationError: Error?
-    func classify(id: Int, classification: String) async throws -> Bool {
+    func classify(id: Int, classification: String) async throws -> ClassifyResult {
         if let mutationError { throw mutationError }
         if throwOnClassify { throw APIError.badStatus(500) }
         return classifyResult
@@ -160,7 +160,7 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
 
 @MainActor @Test func classifyOptimisticallyUpdatesThenKeepsOnSuccess() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
-    api.classifyResult = true
+    api.classifyResult = ClassifyResult(ok: true)
     let store = VideoStore(api: api)
     await store.load()
     await store.classify(id: 1, to: "adults")
@@ -169,7 +169,7 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
 
 @MainActor @Test func classifyRevertsWhenServerReturnsNotOk() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
-    api.classifyResult = false
+    api.classifyResult = ClassifyResult(ok: false)
     let store = VideoStore(api: api)
     await store.load()
     await store.classify(id: 1, to: "adults")
