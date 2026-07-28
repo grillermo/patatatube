@@ -59,13 +59,13 @@ if [ "$DEV" = "1" ]; then
 fi
 
 # gunicorn manages the worker lifecycle (respawn on crash, graceful reload via
-# SIGHUP, staged shutdown); uvicorn workers do the actual ASGI serving.
+# SIGHUP, staged shutdown); uviorn workers do the actual ASGI serving.
 # Access and error logs get their own colors via process substitution but share
 # the "web" label; anything workers print directly (stdout/stderr) also gets it.
 exec > >(colorize 34 web) 2>&1
 exec "$PYTHON_BIN" -m gunicorn main:app \
   --worker-class uvicorn_worker.UvicornWorker \
-  --workers "${WEB_CONCURRENCY:-3}" \
+  --workers "${WEB_CONCURRENCY:-6}" \
   --bind "0.0.0.0:$PORT" \
   --forwarded-allow-ips='*' \
   --access-logfile >(colorize 32 web >&3) \
