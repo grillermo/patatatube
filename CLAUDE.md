@@ -66,6 +66,14 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
 - Stream endpoint is token-gated (Bearer or `?token=`); library previews proxy Plex thumbs at `/videos/{id}/preview` with a disk cache in `data/previews/`.
 - Conversions keep every audio track matching `LIBRARY_AUDIO_LANGS` (default `eng,spa`; first track as fallback). Per-version `audio_langs`/`converted_langs` are JSON columns filled at scan/convert time; the per-movie choice lives in `videos.audio_lang` (`POST /api/videos/{id}/audio`), and the HLS package carries only the chosen language (invalidated via `hls.invalidate` on change).
 
+### Promoting downloads into Plex
+
+- Classifying a **download** row as `tv` or `movies` hands the file to Plex: `promote.py` copies `videos/{id}.mp4` to `<LIBRARY_TV_DIR|LIBRARY_MOVIES_DIR>/<sanitized title>.mp4` (flat, no folders), unlinks the source, invalidates HLS, **hard-deletes the row**, and best-effort triggers a Plex section rescan. The video reappears later as a library row via `scan_library`.
+- The copy is deliberate: `videos/` and `/Volumes/Media` are different filesystems, so `os.rename` raises `EXDEV`. It copies to a hidden `.name.part` inside the destination, then `os.replace`s it — same-volume and atomic, so Plex never scans a partial file.
+- Any failure (volume unmounted, collision, permissions) raises `promote.PromotionError` → **409**, and nothing changes: no move, no classification write, no delete.
+- **Library** rows never move. Their `tv`/`movies` classification comes from the Plex section they live in (`plex.py`), so reclassifying one only rewrites the column until the next scan.
+- `/upload/file` rejects `tv`/`movies` with 400 — a queued upload has no file to move yet.
+
 ## Conventions
 
 - ffmpeg/ffprobe/yt-dlp binaries and behavior are all env-overridable (`FFMPEG_BIN`, `FFPROBE_BIN`, `YTDLP_BIN`, `YTDLP_BROWSER`, `YTDLP_FORMAT`). Downloader code should keep reading these rather than hardcoding paths.
