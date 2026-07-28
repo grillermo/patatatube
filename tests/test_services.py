@@ -16,17 +16,73 @@ def fresh_db(monkeypatch, tmp_path):
 
 def test_apply_classification_accepts_valid(fresh_db):
     db, services = fresh_db
-    target_classification = next(cls for cls in db.CLASSIFICATIONS if cls != "children")
     vid = db.add_video("https://twitter.com/x/status/1")
-    assert services.apply_classification(vid, target_classification) is True
-    assert db.get_video(vid)["classification"] == target_classification
+    result = services.apply_classification(vid, "adults")
+    assert (result.ok, result.promoted) == (True, False)
+    assert db.get_video(vid)["classification"] == "adults"
 
 
 def test_apply_classification_rejects_invalid(fresh_db):
     db, services = fresh_db
     vid = db.add_video("https://twitter.com/x/status/1")
     db.set_video_classification(vid, "children")
-    assert services.apply_classification(vid, "bogus") is False
+    result = services.apply_classification(vid, "bogus")
+    assert (result.ok, result.promoted) == (False, False)
+    assert db.get_video(vid)["classification"] == "children"
+
+
+def test_apply_classification_promotes_a_download_to_movies(fresh_db, monkeypatch):
+    db, services = fresh_db
+    import promote
+    moved = []
+    monkeypatch.setattr(
+        promote, "promote_to_plex",
+        lambda video, classification: moved.append((video["id"], classification)),
+    )
+    vid = db.add_video("https://youtu.be/abc")
+    db.update_video(vid, "done", filename=f"{vid}.mp4")
+
+    result = services.apply_classification(vid, "movies")
+
+    assert (result.ok, result.promoted) == (True, True)
+    assert moved == [(vid, "movies")]
+
+
+def test_apply_classification_leaves_library_rows_alone(fresh_db, monkeypatch):
+    db, services = fresh_db
+    import promote
+    monkeypatch.setattr(
+        promote, "promote_to_plex",
+        lambda video, classification: pytest.fail("library rows must not move"),
+    )
+    video_id, _ = db.upsert_library_video({
+        "source_path": "/media/movies/x.mkv",
+        "title": "X",
+        "classification": "movies",
+        "versions": [{"source_path": "/media/movies/x.mkv", "label": "1080p"}],
+    })
+
+    result = services.apply_classification(video_id, "tv")
+
+    assert (result.ok, result.promoted) == (True, False)
+    assert db.get_video(video_id)["classification"] == "tv"
+
+
+def test_apply_classification_propagates_a_promotion_failure(fresh_db, monkeypatch):
+    db, services = fresh_db
+    import promote
+
+    def boom(video, classification):
+        raise promote.PromotionError("library directory is unavailable")
+
+    monkeypatch.setattr(promote, "promote_to_plex", boom)
+    vid = db.add_video("https://youtu.be/abc")
+    db.update_video(vid, "done", filename=f"{vid}.mp4")
+    db.set_video_classification(vid, "children")
+
+    with pytest.raises(promote.PromotionError):
+        services.apply_classification(vid, "movies")
+
     assert db.get_video(vid)["classification"] == "children"
 
 

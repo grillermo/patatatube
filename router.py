@@ -20,6 +20,7 @@ import db
 import hls
 import library
 import plex
+import promote
 import services
 from db import CLASSIFICATIONS
 from downloader import download_video, process_uploaded_video
@@ -268,6 +269,11 @@ async def upload_file(
     _check_token(request)
     if classification not in CLASSIFICATIONS:
         raise HTTPException(status_code=400, detail="Invalid classification")
+    if classification in promote.PROMOTED_CLASSIFICATIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Upload into children/adults/anabel, then classify it to move it into Plex",
+        )
 
     suffix = Path(file.filename or "").suffix or ".mp4"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -690,7 +696,10 @@ async def manifest():
 
 @router.post("/videos/{video_id}/classify")
 async def classify_video_endpoint(video_id: int, classification: str = Form(...), current_classification: str | None = Form(default=None)):
-    services.apply_classification(video_id, classification)
+    try:
+        services.apply_classification(video_id, classification)
+    except promote.PromotionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     redirect_url = f"/?classification={current_classification}" if current_classification else "/"
     return RedirectResponse(url=redirect_url, status_code=303)
 
@@ -718,8 +727,11 @@ async def api_videos(classification: str | None = None):
 @router.post("/api/videos/{video_id}/classify")
 async def api_classify_video(video_id: int, body: ClassifyRequest, request: Request):
     _check_token(request)
-    ok = services.apply_classification(video_id, body.classification)
-    return {"ok": ok}
+    try:
+        result = services.apply_classification(video_id, body.classification)
+    except promote.PromotionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": result.ok, "promoted": result.promoted}
 
 
 @router.post("/api/videos/{video_id}/version")

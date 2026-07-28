@@ -780,7 +780,7 @@ def test_api_classify_sets_and_returns_ok(client):
         headers={"Authorization": "Bearer test-secret"},
     )
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
+    assert resp.json() == {"ok": True, "promoted": False}
     assert db.get_video(vid)["classification"] == target_classification
 
 
@@ -794,7 +794,7 @@ def test_api_classify_invalid_returns_not_ok(client):
         headers={"Authorization": "Bearer test-secret"},
     )
     assert resp.status_code == 200
-    assert resp.json() == {"ok": False}
+    assert resp.json() == {"ok": False, "promoted": False}
     assert db.get_video(vid)["classification"] == "children"
 
 
@@ -1498,3 +1498,98 @@ def test_hls_rejects_path_traversal(client, monkeypatch, tmp_path):
         assert resp2.status_code == 404
     finally:
         p.unlink(missing_ok=True)
+
+
+def test_api_classify_to_movies_promotes_and_reports_it(client, monkeypatch, tmp_path):
+    import db
+    import promote
+    videos_dir = tmp_path / "videos"
+    videos_dir.mkdir()
+    movies_dir = tmp_path / "movies"
+    movies_dir.mkdir()
+    monkeypatch.setattr(promote, "VIDEOS_DIR", videos_dir)
+    monkeypatch.setenv("LIBRARY_MOVIES_DIR", str(movies_dir))
+    monkeypatch.setattr(promote, "_refresh_plex", lambda classification: None)
+    video_id = db.add_video("https://youtu.be/abc", platform="youtube", title="Akira")
+    (videos_dir / f"{video_id}.mp4").write_bytes(b"bytes")
+    db.update_video(video_id, "done", filename=f"{video_id}.mp4")
+
+    resp = client.post(
+        f"/api/videos/{video_id}/classify",
+        json={"classification": "movies"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "promoted": True}
+    assert (movies_dir / "Akira.mp4").exists()
+    assert db.get_video(video_id) is None
+
+
+def test_api_classify_to_children_does_not_promote(client, monkeypatch):
+    import db
+    video_id = db.add_video("https://youtu.be/abc", platform="youtube", title="Akira")
+    db.update_video(video_id, "done", filename=f"{video_id}.mp4")
+
+    resp = client.post(
+        f"/api/videos/{video_id}/classify",
+        json={"classification": "children"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.json() == {"ok": True, "promoted": False}
+    assert db.get_video(video_id)["classification"] == "children"
+
+
+def test_api_classify_returns_409_when_the_move_fails(client, monkeypatch, tmp_path):
+    import db
+    import promote
+    videos_dir = tmp_path / "videos"
+    videos_dir.mkdir()
+    monkeypatch.setattr(promote, "VIDEOS_DIR", videos_dir)
+    monkeypatch.setenv("LIBRARY_MOVIES_DIR", str(tmp_path / "not-mounted"))
+    video_id = db.add_video("https://youtu.be/abc", platform="youtube", title="Akira")
+    (videos_dir / f"{video_id}.mp4").write_bytes(b"bytes")
+    db.update_video(video_id, "done", filename=f"{video_id}.mp4")
+    db.set_video_classification(video_id, "children")
+
+    resp = client.post(
+        f"/api/videos/{video_id}/classify",
+        json={"classification": "movies"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.status_code == 409
+    assert (videos_dir / f"{video_id}.mp4").exists()
+    assert db.get_video(video_id)["classification"] == "children"
+
+
+def test_ssr_classify_returns_409_when_the_move_fails(client, monkeypatch, tmp_path):
+    import db
+    import promote
+    videos_dir = tmp_path / "videos"
+    videos_dir.mkdir()
+    monkeypatch.setattr(promote, "VIDEOS_DIR", videos_dir)
+    monkeypatch.setenv("LIBRARY_MOVIES_DIR", str(tmp_path / "not-mounted"))
+    video_id = db.add_video("https://youtu.be/abc", platform="youtube", title="Akira")
+    (videos_dir / f"{video_id}.mp4").write_bytes(b"bytes")
+    db.update_video(video_id, "done", filename=f"{video_id}.mp4")
+
+    resp = client.post(
+        f"/videos/{video_id}/classify",
+        data={"classification": "movies"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 409
+    assert db.get_video(video_id) is not None
+
+
+def test_upload_file_rejects_a_library_classification(client):
+    resp = client.post(
+        "/upload/file",
+        files={"file": ("video.mp4", b"bytes", "video/mp4")},
+        data={"classification": "movies"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 400
