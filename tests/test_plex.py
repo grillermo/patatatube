@@ -263,6 +263,7 @@ def test_fetch_thumb_missing_token(monkeypatch):
 
 def test_refresh_sections_hits_every_matching_section(monkeypatch):
     monkeypatch.setenv("PLEX_TOKEN", "tok")
+    monkeypatch.delenv("PLEX_URL", raising=False)
     monkeypatch.setattr(plex, "_get_json", fake_get_json)
     called = []
 
@@ -278,6 +279,7 @@ def test_refresh_sections_hits_every_matching_section(monkeypatch):
 
 def test_refresh_sections_picks_show_sections_for_tv(monkeypatch):
     monkeypatch.setenv("PLEX_TOKEN", "tok")
+    monkeypatch.delenv("PLEX_URL", raising=False)
     monkeypatch.setattr(plex, "_get_json", fake_get_json)
     called = []
 
@@ -293,6 +295,7 @@ def test_refresh_sections_picks_show_sections_for_tv(monkeypatch):
 
 def test_refresh_sections_raises_plex_error_on_transport_failure(monkeypatch):
     monkeypatch.setenv("PLEX_TOKEN", "tok")
+    monkeypatch.delenv("PLEX_URL", raising=False)
     monkeypatch.setattr(plex, "_get_json", fake_get_json)
 
     def fake_get(url, params=None, timeout=None, trust_env=None):
