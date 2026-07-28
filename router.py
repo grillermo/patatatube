@@ -697,7 +697,7 @@ async def manifest():
 @router.post("/videos/{video_id}/classify")
 async def classify_video_endpoint(video_id: int, classification: str = Form(...), current_classification: str | None = Form(default=None)):
     try:
-        services.apply_classification(video_id, classification)
+        await asyncio.to_thread(services.apply_classification, video_id, classification)
     except promote.PromotionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     redirect_url = f"/?classification={current_classification}" if current_classification else "/"
@@ -728,7 +728,7 @@ async def api_videos(classification: str | None = None):
 async def api_classify_video(video_id: int, body: ClassifyRequest, request: Request):
     _check_token(request)
     try:
-        result = services.apply_classification(video_id, body.classification)
+        result = await asyncio.to_thread(services.apply_classification, video_id, body.classification)
     except promote.PromotionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": result.ok, "promoted": result.promoted}

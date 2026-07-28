@@ -13,7 +13,14 @@ private final class PromoteAPI: VideoAPI, @unchecked Sendable {
 
     func videos(classification: String?) async throws -> [Video] { videosToReturn }
     func classifications() async throws -> [String] { ["children", "movies"] }
-    func classify(id: Int, classification: String) async throws -> ClassifyResult { classifyResult }
+    func classify(id: Int, classification: String) async throws -> ClassifyResult {
+        // Mirror the real server: a promotion hard-deletes the row, so it's gone
+        // from any subsequent videos() fetch (e.g. VideoStore's post-promote reload).
+        if classifyResult.promoted {
+            videosToReturn.removeAll { $0.id == id }
+        }
+        return classifyResult
+    }
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
     func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
     func upload(url: String) async throws -> Int { 0 }

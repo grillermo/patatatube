@@ -156,6 +156,11 @@ public final class VideoStore: ObservableObject {
             if result.promoted {
                 videos.removeAll { $0.id == id }
                 mediaCache?.removeAllCached(id: id)
+                // Server hard-deletes the row on promotion, so re-fetch + re-persist
+                // the list now -- otherwise the on-disk cache still contains this
+                // video and a future bootLoad() renders it as a ghost card whose
+                // stream 404s and whose local file was just purged above.
+                await load()
             } else if !result.ok {
                 videos = previous
             }
