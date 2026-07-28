@@ -259,3 +259,46 @@ def test_fetch_thumb_missing_token(monkeypatch):
     with pytest.raises(plex.PlexError) as exc_info:
         plex.fetch_thumb("123")
     assert "PLEX_TOKEN is not configured" in str(exc_info.value)
+
+
+def test_refresh_sections_hits_every_matching_section(monkeypatch):
+    monkeypatch.setenv("PLEX_TOKEN", "tok")
+    monkeypatch.setattr(plex, "_get_json", fake_get_json)
+    called = []
+
+    def fake_get(url, params=None, timeout=None, trust_env=None):
+        called.append(url)
+        return httpx.Response(200, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(plex.httpx, "get", fake_get)
+
+    assert plex.refresh_sections("movie") == 1
+    assert called == ["http://localhost:32400/library/sections/1/refresh"]
+
+
+def test_refresh_sections_picks_show_sections_for_tv(monkeypatch):
+    monkeypatch.setenv("PLEX_TOKEN", "tok")
+    monkeypatch.setattr(plex, "_get_json", fake_get_json)
+    called = []
+
+    def fake_get(url, params=None, timeout=None, trust_env=None):
+        called.append(url)
+        return httpx.Response(200, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(plex.httpx, "get", fake_get)
+
+    assert plex.refresh_sections("show") == 1
+    assert called == ["http://localhost:32400/library/sections/2/refresh"]
+
+
+def test_refresh_sections_raises_plex_error_on_transport_failure(monkeypatch):
+    monkeypatch.setenv("PLEX_TOKEN", "tok")
+    monkeypatch.setattr(plex, "_get_json", fake_get_json)
+
+    def fake_get(url, params=None, timeout=None, trust_env=None):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(plex.httpx, "get", fake_get)
+
+    with pytest.raises(plex.PlexError):
+        plex.refresh_sections("movie")

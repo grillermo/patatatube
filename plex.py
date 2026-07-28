@@ -149,6 +149,28 @@ def fetch_library_items() -> list[dict]:
     return items
 
 
+def refresh_sections(section_type: str) -> int:
+    """Ask Plex to rescan every section of a type ('movie' or 'show').
+
+    Returns how many sections were told to refresh. Plex answers immediately
+    and scans in the background, so this does not wait for indexing.
+    """
+    sections = _get_json("/library/sections")["MediaContainer"].get("Directory", [])
+    keys = [s["key"] for s in sections if s.get("type") == section_type]
+    for key in keys:
+        try:
+            resp = httpx.get(
+                f"{_base_url()}/library/sections/{key}/refresh",
+                params={"X-Plex-Token": _token()},
+                timeout=30,
+                trust_env=False,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise PlexError(f"Plex refresh failed: {exc}") from exc
+    return len(keys)
+
+
 def fetch_thumb(rating_key: str) -> bytes:
     """JPEG bytes of the item's poster/thumb."""
     try:

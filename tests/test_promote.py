@@ -176,3 +176,47 @@ def test_promote_suffixes_a_colliding_name(promote_env):
 
     assert target == movies_dir / "Akira (2).mp4"
     assert (movies_dir / "Akira.mp4").read_bytes() == b"already here"
+
+
+def test_promote_asks_plex_to_rescan_the_matching_section(promote_env, monkeypatch):
+    db, videos_dir, _, _ = promote_env
+    monkeypatch.setenv("PLEX_TOKEN", "tok")
+    # The fixture stubbed _refresh_plex out; put the real one back for this test.
+    monkeypatch.setattr(promote, "_refresh_plex", promote._real_refresh_plex)
+    refreshed = []
+    import plex
+    monkeypatch.setattr(plex, "refresh_sections", lambda t: refreshed.append(t) or 1)
+
+    promote.promote_to_plex(db.get_video(_finished_download(db, videos_dir)), "movies")
+
+    assert refreshed == ["movie"]
+
+
+def test_promote_survives_a_plex_refresh_failure(promote_env, monkeypatch):
+    db, videos_dir, movies_dir, _ = promote_env
+    monkeypatch.setenv("PLEX_TOKEN", "tok")
+    import plex
+
+    def boom(section_type):
+        raise plex.PlexError("plex is down")
+
+    monkeypatch.setattr(promote, "_refresh_plex", promote._real_refresh_plex)
+    monkeypatch.setattr(plex, "refresh_sections", boom)
+    video_id = _finished_download(db, videos_dir)
+
+    assert promote.promote_to_plex(db.get_video(video_id), "movies") == movies_dir / "Akira.mp4"
+    assert db.get_video(video_id) is None
+
+
+def test_promote_skips_the_plex_call_without_a_token(promote_env, monkeypatch):
+    db, videos_dir, _, _ = promote_env
+    monkeypatch.delenv("PLEX_TOKEN", raising=False)
+    import plex
+
+    def boom(section_type):
+        raise AssertionError("must not call Plex without a token")
+
+    monkeypatch.setattr(promote, "_refresh_plex", promote._real_refresh_plex)
+    monkeypatch.setattr(plex, "refresh_sections", boom)
+
+    promote.promote_to_plex(db.get_video(_finished_download(db, videos_dir)), "movies")

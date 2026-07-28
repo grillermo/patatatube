@@ -13,6 +13,7 @@ from pathlib import Path
 
 import db
 import hls
+import plex
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,13 @@ def unique_target(directory: Path, stem: str) -> Path:
 
 
 def _refresh_plex(classification: str) -> None:
-    """Placeholder until Task 3 wires the real Plex scan trigger."""
+    """Best-effort rescan: the file is already in place, so a failure is not fatal."""
+    if not os.getenv("PLEX_TOKEN"):
+        return
+    try:
+        plex.refresh_sections("movie" if classification == "movies" else "show")
+    except Exception as exc:  # noqa: BLE001 - never fail an already-completed move
+        logger.warning("Plex refresh after promoting to %s failed: %s", classification, exc)
 
 
 def promote_to_plex(video: dict, classification: str) -> Path:
