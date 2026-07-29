@@ -130,6 +130,75 @@ final class CacheManagerHLSTests: XCTestCase {
         XCTAssertNotNil(cache.offlineHLSMasterURL(for: 5, versionId: nil))
     }
 
+    /// Stubs the full 6-asset package for video 5, with `segment_00000.m4s`
+    /// failing `segmentFailures` times before succeeding.
+    private func stubPackage(segmentFailures: Int) {
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/master.m3u8",
+            data: Data(master.utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/video.m3u8",
+            data: Data(media.utf8)
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/subtitles/es.m3u8",
+            data: Data(subtitles.utf8)
+        )
+        MockURLProtocol.stub(path: "/videos/5/hls/init.mp4", data: Data([1]))
+        MockURLProtocol.stubFailing(
+            path: "/videos/5/hls/segment_00000.m4s",
+            failures: segmentFailures,
+            data: Data([2])
+        )
+        MockURLProtocol.stub(
+            path: "/videos/5/hls/subtitles/es.vtt",
+            data: Data([3])
+        )
+    }
+
+    private func downloadPackage() async throws {
+        try await cache.downloadHLS(
+            id: 5,
+            versionId: nil,
+            masterURL: URL(string: "https://u.test/videos/5/hls/master.m3u8")!,
+            bearerToken: "tok"
+        )
+    }
+
+    func testDownloadHLSRetriesSegmentAfterConnectionLost() async throws {
+        cache.hlsRetrySleep = { _ in }
+        stubPackage(segmentFailures: 1)
+
+        try await downloadPackage()
+
+        let directory = cache.offlineHLSDir(for: 5, versionId: nil)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: directory
+                    .appendingPathComponent("segment_00000.m4s").path
+            )
+        )
+        XCTAssertEqual(cache.state(for: 5), .cached)
+        XCTAssertEqual(
+            MockURLProtocol.requestCount(path: "/videos/5/hls/segment_00000.m4s"),
+            2
+        )
+    }
+
+    func testDownloadHLSRetriesTransportErrorsWithoutBudget() async throws {
+        cache.hlsRetrySleep = { _ in }
+        stubPackage(segmentFailures: 12)
+
+        try await downloadPackage()
+
+        XCTAssertEqual(cache.state(for: 5), .cached)
+        XCTAssertEqual(
+            MockURLProtocol.requestCount(path: "/videos/5/hls/segment_00000.m4s"),
+            13
+        )
+    }
+
     func testDownloadHLSReusesStreamedSegments() async throws {
         let packageHash = SegmentCache.packageHash(
             forPlaylist: Data(media.utf8)
@@ -484,25 +553,24 @@ final class CacheManagerHLSTests: XCTestCase {
     }
 
     func testDownloadFailureDoesNotPromotePartialPackage() async {
+        let invalidMedia = """
+        #EXTM3U
+        #EXTINF:6.0,
+        ../../escape.m4s
+        #EXT-X-ENDLIST
+
+        """
         MockURLProtocol.stub(
             path: "/videos/5/hls/master.m3u8",
             data: Data(master.utf8)
         )
         MockURLProtocol.stub(
             path: "/videos/5/hls/video.m3u8",
-            data: Data(media.utf8)
+            data: Data(invalidMedia.utf8)
         )
         MockURLProtocol.stub(
             path: "/videos/5/hls/subtitles/es.m3u8",
             data: Data(subtitles.utf8)
-        )
-        MockURLProtocol.stub(
-            path: "/videos/5/hls/segment_00000.m4s",
-            data: Data([2])
-        )
-        MockURLProtocol.stub(
-            path: "/videos/5/hls/subtitles/es.vtt",
-            data: Data([3])
         )
 
         do {

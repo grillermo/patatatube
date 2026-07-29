@@ -79,6 +79,32 @@ final class MockURLProtocol: URLProtocol {
         }
     }
 
+    /// Fails the first `failures` requests for `path` with `error`, then
+    /// serves `data` with a 200. Lets a test prove a fetch retried rather
+    /// than gave up.
+    static func stubFailing(
+        path: String,
+        failures: Int,
+        error: Error = URLError(.networkConnectionLost),
+        data: Data
+    ) {
+        let remaining = Counter(failures)
+        register(path: path) { request in
+            if remaining.decrementIfPositive() {
+                throw error
+            }
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                data
+            )
+        }
+    }
+
     static func requestCount(path: String) -> Int {
         lock.withLock { requestCounts[path, default: 0] }
     }
@@ -109,6 +135,22 @@ final class MockURLProtocol: URLProtocol {
                     return try stub(request)
                 }
             }
+        }
+    }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int
+
+    init(_ value: Int) { self.value = value }
+
+    /// Returns true (and consumes one) while the counter is above zero.
+    func decrementIfPositive() -> Bool {
+        lock.withLock {
+            guard value > 0 else { return false }
+            value -= 1
+            return true
         }
     }
 }

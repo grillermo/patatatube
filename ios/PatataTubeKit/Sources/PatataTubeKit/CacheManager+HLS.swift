@@ -194,7 +194,31 @@ extension CacheManager {
         }
     }
 
+    /// Fetches one HLS asset, retrying transport failures indefinitely with
+    /// capped exponential backoff.
+    ///
+    /// iOS tears down sockets when the app is suspended, so a backgrounded
+    /// download sees `-1005 networkConnectionLost` mid-transfer. Throwing here
+    /// would unwind `downloadHLS` and delete the staging directory, discarding
+    /// every asset fetched so far. Retrying in place turns backgrounding (and
+    /// a WiFi drop) into a pause: the suspended app makes no progress and
+    /// picks the asset back up on foreground.
     private func fetchHLSAsset(
+        _ url: URL,
+        bearerToken: String?
+    ) async throws -> Data {
+        var attempt = 0
+        while true {
+            do {
+                return try await performHLSFetch(url, bearerToken: bearerToken)
+            } catch {
+                attempt += 1
+                try await hlsRetrySleep(hlsRetryBackoff(attempt: attempt))
+            }
+        }
+    }
+
+    private func performHLSFetch(
         _ url: URL,
         bearerToken: String?
     ) async throws -> Data {
@@ -214,6 +238,13 @@ extension CacheManager {
             )
         }
         return data
+    }
+
+    /// 0.5s, 1s, 2s, 4s, 8s, then 16s forever.
+    func hlsRetryBackoff(attempt: Int) -> Duration {
+        let capped = min(max(attempt, 1), 6)
+        let seconds = 0.25 * pow(2.0, Double(capped))
+        return .milliseconds(Int(seconds * 1000))
     }
 
     private func hlsAssetURL(

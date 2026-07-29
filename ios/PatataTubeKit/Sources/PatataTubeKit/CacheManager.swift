@@ -150,6 +150,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var session: URLSession!
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
+    // Backoff between HLS asset retries. A stored hook so tests can drive the
+    // retry loop without waiting real seconds.
+    var hlsRetrySleep: @Sendable (Duration) async throws -> Void = {
+        try await Task.sleep(for: $0)
+    }
     private let lock = NSLock()
     private let cancellationFence: any CacheManagerCancellationFencing
     let concurrencyGate: any DownloadConcurrencyGating
