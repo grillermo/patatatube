@@ -54,6 +54,19 @@ final class CacheManagerHLSTests: XCTestCase {
         super.tearDown()
     }
 
+    func testDefaultConfigurationWaitsForConnectivity() {
+        XCTAssertTrue(CacheManager.defaultConfiguration().waitsForConnectivity)
+    }
+
+    func testHLSRetryBackoffRampsAndCaps() {
+        XCTAssertEqual(cache.hlsRetryBackoff(attempt: 1), .milliseconds(500))
+        XCTAssertEqual(cache.hlsRetryBackoff(attempt: 2), .milliseconds(1000))
+        XCTAssertEqual(cache.hlsRetryBackoff(attempt: 3), .milliseconds(2000))
+        XCTAssertEqual(cache.hlsRetryBackoff(attempt: 6), .milliseconds(16000))
+        XCTAssertEqual(cache.hlsRetryBackoff(attempt: 7), .milliseconds(16000))
+        XCTAssertEqual(cache.hlsRetryBackoff(attempt: 99), .milliseconds(16000))
+    }
+
     private let master = """
     #EXTM3U
     #EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",LANGUAGE="es",NAME="Spanish",DEFAULT=YES,AUTOSELECT=YES,FORCED=NO,URI="subtitles/es.m3u8"

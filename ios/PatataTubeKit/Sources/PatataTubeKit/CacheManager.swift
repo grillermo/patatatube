@@ -173,9 +173,18 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var segmentContextByTask: [Int: SegmentTaskContext] = [:]
     private var tasksByIdentifier: [Int: URLSessionDownloadTask] = [:]
 
+    /// Default session config for app use. `waitsForConnectivity` lets a retry
+    /// started during an outage park inside URLSession instead of failing
+    /// instantly, so the HLS retry loop doesn't spin while offline.
+    public static func defaultConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = true
+        return configuration
+    }
+
     public convenience init(
         root: URL? = nil,
-        configuration: URLSessionConfiguration = .default,
+        configuration: URLSessionConfiguration = CacheManager.defaultConfiguration(),
         streamCache: StreamCache? = nil
     ) {
         self.init(
