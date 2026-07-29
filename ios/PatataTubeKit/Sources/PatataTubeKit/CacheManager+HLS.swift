@@ -63,7 +63,8 @@ extension CacheManager {
 
         let masterData = try await fetchHLSAsset(
             masterURL,
-            bearerToken: bearerToken
+            bearerToken: bearerToken,
+            cacheKey: key
         )
         try throwIfExternalActivityCancelled(key: key)
         try write(masterData, asset: "master.m3u8")
@@ -77,7 +78,8 @@ extension CacheManager {
         for playlist in playlists {
             let data = try await fetchHLSAsset(
                 try hlsAssetURL(playlist, relativeTo: masterURL),
-                bearerToken: bearerToken
+                bearerToken: bearerToken,
+                cacheKey: key
             )
             try throwIfExternalActivityCancelled(key: key)
             try write(data, asset: playlist)
@@ -125,7 +127,8 @@ extension CacheManager {
                     }
                     let data = try await self.fetchHLSAsset(
                         try self.hlsAssetURL(asset, relativeTo: masterURL),
-                        bearerToken: bearerToken
+                        bearerToken: bearerToken,
+                        cacheKey: key
                     )
                     try self.throwIfExternalActivityCancelled(key: key)
                     return (asset, data)
@@ -205,10 +208,13 @@ extension CacheManager {
     /// picks the asset back up on foreground.
     private func fetchHLSAsset(
         _ url: URL,
-        bearerToken: String?
+        bearerToken: String?,
+        cacheKey: String
     ) async throws -> Data {
         var attempt = 0
         while true {
+            try Task.checkCancellation()
+            try throwIfExternalActivityCancelled(key: cacheKey)
             do {
                 return try await performHLSFetch(url, bearerToken: bearerToken)
             } catch {

@@ -199,6 +199,40 @@ final class CacheManagerHLSTests: XCTestCase {
         )
     }
 
+    func testDownloadHLSCancelDuringBackoffExitsPromptly() async throws {
+        let parked = expectation(description: "parked in backoff")
+        parked.assertForOverFulfill = false
+        let released = HLSPromotionGate()
+        cache.hlsRetrySleep = { _ in
+            parked.fulfill()
+            await released.waitForRelease()
+        }
+        stubPackage(segmentFailures: 100)
+
+        let cache = cache!
+        let download = Task {
+            try await cache.downloadHLS(
+                id: 5,
+                versionId: nil,
+                masterURL: URL(
+                    string: "https://u.test/videos/5/hls/master.m3u8"
+                )!,
+                bearerToken: "tok"
+            )
+        }
+        await fulfillment(of: [parked], timeout: 5)
+        cache.cancel(id: 5)
+        await released.release()
+
+        do {
+            _ = try await download.value
+            XCTFail("expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertNil(cache.offlineHLSMasterURL(for: 5, versionId: nil))
+    }
+
     func testDownloadHLSFailsImmediatelyOnNotFound() async throws {
         cache.hlsRetrySleep = { _ in }
         stubPackage(segmentFailures: 0)
