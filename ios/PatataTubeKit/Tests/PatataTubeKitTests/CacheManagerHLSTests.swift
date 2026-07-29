@@ -221,6 +221,10 @@ final class CacheManagerHLSTests: XCTestCase {
             )
         }
         await fulfillment(of: [parked], timeout: 5)
+        await released.waitUntilEntered()
+        let requestsBeforeCancellation = MockURLProtocol.requestCount(
+            path: "/videos/5/hls/segment_00000.m4s"
+        )
         cache.cancel(id: 5)
         await released.release()
 
@@ -230,6 +234,12 @@ final class CacheManagerHLSTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is CancellationError)
         }
+        XCTAssertEqual(
+            MockURLProtocol.requestCount(
+                path: "/videos/5/hls/segment_00000.m4s"
+            ),
+            requestsBeforeCancellation
+        )
         XCTAssertNil(cache.offlineHLSMasterURL(for: 5, versionId: nil))
     }
 
