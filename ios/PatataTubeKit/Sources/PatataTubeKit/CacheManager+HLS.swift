@@ -212,6 +212,7 @@ extension CacheManager {
             do {
                 return try await performHLSFetch(url, bearerToken: bearerToken)
             } catch {
+                if isPermanentHLSError(error) { throw error }
                 attempt += 1
                 try await hlsRetrySleep(hlsRetryBackoff(attempt: attempt))
             }
@@ -238,6 +239,25 @@ extension CacheManager {
             )
         }
         return data
+    }
+
+    /// True when retrying cannot help: the server rejected the request, the
+    /// package is malformed, the disk write failed, or we were cancelled.
+    func isPermanentHLSError(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let apiError = error as? APIError {
+            if case let .badStatus(status) = apiError {
+                return (400..<500).contains(status)
+            }
+            return true
+        }
+        if error is SegmentCacheError { return true }
+        if let urlError = error as? URLError {
+            return urlError.code == .cancelled
+        }
+        // Anything non-URLError that reached us is a local failure (file
+        // write, directory creation) — retrying the network won't fix it.
+        return !(error is URLError)
     }
 
     /// 0.5s, 1s, 2s, 4s, 8s, then 16s forever.

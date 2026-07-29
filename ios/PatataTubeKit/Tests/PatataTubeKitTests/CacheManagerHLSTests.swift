@@ -199,6 +199,62 @@ final class CacheManagerHLSTests: XCTestCase {
         )
     }
 
+    func testDownloadHLSFailsImmediatelyOnNotFound() async throws {
+        cache.hlsRetrySleep = { _ in }
+        stubPackage(segmentFailures: 0)
+        MockURLProtocol.stubStatus(
+            path: "/videos/5/hls/segment_00000.m4s",
+            status: 404
+        )
+
+        do {
+            try await downloadPackage()
+            XCTFail("expected failure")
+        } catch {
+            XCTAssertEqual(error as? APIError, .badStatus(404))
+        }
+
+        XCTAssertEqual(
+            MockURLProtocol.requestCount(path: "/videos/5/hls/segment_00000.m4s"),
+            1
+        )
+        XCTAssertNil(cache.offlineHLSMasterURL(for: 5, versionId: nil))
+    }
+
+    func testDownloadHLSRetriesServerErrors() async throws {
+        cache.hlsRetrySleep = { _ in }
+        stubPackage(segmentFailures: 0)
+        let served = expectation(description: "segment served")
+        nonisolated(unsafe) var attempts = 0
+        MockURLProtocol.registerCounting(
+            path: "/videos/5/hls/segment_00000.m4s"
+        ) { request in
+            attempts += 1
+            if attempts < 3 {
+                return (
+                    HTTPURLResponse(
+                        url: request.url!, statusCode: 503,
+                        httpVersion: nil, headerFields: nil
+                    )!,
+                    Data()
+                )
+            }
+            served.fulfill()
+            return (
+                HTTPURLResponse(
+                    url: request.url!, statusCode: 200,
+                    httpVersion: nil, headerFields: nil
+                )!,
+                Data([2])
+            )
+        }
+
+        try await downloadPackage()
+
+        await fulfillment(of: [served], timeout: 5)
+        XCTAssertEqual(cache.state(for: 5), .cached)
+    }
+
     func testDownloadHLSReusesStreamedSegments() async throws {
         let packageHash = SegmentCache.packageHash(
             forPlaylist: Data(media.utf8)

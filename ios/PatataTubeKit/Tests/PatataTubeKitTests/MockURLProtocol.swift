@@ -105,6 +105,30 @@ final class MockURLProtocol: URLProtocol {
         }
     }
 
+    /// Always answers `path` with `status` and an empty body.
+    static func stubStatus(path: String, status: Int) {
+        register(path: path) { request in
+            (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: status,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                Data()
+            )
+        }
+    }
+
+    /// Exposes the raw stub registration so a test can script per-attempt
+    /// responses. Requests are counted like every other stub.
+    static func registerCounting(
+        path: String,
+        response: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
+    ) {
+        register(path: path, response: response)
+    }
+
     static func requestCount(path: String) -> Int {
         lock.withLock { requestCounts[path, default: 0] }
     }
