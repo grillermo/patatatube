@@ -218,7 +218,7 @@ extension CacheManager {
             do {
                 return try await performHLSFetch(url, bearerToken: bearerToken)
             } catch {
-                if isPermanentHLSError(error) { throw error }
+                guard isRetryableHLSError(error) else { throw error }
                 attempt += 1
                 try await hlsRetrySleep(hlsRetryBackoff(attempt: attempt))
             }
@@ -247,23 +247,26 @@ extension CacheManager {
         return data
     }
 
-    /// True when retrying cannot help: the server rejected the request, the
-    /// package is malformed, the disk write failed, or we were cancelled.
-    func isPermanentHLSError(_ error: Error) -> Bool {
-        if error is CancellationError { return true }
+    /// Returns true only for transport errors that may resolve without
+    /// changing the request. Everything else fails closed as permanent.
+    func isRetryableHLSError(_ error: Error) -> Bool {
         if let apiError = error as? APIError {
-            if case let .badStatus(status) = apiError {
-                return (400..<500).contains(status)
-            }
+            guard case let .badStatus(status) = apiError else { return false }
+            return (500..<600).contains(status)
+        }
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut,
+             .cannotFindHost,
+             .cannotConnectToHost,
+             .networkConnectionLost,
+             .dnsLookupFailed,
+             .notConnectedToInternet,
+             .resourceUnavailable:
             return true
+        default:
+            return false
         }
-        if error is SegmentCacheError { return true }
-        if let urlError = error as? URLError {
-            return urlError.code == .cancelled
-        }
-        // Anything non-URLError that reached us is a local failure (file
-        // write, directory creation) — retrying the network won't fix it.
-        return !(error is URLError)
     }
 
     /// 0.5s, 1s, 2s, 4s, 8s, then 16s forever.

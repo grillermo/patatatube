@@ -29,6 +29,40 @@ private actor HLSPromotionGate {
     }
 }
 
+private actor HLSCancellationAwareSleeper {
+    private var parked = false
+    private var parkedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    func sleep() async throws {
+        try Task.checkCancellation()
+        parked = true
+        let waiters = parkedWaiters
+        parkedWaiters = []
+        waiters.forEach { $0.resume() }
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+            }
+        } onCancel: {
+            Task { await self.cancel() }
+        }
+    }
+
+    func waitUntilParked() async {
+        guard !parked else { return }
+        await withCheckedContinuation { continuation in
+            parkedWaiters.append(continuation)
+        }
+    }
+
+    private func cancel() {
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
+    }
+}
+
 final class CacheManagerHLSTests: XCTestCase {
     private var root: URL!
     private var cache: CacheManager!
@@ -65,6 +99,45 @@ final class CacheManagerHLSTests: XCTestCase {
         XCTAssertEqual(cache.hlsRetryBackoff(attempt: 6), .milliseconds(16000))
         XCTAssertEqual(cache.hlsRetryBackoff(attempt: 7), .milliseconds(16000))
         XCTAssertEqual(cache.hlsRetryBackoff(attempt: 99), .milliseconds(16000))
+    }
+
+    func testHLSRetryabilityIsExplicitAndFailClosed() {
+        let cases: [(name: String, error: Error, shouldRetry: Bool)] = [
+            ("HTTP 503", APIError.badStatus(503), true),
+            ("HTTP 500", APIError.badStatus(500), true),
+            ("HTTP 599", APIError.badStatus(599), true),
+            ("HTTP 100", APIError.badStatus(100), false),
+            ("HTTP 302", APIError.badStatus(302), false),
+            ("HTTP 404", APIError.badStatus(404), false),
+            ("HTTP 600", APIError.badStatus(600), false),
+            ("HTTP status 0", APIError.badStatus(0), false),
+            ("network connection lost", URLError(.networkConnectionLost), true),
+            ("timed out", URLError(.timedOut), true),
+            ("cannot find host", URLError(.cannotFindHost), true),
+            ("cannot connect to host", URLError(.cannotConnectToHost), true),
+            ("DNS lookup failed", URLError(.dnsLookupFailed), true),
+            ("not connected to internet", URLError(.notConnectedToInternet), true),
+            ("resource unavailable", URLError(.resourceUnavailable), true),
+            ("bad URL", URLError(.badURL), false),
+            ("unsupported URL", URLError(.unsupportedURL), false),
+            (
+                "ATS requirement",
+                URLError(.appTransportSecurityRequiresSecureConnection),
+                false
+            ),
+            ("certificate not trusted", URLError(.serverCertificateUntrusted), false),
+            ("URLSession cancellation", URLError(.cancelled), false),
+            ("cancellation", CancellationError(), false),
+            ("local manifest failure", SegmentCacheError.invalidAssetPath, false),
+        ]
+
+        for testCase in cases {
+            XCTAssertEqual(
+                cache.isRetryableHLSError(testCase.error),
+                testCase.shouldRetry,
+                testCase.name
+            )
+        }
     }
 
     private let master = """
@@ -213,12 +286,9 @@ final class CacheManagerHLSTests: XCTestCase {
     }
 
     func testDownloadHLSCancelDuringBackoffExitsPromptly() async throws {
-        let parked = expectation(description: "parked in backoff")
-        parked.assertForOverFulfill = false
-        let released = HLSPromotionGate()
+        let sleeper = HLSCancellationAwareSleeper()
         cache.hlsRetrySleep = { _ in
-            parked.fulfill()
-            await released.waitForRelease()
+            try await sleeper.sleep()
         }
         stubPackage(segmentFailures: 100)
 
@@ -233,26 +303,21 @@ final class CacheManagerHLSTests: XCTestCase {
                 bearerToken: "tok"
             )
         }
-        await fulfillment(of: [parked], timeout: 5)
-        await released.waitUntilEntered()
-        let requestsBeforeCancellation = MockURLProtocol.requestCount(
-            path: "/videos/5/hls/segment_00000.m4s"
-        )
-        cache.cancel(id: 5)
-        await released.release()
+        await sleeper.waitUntilParked()
+        download.cancel()
 
-        do {
-            _ = try await download.value
-            XCTFail("expected cancellation")
-        } catch {
-            XCTAssertTrue(error is CancellationError)
+        let finished = expectation(description: "download cancelled")
+        Task {
+            do {
+                _ = try await download.value
+                XCTFail("expected cancellation")
+            } catch is CancellationError {
+            } catch {
+                XCTFail("expected CancellationError, got \(error)")
+            }
+            finished.fulfill()
         }
-        XCTAssertEqual(
-            MockURLProtocol.requestCount(
-                path: "/videos/5/hls/segment_00000.m4s"
-            ),
-            requestsBeforeCancellation
-        )
+        await fulfillment(of: [finished], timeout: 1)
         XCTAssertNil(cache.offlineHLSMasterURL(for: 5, versionId: nil))
     }
 
@@ -269,6 +334,32 @@ final class CacheManagerHLSTests: XCTestCase {
             XCTFail("expected failure")
         } catch {
             XCTAssertEqual(error as? APIError, .badStatus(404))
+        }
+
+        XCTAssertEqual(
+            MockURLProtocol.requestCount(path: "/videos/5/hls/segment_00000.m4s"),
+            1
+        )
+        XCTAssertNil(cache.offlineHLSMasterURL(for: 5, versionId: nil))
+    }
+
+    func testDownloadHLSFailsImmediatelyOnPermanentURLFailure() async throws {
+        cache.hlsRetrySleep = { _ in throw CancellationError() }
+        stubPackage(segmentFailures: 0)
+        MockURLProtocol.stubFailing(
+            path: "/videos/5/hls/segment_00000.m4s",
+            failures: 1,
+            error: URLError(.badURL),
+            data: Data([2])
+        )
+
+        do {
+            try await downloadPackage()
+            XCTFail("expected failure")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .badURL)
+        } catch {
+            XCTFail("expected bad URL error, got \(error)")
         }
 
         XCTAssertEqual(
