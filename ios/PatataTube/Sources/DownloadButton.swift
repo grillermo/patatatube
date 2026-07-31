@@ -277,6 +277,9 @@ struct DownloadButton: View {
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
+            // Required: inside a List row (EpisodesView) an automatic-styled
+            // button hands activation to the cell and the action never fires.
+            .buttonStyle(.plain)
             .logTap("download-start", ["video_id": "\(identity.videoID)"])
             .accessibilityLabel("Download")
         }
