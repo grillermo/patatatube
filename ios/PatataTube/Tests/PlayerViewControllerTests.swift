@@ -50,6 +50,14 @@ struct PlayerViewControllerTests {
         #expect(receivedScene?.orientationLockIdentifier == ObjectIdentifier(scene))
     }
 
+    @Test func playerControllerHidesTheHomeIndicatorItself() {
+        let controller = SceneReportingPlayerViewController()
+
+        #expect(controller.prefersHomeIndicatorAutoHidden)
+        // AVKit's internal content controller must not answer instead of ours.
+        #expect(controller.childForHomeIndicatorAutoHidden == nil)
+    }
+
     @Test func normalAndSleepPlayersBothContainTheOrientationOverlay() throws {
         let model = AppModel()
         for sleepMode in [false, true] {

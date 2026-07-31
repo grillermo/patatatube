@@ -93,6 +93,9 @@ struct VideoPlayerView: View {
                 }
             )
         }
+        // Home indicator off while playing (YouTube-style); the system still
+        // brings it back on touch and hides it again after idle.
+        .persistentSystemOverlays(.hidden)
         .simultaneousGesture(pullDownToDismiss)
         .task { await setup() }
         .onChange(of: scenePhase) { _, phase in

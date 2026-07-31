@@ -6,6 +6,15 @@ class SceneReportingPlayerViewController: AVPlayerViewController {
     var onSceneAvailable: ((any OrientationLockScene) -> Void)?
     var playerWindowScene: (any OrientationLockScene)? { view.window?.windowScene }
 
+    /// Hide the home indicator while a video is on screen, like the YouTube app.
+    /// AVPlayerViewController only does this for itself in its own full-screen
+    /// presentation; embedded in a SwiftUI `fullScreenCover` it stays inline, so
+    /// the preference has to be stated here. `childForHomeIndicatorAutoHidden`
+    /// is nil'd because UIKit otherwise forwards the question to AVKit's
+    /// internal content controller and never asks us.
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var childForHomeIndicatorAutoHidden: UIViewController? { nil }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         if let playerWindowScene { onSceneAvailable?(playerWindowScene) }
