@@ -7,6 +7,21 @@ from pathlib import Path
 
 CLASSIFICATIONS = ["children", "adults", "anabel", "tv", "movies"]
 
+JOB_KINDS = ("convert", "hls", "normalize")
+PRIORITY_INTERACTIVE = 0
+PRIORITY_BULK = 100
+
+
+def _job_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+MAX_JOB_ATTEMPTS = _job_int_env("MAX_JOB_ATTEMPTS", 3)
+
 
 @contextmanager
 def _conn():
@@ -23,6 +38,34 @@ def _conn():
     try:
         with conn:
             yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
+def _write_conn():
+    """Like _conn(), but takes the write lock before the first read.
+
+    Claiming a job reads the queue and writes the claim in one transaction. A
+    deferred transaction starts on a read snapshot and can fail to upgrade with
+    SQLITE_BUSY_SNAPSHOT - a busy_timeout does not retry, unlike plain
+    SQLITE_BUSY. BEGIN IMMEDIATE takes the write lock up front, so concurrent
+    claimers queue on busy_timeout instead of erroring out.
+    """
+    conn = sqlite3.connect(
+        os.getenv("DB_PATH", "data/watch_later.sqlite"), timeout=30, isolation_level=None
+    )
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
     finally:
         conn.close()
 
@@ -116,6 +159,31 @@ def init_db():
                 UNIQUE(video_id, source_path)
             );
             CREATE INDEX IF NOT EXISTS idx_video_versions_video_id ON video_versions(video_id);
+            """
+        )
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                id INTEGER PRIMARY KEY,
+                kind TEXT NOT NULL,
+                video_id INTEGER NOT NULL,
+                version_id INTEGER NOT NULL DEFAULT 0,
+                payload TEXT,
+                result TEXT,
+                priority INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'queued',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                error_msg TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_pending
+                ON jobs (kind, video_id, version_id)
+                WHERE status IN ('queued', 'running');
+
+            CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs (status, priority, id);
             """
         )
         version_columns = {
@@ -874,3 +942,132 @@ def set_library_state(
             """,
             (status, converted_path, error_msg, video_id),
         )
+
+
+def _job_row(row: sqlite3.Row | None) -> dict | None:
+    """Rows out of the jobs table with payload/result decoded from JSON."""
+    if row is None:
+        return None
+    job = dict(row)
+    for field in ("payload", "result"):
+        raw = job.get(field)
+        try:
+            job[field] = json.loads(raw) if raw else None
+        except (TypeError, ValueError):
+            job[field] = None
+    return job
+
+
+def enqueue_job(
+    kind: str,
+    video_id: int,
+    version_id: int = 0,
+    priority: int = PRIORITY_INTERACTIVE,
+    payload: dict | None = None,
+) -> int | None:
+    """Queue ffmpeg work for converter.py. Returns None if it is already pending."""
+    if kind not in JOB_KINDS:
+        raise ValueError(f"Unknown job kind: {kind}")
+    with _conn() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO jobs (kind, video_id, version_id, payload, priority, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                kind,
+                video_id,
+                version_id,
+                json.dumps(payload) if payload else None,
+                priority,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        return cursor.lastrowid if cursor.rowcount else None
+
+
+def claim_job() -> dict | None:
+    """Atomically take the next eligible job. Skips jobs at MAX_JOB_ATTEMPTS."""
+    with _write_conn() as conn:
+        row = conn.execute(
+            """
+            UPDATE jobs
+            SET status = 'running', started_at = ?, attempts = attempts + 1
+            WHERE id = (
+                SELECT id FROM jobs
+                WHERE status = 'queued' AND attempts < ?
+                ORDER BY priority, id LIMIT 1
+            )
+            RETURNING *
+            """,
+            (datetime.now(timezone.utc).isoformat(), MAX_JOB_ATTEMPTS),
+        ).fetchone()
+        return _job_row(row)
+
+
+def finish_job(
+    job_id: int, status: str, error_msg: str | None = None, result: dict | None = None
+) -> None:
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status = ?, error_msg = ?, result = ?, finished_at = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                error_msg,
+                json.dumps(result) if result else None,
+                datetime.now(timezone.utc).isoformat(),
+                job_id,
+            ),
+        )
+
+
+def requeue_job(job_id: int) -> None:
+    """Return a job to the queue without decrementing its attempt count."""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE jobs SET status = 'queued', started_at = NULL WHERE id = ?", (job_id,)
+        )
+
+
+def reset_orphan_jobs() -> list[dict]:
+    """Requeue every running job and return the rows for temp-file cleanup."""
+    with _write_conn() as conn:
+        rows = conn.execute("SELECT * FROM jobs WHERE status = 'running'").fetchall()
+        conn.execute(
+            "UPDATE jobs SET status = 'queued', started_at = NULL WHERE status = 'running'"
+        )
+        return [_job_row(row) for row in rows]
+
+
+def sweep_exhausted_jobs() -> int:
+    """Fail queued jobs that have exhausted their claim attempts."""
+    with _conn() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE jobs
+            SET status = 'failed', error_msg = ?, finished_at = ?
+            WHERE status = 'queued' AND attempts >= ?
+            """,
+            (
+                f"gave up after {MAX_JOB_ATTEMPTS} attempts",
+                datetime.now(timezone.utc).isoformat(),
+                MAX_JOB_ATTEMPTS,
+            ),
+        )
+        return cursor.rowcount
+
+
+def queued_job_count() -> int:
+    with _conn() as conn:
+        return conn.execute("SELECT COUNT(*) FROM jobs WHERE status = 'queued'").fetchone()[0]
+
+
+def get_job(job_id: int) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return _job_row(row)
