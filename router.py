@@ -772,9 +772,7 @@ async def api_choose_video_version(video_id: int, body: VersionRequest, request:
 
 
 @router.post("/api/videos/{video_id}/audio")
-async def api_choose_audio(
-    video_id: int, body: AudioRequest, request: Request, background_tasks: BackgroundTasks
-):
+async def api_choose_audio(video_id: int, body: AudioRequest, request: Request):
     _check_token(request)
     video = db.get_video(video_id)
     if not video or video.get("deleted_at"):
@@ -803,7 +801,10 @@ async def api_choose_audio(
             converted = None
     if version["status"] == "done" and (converted is None or body.lang not in converted):
         db.set_library_state(video_id, "converting", version_id=version["id"])
-        background_tasks.add_task(library.convert_library_video, video_id)
+        db.enqueue_job(
+            "convert", video_id, version_id=version["id"],
+            priority=db.PRIORITY_INTERACTIVE,
+        )
     return {"ok": True}
 
 

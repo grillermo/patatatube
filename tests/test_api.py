@@ -954,15 +954,19 @@ def test_choose_audio_triggers_reconvert_when_missing(client, tmp_path, monkeypa
     import db
     import library
 
-    vid, _ = _seed_multi_audio_movie(tmp_path, converted_langs='["cat"]')
-    converted = []
-    monkeypatch.setattr(library, "convert_library_video", converted.append)
+    vid, version_id = _seed_multi_audio_movie(tmp_path, converted_langs='["cat"]')
+    spawned = []
+    monkeypatch.setattr(library, "convert_library_video", spawned.append)
 
     resp = client.post(f"/api/videos/{vid}/audio", json={"lang": "spa"}, headers=AUTH)
 
     assert resp.status_code == 200
     assert db.get_video(vid)["status"] == "converting"
-    assert converted == [vid]
+    assert spawned == []
+    job = db.claim_job()
+    assert job["kind"] == "convert"
+    assert job["video_id"] == vid
+    assert job["version_id"] == version_id
 
 
 def test_choose_audio_legacy_null_converted_langs_reconverts(client, tmp_path, monkeypatch):
@@ -975,6 +979,7 @@ def test_choose_audio_legacy_null_converted_langs_reconverts(client, tmp_path, m
     client.post(f"/api/videos/{vid}/audio", json={"lang": "spa"}, headers=AUTH)
 
     assert db.get_video(vid)["status"] == "converting"
+    assert db.queued_job_count() == 1
 
 
 def test_scan_requires_token(client):
