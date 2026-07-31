@@ -32,6 +32,12 @@ def test_payload_round_trips_as_a_dict(tmp_db):
     assert job["payload"] == {"input_path": "/tmp/a.mkv"}
 
 
+def test_empty_payload_round_trips_as_a_dict(tmp_db):
+    tmp_db.enqueue_job("normalize", video_id=1, payload={})
+    job = tmp_db.claim_job()
+    assert job["payload"] == {}
+
+
 def test_priority_beats_insertion_order(tmp_db):
     bulk = tmp_db.enqueue_job("convert", video_id=1, priority=tmp_db.PRIORITY_BULK)
     interactive = tmp_db.enqueue_job("convert", video_id=2, priority=tmp_db.PRIORITY_INTERACTIVE)
@@ -98,6 +104,14 @@ def test_finish_job_records_status_error_and_result(tmp_db):
     assert stored["status"] == "done"
     assert stored["result"] == {"output_path": "/tmp/out.mp4"}
     assert stored["finished_at"] is not None
+
+
+def test_empty_result_round_trips_as_a_dict(tmp_db):
+    tmp_db.enqueue_job("normalize", video_id=1)
+    job = tmp_db.claim_job()
+    tmp_db.finish_job(job["id"], "done", result={})
+
+    assert tmp_db.get_job(job["id"])["result"] == {}
 
 
 def test_finish_job_records_failure(tmp_db):

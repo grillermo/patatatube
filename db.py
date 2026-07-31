@@ -979,7 +979,7 @@ def enqueue_job(
                 kind,
                 video_id,
                 version_id,
-                json.dumps(payload) if payload else None,
+                json.dumps(payload) if payload is not None else None,
                 priority,
                 datetime.now(timezone.utc).isoformat(),
             ),
@@ -1019,7 +1019,7 @@ def finish_job(
             (
                 status,
                 error_msg,
-                json.dumps(result) if result else None,
+                json.dumps(result) if result is not None else None,
                 datetime.now(timezone.utc).isoformat(),
                 job_id,
             ),
