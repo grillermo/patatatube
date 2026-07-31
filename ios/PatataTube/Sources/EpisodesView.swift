@@ -22,8 +22,8 @@ final class EpisodesDownloadAllState {
 struct EpisodesView: View {
     let show: ShowGroup
     let onPlay: (Video, [Video]) -> Void
-    let onDownload: (Video) async -> Bool
-    private let cacheStateOverride: ((Video) -> CacheState)?
+    let onDownload: @MainActor @Sendable (Video) async -> Bool
+    private let cacheStateOverride: (@MainActor @Sendable (Video) -> CacheState)?
 
     @EnvironmentObject var model: AppModel
     @Environment(\.continuousClock) private var clock
@@ -32,8 +32,8 @@ struct EpisodesView: View {
     init(
         show: ShowGroup,
         onPlay: @escaping (Video, [Video]) -> Void,
-        onDownload: @escaping (Video) async -> Bool,
-        currentCacheState: ((Video) -> CacheState)? = nil
+        onDownload: @escaping @MainActor @Sendable (Video) async -> Bool,
+        currentCacheState: (@MainActor @Sendable (Video) -> CacheState)? = nil
     ) {
         self.show = show
         self.onPlay = onPlay
