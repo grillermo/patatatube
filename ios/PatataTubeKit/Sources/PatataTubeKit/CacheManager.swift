@@ -246,6 +246,10 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         concurrencyGate.currentLimit
     }
 
+    /// Directory holding the cached videos. Exposed so callers can ask how much
+    /// room is left on the volume that downloads actually land on.
+    public var cacheRootURL: URL { root }
+
     public func localURL(for id: Int, versionId: Int? = nil) -> URL {
         root.appendingPathComponent(filename(videoId: id, versionId: versionId))
     }
