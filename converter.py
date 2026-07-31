@@ -31,12 +31,12 @@ FFMPEG_JOB_LIMIT = _positive_int_env("FFMPEG_JOB_LIMIT", 1)
 
 
 def _handle_convert(job: dict) -> None:
-    library.convert_library_video(job["video_id"])
+    library.convert_library_video(job["video_id"], raise_errors=True)
 
 
 def _handle_hls(job: dict) -> None:
     payload = job.get("payload") or {}
-    hls.prepare(job["video_id"], payload["source_path"])
+    hls.prepare(job["video_id"], payload["source_path"], raise_errors=True)
 
 
 def _handle_normalize(job: dict) -> dict:

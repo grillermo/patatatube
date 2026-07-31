@@ -167,11 +167,13 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         raise RuntimeError((proc.stdout or "").strip() or "ffmpeg failed while converting")
 
 
-def convert_library_video(video_id: int) -> None:
+def convert_library_video(video_id: int, *, raise_errors: bool = False) -> None:
     """Convert a library row's source to an iPad-ready sibling mp4.
 
     Runs synchronously (FastAPI executes sync background tasks on a thread).
-    Failures set status back to 'unconverted' with error_msg; the row is never deleted.
+    Failures set status back to 'unconverted' with error_msg; the row is never
+    deleted. Converter workers opt into re-raising after cleanup so the job can
+    also be marked failed.
     """
     video = db.get_video(video_id)
     if not video or video.get("source") != "library":
@@ -224,10 +226,12 @@ def convert_library_video(video_id: int) -> None:
         # Function-level import avoids hls importing library at module load.
         import hls
         hls.invalidate(video_id)
-    except Exception as exc:  # noqa: BLE001 - background task, must not raise
+    except Exception as exc:  # noqa: BLE001 - persist state before optional re-raise
         if tmp is not None:
             Path(tmp).unlink(missing_ok=True)
         db.set_library_state(video_id, "unconverted", error_msg=str(exc), version_id=version["id"])
+        if raise_errors:
+            raise
 
 
 def _relabel_versions(versions: list[dict]) -> None:

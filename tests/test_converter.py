@@ -43,6 +43,67 @@ def test_handler_raising_marks_job_failed_with_the_message(tmp_db, monkeypatch):
     assert "ffmpeg exploded" in job["error_msg"]
 
 
+def test_convert_failure_resets_video_and_marks_job_failed(tmp_db, monkeypatch, tmp_path):
+    import converter
+    import library
+
+    source = tmp_path / "movie.mkv"
+    source.write_bytes(b"source")
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(source),
+        "title": "Movie",
+        "classification": "movies",
+        "summary": None,
+        "plex_rating_key": "1",
+    })
+    monkeypatch.setattr(library, "probe_source", lambda path: {
+        "format": {"format_name": "matroska"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "hevc", "width": 1920},
+            {"codec_type": "audio", "codec_name": "eac3"},
+        ],
+    })
+
+    def fail_convert(cmd):
+        raise RuntimeError("convert exploded")
+
+    monkeypatch.setattr(library, "_run_ffmpeg", fail_convert)
+    tmp_db.enqueue_job("convert", video_id=video_id)
+
+    converter.run_job(tmp_db.claim_job())
+
+    video = tmp_db.get_video(video_id)
+    job = tmp_db.get_job(1)
+    assert video["status"] == "unconverted"
+    assert video["error_msg"] == "convert exploded"
+    assert job["status"] == "failed"
+    assert job["error_msg"] == "convert exploded"
+
+
+def test_hls_failure_resets_video_and_marks_job_failed(tmp_db, monkeypatch, tmp_path):
+    import converter
+    import hls
+
+    video_id = tmp_db.add_video("https://example.com/video")
+    tmp_db.set_hls_status(video_id, "converting")
+
+    def fail_hls(*args, **kwargs):
+        raise RuntimeError("hls exploded")
+
+    monkeypatch.setattr(hls, "build_hls_package", fail_hls)
+    tmp_db.enqueue_job(
+        "hls", video_id=video_id, payload={"source_path": str(tmp_path / "movie.mp4")}
+    )
+
+    converter.run_job(tmp_db.claim_job())
+
+    video = tmp_db.get_video(video_id)
+    job = tmp_db.get_job(1)
+    assert video["hls_status"] == "none"
+    assert job["status"] == "failed"
+    assert job["error_msg"] == "hls exploded"
+
+
 def test_handler_result_is_stored_on_the_job(tmp_db, monkeypatch):
     import converter
 

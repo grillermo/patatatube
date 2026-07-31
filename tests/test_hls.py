@@ -197,3 +197,19 @@ def test_invalidate_removes_dir_and_resets_status(fresh_db, tmp_path, monkeypatc
     hls.invalidate(vid)
     assert not directory.exists()
     assert db.get_video(vid)["hls_status"] == "none"
+
+
+def test_prepare_failure_resets_status_without_raising_by_default(fresh_db, monkeypatch):
+    import db
+
+    video_id = db.add_video("https://example.com/video")
+    db.set_hls_status(video_id, "converting")
+
+    def fail_hls(*args, **kwargs):
+        raise RuntimeError("hls exploded")
+
+    monkeypatch.setattr(hls, "build_hls_package", fail_hls)
+
+    hls.prepare(video_id, "/tmp/movie.mp4")
+
+    assert db.get_video(video_id)["hls_status"] == "none"

@@ -264,18 +264,22 @@ def safe_asset_path(video_id, asset_path: str, output_root: Path | None = None) 
     return target
 
 
-def prepare(video_id: int, source_path) -> None:
+def prepare(video_id: int, source_path, *, raise_errors: bool = False) -> None:
     """Background task: build the HLS package and record readiness in the DB.
 
     Runs synchronously (FastAPI runs sync background tasks on a thread). On
     failure the status reverts to 'none' so a later request retries, mirroring
     the library-convert path which never leaves a row wedged in 'converting'.
+    Converter workers opt into re-raising after the reset so the job can also
+    be marked failed.
     """
     try:
         video = db.get_video(video_id)
         audio_lang = video.get("audio_lang") if video else None
         build_hls_package(video_id, source_path, audio_lang=audio_lang)
         db.set_hls_status(video_id, "done")
-    except Exception:  # noqa: BLE001 - background task, must not raise
+    except Exception:  # noqa: BLE001 - persist state before optional re-raise
         traceback.print_exc()
         db.set_hls_status(video_id, "none")
+        if raise_errors:
+            raise
