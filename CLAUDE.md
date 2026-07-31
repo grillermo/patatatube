@@ -20,7 +20,7 @@ python -m pytest tests/test_api.py::test_upload_success   # one test
 - No `pytest.ini`/`pyproject.toml`. Async tests are marked individually with `@pytest.mark.asyncio` (no global asyncio mode), so new async tests must carry that marker.
 - The venv is `python_env/` (gitignored, not checked in). `./serve` hardcodes `python3.13 python_env/bin/uvicorn`. Create it and `pip install -r requirements.txt` before first run.
 - `.env` holds `UPLOAD_TOKEN` (see `.env.example`). Loaded via `python-dotenv`.
-- **Debugging: read `log/backend.log`.** `./serve` mirrors every labeled stream (`dev`/`web`/`caddy`/`access`/`app`) to it, uncolored, alongside the terminal output. Same interleaved view, persisted. Override path with `LOG_FILE=...` (dir is gitignored).
+- **Debugging: read `log/backend.log`.** `./serve` mirrors every labeled stream (`dev`/`web`/`caddy`/`access`/`app`/`convert`) to it, uncolored, alongside the terminal output. Same interleaved view, persisted. Override path with `LOG_FILE=...` (dir is gitignored).
 
 ### iOS (`ios/`)
 
@@ -116,6 +116,31 @@ map for the intermittent-playback investigation:
 2. `downloader.py` runs the download off the event loop: **pybalt** for Twitter/X, **yt-dlp** (`--cookies-from-browser`) for YouTube. Every file is passed through `_normalize_media_for_ios` — an ffmpeg step that guarantees H.264/AAC + `+faststart` so iOS can stream it. Output lands at `videos/{id}.mp4`.
 3. Status transitions queued → downloading → done. **Failures don't get an `error` status** — `db.update_video(status="error")` and the download exception handler both *delete the row* instead. Don't rely on error rows existing.
 4. `GET /videos/{id}/stream` serves the MP4 with HTTP Range support (206 partial content), hand-rolled in `_parse_byte_range` / `_iter_file_range`, gated by an asyncio semaphore (`VIDEO_STREAM_LIMIT`).
+
+### ffmpeg runs in exactly one process
+
+`converter.py` is the only process that spawns ffmpeg. Web workers never do —
+`/api/videos/{id}/prepare`, a cold `master.m3u8`, and upload normalization all
+call `db.enqueue_job` and return immediately. The runner claims jobs
+`FFMPEG_JOB_LIMIT` at a time (default 1, env-overridable) from the `jobs` table,
+ordered by `priority` then `id`; `priority=100` is the iOS Download-all path and
+queues behind interactive taps at `priority=0`.
+
+`./serve` starts it as a supervised child (`until ... do sleep 1; done`) that
+exits with its parent via `--watch-pid`. Queue depth is visible in
+`log/backend.log`:
+
+    [job] +1 kind=convert id=812 priority=100 queued=225
+    [job] -1 kind=convert id=812 status=done secs=412
+
+Only this process may run ffmpeg — that is the invariant that makes the startup
+orphan reset correct (nothing else can hold a `running` job) and the cap real.
+Adding a fourth ffmpeg call site means adding a job kind, not a BackgroundTask.
+This exists because 226 concurrent BackgroundTask conversions took the machine
+down on 2026-07-31; see `docs/superpowers/specs/2026-07-31-ffmpeg-job-queue-design.md`.
+
+**Dev caveat:** `--reload` restarts uvicorn but not the converter. Editing
+`converter.py` or `library.py` needs a full `./serve` restart.
 
 ### Layering — the SSR page and the JSON API share logic, don't duplicate it
 

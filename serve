@@ -61,6 +61,15 @@ exec 3>&1
   --watch-pid "$$" \
   | colorize 35 caddy >&3 &
 
+# converter.py is the only process that spawns ffmpeg; web workers only enqueue.
+# It starts before the web server so the jobs table exists and the queue is
+# draining by the time requests arrive. The until-loop respawns it on crash:
+# unlike gunicorn's workers, a bare background child that died would stall the
+# whole queue silently. $$ survives the exec below, so --watch-pid works in both
+# the DEV and production paths, exactly as the caddy_access.py line above does.
+( until "$PYTHON_BIN" -u converter.py --watch-pid "$$"; do sleep 1; done ) 2>&1 \
+  | colorize 31 convert >&3 &
+
 if [ "$DEV" = "1" ]; then
   exec > >(colorize 36 web) 2>&1
   exec "$PYTHON_BIN" -m uvicorn main:app \
