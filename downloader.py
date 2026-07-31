@@ -79,7 +79,7 @@ async def _download_youtube(video_id: int, url: str) -> tuple[str, str | None]:
 
 
 async def _store_ios_compatible_video(video_id: int, downloaded_path: Path) -> str:
-    normalized_path = await _normalize_media_for_ios(downloaded_path)
+    normalized_path = await _normalize_media_for_ios(downloaded_path, video_id)
     dest = VIDEOS_DIR / f"{video_id}.mp4"
     VIDEOS_DIR.mkdir(exist_ok=True)
     shutil.move(str(normalized_path), str(dest))
@@ -91,8 +91,27 @@ async def _store_ios_compatible_video(video_id: int, downloaded_path: Path) -> s
     return dest.name
 
 
-async def _normalize_media_for_ios(input_path: Path) -> Path:
-    return await asyncio.to_thread(_normalize_media_for_ios_sync, input_path)
+NORMALIZE_POLL_SECONDS = 1.0
+
+
+async def _normalize_media_for_ios(input_path: Path, video_id: int) -> Path:
+    """Hand the ffmpeg work to converter.py and wait for it.
+
+    Polling rather than to_thread: this runs as a BackgroundTask on the event
+    loop, so waiting costs no thread, and converter.py is the only process
+    allowed to spawn ffmpeg.
+    """
+    job_id = db.enqueue_job("normalize", video_id, payload={"input_path": str(input_path)})
+    if job_id is None:
+        raise RuntimeError(f"A normalize job for video {video_id} is already pending")
+
+    while True:
+        job = db.get_job(job_id)
+        if job["status"] == "done":
+            return Path((job["result"] or {})["output_path"])
+        if job["status"] == "failed":
+            raise RuntimeError(job["error_msg"] or "normalization failed")
+        await asyncio.sleep(NORMALIZE_POLL_SECONDS)
 
 
 def _normalize_media_for_ios_sync(input_path: Path) -> Path:

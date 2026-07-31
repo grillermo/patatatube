@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import json
 import subprocess
@@ -32,7 +33,7 @@ async def test_download_youtube_success_persists_title(monkeypatch, downloader_e
         assert url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         return source_file, "Downloaded Title"
 
-    async def fake_normalize(path):
+    async def fake_normalize(path, video_id):
         return Path(path)
 
     monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
@@ -81,7 +82,7 @@ async def test_download_twitter_uses_pybalt(monkeypatch, downloader_env, tmp_pat
         assert url == "https://twitter.com/user/status/123"
         return str(source_file)
 
-    async def fake_normalize(path):
+    async def fake_normalize(path, video_id):
         return Path(path)
 
     monkeypatch.setattr(downloader, "pybalt_download", fake_pybalt)
@@ -217,7 +218,7 @@ async def test_process_uploaded_video_success(monkeypatch, downloader_env, tmp_p
     tmp_upload.write_bytes(b"uploaded-bytes")
     video_id = db.add_video(str(tmp_upload), platform="upload", title="My Video")
 
-    async def fake_normalize(path):
+    async def fake_normalize(path, video_id):
         return Path(path)
 
     monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
@@ -238,7 +239,7 @@ async def test_process_uploaded_video_failure_deletes_row_and_tmpfile(monkeypatc
     tmp_upload.write_bytes(b"not-a-real-video")
     video_id = db.add_video(str(tmp_upload), platform="upload", title="Bad Video")
 
-    async def fake_normalize(path):
+    async def fake_normalize(path, video_id):
         raise RuntimeError("ffmpeg failed while normalizing video")
 
     monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
@@ -255,3 +256,47 @@ async def test_process_uploaded_video_unknown_id_raises(downloader_env):
 
     with pytest.raises(ValueError):
         await downloader.process_uploaded_video(99999)
+
+
+@pytest.mark.asyncio
+async def test_normalize_enqueues_and_awaits_the_job(monkeypatch, downloader_env, tmp_path):
+    db, downloader, _videos_dir = downloader_env
+    source = tmp_path / "in.mkv"
+    source.write_bytes(b"")
+    output = tmp_path / "out.mp4"
+
+    spawned = []
+    monkeypatch.setattr(
+        downloader, "_normalize_media_for_ios_sync", lambda p: spawned.append(p)
+    )
+
+    async def finish_the_job_out_of_band():
+        await asyncio.sleep(0)
+        job = db.claim_job()
+        db.finish_job(job["id"], "done", result={"output_path": str(output)})
+
+    result, _ = await asyncio.gather(
+        downloader._normalize_media_for_ios(source, video_id=42),
+        finish_the_job_out_of_band(),
+    )
+
+    assert result == output
+    assert spawned == [], "the web process must not run ffmpeg itself"
+
+
+@pytest.mark.asyncio
+async def test_normalize_raises_when_the_job_fails(monkeypatch, downloader_env, tmp_path):
+    db, downloader, _videos_dir = downloader_env
+    source = tmp_path / "in.mkv"
+    source.write_bytes(b"")
+
+    async def fail_the_job():
+        await asyncio.sleep(0)
+        job = db.claim_job()
+        db.finish_job(job["id"], "failed", error_msg="bad codec")
+
+    with pytest.raises(RuntimeError, match="bad codec"):
+        await asyncio.gather(
+            downloader._normalize_media_for_ios(source, video_id=42),
+            fail_the_job(),
+        )
