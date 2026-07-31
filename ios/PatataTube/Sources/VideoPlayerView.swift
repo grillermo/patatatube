@@ -160,6 +160,10 @@ struct VideoPlayerView: View {
             orderPosition = 0
         }
         activateAudioSession()
+        // Before the URL is built, not after it fails: a dead proxy makes
+        // `offlineHLSURL` hand out an address nothing answers on, and AVPlayer
+        // reports that as a 12s buffer followed by -1004.
+        await model.streamProxy.ensureRunning()
         guard let (item, source) = playerItemWithSource(for: video) else { return }
         let player = AVPlayer(playerItem: item)
         player.allowsExternalPlayback = true

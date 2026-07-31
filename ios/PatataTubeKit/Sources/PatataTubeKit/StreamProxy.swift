@@ -16,7 +16,16 @@ public final class StreamProxy: @unchecked Sendable {
     private let lock = NSLock()
     private var _port: UInt16?
     private var serverTask: Task<Void, Never>?
-    private var server: HTTPServer?
+    /// Not private so tests can kill the listener the way iOS does — out from
+    /// under the proxy, without going through `stop()`.
+    var server: HTTPServer?
+    /// Loopback liveness probe. Separate from `session`, which callers replace
+    /// with a mock protocol for the upstream side.
+    private let probeSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 2
+        return URLSession(configuration: configuration)
+    }()
     /// Video/version scope to its latest fetched media-playlist hash.
     private var currentHash: [PlaylistScope: String] = [:]
     /// Playlists fetched before `video.m3u8` establishes their package hash.
@@ -64,8 +73,23 @@ public final class StreamProxy: @unchecked Sendable {
             await self?.traced("offline", request) { await self?.handleOffline(request) }
                 ?? HTTPResponse(statusCode: .notFound)
         }
+        // Untraced: `ensureRunning` hits this before every play, and those
+        // records would drown the ones that describe actual playback.
+        await server.appendRoute(HTTPRoute("GET /\(secret)/health")) { _ in
+            HTTPResponse(statusCode: .ok)
+        }
         self.server = server
-        serverTask = Task { try? await server.run() }
+        serverTask = Task { [weak self] in
+            do {
+                try await server.run()
+            } catch {
+                DevLog.event(.proxy, "proxy run failed", ["err": "\(error)"])
+            }
+            // `run()` returning means the listener is gone. Clearing `port` is
+            // what turns a silently dead proxy into a nil URL — which the URL
+            // builders already log — instead of a connection refused 12s later.
+            self?.serverDidExit(server)
+        }
         do {
             try await server.waitUntilListening()
             if case let .ip4(_, port: listeningPort)? = await server.listeningAddress {
@@ -78,6 +102,42 @@ public final class StreamProxy: @unchecked Sendable {
             port = nil
         }
         DevLog.event(.proxy, "proxy started", ["port": port.map(String.init) ?? "nil"])
+    }
+
+    /// Rebinds the proxy when it is no longer serving. Cheap and idempotent, so
+    /// callers can put it in front of every playback.
+    ///
+    /// The app is suspended and resumed far more often than it is launched, and
+    /// iOS reclaims the listening socket while it is away. Without this the
+    /// stale `port` survives the socket, every proxied URL keeps pointing at a
+    /// dead address, and videos that are fully on disk fail to play until the
+    /// app is relaunched.
+    public func ensureRunning() async {
+        if await isServing() { return }
+        DevLog.event(.proxy, "proxy not serving — restarting", [
+            "port": port.map(String.init) ?? "nil",
+        ])
+        await stop()
+        await start()
+    }
+
+    /// One loopback round-trip. A non-nil `port` proves only that we bound one
+    /// once; the socket can die without `run()` ever returning, so liveness has
+    /// to be asked of the socket itself.
+    private func isServing() async -> Bool {
+        guard let port,
+              let url = URL(string: "http://127.0.0.1:\(port)/\(secret)/health")
+        else { return false }
+        guard let (_, response) = try? await probeSession.data(from: url) else { return false }
+        return (response as? HTTPURLResponse)?.statusCode == 200
+    }
+
+    /// Only the server that is still current may clear the port — a restart may
+    /// already have bound a new one by the time the old `run()` unwinds.
+    private func serverDidExit(_ exited: HTTPServer) {
+        guard server === exited else { return }
+        port = nil
+        DevLog.event(.proxy, "proxy listener exited — proxied URLs now nil")
     }
 
     public func stop() async {

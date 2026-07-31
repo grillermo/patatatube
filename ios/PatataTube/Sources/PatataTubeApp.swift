@@ -93,6 +93,10 @@ struct PatataTubeApp: App {
                     // whenever we come back to the foreground (and on launch).
                     if phase == .active {
                         model.cache.resumeInterrupted(bearerToken: model.credentials.token)
+                        // iOS reclaims the loopback listener while the app is
+                        // suspended, and a proxy that came back dead takes every
+                        // cached video's playback URL with it.
+                        Task { await model.streamProxy.ensureRunning() }
                     } else {
                         // Last chance to get pending records out before the app
                         // is suspended or killed.

@@ -428,6 +428,54 @@ final class StreamProxyTests: XCTestCase {
         XCTAssertEqual(response.statusCode, 200)
         XCTAssertEqual(cachedMaster, masterData)
     }
+
+    // MARK: - Listener liveness
+
+    /// A listener that dies on its own — iOS reclaiming the socket during
+    /// suspension — must not leave `port` advertising a dead address, or every
+    /// proxied URL (including the disk-only offline route) points at nothing.
+    func testServerExitClearsPortSoURLsGoNil() async throws {
+        XCTAssertNotNil(proxy.port)
+        await proxy.server?.stop()
+
+        let cleared = await pollUntil { self.proxy.port == nil }
+        XCTAssertTrue(cleared, "port stayed \(proxy.port.map(String.init) ?? "nil") after listener died")
+        XCTAssertNil(proxy.hlsURL(videoId: 5, versionId: nil))
+        XCTAssertNil(proxy.offlineHLSURL(videoId: 5, versionId: nil))
+    }
+
+    func testEnsureRunningRestartsAfterListenerDies() async throws {
+        await proxy.server?.stop()
+        _ = await pollUntil { self.proxy.port == nil }
+
+        await proxy.ensureRunning()
+
+        XCTAssertNotNil(proxy.port)
+        MockURLProtocol.stub(path: "/videos/5/hls/master.m3u8", data: Data("#EXTM3U\nvideo.m3u8\n".utf8))
+        let master = try XCTUnwrap(proxy.hlsURL(videoId: 5, versionId: nil))
+        let (_, response) = try await get(master)
+        XCTAssertEqual(response.statusCode, 200)
+    }
+
+    /// Called before every play, so the common case must be a no-op: rebinding a
+    /// healthy proxy would invalidate the URL of whatever is already playing.
+    func testEnsureRunningKeepsPortWhenAlreadyServing() async throws {
+        let port = try XCTUnwrap(proxy.port)
+        await proxy.ensureRunning()
+        XCTAssertEqual(proxy.port, port)
+    }
+
+    private func pollUntil(
+        timeout: TimeInterval = 2,
+        _ condition: () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return condition()
+    }
 }
 
 private func rangedResponse(
