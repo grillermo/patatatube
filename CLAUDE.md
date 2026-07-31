@@ -159,6 +159,13 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
 
 - `ios/PatataTubeKit/` — a local SwiftPM package holding all logic (`APIClient`, `CacheManager`, `VideoStore`, `Video`, `CredentialStore`). This is the testable core; build/isolate bugs here with `swift build`.
 - `ios/PatataTube/` — the SwiftUI app shell (`Sources/*.swift`), an XcodeGen target. `Video` decodes the server's snake_case JSON; `CacheManager` downloads MP4s for offline playback; `VideoStore` does optimistic classify/upload against `APIClient`.
+- **Download-all is bounded on the client too.** `withBoundedTaskGroup`
+  (PatataTubeKit) runs at most `CacheManager.maxConcurrentDownloads` operations
+  at once. This is not the same bound as `DownloadConcurrencyGate`, which covers
+  only the transfer: `download` calls `ensureReady` -> `POST /prepare` and then
+  polls every 2s *before* acquiring the gate. One task per video is what sent
+  226 concurrent prepare calls at the server on 2026-07-31. New bulk actions go
+  through the bounded window, not a bare `withTaskGroup`.
 
 ### Plex library (library rows)
 

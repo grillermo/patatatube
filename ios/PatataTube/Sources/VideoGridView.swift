@@ -2,6 +2,14 @@
 import SwiftUI
 import PatataTubeKit
 
+/// Confirmation payload for Download all. Carries the snapshot the dialog
+/// describes so the count shown and the work started cannot drift apart.
+struct DownloadAllRequest: Identifiable {
+    let id = UUID()
+    let targets: [Video]
+    let freeBytes: Int64?
+}
+
 struct VideoGridView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
@@ -16,6 +24,7 @@ struct VideoGridView: View {
     @State private var playing: PlaybackQueue?
     @State private var preparationTracker = VideoPreparationTracker()
     @State private var downloadingAll = false
+    @State private var pendingDownloadAll: DownloadAllRequest?
     @State private var errorBannerOffset: CGFloat = 0
 
     // Search: text updates immediately for the field, but filtering only
@@ -37,6 +46,15 @@ struct VideoGridView: View {
 
     static func shouldClearErrorBanner(currentText: String?, displayedText: String) -> Bool {
         currentText == displayedText
+    }
+
+    static func downloadAllMessage(count: Int, freeBytes: Int64?) -> String {
+        let videos = count == 1 ? "1 video" : "\(count) videos"
+        guard let freeBytes else {
+            return "Download \(videos) to this iPad?"
+        }
+        let free = ByteCountFormatter.string(fromByteCount: freeBytes, countStyle: .file)
+        return "Download \(videos) to this iPad? \(free) free."
     }
 
     static func downloadVideo(id: Int, versionID: Int?, videos: [Video]) -> Video? {
@@ -170,7 +188,7 @@ struct VideoGridView: View {
                         Divider()
 
                         Button {
-                            Task { await downloadAll() }
+                            presentDownloadAll()
                         } label: { Label("Download all", systemImage: "arrow.down.circle") }
                         .disabled(downloadingAll)
 
@@ -203,6 +221,23 @@ struct VideoGridView: View {
             .refreshable { await store.refreshLibrary() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
+            .alert(
+                "Download all",
+                isPresented: Binding(
+                    get: { pendingDownloadAll != nil },
+                    set: { if !$0 { pendingDownloadAll = nil } }
+                ),
+                presenting: pendingDownloadAll
+            ) { request in
+                Button("Cancel", role: .cancel) { pendingDownloadAll = nil }
+                Button("Download") {
+                    let targets = request.targets
+                    pendingDownloadAll = nil
+                    Task { await runDownloadAll(targets) }
+                }
+            } message: { request in
+                Text(Self.downloadAllMessage(count: request.targets.count, freeBytes: request.freeBytes))
+            }
             .fullScreenCover(item: $playing) { request in
                 VideoPlayerView(videos: request.videos, startIndex: request.startIndex,
                                 sleepMode: request.sleepMode, randomize: model.randomize(for: store.filter))
@@ -343,23 +378,36 @@ struct VideoGridView: View {
         VideoStore.isCancellation(error)
     }
 
-    /// Downloads every not-yet-cached video currently in view (respects the active filter).
-    private func downloadAll() async {
-        downloadingAll = true
-        defer { downloadingAll = false }
-        // Snapshot the not-cached targets, then let them run concurrently — the
-        // CacheManager gate bounds how many actually download at once.
-        let targets = store.videos.filter {
+    /// Collects the not-yet-cached videos currently on screen and asks for
+    /// confirmation. Filters `filteredVideos`, not `store.videos`: the grid
+    /// renders the search-filtered list, and a dialog announcing a count has to
+    /// match what the user is looking at.
+    private func presentDownloadAll() {
+        let targets = filteredVideos.filter {
             model.cache.state(for: $0.id, versionId: $0.chosenVersionId) == .notCached
         }
-        // Bulk priority: these queue behind any interactive tap on the server.
-        // NOTE: the CacheManager gate bounds the transfers, not these prepare
-        // calls — ensureReady runs before the gate is acquired. The server-side
-        // job queue is what bounds the conversions.
-        await withTaskGroup(of: Void.self) { group in
-            for video in targets {
-                group.addTask { await download(video, bulk: true) }
-            }
+        guard !targets.isEmpty else { return }
+        pendingDownloadAll = DownloadAllRequest(
+            targets: targets,
+            freeBytes: DeviceStorage.availableBytes(at: model.cache.cacheRootURL)
+        )
+    }
+
+    private func runDownloadAll(_ targets: [Video]) async {
+        downloadingAll = true
+        defer { downloadingAll = false }
+        // The CacheManager gate bounds transfers, NOT this. `download` calls
+        // ensureReady -> POST /prepare and then polls every 2s, all before the
+        // gate is acquired. One task per video is what sent 226 simultaneous
+        // prepare calls at the server on 2026-07-31.
+        await withBoundedTaskGroup(
+            limit: model.cache.maxConcurrentDownloads,
+            over: targets
+        ) { video in
+            // Re-checked per item at seed time, not snapshotted: an item can
+            // sit queued while its cache state changes underneath it.
+            guard model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached else { return }
+            await download(video, bulk: true)
         }
     }
 
