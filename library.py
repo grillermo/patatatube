@@ -140,6 +140,19 @@ def conversion_target(source: Path, existing_converted_path: str | None = None) 
     return target
 
 
+def temp_target_for(video_id: int) -> Path | None:
+    """The hidden temp file a conversion of this row writes before os.replace.
+
+    Shared by convert_library_video and converter.py's orphan cleanup so the
+    path has exactly one definition.
+    """
+    version = db.get_video_version(video_id)
+    if not version:
+        return None
+    target = conversion_target(Path(version["source_path"]), version.get("converted_path"))
+    return target.with_name("." + target.name)
+
+
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 
 
@@ -186,6 +199,7 @@ def convert_library_video(video_id: int) -> None:
         target = conversion_target(source, version.get("converted_path"))
         # Hidden temp file in the same directory: invisible to Plex and our scans,
         # and os.replace stays atomic because it is on the same volume.
+        # Shared with converter.py's orphan cleanup via temp_target_for().
         tmp = target.with_name("." + target.name)
         map_args = ["-map", "0:v:0"]
         for index in plan.audio_maps:

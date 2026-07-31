@@ -172,6 +172,24 @@ def test_conversion_target_collision_falls_back(tmp_path):
     assert library.conversion_target(other) == tmp_path / "film.ios.mp4"
 
 
+def test_temp_target_for_is_the_hidden_sibling_of_the_conversion_target(monkeypatch, tmp_path):
+    import db
+    source = tmp_path / "movie.mkv"
+    source.write_bytes(b"")
+    monkeypatch.setattr(db, "get_video_version", lambda video_id, version_id=None: {
+        "id": 1, "source_path": str(source), "converted_path": None,
+    })
+
+    assert library.temp_target_for(42) == tmp_path / ".movie.mp4"
+
+
+def test_temp_target_for_returns_none_when_the_version_is_gone(monkeypatch):
+    import db
+    monkeypatch.setattr(db, "get_video_version", lambda video_id, version_id=None: None)
+
+    assert library.temp_target_for(42) is None
+
+
 def test_width_exactly_2266_passthrough():
     """Width exactly at IPAD_MAX_WIDTH boundary should passthrough when conditions met."""
     p = probe(container="mov,mp4,m4a,3gp,3g2,mj2", vcodec="h264", acodec="aac", width=2266)
