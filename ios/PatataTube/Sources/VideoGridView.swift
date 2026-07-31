@@ -289,12 +289,12 @@ struct VideoGridView: View {
     /// Downloads a video for offline playback. Returns true only when the MP4
     /// actually landed on disk, so the caller's checkmark reflects reality.
     @discardableResult
-    private func download(_ video: Video) async -> Bool {
+    private func download(_ video: Video, bulk: Bool = false) async -> Bool {
         var target = video
         if video.isLibrary, video.status != "done" {
             do {
                 target = try await preparationTracker.track(videoID: video.id) {
-                    try await store.ensureReady(id: video.id)
+                    try await store.ensureReady(id: video.id, bulk: bulk)
                 }
             } catch {
                 store.errorText = String(describing: error)
@@ -352,9 +352,13 @@ struct VideoGridView: View {
         let targets = store.videos.filter {
             model.cache.state(for: $0.id, versionId: $0.chosenVersionId) == .notCached
         }
+        // Bulk priority: these queue behind any interactive tap on the server.
+        // NOTE: the CacheManager gate bounds the transfers, not these prepare
+        // calls — ensureReady runs before the gate is acquired. The server-side
+        // job queue is what bounds the conversions.
         await withTaskGroup(of: Void.self) { group in
             for video in targets {
-                group.addTask { await download(video) }
+                group.addTask { await download(video, bulk: true) }
             }
         }
     }

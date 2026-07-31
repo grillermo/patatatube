@@ -79,7 +79,7 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         chosenAudio.append((id, lang))
         return chooseAudioResult
     }
-    func prepare(id: Int) async throws -> String { prepareResult }
+    func prepare(id: Int, bulk: Bool) async throws -> String { prepareResult }
     func video(id: Int) async throws -> Video {
         videoCalls += 1
         return videoResults.isEmpty ? makeVideo(id: id) : videoResults[min(videoCalls, videoResults.count) - 1]

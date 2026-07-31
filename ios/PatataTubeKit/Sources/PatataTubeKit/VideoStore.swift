@@ -241,8 +241,8 @@ public final class VideoStore: ObservableObject {
 
     /// Kicks off server-side conversion (if needed) and polls until the video
     /// is streamable. Throws PrepareError when the server reports a failed conversion.
-    public func ensureReady(id: Int, pollIntervalSeconds: Double = 2.0) async throws -> Video {
-        let status = try await api.prepare(id: id)
+    public func ensureReady(id: Int, bulk: Bool = false, pollIntervalSeconds: Double = 2.0) async throws -> Video {
+        let status = try await api.prepare(id: id, bulk: bulk)
         if status == "done" {
             return try await api.video(id: id)
         }

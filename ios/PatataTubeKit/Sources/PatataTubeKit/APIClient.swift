@@ -45,7 +45,7 @@ public protocol VideoAPI: Sendable {
     func upload(url: String) async throws -> Int
     func delete(id: Int) async throws -> Bool
     func scanLibrary() async throws -> ScanResult
-    func prepare(id: Int) async throws -> String
+    func prepare(id: Int, bulk: Bool) async throws -> String
     func video(id: Int) async throws -> Video
     func imageData(path: String) async throws -> Data
 }
@@ -141,8 +141,9 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         catch { throw APIError.decoding(String(describing: error)) }
     }
 
-    public func prepare(id: Int) async throws -> String {
-        let data = try await authedPost("api/videos/\(id)/prepare", body: [:])
+    public func prepare(id: Int, bulk: Bool = false) async throws -> String {
+        let body: [String: String] = bulk ? ["priority": "bulk"] : [:]
+        let data = try await authedPost("api/videos/\(id)/prepare", body: body)
         struct Result: Decodable { let status: String }
         do { return try JSONDecoder().decode(Result.self, from: data).status }
         catch { throw APIError.decoding(String(describing: error)) }

@@ -26,7 +26,7 @@ private final class PromoteAPI: VideoAPI, @unchecked Sendable {
     func upload(url: String) async throws -> Int { 0 }
     func delete(id: Int) async throws -> Bool { true }
     func scanLibrary() async throws -> ScanResult { ScanResult(added: 0, updated: 0, skipped: 0) }
-    func prepare(id: Int) async throws -> String { "done" }
+    func prepare(id: Int, bulk: Bool) async throws -> String { "done" }
     func video(id: Int) async throws -> Video { videosToReturn[0] }
     func imageData(path: String) async throws -> Data { Data() }
 }
