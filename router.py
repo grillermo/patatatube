@@ -144,6 +144,9 @@ class AudioRequest(BaseModel):
 
 class PrepareRequest(BaseModel):
     audio_lang: str | None = None
+    # "bulk" is the iOS Download-all path. Anything else, including omitted,
+    # is interactive and jumps ahead of a bulk drain.
+    priority: str | None = None
 
 
 def _print_bad_request_details(request: Request, body: UploadRequest):
@@ -598,7 +601,7 @@ def _resolve_hls_source(video: dict, request: Request) -> Path:
 
 @router.get("/videos/{video_id}/hls/{asset_path:path}")
 async def hls_asset(
-    video_id: int, asset_path: str, request: Request, background_tasks: BackgroundTasks
+    video_id: int, asset_path: str, request: Request
 ):
     _check_token_or_query(request)
     video = db.get_video(video_id)
@@ -618,16 +621,15 @@ async def hls_asset(
         return FileResponse(target, media_type=media_type)
 
     # Nothing on disk yet. Only the master request triggers packaging; segment
-    # and subtitle requests before readiness are simply 404. Packaging runs off
-    # the event loop and the client polls the master URL until it is 200.
-    #
-    # Return a real 409 Response (not raise): FastAPI only runs the injected
-    # BackgroundTasks when the endpoint *returns* a response — a raised
-    # HTTPException drops them, so the prep task would never fire.
+    # and subtitle requests before readiness are simply 404. Packaging is queued
+    # for converter.py and the client polls the master URL until it is 200.
     if asset_path == "master.m3u8":
         if video.get("hls_status") != "converting":
             db.set_hls_status(video_id, "converting")
-            background_tasks.add_task(hls.prepare, video_id, str(source))
+        db.enqueue_job(
+            "hls", video_id, priority=db.PRIORITY_INTERACTIVE,
+            payload={"source_path": str(source)},
+        )
         return JSONResponse({"detail": "HLS preparing"}, status_code=409)
 
     raise HTTPException(status_code=404, detail="Not found")
@@ -894,7 +896,6 @@ async def api_video(video_id: int, request: Request):
 async def api_prepare_video(
     video_id: int,
     request: Request,
-    background_tasks: BackgroundTasks,
     body: PrepareRequest | None = None,
 ):
     _check_token(request)
@@ -958,13 +959,17 @@ async def api_prepare_video(
     # Write "converting" now, before the first await, so a second concurrent
     # request for this same video reads "converting" on its own db.get_video
     # call above and takes the no-op 202 early-return instead of racing
-    # through to a second probe + queued background task. (Not airtight
+    # through to a second probe + queued job. (Not airtight
     # against two requests reading the old status in the exact same instant
     # before either writes, but this closes the practical window between
     # overlapping requests a few milliseconds apart.)
     db.set_library_state(video_id, "converting", version_id=version["id"])
 
-    background_tasks.add_task(library.convert_library_video, video_id)
+    # converter.py is the only process that spawns ffmpeg. Enqueueing an
+    # already-pending job is a no-op, which is why the comment above about
+    # racing concurrent requests no longer needs to be airtight.
+    priority = db.PRIORITY_BULK if body and body.priority == "bulk" else db.PRIORITY_INTERACTIVE
+    db.enqueue_job("convert", video_id, version_id=version["id"], priority=priority)
     return JSONResponse({"status": "converting"}, status_code=202)
 
 

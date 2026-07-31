@@ -1,5 +1,6 @@
 # tests/test_api.py
 import importlib
+import itertools
 import json
 from pathlib import Path
 
@@ -842,6 +843,60 @@ def make_library_row(tmp_path, name="ep.mkv"):
     return vid, src
 
 
+_queued_library_ids = itertools.count()
+
+
+def _queued_library_row(tmp_path):
+    import db
+
+    item_id = next(_queued_library_ids)
+    src = tmp_path / f"queued-{item_id}.mkv"
+    src.write_bytes(b"fake")
+    vid, _ = db.upsert_library_video({
+        **LIB_ITEM_API,
+        "source_path": str(src),
+        "plex_rating_key": f"queued-{item_id}",
+    })
+    return vid
+
+
+def _library_row_needing_conversion(tmp_path, monkeypatch):
+    import library
+
+    monkeypatch.setattr(library, "probe_source", lambda p: {
+        "streams": [{
+            "codec_type": "video", "codec_name": "hevc", "width": 1920,
+            "codec_tag_string": "[0][0][0][0]",
+        }],
+        "format": {"format_name": "matroska,webm"},
+    })
+    return _queued_library_row(tmp_path)
+
+
+def _library_row_that_passes_through(tmp_path, monkeypatch):
+    import library
+
+    monkeypatch.setattr(library, "probe_source", lambda p: {
+        "streams": [
+            {
+                "codec_type": "video", "codec_name": "h264", "width": 1920,
+                "codec_tag_string": "avc1",
+            },
+            {"codec_type": "audio", "codec_name": "aac", "channels": 2},
+        ],
+        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
+    })
+    return _queued_library_row(tmp_path)
+
+
+def _ready_library_row(tmp_path):
+    import db
+
+    vid = _queued_library_row(tmp_path)
+    db.set_library_state(vid, "done")
+    return vid
+
+
 def _seed_multi_audio_movie(tmp_path, converted_langs='["eng", "spa"]', status="done"):
     import db
 
@@ -1100,9 +1155,85 @@ def test_prepare_queues_conversion(client, tmp_path, monkeypatch):
     resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
     assert resp.status_code == 202
     assert resp.json() == {"status": "converting"}
-    assert converted == [vid]  # TestClient runs background tasks before returning
     import db
+    assert converted == []
+    assert db.queued_job_count() == 1
     assert db.get_video(vid)["status"] == "converting"
+
+
+def test_prepare_enqueues_instead_of_spawning(client, tmp_path, monkeypatch):
+    import db
+    import library
+
+    spawned = []
+    monkeypatch.setattr(library, "convert_library_video", lambda vid: spawned.append(vid))
+    video_id = _library_row_needing_conversion(tmp_path, monkeypatch)
+
+    response = client.post(
+        f"/api/videos/{video_id}/prepare", headers=AUTH, json={}
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "converting"
+    assert spawned == []
+    assert db.queued_job_count() == 1
+
+
+def test_prepare_passthrough_creates_no_job(client, tmp_path, monkeypatch):
+    import db
+
+    video_id = _library_row_that_passes_through(tmp_path, monkeypatch)
+
+    response = client.post(f"/api/videos/{video_id}/prepare", headers=AUTH, json={})
+
+    assert response.json()["status"] == "done"
+    assert db.queued_job_count() == 0
+
+
+def test_bulk_prepare_is_queued_behind_interactive(client, tmp_path, monkeypatch):
+    import db
+
+    bulk_id = _library_row_needing_conversion(tmp_path, monkeypatch)
+    interactive_id = _library_row_needing_conversion(tmp_path, monkeypatch)
+
+    client.post(
+        f"/api/videos/{bulk_id}/prepare", headers=AUTH, json={"priority": "bulk"}
+    )
+    client.post(f"/api/videos/{interactive_id}/prepare", headers=AUTH, json={})
+
+    assert db.claim_job()["video_id"] == interactive_id
+    assert db.claim_job()["video_id"] == bulk_id
+
+
+def test_prepare_storm_spawns_no_ffmpeg(client, tmp_path, monkeypatch):
+    """The incident, as a test: many prepares, zero ffmpeg from the web process."""
+    import db
+    import library
+
+    spawned = []
+    monkeypatch.setattr(library, "convert_library_video", lambda vid: spawned.append(vid))
+    video_ids = [
+        _library_row_needing_conversion(tmp_path, monkeypatch) for _ in range(25)
+    ]
+
+    for video_id in video_ids:
+        client.post(
+            f"/api/videos/{video_id}/prepare", headers=AUTH, json={"priority": "bulk"}
+        )
+
+    assert spawned == []
+    assert db.queued_job_count() == 25
+
+
+def test_repeated_prepare_for_one_video_queues_one_job(client, tmp_path, monkeypatch):
+    import db
+
+    video_id = _library_row_needing_conversion(tmp_path, monkeypatch)
+
+    client.post(f"/api/videos/{video_id}/prepare", headers=AUTH, json={})
+    client.post(f"/api/videos/{video_id}/prepare", headers=AUTH, json={})
+
+    assert db.queued_job_count() == 1
 
 
 def test_prepare_while_converting_is_noop_202(client, tmp_path, monkeypatch):
@@ -1197,7 +1328,10 @@ def test_prepare_reconverts_legacy_or_missing_selected_audio(client, tmp_path, m
     resp = client.post(f"/api/videos/{vid}/prepare", json={"audio_lang": "spa"}, headers=AUTH)
 
     assert resp.status_code == 202
-    assert converted == [vid]
+    assert converted == []
+    job = db.claim_job()
+    assert job["kind"] == "convert"
+    assert job["video_id"] == vid
     assert invalidated == [vid]
     assert db.get_video(vid)["audio_lang"] == "spa"
 
@@ -1456,18 +1590,39 @@ def test_hls_master_409_when_source_not_ready(client):
     assert resp.status_code == 409
 
 
+def test_cold_master_playlist_enqueues_an_hls_job(client, tmp_path, monkeypatch):
+    import db
+    import hls
+
+    packaged = []
+    monkeypatch.setattr(hls, "prepare", lambda vid, src: packaged.append(vid))
+    video_id = _ready_library_row(tmp_path)
+
+    response = client.get(f"/videos/{video_id}/hls/master.m3u8", headers=AUTH)
+
+    assert response.status_code == 409
+    assert packaged == []
+    job = db.claim_job()
+    assert job["kind"] == "hls"
+    assert job["payload"]["source_path"]
+
+
 def test_hls_master_prepares_then_serves_tree(client, monkeypatch, tmp_path):
+    import db
     import hls
 
     monkeypatch.setattr(hls, "HLS_DIR", tmp_path / "hls")
     monkeypatch.setattr(hls, "build_hls_package", _fake_build)
     vid, p = _seed_done_download()
     try:
-        # First hit: source ready but no package -> schedules prep, 409.
+        # First hit: source ready but no package -> queues prep, 409.
         first = client.get(f"/videos/{vid}/hls/master.m3u8", headers=AUTH)
         assert first.status_code == 409
 
-        # Background prep has now run (TestClient runs tasks post-response).
+        job = db.claim_job()
+        assert job["kind"] == "hls"
+        hls.prepare(job["video_id"], job["payload"]["source_path"])
+
         master = client.get(f"/videos/{vid}/hls/master.m3u8", headers=AUTH)
         assert master.status_code == 200
         assert master.headers["content-type"].startswith("application/vnd.apple.mpegurl")
