@@ -178,23 +178,9 @@ def test_sweep_marks_exhausted_jobs_failed(tmp_db):
     assert "attempts" in tmp_db.get_job(job["id"])["error_msg"]
 
 
-def test_terminal_exhausted_jobs_excludes_failure_superseded_by_newer_work(
-    tmp_db, monkeypatch
+def test_recover_exhausted_convert_versions_ignores_failure_superseded_by_newer_work(
+    tmp_db, monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(tmp_db, "MAX_JOB_ATTEMPTS", 1)
-    old_id = tmp_db.enqueue_job("convert", video_id=1, version_id=7)
-    tmp_db.claim_job()
-    tmp_db.requeue_job(old_id)
-    tmp_db.sweep_exhausted_jobs()
-
-    assert [job["id"] for job in tmp_db.terminal_exhausted_jobs()] == [old_id]
-
-    assert tmp_db.enqueue_job("convert", video_id=1, version_id=7) is not None
-
-    assert tmp_db.terminal_exhausted_jobs() == []
-
-
-def test_terminal_exhausted_job_resolves_legacy_version_once(tmp_db, monkeypatch, tmp_path):
     source = tmp_path / "movie.mkv"
     video_id, _ = tmp_db.upsert_library_video({
         "source_path": str(source),
@@ -204,16 +190,42 @@ def test_terminal_exhausted_job_resolves_legacy_version_once(tmp_db, monkeypatch
         "plex_rating_key": "1",
     })
     version = tmp_db.get_video_versions(video_id)[0]
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
+    monkeypatch.setattr(tmp_db, "MAX_JOB_ATTEMPTS", 1)
+    old_id = tmp_db.enqueue_job("convert", video_id=video_id, version_id=version["id"])
+    tmp_db.claim_job()
+    tmp_db.requeue_job(old_id)
+    tmp_db.sweep_exhausted_jobs()
+
+    assert tmp_db.enqueue_job(
+        "convert", video_id=video_id, version_id=version["id"]
+    ) is not None
+
+    assert tmp_db.recover_exhausted_convert_versions() == 0
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
+
+
+def test_recover_exhausted_convert_versions_ignores_legacy_zero_id(
+    tmp_db, monkeypatch, tmp_path
+):
+    source = tmp_path / "movie.mkv"
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(source),
+        "title": "Movie",
+        "classification": "movies",
+        "summary": None,
+        "plex_rating_key": "1",
+    })
+    version = tmp_db.get_video_versions(video_id)[0]
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
     monkeypatch.setattr(tmp_db, "MAX_JOB_ATTEMPTS", 1)
     job_id = tmp_db.enqueue_job("convert", video_id=video_id)
     tmp_db.claim_job()
     tmp_db.requeue_job(job_id)
     tmp_db.sweep_exhausted_jobs()
 
-    job = tmp_db.terminal_exhausted_jobs()[0]
-
-    assert job["version_id"] == 0
-    assert job["resolved_version_id"] == version["id"]
+    assert tmp_db.recover_exhausted_convert_versions() == 0
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
 
 
 def test_queued_job_count_excludes_running_and_finished(tmp_db):

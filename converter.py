@@ -31,7 +31,10 @@ FFMPEG_JOB_LIMIT = _positive_int_env("FFMPEG_JOB_LIMIT", 1)
 
 
 def _handle_convert(job: dict) -> None:
-    library.convert_library_video(job["video_id"], raise_errors=True)
+    version_id = job.get("version_id") or 0
+    if version_id <= 0:
+        raise ValueError("convert job requires a positive version_id")
+    library.convert_library_video(job["video_id"], version_id, raise_errors=True)
 
 
 def _handle_hls(job: dict) -> None:
@@ -90,7 +93,9 @@ def cleanup_orphan(job: dict) -> None:
     """
     try:
         if job["kind"] == "convert":
-            temp = library.temp_target_for(job["video_id"])
+            temp = library.temp_target_for(
+                job["video_id"], version_id=job.get("version_id") or 0
+            )
             if temp is not None:
                 Path(temp).unlink(missing_ok=True)
         elif job["kind"] == "hls":
@@ -118,21 +123,7 @@ def recover_orphans() -> None:
         cleanup_orphan(orphan)
 
     swept = db.sweep_exhausted_jobs()
-    for job in db.terminal_exhausted_jobs():
-        if job["kind"] != "convert":
-            continue
-        version_id = job["resolved_version_id"]
-        if version_id is None:
-            continue
-        version = db.get_video_version(job["video_id"], version_id)
-        if version is None or version["status"] != "converting":
-            continue
-        db.set_library_state(
-            job["video_id"],
-            "unconverted",
-            error_msg=job["error_msg"],
-            version_id=version_id,
-        )
+    db.recover_exhausted_convert_versions()
 
     if swept:
         print(f"[job] failed {swept} job(s) past {db.MAX_JOB_ATTEMPTS} attempts", flush=True)

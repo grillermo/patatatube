@@ -1,5 +1,6 @@
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -68,7 +69,8 @@ def test_convert_failure_resets_video_and_marks_job_failed(tmp_db, monkeypatch, 
         raise RuntimeError("convert exploded")
 
     monkeypatch.setattr(library, "_run_ffmpeg", fail_convert)
-    tmp_db.enqueue_job("convert", video_id=video_id)
+    version_id = tmp_db.get_video_versions(video_id)[0]["id"]
+    tmp_db.enqueue_job("convert", video_id=video_id, version_id=version_id)
 
     converter.run_job(tmp_db.claim_job())
 
@@ -200,9 +202,15 @@ def test_cleanup_orphan_deletes_a_convert_temp_file(tmp_db, monkeypatch, tmp_pat
 
     temp = tmp_path / ".movie.mp4"
     temp.write_bytes(b"partial")
-    monkeypatch.setattr(library, "temp_target_for", lambda video_id: temp)
+    monkeypatch.setattr(
+        library,
+        "temp_target_for",
+        lambda video_id, version_id=None: temp if version_id == 7 else None,
+    )
 
-    converter.cleanup_orphan({"kind": "convert", "video_id": 42, "payload": None})
+    converter.cleanup_orphan({
+        "kind": "convert", "video_id": 42, "version_id": 7, "payload": None,
+    })
 
     assert not temp.exists()
 
@@ -217,6 +225,113 @@ def test_cleanup_orphan_invalidates_partial_hls_output(tmp_db, monkeypatch):
     converter.cleanup_orphan({"kind": "hls", "video_id": 42, "payload": None})
 
     assert invalidated == [42]
+
+
+def test_convert_job_uses_persisted_version_after_selection_changes(
+    tmp_db, monkeypatch, tmp_path
+):
+    import converter
+    import library
+
+    source_1080 = tmp_path / "movie-1080.mkv"
+    source_4k = tmp_path / "movie-4k.mkv"
+    source_1080.write_bytes(b"1080")
+    source_4k.write_bytes(b"4k")
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(source_1080),
+        "title": "Movie",
+        "classification": "movies",
+        "summary": None,
+        "plex_rating_key": "1",
+        "versions": [
+            {"source_path": str(source_1080), "label": "1080p"},
+            {"source_path": str(source_4k), "label": "4K"},
+        ],
+    })
+    first, chosen = tmp_db.get_video_versions(video_id)
+    assert tmp_db.set_chosen_version(video_id, chosen["id"])
+    monkeypatch.setattr(library, "probe_source", lambda path: {
+        "format": {"format_name": "matroska"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "hevc", "width": 1920},
+            {"codec_type": "audio", "codec_name": "eac3"},
+        ],
+    })
+
+    def write_output(cmd):
+        tmp_path = Path(cmd[-1])
+        tmp_path.write_bytes(b"converted")
+
+    monkeypatch.setattr(library, "_run_ffmpeg", write_output)
+    tmp_db.enqueue_job("convert", video_id=video_id, version_id=first["id"])
+
+    converter.run_job(tmp_db.claim_job())
+
+    refreshed = {version["id"]: version for version in tmp_db.get_video_versions(video_id)}
+    assert refreshed[first["id"]]["status"] == "done"
+    assert refreshed[first["id"]]["converted_path"] == str(tmp_path / "movie-1080.mp4")
+    assert refreshed[chosen["id"]]["status"] == "unconverted"
+    assert tmp_db.get_video(video_id)["chosen_version_id"] == chosen["id"]
+    assert tmp_db.get_job(1)["status"] == "done"
+
+
+def test_convert_job_without_version_id_does_not_touch_chosen_version(
+    tmp_db, tmp_path
+):
+    import converter
+
+    source = tmp_path / "movie.mkv"
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(source),
+        "title": "Movie",
+        "classification": "movies",
+        "summary": None,
+        "plex_rating_key": "1",
+    })
+    version = tmp_db.get_video_versions(video_id)[0]
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
+    tmp_db.enqueue_job("convert", video_id=video_id)
+
+    converter.run_job(tmp_db.claim_job())
+
+    assert tmp_db.get_job(1)["status"] == "failed"
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
+
+
+def test_cleanup_orphan_uses_persisted_version_after_selection_changes(tmp_db, tmp_path):
+    import converter
+
+    source_1080 = tmp_path / "movie-1080.mkv"
+    source_4k = tmp_path / "movie-4k.mkv"
+    source_1080.write_bytes(b"1080")
+    source_4k.write_bytes(b"4k")
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(source_1080),
+        "title": "Movie",
+        "classification": "movies",
+        "summary": None,
+        "plex_rating_key": "1",
+        "versions": [
+            {"source_path": str(source_1080), "label": "1080p"},
+            {"source_path": str(source_4k), "label": "4K"},
+        ],
+    })
+    first, chosen = tmp_db.get_video_versions(video_id)
+    assert tmp_db.set_chosen_version(video_id, chosen["id"])
+    first_temp = tmp_path / ".movie-1080.mp4"
+    chosen_temp = tmp_path / ".movie-4k.mp4"
+    first_temp.write_bytes(b"first partial")
+    chosen_temp.write_bytes(b"chosen partial")
+
+    converter.cleanup_orphan({
+        "kind": "convert",
+        "video_id": video_id,
+        "version_id": first["id"],
+        "payload": None,
+    })
+
+    assert not first_temp.exists()
+    assert chosen_temp.exists()
 
 
 def test_exhausted_convert_orphan_resets_its_version(tmp_db, monkeypatch, tmp_path):

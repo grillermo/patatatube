@@ -1062,41 +1062,50 @@ def sweep_exhausted_jobs() -> int:
         return cursor.rowcount
 
 
-def terminal_exhausted_jobs() -> list[dict]:
-    """Latest failed max-attempt job for each work key, for state reconciliation."""
-    with _conn() as conn:
+def recover_exhausted_convert_versions() -> int:
+    """Atomically reset versions whose latest explicit convert job is exhausted."""
+    recovered = 0
+    with _write_conn() as conn:
         rows = conn.execute(
             """
-            SELECT job.*,
-                   CASE
-                       WHEN job.kind = 'convert'
-                           THEN COALESCE(NULLIF(job.version_id, 0), video.chosen_version_id)
-                       ELSE job.version_id
-                   END AS resolved_version_id
+            SELECT job.video_id, job.version_id, job.error_msg
             FROM jobs AS job
-            LEFT JOIN videos AS video ON video.id = job.video_id
-            WHERE job.status = 'failed'
+            JOIN video_versions AS version
+              ON version.video_id = job.video_id
+             AND version.id = job.version_id
+            WHERE job.kind = 'convert'
+              AND job.version_id > 0
+              AND job.status = 'failed'
               AND job.attempts >= ?
+              AND version.status = 'converting'
               AND NOT EXISTS (
                   SELECT 1
                   FROM jobs AS newer
                   WHERE newer.kind = job.kind
                     AND newer.video_id = job.video_id
-                    AND (
-                        (
-                            job.kind = 'convert'
-                            AND COALESCE(NULLIF(newer.version_id, 0), video.chosen_version_id, 0)
-                                = COALESCE(NULLIF(job.version_id, 0), video.chosen_version_id, 0)
-                        )
-                        OR (job.kind != 'convert' AND newer.version_id = job.version_id)
-                    )
+                    AND newer.version_id = job.version_id
                     AND newer.id > job.id
               )
             ORDER BY job.id
             """,
             (MAX_JOB_ATTEMPTS,),
         ).fetchall()
-        return [_job_row(row) for row in rows]
+        for row in rows:
+            cursor = conn.execute(
+                """
+                UPDATE video_versions
+                SET status = 'unconverted',
+                    converted_path = NULL,
+                    converted_langs = NULL,
+                    error_msg = ?
+                WHERE video_id = ? AND id = ? AND status = 'converting'
+                """,
+                (row["error_msg"], row["video_id"], row["version_id"]),
+            )
+            if cursor.rowcount:
+                _sync_video_from_chosen(conn, row["video_id"])
+                recovered += 1
+    return recovered
 
 
 def queued_job_count() -> int:

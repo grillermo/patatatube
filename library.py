@@ -140,13 +140,13 @@ def conversion_target(source: Path, existing_converted_path: str | None = None) 
     return target
 
 
-def temp_target_for(video_id: int) -> Path | None:
+def temp_target_for(video_id: int, version_id: int | None = None) -> Path | None:
     """The hidden temp file a conversion of this row writes before os.replace.
 
     Shared by convert_library_video and converter.py's orphan cleanup so the
     path has exactly one definition.
     """
-    version = db.get_video_version(video_id)
+    version = db.get_video_version(video_id, version_id)
     if not version:
         return None
     target = conversion_target(Path(version["source_path"]), version.get("converted_path"))
@@ -167,7 +167,12 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         raise RuntimeError((proc.stdout or "").strip() or "ffmpeg failed while converting")
 
 
-def convert_library_video(video_id: int, *, raise_errors: bool = False) -> None:
+def convert_library_video(
+    video_id: int,
+    version_id: int | None = None,
+    *,
+    raise_errors: bool = False,
+) -> None:
     """Convert a library row's source to an iPad-ready sibling mp4.
 
     Runs synchronously (FastAPI executes sync background tasks on a thread).
@@ -178,7 +183,7 @@ def convert_library_video(video_id: int, *, raise_errors: bool = False) -> None:
     video = db.get_video(video_id)
     if not video or video.get("source") != "library":
         return
-    version = db.get_video_version(video_id)
+    version = db.get_video_version(video_id, version_id)
     if not version:
         return
 
