@@ -110,6 +110,34 @@ def worker_loop(stop: threading.Event, poll_interval: float = 1.0) -> None:
         run_job(job)
 
 
+def recover_orphans() -> None:
+    """Requeue crashed work, clean partials, and finalize exhausted versions."""
+    orphans = db.reset_orphan_jobs()
+    for orphan in orphans:
+        print(f"[job] requeued orphan kind={orphan['kind']} id={orphan['video_id']}", flush=True)
+        cleanup_orphan(orphan)
+
+    swept = db.sweep_exhausted_jobs()
+    for job in db.terminal_exhausted_jobs():
+        if job["kind"] != "convert":
+            continue
+        version_id = job["resolved_version_id"]
+        if version_id is None:
+            continue
+        version = db.get_video_version(job["video_id"], version_id)
+        if version is None or version["status"] != "converting":
+            continue
+        db.set_library_state(
+            job["video_id"],
+            "unconverted",
+            error_msg=job["error_msg"],
+            version_id=version_id,
+        )
+
+    if swept:
+        print(f"[job] failed {swept} job(s) past {db.MAX_JOB_ATTEMPTS} attempts", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--watch-pid", type=int)
@@ -120,12 +148,7 @@ def main() -> None:
 
     # Only this process runs jobs, so nothing can legitimately be 'running' at
     # our startup: anything still marked so is debris from a crash.
-    for orphan in db.reset_orphan_jobs():
-        print(f"[job] requeued orphan kind={orphan['kind']} id={orphan['video_id']}", flush=True)
-        cleanup_orphan(orphan)
-    swept = db.sweep_exhausted_jobs()
-    if swept:
-        print(f"[job] failed {swept} job(s) past {db.MAX_JOB_ATTEMPTS} attempts", flush=True)
+    recover_orphans()
 
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())

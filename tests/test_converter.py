@@ -217,3 +217,101 @@ def test_cleanup_orphan_invalidates_partial_hls_output(tmp_db, monkeypatch):
     converter.cleanup_orphan({"kind": "hls", "video_id": 42, "payload": None})
 
     assert invalidated == [42]
+
+
+def test_exhausted_convert_orphan_resets_its_version(tmp_db, monkeypatch, tmp_path):
+    import converter
+
+    source_1080 = tmp_path / "movie-1080.mkv"
+    source_4k = tmp_path / "movie-4k.mkv"
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(source_1080),
+        "title": "Movie",
+        "classification": "movies",
+        "summary": None,
+        "plex_rating_key": "1",
+        "versions": [
+            {"source_path": str(source_1080), "label": "1080p"},
+            {"source_path": str(source_4k), "label": "4K"},
+        ],
+    })
+    versions = tmp_db.get_video_versions(video_id)
+    first, exhausted = versions
+    tmp_db.set_library_state(video_id, "converting", version_id=first["id"])
+    tmp_db.set_library_state(video_id, "converting", version_id=exhausted["id"])
+    monkeypatch.setattr(tmp_db, "MAX_JOB_ATTEMPTS", 1)
+    tmp_db.enqueue_job("convert", video_id=video_id, version_id=exhausted["id"])
+    tmp_db.claim_job()
+
+    converter.recover_orphans()
+
+    refreshed = {version["id"]: version for version in tmp_db.get_video_versions(video_id)}
+    job = tmp_db.get_job(1)
+    video = tmp_db.get_video(video_id)
+    assert refreshed[first["id"]]["status"] == "converting"
+    assert refreshed[exhausted["id"]]["status"] == "unconverted"
+    assert refreshed[exhausted["id"]]["error_msg"] == "gave up after 1 attempts"
+    assert video["chosen_version_id"] == first["id"]
+    assert video["status"] == "converting"
+    assert video["error_msg"] is None
+    assert job["status"] == "failed"
+
+
+def test_recover_orphans_repairs_exhausted_version_after_interrupted_recovery(
+    tmp_db, monkeypatch, tmp_path
+):
+    import converter
+
+    source = tmp_path / "movie.mkv"
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(source),
+        "title": "Movie",
+        "classification": "movies",
+        "summary": None,
+        "plex_rating_key": "1",
+    })
+    version = tmp_db.get_video_versions(video_id)[0]
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
+    monkeypatch.setattr(tmp_db, "MAX_JOB_ATTEMPTS", 1)
+    job_id = tmp_db.enqueue_job("convert", video_id=video_id, version_id=version["id"])
+    tmp_db.claim_job()
+
+    tmp_db.reset_orphan_jobs()
+    tmp_db.sweep_exhausted_jobs()
+    assert tmp_db.get_job(job_id)["status"] == "failed"
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
+
+    converter.recover_orphans()
+
+    recovered = tmp_db.get_video_version(video_id, version["id"])
+    assert recovered["status"] == "unconverted"
+    assert recovered["error_msg"] == "gave up after 1 attempts"
+
+
+def test_legacy_exhausted_job_does_not_override_newer_explicit_version_work(
+    tmp_db, monkeypatch, tmp_path
+):
+    import converter
+
+    source = tmp_path / "movie.mkv"
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(source),
+        "title": "Movie",
+        "classification": "movies",
+        "summary": None,
+        "plex_rating_key": "1",
+    })
+    version = tmp_db.get_video_versions(video_id)[0]
+    monkeypatch.setattr(tmp_db, "MAX_JOB_ATTEMPTS", 1)
+    old_id = tmp_db.enqueue_job("convert", video_id=video_id)
+    tmp_db.claim_job()
+    tmp_db.requeue_job(old_id)
+    tmp_db.sweep_exhausted_jobs()
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
+
+    newer_id = tmp_db.enqueue_job("convert", video_id=video_id, version_id=version["id"])
+
+    converter.recover_orphans()
+
+    assert tmp_db.get_job(newer_id)["status"] == "queued"
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"

@@ -1062,6 +1062,43 @@ def sweep_exhausted_jobs() -> int:
         return cursor.rowcount
 
 
+def terminal_exhausted_jobs() -> list[dict]:
+    """Latest failed max-attempt job for each work key, for state reconciliation."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT job.*,
+                   CASE
+                       WHEN job.kind = 'convert'
+                           THEN COALESCE(NULLIF(job.version_id, 0), video.chosen_version_id)
+                       ELSE job.version_id
+                   END AS resolved_version_id
+            FROM jobs AS job
+            LEFT JOIN videos AS video ON video.id = job.video_id
+            WHERE job.status = 'failed'
+              AND job.attempts >= ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM jobs AS newer
+                  WHERE newer.kind = job.kind
+                    AND newer.video_id = job.video_id
+                    AND (
+                        (
+                            job.kind = 'convert'
+                            AND COALESCE(NULLIF(newer.version_id, 0), video.chosen_version_id, 0)
+                                = COALESCE(NULLIF(job.version_id, 0), video.chosen_version_id, 0)
+                        )
+                        OR (job.kind != 'convert' AND newer.version_id = job.version_id)
+                    )
+                    AND newer.id > job.id
+              )
+            ORDER BY job.id
+            """,
+            (MAX_JOB_ATTEMPTS,),
+        ).fetchall()
+        return [_job_row(row) for row in rows]
+
+
 def queued_job_count() -> int:
     with _conn() as conn:
         return conn.execute("SELECT COUNT(*) FROM jobs WHERE status = 'queued'").fetchone()[0]
