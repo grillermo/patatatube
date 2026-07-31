@@ -58,6 +58,12 @@ silent.
   same file, rotating to `ios.jsonl.1` at 32 MB. Nothing is recorded until
   `DevLog.connect` gets credentials — `AppModel` calls it at init and on save.
 
+`./serve` truncates `log/ios.jsonl` (and drops `ios.jsonl.1`) on every start,
+exactly like `log/backend.log`, so a run's iOS and server logs cover the same
+window. Override the path with `IOS_LOG_FILE=...`. **A restart discards the
+previous run's records** — copy the file elsewhere before restarting if a
+reproduction is still being analysed.
+
 ```bash
 tail -n 300 log/ios.jsonl
 grep '"kind":"error"' log/ios.jsonl | tail -30

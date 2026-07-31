@@ -17,6 +17,21 @@ mkdir -p "$(dirname "$LOG_FILE")"
 # Truncate on every start so each run's log begins from scratch.
 : > "$LOG_FILE"
 
+# The iOS app's DEVLOG records land here, posted to /api/devlog by instrumented
+# builds (see devlog.py). Truncated alongside backend.log so both cover the same
+# window — correlating the two is the point of having them. Exported so devlog.py
+# resolves the same path this script just cleared.
+export IOS_LOG_FILE="${IOS_LOG_FILE:-log/ios.jsonl}"
+mkdir -p "$(dirname "$IOS_LOG_FILE")"
+: > "$IOS_LOG_FILE"
+# devlog.py rotates to "<name>.1" at its size cap; drop that generation too, or
+# a fresh run still sits next to the previous run's overflow.
+rm -f "$IOS_LOG_FILE.1"
+
+# Truncation happens here, not in main.py's lifespan: lifespan runs once per
+# gunicorn worker (6 by default) and again on every dev --reload, so it would
+# wipe the log repeatedly, including mid-session.
+
 # macOS launchd hands processes a 256-fd soft limit. Video streaming, HLS
 # segment bursts, preview fetches and SQLite each hold fds, so raise the soft
 # limit toward the hard cap. Defense in depth on top of closing connections.
