@@ -165,7 +165,11 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
   only the transfer: `download` calls `ensureReady` -> `POST /prepare` and then
   polls every 2s *before* acquiring the gate. One task per video is what sent
   226 concurrent prepare calls at the server on 2026-07-31. New bulk actions go
-  through the bounded window, not a bare `withTaskGroup`.
+  through the bounded window, not a bare `withTaskGroup`. The grid's own
+  Download-all passes `bulk: true` (server priority=100), but the per-show
+  Download-all in `EpisodesView` shares its `onDownload` closure with
+  individual per-episode taps and deliberately does not, so it enqueues at
+  interactive (non-bulk) priority.
 
 ### Plex library (library rows)
 

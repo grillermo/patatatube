@@ -81,22 +81,21 @@ struct SettingsView: View {
                 Section {
                     Button("Cache all videos") {
                         Task {
-                            await withTaskGroup(of: Void.self) { group in
-                                for video in model.store.videos {
-                                    guard let url = model.streamURL(for: video) else { continue }
-                                    let preview = video.previewUrl.flatMap(URL.init(string:))
-                                    let versionId = video.chosenVersionId
-                                    let id = video.id
-                                    let streamCount = model.downloadStreamCount
-                                    let token = model.credentials.token
-                                    group.addTask {
-                                        try? await model.cache.download(
-                                            id: id, versionId: versionId, from: url,
-                                            preview: preview, bearerToken: token,
-                                            streamCount: streamCount
-                                        )
-                                    }
-                                }
+                            await withBoundedTaskGroup(
+                                limit: model.cache.maxConcurrentDownloads,
+                                over: model.store.videos
+                            ) { video in
+                                guard let url = model.streamURL(for: video) else { return }
+                                let preview = video.previewUrl.flatMap(URL.init(string:))
+                                let versionId = video.chosenVersionId
+                                let id = video.id
+                                let streamCount = model.downloadStreamCount
+                                let token = model.credentials.token
+                                try? await model.cache.download(
+                                    id: id, versionId: versionId, from: url,
+                                    preview: preview, bearerToken: token,
+                                    streamCount: streamCount
+                                )
                             }
                         }
                     }
