@@ -88,11 +88,15 @@ struct EpisodesView: View {
     @MainActor
     static func downloadEligibleEpisodes(
         _ episodes: [Video],
-        currentCacheState: (Video) -> CacheState,
-        onDownload: (Video) async -> Bool
+        limit: Int,
+        currentCacheState: @escaping @MainActor @Sendable (Video) -> CacheState,
+        onDownload: @escaping @MainActor @Sendable (Video) async -> Bool
     ) async {
-        for episode in episodes {
-            guard currentCacheState(episode) == .notCached else { continue }
+        // Eligibility is checked inside the operation, not by pre-filtering:
+        // an episode can sit queued in the window long enough to finish
+        // downloading by another route, and re-downloading it wastes the slot.
+        await withBoundedTaskGroup(limit: limit, over: episodes) { episode in
+            guard currentCacheState(episode) == .notCached else { return }
             _ = await onDownload(episode)
         }
     }
@@ -132,6 +136,7 @@ struct EpisodesView: View {
         }
         await Self.downloadEligibleEpisodes(
             show.episodes,
+            limit: model.cache.maxConcurrentDownloads,
             currentCacheState: currentCacheState(for:),
             onDownload: onDownload
         )
