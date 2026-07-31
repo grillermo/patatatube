@@ -58,9 +58,25 @@ module IpaBuilder
 
   # Build the .ipa from source and return its path (inside a fresh tmp dir the
   # caller is responsible for cleaning up). Steps: xcodegen -> archive -> package.
-  def build
+  #
+  # `instrumented: true` compiles in DevLog (see
+  # ios/PatataTubeKit/Sources/PatataTubeKit/DevLog.swift) by defining the DEVLOG
+  # condition. It goes on the xcodebuild command line because that is the only
+  # place that reaches BOTH the app target and the PatataTubeKit SwiftPM package
+  # — a project-level setting does not reach the package, and most of the
+  # instrumented code (CacheManager, StreamProxy) lives there.
+  #
+  # DEVLOG is deliberately independent of Debug/Release: the build that has to
+  # be instrumented is the Release .ipa that AltStore sideloads onto the iPad.
+  def build(instrumented: false)
     die("no xcodegen on PATH (brew install xcodegen)") if `which xcodegen`.empty?
     die("project dir not found: #{PROJECT_DIR}") unless Dir.exist?(PROJECT_DIR)
+
+    if instrumented
+      puts "\n#{red(bold('  ⚠  INSTRUMENTED BUILD — DEVLOG active'))}"
+      puts "     The app will post runtime logs to the backend (POST /api/devlog)."
+      puts "     Ship a clean build over it when you are done debugging.\n\n"
+    end
 
     ENV["DEVELOPER_DIR"] = resolve_developer_dir
     puts "    DEVELOPER_DIR=#{ENV['DEVELOPER_DIR']}"
@@ -71,7 +87,9 @@ module IpaBuilder
     work    = Dir.mktmpdir("#{APP_NAME}-ipa-")
     archive = File.join(work, "#{APP_NAME}.xcarchive")
 
-    step "Archiving (xcodebuild)"
+    devlog = instrumented ? "SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) DEVLOG' " : ""
+
+    step "Archiving (xcodebuild)#{instrumented ? ' [DEVLOG]' : ''}"
     run(
       "xcodebuild " \
       "-project #{Shellwords.escape(PROJECT)} " \
@@ -80,6 +98,7 @@ module IpaBuilder
       "-destination 'generic/platform=iOS' " \
       "-archivePath #{Shellwords.escape(archive)} " \
       "CODE_SIGNING_ALLOWED=NO " \
+      "#{devlog}" \
       "-allowProvisioningUpdates " \
       "archive",
       chdir: PROJECT_DIR

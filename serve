@@ -27,11 +27,16 @@ ulimit -n "${FD_LIMIT:-8192}" 2>/dev/null || true
 # Each line is also appended, uncolored, to $LOG_FILE so the same interleaved
 # view survives to disk. O_APPEND + per-line fflush keeps concurrent colorize
 # processes from clobbering each other.
+# gunicorn logs "Handling signal: winch" on every terminal resize (SIGWINCH);
+# it is pure noise, so it is dropped from both the terminal and the log file.
+NOISE_RE="${NOISE_RE:-Handling signal: winch}"
 colorize() {
   awk -v p="$(printf '\033[1;%sm%-7s|\033[0m' "$1" "$2")" \
       -v plain="$(printf '%-7s|' "$2")" \
       -v logf="$LOG_FILE" \
-      '{ print p, $0; fflush(); print plain, $0 >> logf; fflush(logf) }'
+      -v noise="$NOISE_RE" \
+      '$0 ~ noise { next }
+       { print p, $0; fflush(); print plain, $0 >> logf; fflush(logf) }'
 }
 
 # fd 3 preserves the real stdout so Caddy lines bypass the dev/web labels.

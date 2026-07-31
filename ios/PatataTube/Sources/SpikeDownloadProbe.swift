@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import PatataTubeKit
 
 /// Throwaway spike. Prints answers to the four unknowns above. Delete before
 /// merging anything — this never ships.
@@ -22,7 +23,7 @@ final class SpikeDownloadProbe: NSObject, AVAssetDownloadDelegate {
             "AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(token)"]
         ])
         let selections = asset.allMediaSelections
-        print("SPIKE q4: allMediaSelections count = \(selections.count)")
+        DevLog.event(.download, "spike q4: allMediaSelections", ["count": "\(selections.count)"])
         task = session.aggregateAssetDownloadTask(
             with: asset, mediaSelections: selections, assetTitle: "spike",
             assetArtworkData: nil, options: nil)
@@ -31,7 +32,7 @@ final class SpikeDownloadProbe: NSObject, AVAssetDownloadDelegate {
         // Cancel at roughly 20%, then restart and observe whether the first
         // progress report resumes near 20% (resume) or near 0% (restart).
         try? await Task.sleep(for: .seconds(20))
-        print("SPIKE q1a: cancelling at fraction \(fractionAtCancel)")
+        DevLog.event(.download, "spike q1a: cancelling", ["fraction": "\(fractionAtCancel)"])
         task?.cancel()
         try? await Task.sleep(for: .seconds(3))
         let restartAsset = AVURLAsset(url: master, options: [
@@ -48,7 +49,7 @@ final class SpikeDownloadProbe: NSObject, AVAssetDownloadDelegate {
     /// variant if q1a shows a restart-from-0, to confirm the local-URL path
     /// (already shipped) does or doesn't fare better.
     func restartFromLocal() {
-        guard let localURL else { print("SPIKE q1b: no local URL captured"); return }
+        guard let localURL else { DevLog.event(.download, "spike q1b: no local URL captured"); return }
         let asset = AVURLAsset(url: localURL)
         task = session.aggregateAssetDownloadTask(
             with: asset, mediaSelections: asset.allMediaSelections,
@@ -58,27 +59,27 @@ final class SpikeDownloadProbe: NSObject, AVAssetDownloadDelegate {
 
     /// q2: play the running task's asset and print whether playback starts.
     func playRunningTaskAsset() {
-        guard let asset = task?.urlAsset else { print("SPIKE q2: no task"); return }
+        guard let asset = task?.urlAsset else { DevLog.event(.download, "spike q2: no task"); return }
         let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)
         player.play()
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(5))
-            print("SPIKE q2: status=\(item.status.rawValue) time=\(player.currentTime().seconds)")
+            DevLog.event(.download, "spike q2", ["status": "\(item.status.rawValue)", "t": "\(player.currentTime().seconds)"])
         }
     }
 
     /// q3: after cancelling, play the partial from its local URL (run in Airplane Mode).
     func playPartialOffline() {
-        guard let localURL else { print("SPIKE q3: no local URL"); return }
+        guard let localURL else { DevLog.event(.download, "spike q3: no local URL"); return }
         let item = AVPlayerItem(asset: AVURLAsset(url: localURL))
         let player = AVPlayer(playerItem: item)
         player.play()
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(5))
-            print("SPIKE q3: status=\(item.status.rawValue) error=\(String(describing: item.error)) time=\(player.currentTime().seconds)")
+            DevLog.event(.download, "spike q3", ["status": "\(item.status.rawValue)", "err": "\(String(describing: item.error))", "t": "\(player.currentTime().seconds)"])
             let groups = try? await item.asset.loadMediaSelectionGroup(for: .legible)
-            print("SPIKE q4 offline: legible options = \(groups?.options.count ?? -1)")
+            DevLog.event(.download, "spike q4 offline", ["legible_options": "\(groups?.options.count ?? -1)"])
         }
     }
 
@@ -87,7 +88,7 @@ final class SpikeDownloadProbe: NSObject, AVAssetDownloadDelegate {
         willDownloadTo location: URL
     ) {
         localURL = location
-        print("SPIKE willDownloadTo: \(location.path)")
+        DevLog.event(.download, "spike willDownloadTo", ["path": location.path])
     }
 
     func urlSession(
@@ -99,11 +100,11 @@ final class SpikeDownloadProbe: NSObject, AVAssetDownloadDelegate {
         let expected = timeRangeExpectedToLoad.duration.seconds
         let fraction = expected > 0 ? loaded / expected : 0
         fractionAtCancel = fraction
-        print("SPIKE progress: \(fraction) bytesReceived=\(aggregateAssetDownloadTask.countOfBytesReceived)")
+        DevLog.event(.download, "spike progress", ["fraction": "\(fraction)", "bytes": "\(aggregateAssetDownloadTask.countOfBytesReceived)"])
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        print("SPIKE didComplete error=\(String(describing: error))")
+        DevLog.event(.download, "spike didComplete", ["err": "\(String(describing: error))"])
     }
 }
 

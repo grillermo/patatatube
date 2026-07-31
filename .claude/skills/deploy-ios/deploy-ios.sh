@@ -13,6 +13,12 @@
 #   deploy-ios.sh 1.4.2                    # forward explicit version to ./deploy
 #   deploy-ios.sh -m "message" minor      # custom commit message for pending changes
 #   deploy-ios.sh --dry-run [args]        # run preflight checks only; commit nothing
+#   deploy-ios.sh --instrumented [args]   # build with DEVLOG runtime logging
+#   deploy-ios.sh --instrumented --yes    # ^ without ./deploy's confirmation prompt
+#
+# --instrumented compiles DevLog into the .ipa so the app records what it does
+# at runtime and posts it to the backend (POST /api/devlog -> log/ios.jsonl).
+# It is still a public release; ship a clean build over it when done.
 #
 # Remote is named `github` (there is no `origin`); ./deploy pushes there too.
 
@@ -20,13 +26,20 @@ set -euo pipefail
 
 msg="Commit pending changes before iOS deploy"
 dry_run=0
+instrumented=0
+assume_yes=0
 bump=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -m) msg="$2"; shift 2 ;;
     --dry-run) dry_run=1; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    --instrumented|--devlog) instrumented=1; shift ;;
+    # ./deploy asks for interactive confirmation before publishing an
+    # instrumented build. Needed when running non-interactively, where there is
+    # no stdin to answer it.
+    --yes) assume_yes=1; shift ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
     *) bump="$1"; shift ;;
   esac
 done
@@ -116,12 +129,20 @@ fi
 bump="$candidate"
 ok "target version v$bump (from v$current_version)"
 
+deploy_args="$bump"
+if [ "$instrumented" -eq 1 ]; then
+  deploy_args="$deploy_args --instrumented"
+  [ "$assume_yes" -eq 1 ] && deploy_args="$deploy_args --yes"
+  printf '\033[31m⚠  INSTRUMENTED build (DEVLOG): the app will post runtime logs to the backend.\033[0m\n'
+  printf '\033[31m   This is still a public release — ship a clean build over it when done.\033[0m\n'
+fi
+
 echo "--- pending changes ---"
 git status --short
 echo "--- plan ---"
 echo "  1. git add -A && git commit -m \"$msg\"   (skipped if nothing pending)"
 echo "  2. git push $remote $branch"
-echo "  3. ./deploy $bump"
+echo "  3. ./deploy $deploy_args"
 
 if [ "$dry_run" -eq 1 ]; then
   ok "dry run — nothing committed, pushed, or deployed"
@@ -141,4 +162,10 @@ git push "$remote" "$branch"
 ok "pushed to $remote/$branch"
 
 # --- hand off to the release script -----------------------------------------
+if [ "$instrumented" -eq 1 ]; then
+  if [ "$assume_yes" -eq 1 ]; then
+    exec ./deploy ${bump:+"$bump"} --instrumented --yes
+  fi
+  exec ./deploy ${bump:+"$bump"} --instrumented
+fi
 exec ./deploy ${bump:+"$bump"}

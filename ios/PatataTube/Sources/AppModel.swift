@@ -70,12 +70,16 @@ final class AppModel: ObservableObject {
         self.baseURLText = credentials.baseURL?.absoluteString ?? ""
         self.tokenText = credentials.token ?? ""
         cache.setMaxConcurrentDownloads(self.downloadConcurrency)
+        // On a real device the backend is DevLog's only sink, so nothing is
+        // recorded until it knows where to post. No-op without DEVLOG.
+        DevLog.connect(baseURL: credentials.baseURL, token: credentials.token)
         Task { await streamProxy.start() }
     }
 
     func saveSettings() {
         credentials.baseURL = URL(string: baseURLText.trimmingCharacters(in: .whitespaces))
         credentials.token = tokenText.isEmpty ? nil : tokenText
+        DevLog.connect(baseURL: credentials.baseURL, token: credentials.token)
         downloadStreamCount = min(
             max(downloadStreamCount, DownloadStreamSettings.allowedCounts.lowerBound),
             DownloadStreamSettings.allowedCounts.upperBound

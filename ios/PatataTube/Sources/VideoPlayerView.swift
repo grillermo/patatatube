@@ -57,6 +57,9 @@ struct VideoPlayerView: View {
     /// autoplay toggle (see `playbackEndAction`). Toggled by the in-player moon
     /// button; `sleepMode` stays the immutable launch seed.
     @State private var sleepAfterCurrent: Bool
+    /// Records the AVPlayer/AVPlayerItem state machine into DevLog. Inert
+    /// without the DEVLOG condition.
+    @State private var playbackProbe = PlaybackProbe()
 
     var body: some View {
         ZStack {
@@ -116,6 +119,9 @@ struct VideoPlayerView: View {
             readyTimeoutTask = nil
             nowPlaying.detach()
             deactivateAudioSession()
+            playbackProbe.detach()
+            DevLog.event(.nav, "player dismissed", ["video_id": "\(video.id)"])
+            DevLog.flush()
         }
     }
 
@@ -154,11 +160,12 @@ struct VideoPlayerView: View {
             orderPosition = 0
         }
         activateAudioSession()
-        guard let item = playerItem(for: video) else { return }
+        guard let (item, source) = playerItemWithSource(for: video) else { return }
         let player = AVPlayer(playerItem: item)
         player.allowsExternalPlayback = true
         player.usesExternalPlaybackWhileExternalScreenIsActive = true
         self.player = player
+        playbackProbe.attach(item: item, player: player, video: video, source: source)
         playWhenReady(item: item, on: player)
         Task { await applyAudioSelection(item: item, lang: video.audioLang) }
         nowPlaying.onNext = { advance(by: 1) }
@@ -177,9 +184,12 @@ struct VideoPlayerView: View {
         readyTimeoutTask?.cancel()
         itemReady = false
 
-        let markReady = {
+        let markReady = { (trigger: String) in
             guard self.player === player, !self.itemReady else { return }
             self.itemReady = true
+            DevLog.event(.play, "mounted and playing", [
+                "video_id": "\(self.video.id)", "trigger": trigger,
+            ])
             player.play()
             self.readyObserver?.invalidate()
             self.readyObserver = nil
@@ -189,55 +199,135 @@ struct VideoPlayerView: View {
 
         // Already buffered (e.g. cached local file): mount without a flash.
         if item.isPlaybackLikelyToKeepUp {
-            markReady()
+            markReady("already-buffered")
             return
         }
 
         readyObserver = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { _, change in
             guard change.newValue == true else { return }
-            Task { @MainActor in markReady() }
+            Task { @MainActor in markReady("likelyToKeepUp") }
         }
 
         readyTimeoutTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(12))
             guard !Task.isCancelled else { return }
-            markReady()
+            // Buffering never reported ready. The player mounts anyway, so from
+            // the outside this looks like "it just didn't play" — exactly the
+            // symptom under investigation.
+            DevLog.event(.play, "ready timeout — mounting anyway after 12s", [
+                "video_id": "\(self.video.id)",
+                "item_status": "\(item.status.rawValue)",
+                "buffer_empty": "\(item.isPlaybackBufferEmpty)",
+            ])
+            markReady("timeout")
         }
     }
 
     /// AVPlayerItem for a queue entry, or nil when it has no playable source
     /// (skipped during queue navigation).
+    /// Most callers only ask *whether* a video is playable, sweeping the queue
+    /// for the next candidate. Those probes are silent — logging one source line
+    /// per candidate would bury the one that actually got played.
     private func playerItem(for video: Video) -> AVPlayerItem? {
-        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
+        playerItemWithSource(for: video, log: false)?.item
+    }
+
+    /// As `playerItem(for:)`, but reports which of the five source branches was
+    /// taken. Playback failures that only happen sometimes are usually a wrong
+    /// branch — a `cached` state over a file that is missing or half written,
+    /// say — so the branch and the on-disk facts behind it are recorded
+    /// together, before AVFoundation ever sees the URL.
+    private func playerItemWithSource(
+        for video: Video,
+        log: Bool = true
+    ) -> (item: AVPlayerItem, source: String)? {
+        let cacheState = model.cache.state(for: video.id, versionId: video.chosenVersionId)
+        let local = model.cache.localURL(for: video.id, versionId: video.chosenVersionId)
+        let localExists = FileManager.default.fileExists(atPath: local.path)
+
+        func chose(_ source: String, _ item: AVPlayerItem, _ extra: [String: String] = [:]) -> (AVPlayerItem, String) {
+            guard log else { return (item, source) }
+            var meta = [
+                "video_id": "\(video.id)",
+                "version_id": video.chosenVersionId.map(String.init) ?? "-",
+                "source": source,
+                "cache": DevLog.describe(cacheState),
+                "local_exists": "\(localExists)",
+                "local_bytes": Self.fileSize(at: local),
+                "status": video.status ?? "-",
+                "is_library": "\(video.isLibrary)",
+                "has_hls": "\(!(video.hlsPath ?? "").isEmpty)",
+                // Discriminates the two ways a downloaded video ends up streaming.
+                // Proxy down (port nil) kills the offline HLS route as well as the
+                // network ones, because both go through the same URL builder.
+                "proxy_port": model.streamProxy.port.map(String.init) ?? "nil",
+                // True when *some* version of this video is on disk. `cache` is
+                // keyed by chosenVersionId, so `cache=notCached` together with
+                // `any_version_cached=true` is version-key drift: the file is
+                // there under a different key and playback went to the network.
+                "any_version_cached": "\(model.cache.hasAnyCached(id: video.id))",
+                "local_path": local.lastPathComponent,
+            ]
+            meta.merge(extra) { current, _ in current }
+            DevLog.event(.play, "source -> \(source)", meta)
+            return (item, source)
+        }
+
+        if cacheState == .cached {
             // Offline wins: local MP4 file, else promoted HLS via the proxy.
-            let local = model.cache.localURL(for: video.id, versionId: video.chosenVersionId)
-            if FileManager.default.fileExists(atPath: local.path) {
-                return AVPlayerItem(url: local)
+            if localExists {
+                return chose("local_mp4", AVPlayerItem(url: local))
             }
             if let offline = model.offlineHLSURL(for: video) {
-                return AVPlayerItem(url: offline)
+                return chose("offline_hls", AVPlayerItem(url: offline))
+            }
+            // Reported cached, yet neither offline source resolved — the cache
+            // and the filesystem disagree. Falls through to streaming below.
+            if log {
+                DevLog.event(.cache, "cached but no local source", [
+                    "video_id": "\(video.id)",
+                    "local": local.path,
+                ])
             }
         }
         // Library rows that haven't been converted server-side have no streamable file yet.
-        if video.isLibrary && video.status != "done" { return nil }
+        if video.isLibrary && video.status != "done" {
+            if log {
+                DevLog.event(.play, "source -> none (library not converted)", [
+                    "video_id": "\(video.id)", "status": video.status ?? "-",
+                ])
+            }
+            return nil
+        }
         if let proxied = model.proxiedHLSURL(for: video) {
             // Proxied HLS: read-through cache, native subtitle tracks, no headers needed.
-            return AVPlayerItem(url: proxied)
+            return chose("proxy_hls", AVPlayerItem(url: proxied))
         }
         if let hlsURL = model.hlsURL(for: video) {
             // Proxy down: direct remote HLS with authed headers (old behavior).
-            return AVPlayerItem(asset: authedAsset(url: hlsURL))
+            return chose("direct_hls", AVPlayerItem(asset: authedAsset(url: hlsURL)), ["proxy": "down"])
         }
         if video.hlsPath == nil || video.hlsPath?.isEmpty == true,
            let proxied = model.proxiedMP4URL(for: video), model.streamURL(for: video) != nil {
             // Proxied direct MP4 for rows without an HLS package.
-            return AVPlayerItem(url: proxied)
+            return chose("proxy_mp4", AVPlayerItem(url: proxied))
         }
         if let url = model.streamURL(for: video) {
             // Proxy down: direct MP4 fallback.
-            return AVPlayerItem(asset: authedAsset(url: url))
+            return chose("direct_mp4", AVPlayerItem(asset: authedAsset(url: url)), ["proxy": "down"])
+        }
+        if log {
+            DevLog.event(.play, "source -> none", [
+                "video_id": "\(video.id)", "cache": DevLog.describe(cacheState),
+            ])
         }
         return nil
+    }
+
+    private static func fileSize(at url: URL) -> String {
+        guard let size = try? FileManager.default
+            .attributesOfItem(atPath: url.path)[.size] as? Int64 else { return "-" }
+        return "\(size)"
     }
 
     private func title(of video: Video) -> String {
@@ -343,13 +433,15 @@ struct VideoPlayerView: View {
         let nextIndex = randomize
             ? randomStep(direction: direction)
             : playableIndex(from: currentIndex, direction: direction)
-        guard let nextIndex, let item = playerItem(for: videos[nextIndex]) else {
+        guard let nextIndex, let (item, source) = playerItemWithSource(for: videos[nextIndex]) else {
+            DevLog.event(.play, "advance found nothing playable", ["direction": "\(direction)"])
             player.pause()
             if UIApplication.shared.applicationState == .active { dismiss() }
             return
         }
         currentIndex = nextIndex
         player.replaceCurrentItem(with: item)
+        playbackProbe.attach(item: item, player: player, video: videos[nextIndex], source: source)
         Task { await applyAudioSelection(item: item, lang: videos[nextIndex].audioLang) }
         bindPlayToEnd()
         playWhenReady(item: item, on: player)

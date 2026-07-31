@@ -23,7 +23,15 @@ actor StreamCacheLRU {
         }
     }
 
+    /// Sweeps are triggered from essentially every proxy operation, and each one
+    /// `stat`s every file under every entry to compute the total. Slow sweeps
+    /// are logged so the bookkeeping cost on the request path is measurable —
+    /// with a full cache this competes for disk I/O with the reads it is meant
+    /// to be serving.
+    private static let slowSweepThreshold: TimeInterval = 0.1
+
     func enforce() {
+        let startedAt = Date()
         var entries: [(dir: URL, accessed: Date, size: Int64)] = []
         for managed in managedDirs {
             let children = (try? fileManager.contentsOfDirectory(
@@ -37,10 +45,33 @@ actor StreamCacheLRU {
         }
 
         var total = entries.reduce(Int64(0)) { $0 + $1.size }
+
+        let sweepSeconds = Date().timeIntervalSince(startedAt)
+        if sweepSeconds >= Self.slowSweepThreshold {
+            DevLog.event(.cache, "LRU sweep slow", [
+                "ms": "\(Int(sweepSeconds * 1000))",
+                "entries": "\(entries.count)",
+                "total": "\(total)",
+                "budget": "\(budgetBytes)",
+            ])
+        }
         guard total > budgetBytes else { return }
+
+        // Every eviction is logged. Evicting the entry backing the video that is
+        // playing right now is a leading hypothesis for the intermittent
+        // failures, and nothing else in the app would reveal it.
+        DevLog.event(.cache, "LRU over budget", [
+            "total": "\(total)", "budget": "\(budgetBytes)", "entries": "\(entries.count)",
+        ])
         for entry in entries.sorted(by: { $0.accessed < $1.accessed }) {
             guard (try? fileManager.removeItem(at: entry.dir)) != nil else { continue }
             total -= entry.size
+            DevLog.event(.cache, "LRU evicted", [
+                "entry": entry.dir.lastPathComponent,
+                "bytes": "\(entry.size)",
+                "accessed": DevLogEncoding.timestampFormatter.string(from: entry.accessed),
+                "remaining": "\(total)",
+            ])
             if total <= budgetBytes { break }
         }
     }
@@ -70,9 +101,17 @@ actor StreamCacheLRU {
         where entry.dir.standardizedFileURL.path != excludedPath
         {
             if (try? fileManager.removeItem(at: entry.dir)) != nil {
+                DevLog.event(.cache, "evicted for storage failure", [
+                    "entry": entry.dir.lastPathComponent,
+                    "excluded": excluded?.lastPathComponent ?? "-",
+                ])
                 return true
             }
         }
+        DevLog.event(.cache, "storage-failure eviction found nothing to free", [
+            "entries": "\(entries.count)",
+            "excluded": excluded?.lastPathComponent ?? "-",
+        ])
         return false
     }
 

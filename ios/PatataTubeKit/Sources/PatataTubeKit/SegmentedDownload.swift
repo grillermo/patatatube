@@ -234,7 +234,15 @@ struct SegmentedDownloadStore: @unchecked Sendable {
         }
     }
 
+    /// Discards a download's manifest and parts. Called on assembly failure as
+    /// well as on success, so every byte already fetched is thrown away and the
+    /// next `resumeInterrupted` starts the transfer over from zero.
     func remove(cacheKey: String) {
+        DevLog.event(.download, "manifest removed", ["key": cacheKey])
+        removeWithoutLogging(cacheKey: cacheKey)
+    }
+
+    private func removeWithoutLogging(cacheKey: String) {
         try? fileManager.removeItem(at: directory(cacheKey: cacheKey))
     }
 
@@ -318,6 +326,40 @@ struct SegmentedDownloadStore: @unchecked Sendable {
         let assembly = assemblyURL(cacheKey: manifest.cacheKey)
         defer { try? fileManager.removeItem(at: assembly) }
 
+        // Assembly rewrites every part into a fresh file rather than moving
+        // them, so completing an N-byte movie needs another N bytes free on top
+        // of the parts already on disk. If that headroom is missing this throws,
+        // the manifest is discarded below, and the whole download restarts from
+        // zero on the next foreground. Record the numbers that decide it.
+        DevLog.event(.download, "assembly starting", [
+            "key": manifest.cacheKey,
+            "total_bytes": "\(manifest.totalByteCount)",
+            "free_bytes": DevLog.freeDiskBytes(),
+            "segments": "\(manifest.segments.count)",
+        ])
+
+        do {
+            try assembleThrowing(manifest: manifest, destination: destination, assembly: assembly)
+        } catch {
+            DevLog.event(.download, "assembly FAILED — manifest discarded, restarts from zero", [
+                "key": manifest.cacheKey,
+                "total_bytes": "\(manifest.totalByteCount)",
+                "free_bytes": DevLog.freeDiskBytes(),
+                "err": "\(error)",
+            ])
+            throw error
+        }
+        DevLog.event(.download, "assembly finished", [
+            "key": manifest.cacheKey,
+            "free_bytes": DevLog.freeDiskBytes(),
+        ])
+    }
+
+    private func assembleThrowing(
+        manifest: SegmentedDownloadManifest,
+        destination: URL,
+        assembly: URL
+    ) throws {
         let validated = try manifest.validated()
         guard validated.segments.allSatisfy(\.isComplete) else {
             throw SegmentedDownloadError.corruptManifest

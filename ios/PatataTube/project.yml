@@ -3,6 +3,20 @@ options:
   bundleIdPrefix: com.patatatube
   deploymentTarget:
     iOS: "17.0"
+# Project-level build settings. These reach the SwiftPM package targets
+# (PatataTubeKit) as well as the app target, which a target-level setting would
+# not — and most of the instrumented code lives in the package.
+#
+# DEVLOG turns on DevLog (see PatataTubeKit/Sources/PatataTubeKit/DevLog.swift).
+# Debug only, so a plain Xcode Run in the Simulator is always instrumented while
+# a normal Release archive stays silent. Instrumented *Release* .ipas come from
+# `./deploy --instrumented`, which injects the same condition on the xcodebuild
+# command line.
+settings:
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEVLOG"
+
 packages:
   PatataTubeKit:
     path: ../PatataTubeKit
@@ -99,6 +113,13 @@ schemes:
     build:
       targets:
         PatataTube: all
+    run:
+      config: Debug
+      # The Simulator shares the host filesystem, so the app writes its dev log
+      # straight to the repo — no server, no container spelunking. Absent on a
+      # real device, where DevLog's HTTP sink posts to the backend instead.
+      environmentVariables:
+        PATATATUBE_DEV_LOG: /Users/grillermo/c/patatatube/log/ios.jsonl
     test:
       targets:
         - PatataTubeTests

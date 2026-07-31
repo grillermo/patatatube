@@ -46,12 +46,38 @@ The driver:
 
 The AltStore source URL is printed at the end by `./deploy`.
 
+## Instrumented builds (`--instrumented`)
+
+```bash
+.claude/skills/deploy-ios/deploy-ios.sh --instrumented        # patch bump, DEVLOG on
+.claude/skills/deploy-ios/deploy-ios.sh --instrumented minor
+```
+
+Compiles the app with the **`DEVLOG`** condition, which switches on `DevLog`
+(`ios/PatataTubeKit/Sources/PatataTubeKit/DevLog.swift`). The app then records
+taps, the AVPlayer state machine, StreamProxy requests, cache-state transitions
+and download lifecycle, and POSTs them to the backend's `/api/devlog`, which
+appends them to **`log/ios.jsonl`** on the server. Read that file to diagnose.
+
+Use it to reproduce a bug that only happens on the real iPad — playback failing
+intermittently is the case it was built for. Without the flag every call site
+compiles to nothing, so normal releases log nothing at all.
+
+`DEVLOG` is independent of Debug/Release: the `.ipa` is a Release build either
+way. `./deploy` prompts for confirmation before publishing one (skip with
+`--yes`), marks the version `[DEVLOG]` in `ios/apps.json`, and prints the
+command to ship a clean build afterwards.
+
 ## Gotchas
 
 - **The remote is named `github`, not `origin`.** `git push origin` fails — there is no `origin`. Both this driver and `./deploy` push to `github`.
 - **Default-branch guard is hard.** `./deploy` calls `die` if you're not on `main`; the driver checks the same thing first so you fail fast before any commit.
 - **`./deploy` commits twice-over is expected.** This driver commits your pending work; `./deploy` then makes a *second* commit for the version bump + manifest. Two commits per release is normal.
 - **A real run is irreversible and outward-facing** — it cuts a public GitHub Release and publishes to the AltStore source. Use `--dry-run` to rehearse. There is no undo built in (delete the release + tag manually via `gh` if needed).
+- **Never leave the AltStore source on an instrumented build.** `--instrumented`
+  publishes to the same public source as any other release, and AltStore will
+  auto-install it on the iPad. Once the bug is understood, run a plain
+  `deploy-ios.sh` to ship a clean build over it.
 - **`.ipa` build needs the macOS/Xcode toolchain.** `./deploy` → `ios/ipa_builder.rb` shells out to the Xcode build; it won't produce a build on a headless Linux box.
 
 ## Troubleshooting

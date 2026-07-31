@@ -70,8 +70,14 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         return d
     }
 
+    /// Every API response funnels through here, so this is the one place that
+    /// sees all of them. Paths and statuses only — never tokens, never bodies.
     private static func check(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { return }
+        DevLog.event(.net, "\(http.statusCode) \(http.url?.path ?? "-")", [
+            "status": "\(http.statusCode)",
+            "path": http.url?.path ?? "-",
+        ])
         guard (200..<300).contains(http.statusCode) else {
             throw APIError.badStatus(http.statusCode)
         }

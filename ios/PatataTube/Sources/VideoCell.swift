@@ -70,6 +70,7 @@ struct VideoCell: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .logTap("play", ["video_id": "\(video.id)", "status": video.status])
             .overlay(alignment: .bottomTrailing) {
                 if showsSleepButton {
                     Button(action: onPlaySleep) {

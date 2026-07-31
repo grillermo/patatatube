@@ -35,6 +35,11 @@ final class DownloadConcurrencyGate: DownloadConcurrencyGating, @unchecked Senda
                 waiters.append(continuation)
                 return false
             }
+            // `active` here counts only downloads that came through this gate.
+            // Compare it against the number of concurrent transfers the backend
+            // actually sees: a gap means something started a download without
+            // acquiring a permit.
+            logState(granted ? "gate acquired" : "gate queued")
             if granted { continuation.resume() }
         }
     }
@@ -48,7 +53,16 @@ final class DownloadConcurrencyGate: DownloadConcurrencyGating, @unchecked Senda
             }
             return nil
         }
+        logState("gate released")
         next?.resume()
+    }
+
+    private func logState(_ message: String) {
+        guard DevLog.enabled else { return }
+        let (active, limit, waiting) = lock.withLock { (self.active, self.limit, waiters.count) }
+        DevLog.event(.download, message, [
+            "active": "\(active)", "limit": "\(limit)", "waiting": "\(waiting)",
+        ])
     }
 
     func setLimit(_ n: Int) {

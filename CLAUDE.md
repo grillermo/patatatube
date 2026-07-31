@@ -27,9 +27,80 @@ python -m pytest tests/test_api.py::test_upload_success   # one test
 ```bash
 cd ios/PatataTube && xcodegen generate && open PatataTube.xcodeproj   # project.pbxproj is generated from project.yml
 cd ios/PatataTubeKit && swift build                                   # build the logic package standalone
+cd ios/PatataTubeKit && swift test                                    # debug: DEVLOG on
+cd ios/PatataTubeKit && swift test -c release                         # release: DEVLOG off (silence guarantee)
 ```
 
 See `ios/README.md` for the full manual test checklist (no automated iOS test target exists yet).
+
+Run **both** `swift test` invocations when touching `DevLog` — the two
+configurations exercise opposite halves of the gating (see below).
+
+- Pre-existing, unrelated: the full parallel `swift test` run prints a
+  `Fatal error: Index out of range` from the swift-testing suites. It reproduces
+  on a clean checkout and every test still reports passing.
+
+### Debugging the iOS app: read `log/ios.jsonl`
+
+Instrumented builds emit structured JSONL — one JSON object per line, fields in
+a fixed order: `ts`, `seq`, `kind`, `msg`, `src`, `fn`, `session`, `meta`.
+`kind` is one of `tap` `nav` `play` `proxy` `cache` `download` `net` `state`
+`error` `lifecycle`. `session` identifies one app run; `seq` is monotonic within
+it, so ordering survives batching. A `lifecycle` record with `meta.dropped`
+marks records discarded to ring-buffer overflow — a gap in `seq` is never
+silent.
+
+- **Simulator**: the app writes straight to the host path in the
+  `PATATATUBE_DEV_LOG` scheme env var (`log/ios.jsonl`). Launching outside
+  Xcode needs `SIMCTL_CHILD_PATATATUBE_DEV_LOG=...` on `xcrun simctl launch`.
+- **Device**: there is no host path, so the app batches records to
+  `POST /api/devlog` (Bearer `UPLOAD_TOKEN`) and `devlog.py` appends them to the
+  same file, rotating to `ios.jsonl.1` at 32 MB. Nothing is recorded until
+  `DevLog.connect` gets credentials — `AppModel` calls it at init and on save.
+
+```bash
+tail -n 300 log/ios.jsonl
+grep '"kind":"error"' log/ios.jsonl | tail -30
+jq -c 'select(.meta.video_id=="812")' log/ios.jsonl              # one video's whole story
+jq -c 'select(.kind=="play" or .kind=="proxy" or .kind=="cache")' log/ios.jsonl
+```
+
+**All of it is compiled out unless the `DEVLOG` condition is set, so a normal
+release logs nothing.** Add call sites with `DevLog.event` / `DevLog.error` /
+`View.logTap` — never `print`. Both arguments are `@autoclosure`, so with the
+flag off nothing is even interpolated; keep `meta` values cheap anyway
+(precomputed, no filesystem walks) since they *do* run when it is on.
+
+Getting `DEVLOG` set is the fiddly part, and it is deliberately independent of
+`DEBUG` — the build that misbehaves is the Release `.ipa` AltStore sideloads:
+
+- **Debug** (Xcode Run, Simulator): on automatically. The app target gets it
+  from `settings.configs.Debug` in `project.yml`; **PatataTubeKit gets it from
+  its own `Package.swift`** — an Xcode project-level setting does not reach
+  SwiftPM package targets, and most instrumented code (`CacheManager`,
+  `StreamProxy`) lives in the package. Both are needed.
+- **Release**: off, unless built via `./deploy --instrumented`, which passes
+  `SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) DEVLOG'` on the
+  `xcodebuild` command line — the one place that does reach every target.
+
+`DevLog` never propagates its own failures into the code it observes: emission
+only takes a lock and appends to a bounded ring buffer, all I/O happens later on
+a utility queue, and overflow drops records rather than applying backpressure to
+the playback path. Keep it that way — this app has already shipped a main-thread
+hang from a synchronous `NSFileHandle.write` (`VideoStore.swift:100`, Sentry
+PATATATUBE-2). Records carry ids, statuses, byte counts and error codes only —
+never bearer tokens, never response bodies.
+
+The backend also prints a stream-permit gauge to `log/backend.log` —
+`[stream] +1 <file> active=N/16`, `-1`, and `[stream] saturated: …` when
+`/videos/{id}/stream`'s semaphore is fully held. Those permits are held for the
+*entire* response body, so comparing that gauge against the app's
+`gate acquired`/`gate released` records is how download-storm starvation gets
+confirmed.
+
+Design, the full list of instrumented call sites, and a hypothesis → evidence
+map for the intermittent-playback investigation:
+`docs/ios-devlog-instrumentation-plan.md` (§7).
 
 ## Architecture
 

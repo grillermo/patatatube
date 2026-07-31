@@ -450,6 +450,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     public func download(id: Int, versionId: Int? = nil, from remote: URL, preview: URL? = nil,
                          showPosterKey: String? = nil, showPoster: URL? = nil,
                          bearerToken: String? = nil, streamCount: Int = 1) async throws {
+        DevLog.event(.download, "download requested", [
+            "video_id": "\(id)",
+            "version_id": versionId.map(String.init) ?? "-",
+            "streams": "\(streamCount)",
+            "state": DevLog.describe(state(for: id, versionId: versionId)),
+        ])
         await concurrencyGate.acquire()
         defer { concurrencyGate.release() }
         _ = try await downloadVideo(
@@ -566,6 +572,15 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             task.resume()
             recordResumedID(id)
         }
+        // This path never touches `concurrencyGate` — unlike `download(id:…)`.
+        // It also re-runs on every foreground, not once per launch. If this
+        // count is large, every one of those transfers started at once, which is
+        // what the backend's stream-slot gauge should be compared against.
+        DevLog.event(.download, "resumeInterrupted (ungated by concurrencyGate)", [
+            "resumed": "\(resumed.count)",
+            "ids": resumed.prefix(20).map(String.init).joined(separator: ","),
+            "free_bytes": DevLog.freeDiskBytes(),
+        ])
         return resumed
     }
 
@@ -574,6 +589,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Explicit cancel restarts from scratch - it does not persist resume data.
     public func cancel(id: Int, versionId: Int? = nil) {
         let key = cacheKey(videoId: id, versionId: versionId)
+        // A cancellation racing a video that is currently playing is a textbook
+        // intermittent failure, so every cancel is recorded with the state it
+        // interrupted.
+        DevLog.event(.cache, "cancel", [
+            "video_id": "\(id)",
+            "version_id": versionId.map(String.init) ?? "-",
+            "state": DevLog.describe(state(for: id, versionId: versionId)),
+        ])
         cancelExternalActivity(key: key)
         cancellationFence.beginCancellation(cacheKey: key)
         defer {
@@ -620,6 +643,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Deletes a cached MP4. Used when the server re-converts a file with a
     /// different audio track set, making the cached copy stale.
     public func removeCached(id: Int, versionId: Int? = nil) {
+        DevLog.event(.cache, "removeCached", [
+            "video_id": "\(id)", "version_id": versionId.map(String.init) ?? "-",
+        ])
         try? fileManager.removeItem(at: localURL(for: id, versionId: versionId))
         try? fileManager.removeItem(
             at: offlineHLSDir(for: id, versionId: versionId)
@@ -635,6 +661,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Deletes every cached MP4, HLS package, and resume file for this video.
     /// Preview images and show posters are kept — small, still useful offline.
     public func removeAllCached(id: Int) {
+        DevLog.event(.cache, "removeAllCached", ["video_id": "\(id)"])
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         let resumes = contents.filter {
             $0 == "\(id).resume" || ($0.hasPrefix("\(id):") && $0.hasSuffix(".resume"))
@@ -654,6 +681,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// MP4s + HLS packages + resume files + manifests + completion history. Preview
     /// images and show posters are kept (see `clearAllCovers()`).
     public func clearAllVideos() {
+        DevLog.event(.cache, "clearAllVideos", [
+            "active_downloads": "\(activeDownloads().count)",
+        ])
         for activity in activeDownloads() {
             cancel(id: activity.videoID, versionId: activity.versionID)
         }
@@ -1918,8 +1948,18 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
         switch result {
         case .success(let url):
+            DevLog.event(.download, "segmented download finished", [
+                "video_id": "\(attempt.manifest.videoId)",
+                "bytes": "\(attempt.manifest.totalByteCount)",
+                "file": url.lastPathComponent,
+            ])
             continuation?.resume(returning: url)
         case .failure(let error):
+            DevLog.event(.download, "segmented download failed", [
+                "video_id": "\(attempt.manifest.videoId)",
+                "cancelled": "\(attempt.explicitlyCancelled)",
+                "err": "\(error)",
+            ])
             continuation?.resume(throwing: error)
         }
     }
@@ -1944,8 +1984,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
 
         switch result {
         case .success(let url):
+            DevLog.event(.download, "download finished", [
+                "key": key, "file": url.lastPathComponent,
+            ])
             continuation?.resume(returning: url)
         case .failure(let error):
+            DevLog.event(.download, "download failed", [
+                "key": key, "err": "\(error)",
+            ])
             continuation?.resume(throwing: error)
         }
     }

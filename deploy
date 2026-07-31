@@ -24,6 +24,14 @@
 #   ./deploy                 # bump patch  (1.0.0 -> 1.0.1)
 #   ./deploy patch|minor|major
 #   ./deploy 1.4.2           # set an explicit version
+#   ./deploy --instrumented  # ^ any of the above, but with DEVLOG compiled in
+#   ./deploy --instrumented --yes   # skip the confirmation prompt
+#
+# --instrumented builds the .ipa with the DEVLOG condition, so the app records
+# what it is doing at runtime and posts it to the backend (POST /api/devlog ->
+# log/ios.jsonl). Use it to reproduce a bug on the real iPad. It is a normal
+# public release in every other respect, so ship a clean build over it once the
+# bug is understood. See docs/ios-devlog-instrumentation-plan.md.
 #
 # The AltStore source URL to add on the iPad is printed at the end (and lives
 # in ios/altstore.md).
@@ -42,6 +50,14 @@ BUNDLE_ID    = "com.patatatube.app"
 SOURCE_ID    = "com.patatatube.source"
 MANIFEST_REL = "ios/apps.json"
 ICON_REL     = "apple-touch-icon.png"
+
+# --- flags -------------------------------------------------------------------
+# Pulled out of ARGV before the version argument is read, so --instrumented can
+# appear anywhere on the command line.
+
+ASSUME_YES   = !ARGV.delete("--yes").nil?
+INSTRUMENTED = !(ARGV.delete("--instrumented") || ARGV.delete("--devlog")).nil? ||
+               ENV["PATATATUBE_DEVLOG"] == "1"
 
 # --- repo / remote -----------------------------------------------------------
 
@@ -96,9 +112,20 @@ File.write(PROJECT_YML, yml)
 
 puts B.bold("\n==> Releasing #{APP_NAME} #{current} -> #{version} (build #{build}) to #{REPO}")
 
+# An instrumented build is a public GitHub Release like any other, and AltStore
+# will push it to the iPad automatically. Make that impossible to do by accident.
+if INSTRUMENTED && !ASSUME_YES
+  puts B.red(B.bold("\n  ⚠  This publishes an INSTRUMENTED build (DEVLOG) to the public AltStore source."))
+  puts "     The app will post runtime logs to your backend, and AltStore will"
+  puts "     auto-install it on the iPad. Ship a clean build over it afterwards."
+  print "\n  Type 'yes' to continue: "
+  B.die("aborted") unless $stdin.gets&.strip == "yes"
+end
+
 # --- build -------------------------------------------------------------------
 
-ipa      = B.build                      # tmp .ipa, dir owned by us to clean up
+# tmp .ipa, dir owned by us to clean up
+ipa      = B.build(instrumented: INSTRUMENTED)
 work     = File.dirname(ipa)
 released = File.join(work, asset)
 File.rename(ipa, released)
@@ -125,7 +152,9 @@ new_version = {
   "version"              => version,
   "buildVersion"         => build.to_s,
   "date"                 => Time.now.utc.iso8601,
-  "localizedDescription" => "Release #{version}.",
+  # Marked in the manifest so an instrumented build is identifiable on the iPad
+  # and in the source history, not just in whoever-ran-it's memory.
+  "localizedDescription" => INSTRUMENTED ? "[DEVLOG] Instrumented build #{version}." : "Release #{version}.",
   "downloadURL"          => download,
   "size"                 => size,
   "sha256"               => sha256,
@@ -183,3 +212,10 @@ puts B.green("\n✓ Published #{APP_NAME} #{version}")
 puts "  Source URL (add once in AltStore -> Sources -> + ):"
 puts B.bold("    #{MANIFEST_URL}")
 puts "  Already added? AltStore auto-updates on its next background refresh."
+
+if INSTRUMENTED
+  puts B.red(B.bold("\n  ⚠  v#{version} is an INSTRUMENTED build (DEVLOG)."))
+  puts "     Logs land in log/ios.jsonl on the server. When you are done:"
+  puts B.bold("       ./deploy patch")
+  puts "     to ship a clean build over it."
+end

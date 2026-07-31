@@ -42,19 +42,27 @@ public final class StreamProxy: @unchecked Sendable {
     }
 
     public func start() async {
+        DevLog.event(.proxy, "proxy start requested")
         guard let address = try? sockaddr_in.inet(ip4: "127.0.0.1", port: 0) else {
+            // Silent in production: `port` stays nil, every URL builder returns
+            // nil, and playback quietly falls back to the network — including
+            // for videos already on disk.
+            DevLog.event(.proxy, "proxy bind failed — all proxied URLs will be nil")
             port = nil
             return
         }
         let server = HTTPServer(address: address)
         await server.appendRoute(HTTPRoute("GET /\(secret)/hls/:id/:v/*")) { [weak self] request in
-            await self?.handleHLS(request) ?? HTTPResponse(statusCode: .notFound)
+            await self?.traced("hls", request) { await self?.handleHLS(request) }
+                ?? HTTPResponse(statusCode: .notFound)
         }
         await server.appendRoute(HTTPRoute("GET /\(secret)/mp4/:id/:v")) { [weak self] request in
-            await self?.handleMP4(request) ?? HTTPResponse(statusCode: .notFound)
+            await self?.traced("mp4", request) { await self?.handleMP4(request) }
+                ?? HTTPResponse(statusCode: .notFound)
         }
         await server.appendRoute(HTTPRoute("GET /\(secret)/offline/:id/:v/*")) { [weak self] request in
-            await self?.handleOffline(request) ?? HTTPResponse(statusCode: .notFound)
+            await self?.traced("offline", request) { await self?.handleOffline(request) }
+                ?? HTTPResponse(statusCode: .notFound)
         }
         self.server = server
         serverTask = Task { try? await server.run() }
@@ -64,16 +72,48 @@ public final class StreamProxy: @unchecked Sendable {
                 port = listeningPort
             }
         } catch {
+            DevLog.event(.proxy, "proxy listen failed — all proxied URLs will be nil", [
+                "err": "\(error)",
+            ])
             port = nil
         }
+        DevLog.event(.proxy, "proxy started", ["port": port.map(String.init) ?? "nil"])
     }
 
     public func stop() async {
+        // A proxy that stopped while a player still holds one of its URLs looks
+        // exactly like a random playback failure, so both edges are recorded.
+        DevLog.event(.proxy, "proxy stopping", ["port": port.map(String.init) ?? "nil"])
         await server?.stop()
         serverTask?.cancel()
         serverTask = nil
         server = nil
         port = nil
+    }
+
+    /// Records one proxy request: what AVPlayer asked for, what it got back, and
+    /// how long it took. AVPlayer's own error log only names the URI, so without
+    /// this there is no way to tell a proxy fault from a backend fault.
+    private func traced(
+        _ route: String,
+        _ request: HTTPRequest,
+        _ handler: () async -> HTTPResponse?
+    ) async -> HTTPResponse? {
+        guard DevLog.enabled else { return await handler() }
+
+        let started = Date()
+        let response = await handler()
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+
+        var meta: [String: String] = [
+            "route": route,
+            "path": request.path,
+            "status": response.map { "\($0.statusCode.code)" } ?? "nil",
+            "ms": "\(ms)",
+        ]
+        if let range = request.headers[.range] { meta["range"] = range }
+        DevLog.event(.proxy, "\(route) \(response.map { "\($0.statusCode.code)" } ?? "nil")", meta)
+        return response
     }
 
     // MARK: - Public URL builders
@@ -91,7 +131,16 @@ public final class StreamProxy: @unchecked Sendable {
     }
 
     private func localURL(kind: String, videoId: Int, versionId: Int?, suffix: String) -> URL? {
-        guard let port else { return nil }
+        guard let port else {
+            // Every proxied URL — including the disk-only `offline` route — dies
+            // with the proxy. This is the moment a downloaded video loses its
+            // local path, so it must not be silent.
+            DevLog.event(.proxy, "proxied URL unavailable — proxy not listening", [
+                "kind": kind, "video_id": "\(videoId)",
+                "version_id": versionId.map(String.init) ?? "-",
+            ])
+            return nil
+        }
         return URL(
             string: "http://127.0.0.1:\(port)/\(secret)/\(kind)/\(videoId)/\(versionId ?? 0)\(suffix)"
         )
@@ -279,8 +328,16 @@ public final class StreamProxy: @unchecked Sendable {
                 cache.touchAndEnforce(
                     entryDir: cache.segments.videoDir(videoId: params.videoId)
                 )
+                DevLog.event(.proxy, "playlist upstream failed, served from cache", [
+                    "video_id": "\(params.videoId)", "asset": params.asset,
+                    "err": "\(error)",
+                ])
                 return HTTPResponse(statusCode: .ok, headers: headers, body: cached)
             }
+            DevLog.event(.proxy, "playlist unavailable -> 502", [
+                "video_id": "\(params.videoId)", "asset": params.asset,
+                "err": "\(error)",
+            ])
             return HTTPResponse(statusCode: .badGateway)
         }
     }
@@ -319,6 +376,13 @@ public final class StreamProxy: @unchecked Sendable {
             )
             cache.touchAndEnforce(entryDir: entry)
         } catch {
+            // Storage failed mid-playback and we are about to evict to make
+            // room. Eviction during playback is a leading suspect for the
+            // intermittent failures, so both the entry and the retry outcome go
+            // in the log.
+            DevLog.event(.cache, "HLS store failed, evicting and retrying", [
+                "video_id": "\(videoId)", "asset": asset, "err": "\(error)",
+            ])
             await cache.evictForStorageFailure(failedEntry: entry)
             do {
                 try await cache.segments.store(
@@ -331,6 +395,9 @@ public final class StreamProxy: @unchecked Sendable {
                 cache.touchAndEnforce(entryDir: entry)
             } catch {
                 // Playback remains pass-through after one bounded retry.
+                DevLog.event(.cache, "HLS store retry failed, staying pass-through", [
+                    "video_id": "\(videoId)", "asset": asset, "err": "\(error)",
+                ])
             }
         }
     }
@@ -366,6 +433,10 @@ public final class StreamProxy: @unchecked Sendable {
             asset: params.asset
         ) {
             cache.touchAndEnforce(entryDir: cache.segments.videoDir(videoId: params.videoId))
+            DevLog.event(.proxy, "HLS asset cache hit", [
+                "video_id": "\(params.videoId)", "asset": params.asset,
+                "bytes": "\(cached.count)",
+            ])
             return HTTPResponse(statusCode: .ok, headers: headers, body: cached)
         }
 
@@ -397,6 +468,10 @@ public final class StreamProxy: @unchecked Sendable {
             )
             return HTTPResponse(statusCode: .ok, headers: headers, body: data)
         } catch {
+            DevLog.event(.proxy, "HLS asset fetch failed -> 502", [
+                "video_id": "\(params.videoId)", "asset": params.asset,
+                "err": "\(error)",
+            ])
             return HTTPResponse(statusCode: .badGateway)
         }
     }
@@ -432,6 +507,9 @@ public final class StreamProxy: @unchecked Sendable {
                     )
                 }
             } catch {
+                DevLog.event(.proxy, "MP4 probe failed -> 502", [
+                    "video_id": "\(params.videoId)", "err": "\(error)",
+                ])
                 return HTTPResponse(statusCode: .badGateway)
             }
             do {
@@ -445,8 +523,16 @@ public final class StreamProxy: @unchecked Sendable {
                     rangeHeader: request.headers[.range],
                     total: probe.totalByteCount
                 ) else {
+                    DevLog.event(.proxy, "MP4 range not satisfiable", [
+                        "video_id": "\(params.videoId)",
+                        "range": request.headers[.range] ?? "-",
+                        "total": "\(probe.totalByteCount)",
+                    ])
                     return HTTPResponse(statusCode: .rangeNotSatisfiable)
                 }
+                DevLog.event(.proxy, "MP4 prepare failed, passing through", [
+                    "video_id": "\(params.videoId)", "err": "\(error)",
+                ])
                 return await passthroughMP4(
                     window: window,
                     total: probe.totalByteCount,
@@ -500,6 +586,16 @@ public final class StreamProxy: @unchecked Sendable {
                         else {
                             throw SegmentedDownloadError.changedEntity
                         }
+                        // The file changed underneath an in-flight playback —
+                        // the server re-encoded or re-promoted it. Everything
+                        // cached for this key is now wrong.
+                        DevLog.event(.proxy, "MP4 entity changed mid-stream", [
+                            "video_id": "\(params.videoId)",
+                            "old_etag": manifest.etag,
+                            "new_etag": responseETag,
+                            "old_total": "\(manifest.totalByteCount)",
+                            "new_total": "\(contentRange.total)",
+                        ])
                         total = contentRange.total
                         window = replacementWindow
                         try await prepareMP4WithRecovery(
@@ -540,6 +636,11 @@ public final class StreamProxy: @unchecked Sendable {
                     }
                     cache.touchAndEnforce(entryDir: cache.ranges.entryDir(key: key))
                 } catch {
+                    DevLog.event(.proxy, "MP4 hole fetch failed, passing through", [
+                        "video_id": "\(params.videoId)",
+                        "hole": "\(hole.start)-\(hole.end)",
+                        "err": "\(error)",
+                    ])
                     return await passthroughMP4(window: window, total: total, url: url)
                         ?? HTTPResponse(statusCode: .badGateway)
                 }
@@ -551,12 +652,24 @@ public final class StreamProxy: @unchecked Sendable {
 
         do {
             guard let data = try await cache.ranges.read(key: key, range: window) else {
+                // The bytes were there a moment ago (the holes were just
+                // filled) and now are not — an eviction between write and read
+                // is the shape to look for here.
+                DevLog.event(.proxy, "MP4 cache read empty, passing through", [
+                    "video_id": "\(params.videoId)",
+                    "window": "\(window.start)-\(window.end)",
+                ])
                 return await passthroughMP4(window: window, total: total, url: url)
                     ?? HTTPResponse(statusCode: .badGateway)
             }
             cache.touchAndEnforce(entryDir: cache.ranges.entryDir(key: key))
             return partialResponse(data: data, window: window, total: total)
         } catch {
+            DevLog.event(.proxy, "MP4 cache read failed, passing through", [
+                "video_id": "\(params.videoId)",
+                "window": "\(window.start)-\(window.end)",
+                "err": "\(error)",
+            ])
             return await passthroughMP4(window: window, total: total, url: url)
                 ?? HTTPResponse(statusCode: .badGateway)
         }
@@ -575,6 +688,9 @@ public final class StreamProxy: @unchecked Sendable {
             )
         } catch {
             let entry = cache.ranges.entryDir(key: key)
+            DevLog.event(.cache, "MP4 prepare failed, evicting and retrying", [
+                "key": key, "err": "\(error)",
+            ])
             await cache.evictForStorageFailure(failedEntry: entry)
             _ = try await cache.ranges.prepareForWriteRetry(
                 key: key,
@@ -600,6 +716,10 @@ public final class StreamProxy: @unchecked Sendable {
             )
         } catch {
             let entry = cache.ranges.entryDir(key: key)
+            DevLog.event(.cache, "MP4 write failed, evicting and retrying", [
+                "key": key, "offset": "\(offset)", "bytes": "\(data.count)",
+                "err": "\(error)",
+            ])
             await cache.evictForStorageFailure(failedEntry: entry)
             guard try await cache.ranges.prepareForWriteRetry(
                 key: key,

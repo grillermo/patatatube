@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from pydantic import BaseModel
 
 import db
+import devlog
 import hls
 import library
 import plex
@@ -73,7 +74,14 @@ def _positive_int_env(name: str, default: int) -> int:
         return default
 
 
-_video_stream_slots = asyncio.Semaphore(_positive_int_env("VIDEO_STREAM_LIMIT", DEFAULT_VIDEO_STREAM_LIMIT))
+VIDEO_STREAM_LIMIT = _positive_int_env("VIDEO_STREAM_LIMIT", DEFAULT_VIDEO_STREAM_LIMIT)
+_video_stream_slots = asyncio.Semaphore(VIDEO_STREAM_LIMIT)
+# Permits held right now. A permit is held for the *entire* response body, so a
+# handful of stalled multi-GB transfers can hold all of them indefinitely and
+# every later request queues behind them. This gauge is what confirms (or rules
+# out) that starvation: compare it against the app's own concurrency-gate counts
+# in log/ios.jsonl. See docs/ios-devlog-instrumentation-plan.md.
+_video_stream_active = 0
 
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 # Single-segment YouTube paths that are pages, not video ids.
@@ -375,20 +383,40 @@ async def _iter_file_range(
     byte_count: int | None = None,
     completion_title: str | None = None,
 ) -> AsyncIterator[bytes]:
+    global _video_stream_active
+    waiting = _video_stream_active >= VIDEO_STREAM_LIMIT
+    if waiting:
+        print(
+            f"[stream] saturated: {_video_stream_active}/{VIDEO_STREAM_LIMIT} permits held, "
+            f"queuing {file_path.name}",
+            flush=True,
+        )
     async with _video_stream_slots:
-        async with await anyio.open_file(file_path, "rb") as f:
-            if start:
-                await f.seek(start)
+        _video_stream_active += 1
+        print(
+            f"[stream] +1 {file_path.name} active={_video_stream_active}/{VIDEO_STREAM_LIMIT}",
+            flush=True,
+        )
+        try:
+            async with await anyio.open_file(file_path, "rb") as f:
+                if start:
+                    await f.seek(start)
 
-            remaining = byte_count
-            while remaining is None or remaining > 0:
-                read_size = VIDEO_CHUNK_SIZE if remaining is None else min(VIDEO_CHUNK_SIZE, remaining)
-                chunk = await f.read(read_size)
-                if not chunk:
-                    break
-                if remaining is not None:
-                    remaining -= len(chunk)
-                yield chunk
+                remaining = byte_count
+                while remaining is None or remaining > 0:
+                    read_size = VIDEO_CHUNK_SIZE if remaining is None else min(VIDEO_CHUNK_SIZE, remaining)
+                    chunk = await f.read(read_size)
+                    if not chunk:
+                        break
+                    if remaining is not None:
+                        remaining -= len(chunk)
+                    yield chunk
+        finally:
+            _video_stream_active -= 1
+            print(
+                f"[stream] -1 {file_path.name} active={_video_stream_active}/{VIDEO_STREAM_LIMIT}",
+                flush=True,
+            )
 
     # Reached here only if the whole requested range was streamed without the
     # client disconnecting. When it was the final byte of the file, the video
@@ -805,6 +833,35 @@ async def api_library_scan(request: Request):
         return await asyncio.to_thread(library.scan_library)
     except plex.PlexError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+class DevLogBatch(BaseModel):
+    session: str
+    records: list[dict]
+
+
+@router.post("/api/devlog", status_code=204)
+async def api_devlog(request: Request, batch: DevLogBatch):
+    """Sink for the iOS app's DEVLOG instrumentation (device builds).
+
+    Simulator runs write straight to the host file; a real iPad can't, so it
+    batches records here and they land in the same ``log/ios.jsonl``. See
+    devlog.py.
+    """
+    _check_token(request)
+
+    if len(batch.records) > devlog.MAX_RECORDS_PER_REQUEST:
+        raise HTTPException(status_code=413, detail="Too many records in batch")
+
+    # This endpoint exists to observe the video endpoints, so it must never
+    # compete with them: reject oversize bodies instead of buffering them, and
+    # do the write off the event loop.
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > devlog.MAX_REQUEST_BYTES:
+        raise HTTPException(status_code=413, detail="Batch too large")
+
+    await asyncio.to_thread(devlog.append, batch.records)
+    return Response(status_code=204)
 
 
 @router.get("/api/videos/{video_id}")

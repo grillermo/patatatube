@@ -231,6 +231,8 @@ struct DownloadButton: View {
                     .transition(.scale.combined(with: .opacity))
             }
             .buttonStyle(.plain)
+            .logTap("download-cached", ["video_id": "\(identity.videoID)",
+                                       "armed": "\(state.showsArmedDelete)"])
             .accessibilityLabel(state.showsArmedDelete ? "Delete download" : "Downloaded")
 
         case .downloading:
@@ -255,6 +257,8 @@ struct DownloadButton: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .logTap("download-cancel", ["video_id": "\(identity.videoID)",
+                                       "progress": String(format: "%.2f", state.clampedProgress)])
             .accessibilityLabel("Cancel download")
             .accessibilityValue("\(Int(state.clampedProgress * 100))%")
 
@@ -273,6 +277,7 @@ struct DownloadButton: View {
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
+            .logTap("download-start", ["video_id": "\(identity.videoID)"])
             .accessibilityLabel("Download")
         }
     }

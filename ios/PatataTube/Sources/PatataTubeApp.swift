@@ -1,6 +1,7 @@
 // ios/PatataTube/Sources/PatataTubeApp.swift
 import SwiftUI
 import Sentry
+import PatataTubeKit
 
 import Capture
 
@@ -34,6 +35,15 @@ struct PatataTubeApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        // First thing in the process: everything below is worth having in the
+        // log. No-op unless built with the DEVLOG condition.
+        DevLog.start()
+        NSSetUncaughtExceptionHandler { exception in
+            DevLog.event(.error, "uncaught: \(exception.name.rawValue) \(exception.reason ?? "")",
+                         ["stack": exception.callStackSymbols.prefix(12).joined(separator: " | ")])
+            DevLog.flush()
+        }
+
         SentrySDK.start { options in
             options.dsn = "https://de3e08718ecce35b4b92a8519ec40a79@o4511260455796736.ingest.us.sentry.io/4511786930798597"
 
@@ -77,11 +87,16 @@ struct PatataTubeApp: App {
                 .environmentObject(model)
                 .environmentObject(model.store)
                 .onChange(of: scenePhase) { _, phase in
+                    DevLog.event(.lifecycle, "scenePhase -> \(phase)")
                     // Downloads use a foreground session, so they stall when the
                     // app is suspended. Resume them from persisted resume data
                     // whenever we come back to the foreground (and on launch).
                     if phase == .active {
                         model.cache.resumeInterrupted(bearerToken: model.credentials.token)
+                    } else {
+                        // Last chance to get pending records out before the app
+                        // is suspended or killed.
+                        DevLog.flush()
                     }
                 }
                 .onReceive(QuickActionRouter.shared.$pending.compactMap { $0 }) { action in
