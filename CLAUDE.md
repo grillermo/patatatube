@@ -170,6 +170,13 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
   Download-all in `EpisodesView` shares its `onDownload` closure with
   individual per-episode taps and deliberately does not, so it enqueues at
   interactive (non-bulk) priority.
+- **The in-app web bridge has an address bar.** `WebBridgeView` opens on the
+  last committed page (`WebHistoryStore.lastURL`, `UserDefaults` key
+  `webBridgeHistory`, 200 entries) rather than a hardcoded URL. Typing
+  fuzzy-searches that history — whitespace is a wildcard, tokens must match in
+  order — and text matching nothing goes through `WebAddress.resolve`, which
+  fills in `https://` and refuses anything without a host. There is deliberately
+  no search-engine fallback.
 
 ### Plex library (library rows)
 
