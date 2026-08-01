@@ -67,7 +67,7 @@ struct WebBridgeView: View {
                     addressFocused = false
                 }
                 .onChange(of: addressFocused) { _, focused in
-                    if !focused { model.resetAddressText() }
+                    model.setAddressFocused(focused)
                 }
                 .onChange(of: model.addressText) { _, _ in model.refreshSuggestions() }
 
@@ -131,6 +131,11 @@ final class WebBridgeModel: ObservableObject {
 
     let history: WebHistoryStore
     private(set) var currentURL: URL
+    /// Tracks whether the address `TextField` is focused, so a background page
+    /// commit (redirect, `didFinish` chatter) never clobbers text the user is
+    /// still typing. Kept in the model — not `@FocusState` — because
+    /// `didCommit` runs from the coordinator, outside the view.
+    private var isAddressFieldFocused = false
 
     init(history: WebHistoryStore, fallback: URL) {
         self.history = history
@@ -166,6 +171,18 @@ final class WebBridgeModel: ObservableObject {
         suggestions = []
     }
 
+    /// Called by the view whenever the address field's focus changes. Losing
+    /// focus normally reverts the field to the current URL, but not when a
+    /// navigation is already in flight (`pendingURL != nil`) — otherwise the
+    /// field would flash back to the old URL for the moment between submit
+    /// and the new page's `didCommit`.
+    func setAddressFocused(_ focused: Bool) {
+        isAddressFieldFocused = focused
+        if !focused && pendingURL == nil {
+            resetAddressText()
+        }
+    }
+
     func refreshSuggestions() {
         suggestions = addressText == currentURL.absoluteString ? [] : history.search(addressText)
     }
@@ -173,7 +190,9 @@ final class WebBridgeModel: ObservableObject {
     /// Called by the coordinator once WebKit commits a page.
     func didCommit(url: URL, canGoBack: Bool, canGoForward: Bool) {
         currentURL = url
-        addressText = url.absoluteString
+        if !isAddressFieldFocused {
+            addressText = url.absoluteString
+        }
         suggestions = []
         self.canGoBack = canGoBack
         self.canGoForward = canGoForward
@@ -192,12 +211,19 @@ final class WebBridgeModel: ObservableObject {
         pendingURL = url
     }
 
+    /// `@Published` fires `objectWillChange` on every set, changed or not.
+    /// Both consumers below must not write when the value is already at rest
+    /// (`nil` / `.none`) — an unconditional `= nil` here would re-publish on
+    /// every `updateUIView` call, including the ones it itself triggers,
+    /// turning that into a self-sustaining re-render loop.
     fileprivate func consumePending() -> URL? {
-        defer { pendingURL = nil }
-        return pendingURL
+        guard let url = pendingURL else { return nil }
+        pendingURL = nil
+        return url
     }
 
     fileprivate func consumeCommand() -> Command {
+        guard command != .none else { return .none }
         defer { command = .none }
         return command
     }
