@@ -9,36 +9,204 @@ import PatataTubeKit
 /// The page posts `window.webkit.messageHandlers.soundBridge.postMessage("playSound")`
 /// and the coordinator toggles `MPMusicPlayerController.systemMusicPlayer`.
 /// Nothing else crosses the bridge — unknown message bodies are ignored.
+///
+/// The address bar on top drives navigation: typing fuzzy-searches visited
+/// pages (spaces are wildcards), and text matching nothing is resolved as a
+/// URL instead. The sheet reopens on whatever page was last committed.
 struct WebBridgeView: View {
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var model: WebBridgeModel
+    @FocusState private var addressFocused: Bool
 
     static let defaultURL = URL(string: "https://awh.chiq.me/live")!
 
-    let url: URL
-
-    init(url: URL = WebBridgeView.defaultURL) {
-        self.url = url
+    init(history: WebHistoryStore = WebHistoryStore()) {
+        _model = StateObject(wrappedValue: WebBridgeModel(history: history,
+                                                          fallback: WebBridgeView.defaultURL))
     }
 
     var body: some View {
         NavigationStack {
-            SoundBridgeWebView(url: url)
-                .ignoresSafeArea(edges: .bottom)
-                .navigationTitle("Live")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Done") { dismiss() }
+            VStack(spacing: 0) {
+                addressBar
+                Divider()
+                ZStack(alignment: .top) {
+                    SoundBridgeWebView(model: model)
+                        .ignoresSafeArea(edges: .bottom)
+                    if addressFocused && !model.suggestions.isEmpty {
+                        suggestionList
                     }
                 }
+            }
+            .navigationTitle("Live")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
+    }
+
+    private var addressBar: some View {
+        HStack(spacing: 12) {
+            Button { model.goBack() } label: { Image(systemName: "chevron.backward") }
+                .disabled(!model.canGoBack)
+            Button { model.goForward() } label: { Image(systemName: "chevron.forward") }
+                .disabled(!model.canGoForward)
+
+            TextField("Address", text: $model.addressText)
+                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .submitLabel(.go)
+                .focused($addressFocused)
+                .onSubmit {
+                    model.submit()
+                    addressFocused = false
+                }
+                .onChange(of: addressFocused) { _, focused in
+                    if !focused { model.resetAddressText() }
+                }
+                .onChange(of: model.addressText) { _, _ in model.refreshSuggestions() }
+
+            Button { model.reload() } label: { Image(systemName: "arrow.clockwise") }
+
+            Menu {
+                if model.history.entries.isEmpty {
+                    Text("No history yet")
+                } else {
+                    ForEach(model.history.entries.prefix(15), id: \.url) { entry in
+                        Button(entry.url) { model.open(entry) }
+                    }
+                }
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private var suggestionList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(model.suggestions, id: \.url) { entry in
+                    Button {
+                        model.open(entry)
+                        addressFocused = false
+                    } label: {
+                        Text(entry.url)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+                    Divider()
+                }
+            }
+        }
+        .frame(maxHeight: 260)
+        .background(.regularMaterial)
+    }
+}
+
+/// Owns the address-bar state and the navigation commands the web view obeys.
+///
+/// The view never touches `WKWebView` directly: it mutates `pendingURL` and
+/// `command`, and `SoundBridgeWebView.updateUIView` applies them.
+@MainActor
+final class WebBridgeModel: ObservableObject {
+    enum Command: Equatable { case none, back, forward, reload }
+
+    @Published var addressText: String
+    @Published private(set) var suggestions: [WebHistoryEntry] = []
+    @Published private(set) var canGoBack = false
+    @Published private(set) var canGoForward = false
+    @Published fileprivate var pendingURL: URL?
+    @Published fileprivate var command: Command = .none
+
+    let history: WebHistoryStore
+    private(set) var currentURL: URL
+
+    init(history: WebHistoryStore, fallback: URL) {
+        self.history = history
+        let start = history.lastURL ?? fallback
+        self.currentURL = start
+        self.addressText = start.absoluteString
+        self.pendingURL = start
+    }
+
+    /// Enter: the top fuzzy match wins; with no matches the text is resolved as
+    /// an address; unresolvable text navigates nowhere and the field reverts.
+    func submit() {
+        if let top = suggestions.first, let url = URL(string: top.url) {
+            navigate(to: url)
+        } else if let url = WebAddress.resolve(addressText) {
+            navigate(to: url)
+        } else {
+            resetAddressText()
+        }
+    }
+
+    func open(_ entry: WebHistoryEntry) {
+        guard let url = URL(string: entry.url) else { return }
+        navigate(to: url)
+    }
+
+    func goBack() { command = .back }
+    func goForward() { command = .forward }
+    func reload() { command = .reload }
+
+    func resetAddressText() {
+        addressText = currentURL.absoluteString
+        suggestions = []
+    }
+
+    func refreshSuggestions() {
+        suggestions = addressText == currentURL.absoluteString ? [] : history.search(addressText)
+    }
+
+    /// Called by the coordinator once WebKit commits a page.
+    func didCommit(url: URL, canGoBack: Bool, canGoForward: Bool) {
+        currentURL = url
+        addressText = url.absoluteString
+        suggestions = []
+        self.canGoBack = canGoBack
+        self.canGoForward = canGoForward
+        history.record(url)
+        DevLog.event(.nav, "web bridge navigate", ["host": url.host ?? ""])
+    }
+
+    func updateNavigationState(canGoBack: Bool, canGoForward: Bool) {
+        self.canGoBack = canGoBack
+        self.canGoForward = canGoForward
+    }
+
+    private func navigate(to url: URL) {
+        suggestions = []
+        addressText = url.absoluteString
+        pendingURL = url
+    }
+
+    fileprivate func consumePending() -> URL? {
+        defer { pendingURL = nil }
+        return pendingURL
+    }
+
+    fileprivate func consumeCommand() -> Command {
+        defer { command = .none }
+        return command
     }
 }
 
 struct SoundBridgeWebView: UIViewRepresentable {
-    let url: URL
+    @ObservedObject var model: WebBridgeModel
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
     func makeUIView(context: Context) -> WKWebView {
         let contentController = WKUserContentController()
@@ -49,20 +217,38 @@ struct SoundBridgeWebView: UIViewRepresentable {
         config.allowsInlineMediaPlayback = true
 
         let webView = WKWebView(frame: .zero, configuration: config)
-        webView.load(URLRequest(url: url))
+        webView.navigationDelegate = context.coordinator
+        if let url = model.consumePending() {
+            webView.load(URLRequest(url: url))
+        }
         return webView
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        switch model.consumeCommand() {
+        case .back where uiView.canGoBack: uiView.goBack()
+        case .forward where uiView.canGoForward: uiView.goForward()
+        case .reload: uiView.reload()
+        default: break
+        }
+        if let url = model.consumePending() {
+            uiView.load(URLRequest(url: url))
+        }
+    }
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         // The user content controller retains the handler; drop it so the
         // coordinator (and the web view) can deallocate with the sheet.
         uiView.configuration.userContentController
             .removeScriptMessageHandler(forName: "soundBridge")
+        uiView.navigationDelegate = nil
     }
 
-    final class Coordinator: NSObject, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+        private let model: WebBridgeModel
+
+        init(model: WebBridgeModel) { self.model = model }
+
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
             guard message.name == "soundBridge",
@@ -77,6 +263,22 @@ struct SoundBridgeWebView: UIViewRepresentable {
             }
             DevLog.event(.tap, "sound bridge toggle",
                          ["state": String(musicPlayer.playbackState.rawValue)])
+        }
+
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            guard let url = webView.url else { return }
+            MainActor.assumeIsolated {
+                model.didCommit(url: url,
+                                canGoBack: webView.canGoBack,
+                                canGoForward: webView.canGoForward)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            MainActor.assumeIsolated {
+                model.updateNavigationState(canGoBack: webView.canGoBack,
+                                            canGoForward: webView.canGoForward)
+            }
         }
     }
 }
