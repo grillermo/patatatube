@@ -68,3 +68,44 @@ struct WebHistoryStoreTests {
         #expect(store.entries.map(\.url) == ["https://a.example.com/one"])
     }
 }
+
+struct WebHistorySearchTests {
+    private func seeded() -> WebHistoryStore {
+        let store = WebHistoryStore(defaults: makeDefaults())
+        store.record(url("https://awh.chiq.me/live"))
+        store.record(url("https://example.com/videos/cats"))
+        store.record(url("https://awh.chiq.me/archive"))
+        return store   // newest first: archive, cats, live
+    }
+
+    @Test func blankQueryReturnsEverythingNewestFirst() {
+        #expect(seeded().search("   ").map(\.url) == ["https://awh.chiq.me/archive",
+                                                      "https://example.com/videos/cats",
+                                                      "https://awh.chiq.me/live"])
+    }
+
+    @Test func matchesASingleSubstring() {
+        #expect(seeded().search("cats").map(\.url) == ["https://example.com/videos/cats"])
+    }
+
+    @Test func spacesActAsWildcards() {
+        #expect(seeded().search("awh live").map(\.url) == ["https://awh.chiq.me/live"])
+    }
+
+    @Test func tokensMustAppearInOrder() {
+        #expect(seeded().search("live awh").isEmpty)
+    }
+
+    @Test func matchingIsCaseInsensitive() {
+        #expect(seeded().search("AWH ARCHIVE").map(\.url) == ["https://awh.chiq.me/archive"])
+    }
+
+    @Test func multipleMatchesStayNewestFirst() {
+        #expect(seeded().search("awh").map(\.url) == ["https://awh.chiq.me/archive",
+                                                      "https://awh.chiq.me/live"])
+    }
+
+    @Test func noMatchesIsEmpty() {
+        #expect(seeded().search("nonesuch").isEmpty)
+    }
+}

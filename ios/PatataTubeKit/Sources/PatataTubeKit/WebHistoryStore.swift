@@ -54,4 +54,22 @@ public final class WebHistoryStore: @unchecked Sendable {
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         defaults.set(data, forKey: Self.storageKey)
     }
+
+    /// Fuzzy-matches history by treating whitespace in `query` as wildcards:
+    /// every token must occur, in order, somewhere in the URL string. So
+    /// `"awh live"` finds `https://awh.chiq.me/live` but `"live awh"` does not.
+    /// A blank query returns the whole history. Results stay newest first.
+    public func search(_ query: String) -> [WebHistoryEntry] {
+        let tokens = query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !tokens.isEmpty else { return entries }
+
+        return entries.filter { entry in
+            var remainder = Substring(entry.url.lowercased())
+            for token in tokens {
+                guard let hit = remainder.range(of: token) else { return false }
+                remainder = remainder[hit.upperBound...]
+            }
+            return true
+        }
+    }
 }
