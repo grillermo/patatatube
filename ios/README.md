@@ -231,6 +231,29 @@ On first launch grid is empty / errors — need server config:
 5. Relaunch the app → the switch is back to off (it is session-only by design).
 6. Lock-screen next/previous keep working with the switch in either position.
 
+### Web bridge address bar
+
+Run the app from Xcode, tap the live-page button in the grid
+(`VideoGridView.swift:177`), and confirm each of:
+
+- [ ] Sheet opens on `https://awh.chiq.me/live` on a fresh install.
+- [ ] Typing `awh` after visiting a couple of pages shows a suggestion list;
+      tapping a row navigates and dismisses the list.
+- [ ] Typing `awh live` (space as wildcard) matches `awh.chiq.me/live`.
+- [ ] Typing `example.com` with no history match and hitting Go navigates to
+      `https://example.com`.
+- [ ] Typing `cat videos` and hitting Go does nothing and the field reverts to
+      the current URL.
+- [ ] Tapping a link inside the page updates the address field.
+- [ ] Back/forward enable and disable correctly; reload reloads.
+- [ ] The clock button lists recent pages (up to 15) without typing; picking
+      one navigates. On a fresh install it reads "No history yet".
+- [ ] Closing and reopening the sheet — and force-quitting and relaunching the
+      app — reopens on the last committed page.
+- [ ] The existing sound bridge still toggles music from the page.
+- [ ] `grep '"kind":"nav"' log/ios.jsonl` shows `web bridge navigate` records
+      carrying a `host` and **no full URL**.
+
 ## Notes
 
 - `PatataTubeTests` covers the shared download button's state, rendering,

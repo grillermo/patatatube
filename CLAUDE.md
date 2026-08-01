@@ -38,7 +38,11 @@ configurations exercise opposite halves of the gating (see below).
 
 - Pre-existing, unrelated: the full parallel `swift test` run prints a
   `Fatal error: Index out of range` from the swift-testing suites. It reproduces
-  on a clean checkout and every test still reports passing.
+  on a clean checkout. A full parallel run can also show other pre-existing
+  flaky test failures (e.g. in `VideoStoreTests`) that don't reproduce under
+  filtered/targeted runs — don't take a full-suite failure alone as a
+  regression signal; re-run the specific test(s) filtered before concluding
+  something broke.
 
 ### Debugging the iOS app: read `log/ios.jsonl`
 
