@@ -18,6 +18,7 @@ struct VideoGridView: View {
     @State private var showSettings = false
     @State private var showUpload = false
     @State private var showDownloads = false
+    @State private var showWebBridge = false
     /// Queue snapshot + start index, built at tap time. A single cover item —
     /// presenting from separate state raced the boot load and could hand the
     /// player an empty queue on the first cold-launch tap (index crash).
@@ -172,6 +173,14 @@ struct VideoGridView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showWebBridge = true
+                    } label: {
+                        Image(systemName: "globe")
+                    }
+                    .accessibilityLabel("Live")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
                             showUpload = true
@@ -221,6 +230,7 @@ struct VideoGridView: View {
             .refreshable { await store.refreshLibrary() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
+            .sheet(isPresented: $showWebBridge) { WebBridgeView() }
             .alert(
                 "Download all",
                 isPresented: Binding(

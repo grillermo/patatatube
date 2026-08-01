@@ -47,7 +47,10 @@ def preview_url_for(video: dict) -> str | None:
     """Where to fetch this row's poster/thumbnail image from.
 
     Library rows proxy Plex thumbs through our own endpoint; download rows
-    (YouTube) carry an external thumbnail URL straight in the column.
+    (YouTube) carry an external thumbnail URL straight in the column. Twitter
+    and file-upload rows have no external thumbnail at all — for those the same
+    endpoint grabs a frame out of the downloaded mp4, which beats the black
+    poster the clients showed when this was None.
     """
     if (video.get("source") or "download") == "library":
         url = f"/videos/{video['id']}/preview"
@@ -58,7 +61,12 @@ def preview_url_for(video: dict) -> str | None:
         # keeps a stable URL and stays cached.
         version = video.get("preview_version")
         return f"{url}?v={version}" if version else url
-    return video.get("preview_url")
+    external = video.get("preview_url")
+    if external:
+        return external
+    if video.get("status") == "done":
+        return f"/videos/{video['id']}/preview"
+    return None
 
 
 def serialize_video(video: dict) -> dict:

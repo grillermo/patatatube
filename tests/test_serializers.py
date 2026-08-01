@@ -205,3 +205,35 @@ def test_serialize_upload_video_redacts_tmp_path_from_url():
     assert data["url"] == ""
     assert data["title"] == "My Upload"
     assert data["platform"] == "upload"
+
+
+def test_serialize_download_without_thumbnail_uses_generated_preview():
+    """Twitter/upload rows have no external thumbnail — point at our own
+    frame-grab endpoint instead of leaving the client with a black poster."""
+    row = {
+        "id": 28,
+        "url": "https://x.com/Rasmic/status/2069967490575192401",
+        "platform": "twitter",
+        "status": "done",
+        "preview_url": None,
+    }
+    assert serialize_video(row)["preview_url"] == "/videos/28/preview"
+
+
+def test_serialize_download_keeps_external_thumbnail():
+    row = {
+        "id": 9,
+        "url": "https://youtu.be/dQw4w9WgXcQ",
+        "platform": "youtube",
+        "status": "done",
+        "preview_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+    }
+    assert serialize_video(row)["preview_url"] == (
+        "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+    )
+
+
+def test_serialize_download_not_done_has_no_preview():
+    """Nothing to grab a frame from until the file exists."""
+    row = {"id": 30, "url": "https://x.com/a/status/1", "status": "queued"}
+    assert serialize_video(row)["preview_url"] is None

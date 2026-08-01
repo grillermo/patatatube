@@ -39,6 +39,9 @@ PREVIEWS_DIR = Path("data/previews")
 # cache so previously-cached full-size files regenerate at the new size.
 PREVIEW_MAX_EDGE = 1200
 PREVIEW_CACHE_SUFFIX = f"r{PREVIEW_MAX_EDGE}"
+# Seconds into the file to grab a download's poster frame from. Frame 0 is
+# black in most Twitter clips and screen recordings.
+PREVIEW_FRAME_OFFSET = 3.0
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 VIDEO_CHUNK_SIZE = 1024 * 1024
 DEFAULT_VIDEO_STREAM_LIMIT = 16
@@ -449,18 +452,74 @@ def _resize_jpeg(content: bytes, max_edge: int) -> bytes:
     return proc.stdout
 
 
+def _grab_frame(path: Path, offset: float, max_edge: int) -> bytes:
+    """One JPEG frame from `path`, taken `offset` seconds in and downscaled.
+
+    Seeking matters: the opening frame of a Twitter clip or a screen recording
+    is very often black, which is exactly the poster this replaces. A clip
+    shorter than the offset seeks past the end and yields nothing, so that case
+    retries from the start."""
+    def run(seek: float) -> bytes:
+        cmd = [FFMPEG_BIN, "-loglevel", "error"]
+        if seek:
+            cmd += ["-ss", str(seek)]
+        cmd += [
+            "-i", str(path), "-frames:v", "1",
+            "-vf", (
+                f"scale='min({max_edge},iw)':'min({max_edge},ih)':"
+                "force_original_aspect_ratio=decrease"
+            ),
+            "-q:v", "3", "-f", "mjpeg", "pipe:1",
+        ]
+        try:
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError:
+            return b""
+        return proc.stdout if proc.returncode == 0 else b""
+
+    return run(offset) or run(0)
+
+
 def _build_preview(rating_key: str, max_edge: int) -> bytes:
     """Fetch the Plex thumb and downscale it. Runs in a worker thread."""
     content = plex.fetch_thumb(rating_key)
     return _resize_jpeg(content, max_edge)
 
 
+async def _download_preview(video: dict) -> Response:
+    """Poster for a download row, grabbed out of its own mp4 and cached to disk."""
+    filename = video.get("filename")
+    path = VIDEOS_DIR / filename if filename else None
+    if video.get("status") != "done" or not path or not path.exists():
+        raise HTTPException(status_code=404, detail="No preview")
+
+    cache_file = PREVIEWS_DIR / f"dl{video['id']}.{PREVIEW_CACHE_SUFFIX}.jpg"
+    if not cache_file.exists():
+        content = await asyncio.to_thread(
+            _grab_frame, path, PREVIEW_FRAME_OFFSET, PREVIEW_MAX_EDGE
+        )
+        if not content:
+            raise HTTPException(status_code=502, detail="Preview extraction failed")
+        PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = cache_file.with_suffix(".jpg.tmp")
+        tmp.write_bytes(content)
+        tmp.replace(cache_file)
+
+    return Response(
+        content=cache_file.read_bytes(),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @router.get("/videos/{video_id}/preview")
 async def video_preview(video_id: int, request: Request, kind: str = "item"):
     _check_token_or_query(request)
     video = db.get_video(video_id)
-    if not video or video.get("source") != "library" or video.get("deleted_at"):
+    if not video or video.get("deleted_at"):
         raise HTTPException(status_code=404, detail="No preview")
+    if video.get("source") != "library":
+        return await _download_preview(video)
     if kind == "show":
         rating_key = video.get("show_rating_key")
         version = video.get("show_preview_version")
@@ -823,6 +882,8 @@ async def api_delete_video(video_id: int, request: Request):
         else:
             if video.get("filename"):
                 (VIDEOS_DIR / video["filename"]).unlink(missing_ok=True)
+            # The generated poster is derived from that mp4 — drop it too.
+            (PREVIEWS_DIR / f"dl{video_id}.{PREVIEW_CACHE_SUFFIX}.jpg").unlink(missing_ok=True)
             db.delete_video(video_id)
     return {"ok": True}
 

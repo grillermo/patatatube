@@ -1753,3 +1753,59 @@ def test_upload_file_rejects_a_library_classification(client):
         headers={"Authorization": "Bearer test-secret"},
     )
     assert resp.status_code == 400
+
+
+def test_preview_grabs_frame_for_download_without_thumbnail(client, tmp_path, monkeypatch):
+    """Twitter/upload rows carry no external thumb — serve a frame from the mp4."""
+    import router
+    monkeypatch.setattr("cache.get", _cache_miss)
+    monkeypatch.setattr("cache.put", _cache_noop)
+    previews = tmp_path / "previews"
+    monkeypatch.setattr("router.PREVIEWS_DIR", previews)
+    grabs = []
+
+    def fake_grab(path, offset, max_edge):
+        grabs.append((path, offset, max_edge))
+        return b"FRAME"
+
+    monkeypatch.setattr(router, "_grab_frame", fake_grab)
+    vid, f = make_done_download_video(tmp_path)
+    try:
+        assert client.get(f"/videos/{vid}/preview").status_code == 401
+
+        resp = client.get(f"/videos/{vid}/preview", headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.content == b"FRAME"
+        assert resp.headers["content-type"] == "image/jpeg"
+        # Frame taken a few seconds in — the first frame is routinely black.
+        assert grabs == [(f, router.PREVIEW_FRAME_OFFSET, router.PREVIEW_MAX_EDGE)]
+
+        client.get(f"/videos/{vid}/preview", headers=AUTH)  # disk cache
+        assert len(grabs) == 1
+    finally:
+        f.unlink(missing_ok=True)
+
+
+def test_preview_404s_when_download_file_is_missing(client, tmp_path, monkeypatch):
+    import db
+    monkeypatch.setattr("cache.get", _cache_miss)
+    monkeypatch.setattr("cache.put", _cache_noop)
+    monkeypatch.setattr("router.PREVIEWS_DIR", tmp_path / "previews")
+    vid = db.add_video("https://x.com/a/status/9", platform="twitter")
+    db.update_video(vid, "done", filename=f"{vid}.mp4")
+    assert client.get(f"/videos/{vid}/preview", headers=AUTH).status_code == 404
+
+
+def test_delete_removes_cached_download_preview(client, tmp_path, monkeypatch):
+    import router
+    previews = tmp_path / "previews"
+    previews.mkdir()
+    monkeypatch.setattr("router.PREVIEWS_DIR", previews)
+    vid, f = make_done_download_video(tmp_path)
+    poster = previews / f"dl{vid}.{router.PREVIEW_CACHE_SUFFIX}.jpg"
+    poster.write_bytes(b"FRAME")
+    try:
+        assert client.post(f"/api/video/{vid}/delete", headers=AUTH).status_code == 200
+        assert not poster.exists()
+    finally:
+        f.unlink(missing_ok=True)
