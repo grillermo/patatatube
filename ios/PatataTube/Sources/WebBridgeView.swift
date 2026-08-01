@@ -126,16 +126,33 @@ final class WebBridgeModel: ObservableObject {
     @Published private(set) var suggestions: [WebHistoryEntry] = []
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
-    @Published fileprivate var pendingURL: URL?
-    @Published fileprivate var command: Command = .none
+    /// Bumped by every navigation command (`navigate(to:)`, `goBack()`,
+    /// `goForward()`, `reload()`) so `SoundBridgeWebView` re-renders and
+    /// `updateUIView` picks up the new `pendingURL`/`command`. `pendingURL`
+    /// and `command` themselves are plain stored properties, not
+    /// `@Published` — clearing them in `consumePending`/`consumeCommand`
+    /// happens from inside `updateUIView`/`makeUIView`, and publishing a
+    /// change from within a SwiftUI view update is the pattern we're
+    /// avoiding here, even when the value genuinely changed.
+    @Published private(set) var navigationRevision = 0
+    fileprivate var pendingURL: URL?
+    fileprivate var command: Command = .none
 
     let history: WebHistoryStore
     private(set) var currentURL: URL
+    /// Set `true` when `navigate(to:)` kicks off a new load, `false` once
+    /// `didCommit` (success) or `navigationFailed()` (failure) hears back
+    /// from WebKit. This — not `pendingURL == nil` — is the reliable signal
+    /// that a navigation is still outstanding: `pendingURL` is consumed
+    /// (cleared) by `updateUIView` in the same SwiftUI update pass as
+    /// focus-change handling, with unspecified ordering, so it can already
+    /// read `nil` before the page has actually committed.
+    private(set) var navigationInFlight = false
     /// Tracks whether the address `TextField` is focused, so a background page
     /// commit (redirect, `didFinish` chatter) never clobbers text the user is
     /// still typing. Kept in the model — not `@FocusState` — because
     /// `didCommit` runs from the coordinator, outside the view.
-    private var isAddressFieldFocused = false
+    private(set) var isAddressFieldFocused = false
 
     init(history: WebHistoryStore, fallback: URL) {
         self.history = history
@@ -162,9 +179,20 @@ final class WebBridgeModel: ObservableObject {
         navigate(to: url)
     }
 
-    func goBack() { command = .back }
-    func goForward() { command = .forward }
-    func reload() { command = .reload }
+    func goBack() {
+        command = .back
+        navigationRevision += 1
+    }
+
+    func goForward() {
+        command = .forward
+        navigationRevision += 1
+    }
+
+    func reload() {
+        command = .reload
+        navigationRevision += 1
+    }
 
     func resetAddressText() {
         addressText = currentURL.absoluteString
@@ -172,23 +200,30 @@ final class WebBridgeModel: ObservableObject {
     }
 
     /// Called by the view whenever the address field's focus changes. Losing
-    /// focus normally reverts the field to the current URL, but not when a
-    /// navigation is already in flight (`pendingURL != nil`) — otherwise the
+    /// focus normally reverts the field to the current URL, but not while a
+    /// navigation is still in flight (`navigationInFlight`) — otherwise the
     /// field would flash back to the old URL for the moment between submit
-    /// and the new page's `didCommit`.
+    /// and the new page's `didCommit`/`navigationFailed`.
     func setAddressFocused(_ focused: Bool) {
         isAddressFieldFocused = focused
-        if !focused && pendingURL == nil {
+        if !focused && !navigationInFlight {
             resetAddressText()
         }
     }
 
+    /// Only refreshes while the user is actually editing the field. Without
+    /// this guard, the write `navigate(to:)` makes to `addressText` (to show
+    /// the destination while it loads) would also refire this, repopulating
+    /// suggestions against a `currentURL` that hasn't updated yet — stale
+    /// data that a second Enter could act on if the navigation never commits.
     func refreshSuggestions() {
+        guard isAddressFieldFocused else { return }
         suggestions = addressText == currentURL.absoluteString ? [] : history.search(addressText)
     }
 
     /// Called by the coordinator once WebKit commits a page.
     func didCommit(url: URL, canGoBack: Bool, canGoForward: Bool) {
+        navigationInFlight = false
         currentURL = url
         if !isAddressFieldFocused {
             addressText = url.absoluteString
@@ -200,6 +235,20 @@ final class WebBridgeModel: ObservableObject {
         DevLog.event(.nav, "web bridge navigate", ["host": url.host ?? ""])
     }
 
+    /// Called by the coordinator when a navigation fails outright (bad host,
+    /// no network) instead of committing. Mirrors `didCommit`'s "don't
+    /// clobber if the user is typing" behavior, but restores the previous
+    /// `currentURL` rather than adopting a new one.
+    func navigationFailed(canGoBack: Bool, canGoForward: Bool, host: String) {
+        navigationInFlight = false
+        if !isAddressFieldFocused {
+            addressText = currentURL.absoluteString
+        }
+        self.canGoBack = canGoBack
+        self.canGoForward = canGoForward
+        DevLog.event(.error, "web bridge navigation failed", ["host": host])
+    }
+
     func updateNavigationState(canGoBack: Bool, canGoForward: Bool) {
         self.canGoBack = canGoBack
         self.canGoForward = canGoForward
@@ -209,13 +258,13 @@ final class WebBridgeModel: ObservableObject {
         suggestions = []
         addressText = url.absoluteString
         pendingURL = url
+        navigationInFlight = true
+        navigationRevision += 1
     }
 
-    /// `@Published` fires `objectWillChange` on every set, changed or not.
-    /// Both consumers below must not write when the value is already at rest
-    /// (`nil` / `.none`) — an unconditional `= nil` here would re-publish on
-    /// every `updateUIView` call, including the ones it itself triggers,
-    /// turning that into a self-sustaining re-render loop.
+    /// Not `@Published`; see `navigationRevision` above for why. Consuming
+    /// (clearing) here is still important so a second `updateUIView` call
+    /// doesn't re-issue the same load/command.
     fileprivate func consumePending() -> URL? {
         guard let url = pendingURL else { return nil }
         pendingURL = nil
@@ -304,6 +353,26 @@ struct SoundBridgeWebView: UIViewRepresentable {
             MainActor.assumeIsolated {
                 model.updateNavigationState(canGoBack: webView.canGoBack,
                                             canGoForward: webView.canGoForward)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            handleNavigationFailure(webView)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+                     withError error: Error) {
+            handleNavigationFailure(webView)
+        }
+
+        /// Never logs the failed URL or `error.localizedDescription` — both
+        /// can embed the URL. `webView.url?.host` is best-effort only; WebKit
+        /// may already have reverted it by the time this runs.
+        private func handleNavigationFailure(_ webView: WKWebView) {
+            MainActor.assumeIsolated {
+                model.navigationFailed(canGoBack: webView.canGoBack,
+                                       canGoForward: webView.canGoForward,
+                                       host: webView.url?.host ?? "")
             }
         }
     }
