@@ -48,6 +48,9 @@ targets:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations: {}
         UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: com.patatatube.openWeb
+            UIApplicationShortcutItemTitle: Open Web
+            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeBookmark
           - UIApplicationShortcutItemType: com.patatatube.clearVideos
             UIApplicationShortcutItemTitle: Clear Videos
             UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare

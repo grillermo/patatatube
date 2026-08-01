@@ -38,6 +38,14 @@
 	<array>
 		<dict>
 			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeBookmark</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Open Web</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.patatatube.openWeb</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconType</key>
 			<string>UIApplicationShortcutIconTypeShare</string>
 			<key>UIApplicationShortcutItemTitle</key>
 			<string>Clear Videos</string>

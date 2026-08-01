@@ -31,6 +31,11 @@ final class AppModel: ObservableObject {
     /// across relaunch.
     @Published var randomizeByClassification: [String: Bool] = [:]
 
+    /// Bumped by the "Open Web" quick action. A counter, not a Bool, so a
+    /// second shortcut tap re-opens the bridge even if the flag never got
+    /// cleared — the grid only reacts to changes.
+    @Published var webBridgeRequests: Int = 0
+
     func randomize(for classification: String?) -> Bool {
         randomizeByClassification[classification ?? "all"] ?? false
     }
@@ -95,6 +100,7 @@ final class AppModel: ObservableObject {
 
     func handle(_ action: QuickAction) async {
         switch action {
+        case .openWeb: webBridgeRequests += 1
         case .clearVideos: await clearVideos()
         case .clearCovers: await clearCovers()
         case .clearLists: await clearLists()

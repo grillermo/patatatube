@@ -227,6 +227,7 @@ struct VideoGridView: View {
                     }
                 }
             }
+            .onChange(of: model.webBridgeRequests) { _, _ in showWebBridge = true }
             .refreshable { await store.refreshLibrary() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
