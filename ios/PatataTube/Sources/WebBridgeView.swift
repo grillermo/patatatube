@@ -13,6 +13,10 @@ import PatataTubeKit
 /// The address bar on top drives navigation: typing fuzzy-searches visited
 /// pages (spaces are wildcards), but text that is itself an address navigates
 /// there rather than to a match. The sheet reopens on the last committed page.
+///
+/// Presented as a `fullScreenCover` and deliberately without a `NavigationStack`
+/// — the title bar bought nothing and cost a whole row, so Done lives in the
+/// address bar and everything below it is web.
 struct WebBridgeView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: WebBridgeModel
@@ -26,23 +30,14 @@ struct WebBridgeView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                addressBar
-                Divider()
-                ZStack(alignment: .top) {
-                    SoundBridgeWebView(model: model)
-                        .ignoresSafeArea(edges: .bottom)
-                    if addressFocused && !model.suggestions.isEmpty {
-                        suggestionList
-                    }
-                }
-            }
-            .navigationTitle("Live")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Done") { dismiss() }
+        VStack(spacing: 0) {
+            addressBar
+            Divider()
+            ZStack(alignment: .top) {
+                SoundBridgeWebView(model: model)
+                    .ignoresSafeArea(edges: .bottom)
+                if addressFocused && !model.suggestions.isEmpty {
+                    suggestionList
                 }
             }
         }
@@ -50,6 +45,9 @@ struct WebBridgeView: View {
 
     private var addressBar: some View {
         HStack(spacing: 12) {
+            Button { dismiss() } label: { Image(systemName: "xmark") }
+                .accessibilityLabel("Done")
+
             Button { model.goBack() } label: { Image(systemName: "chevron.backward") }
                 .disabled(!model.canGoBack)
             Button { model.goForward() } label: { Image(systemName: "chevron.forward") }
@@ -86,7 +84,7 @@ struct WebBridgeView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
     }
 
     private var suggestionList: some View {

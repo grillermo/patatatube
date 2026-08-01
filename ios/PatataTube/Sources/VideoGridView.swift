@@ -230,7 +230,7 @@ struct VideoGridView: View {
             .refreshable { await store.refreshLibrary() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
-            .sheet(isPresented: $showWebBridge) { WebBridgeView() }
+            .fullScreenCover(isPresented: $showWebBridge) { WebBridgeView() }
             .alert(
                 "Download all",
                 isPresented: Binding(
