@@ -43,14 +43,13 @@ public final class WebHistoryStore: @unchecked Sendable {
         entries.first.flatMap { URL(string: $0.url) }
     }
 
-    public func record(_ url: URL, now: Date = Date()) {
+    public func record(_ url: URL) {
         let key = url.absoluteString
-        lock.lock()
+        lock.lock(); defer { lock.unlock() }
         cache.removeAll { $0.url == key }
-        cache.insert(WebHistoryEntry(url: key, lastVisited: now), at: 0)
+        cache.insert(WebHistoryEntry(url: key, lastVisited: Date()), at: 0)
         if cache.count > limit { cache.removeLast(cache.count - limit) }
         let snapshot = cache
-        lock.unlock()
 
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         defaults.set(data, forKey: Self.storageKey)
