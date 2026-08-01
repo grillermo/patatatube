@@ -11,8 +11,8 @@ import PatataTubeKit
 /// Nothing else crosses the bridge — unknown message bodies are ignored.
 ///
 /// The address bar on top drives navigation: typing fuzzy-searches visited
-/// pages (spaces are wildcards), and text matching nothing is resolved as a
-/// URL instead. The sheet reopens on whatever page was last committed.
+/// pages (spaces are wildcards), but text that is itself an address navigates
+/// there rather than to a match. The sheet reopens on the last committed page.
 struct WebBridgeView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: WebBridgeModel
@@ -162,12 +162,10 @@ final class WebBridgeModel: ObservableObject {
         self.pendingURL = start
     }
 
-    /// Enter: the top fuzzy match wins; with no matches the text is resolved as
-    /// an address; unresolvable text navigates nowhere and the field reverts.
+    /// Enter: a typed address wins; otherwise the top fuzzy match; text that is
+    /// neither navigates nowhere and the field reverts.
     func submit() {
-        if let top = suggestions.first, let url = URL(string: top.url) {
-            navigate(to: url)
-        } else if let url = WebAddress.resolve(addressText) {
+        if let url = WebAddress.destination(for: addressText, topMatch: suggestions.first?.url) {
             navigate(to: url)
         } else {
             resetAddressText()

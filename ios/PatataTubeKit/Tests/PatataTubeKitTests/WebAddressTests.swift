@@ -31,4 +31,27 @@ struct WebAddressTests {
         #expect(WebAddress.resolve("   ") == nil)
         #expect(WebAddress.resolve("localpage") == nil)
     }
+
+    @Test func typedAddressBeatsTheTopHistoryMatch() {
+        #expect(WebAddress.destination(for: "example.com/new",
+                                       topMatch: "https://example.com/old")?.absoluteString
+                == "https://example.com/new")
+        #expect(WebAddress.destination(for: "https://other.test",
+                                       topMatch: "https://awh.chiq.me/live")?.absoluteString
+                == "https://other.test")
+    }
+
+    @Test func fallsBackToTheTopHistoryMatchForNonAddresses() {
+        #expect(WebAddress.destination(for: "awh live",
+                                       topMatch: "https://awh.chiq.me/live")?.absoluteString
+                == "https://awh.chiq.me/live")
+        #expect(WebAddress.destination(for: "localpage",
+                                       topMatch: "https://awh.chiq.me/live")?.absoluteString
+                == "https://awh.chiq.me/live")
+    }
+
+    @Test func resolvesToNothingWhenNeitherApplies() {
+        #expect(WebAddress.destination(for: "cat videos", topMatch: nil) == nil)
+        #expect(WebAddress.destination(for: "", topMatch: nil) == nil)
+    }
 }

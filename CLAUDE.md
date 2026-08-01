@@ -178,9 +178,11 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
   last committed page (`WebHistoryStore.lastURL`, `UserDefaults` key
   `webBridgeHistory`, 200 entries) rather than a hardcoded URL. Typing
   fuzzy-searches that history — whitespace is a wildcard, tokens must match in
-  order — and text matching nothing goes through `WebAddress.resolve`, which
-  fills in `https://` and refuses anything without a host. There is deliberately
-  no search-engine fallback.
+  order. Enter routes through `WebAddress.destination`: **typed addresses win
+  over the top history match**, so text that resolves as a URL always navigates
+  there, and history only decides for text that isn't an address on its own.
+  Resolution fills in `https://` and refuses anything without a host. There is
+  deliberately no search-engine fallback.
 
 ### Plex library (library rows)
 

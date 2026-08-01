@@ -242,6 +242,8 @@ Run the app from Xcode, tap the live-page button in the grid
 - [ ] Typing `awh live` (space as wildcard) matches `awh.chiq.me/live`.
 - [ ] Typing `example.com` with no history match and hitting Go navigates to
       `https://example.com`.
+- [ ] Typing a full URL *while the suggestion list shows matches* and hitting Go
+      navigates to the typed URL, not the first suggestion.
 - [ ] Typing `cat videos` and hitting Go does nothing and the field reverts to
       the current URL.
 - [ ] Tapping a link inside the page updates the address field.
