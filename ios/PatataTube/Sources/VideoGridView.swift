@@ -250,7 +250,6 @@ struct VideoGridView: View {
     private var filterTabs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                tab(title: "all", value: nil)
                 ForEach(classifications, id: \.self) { c in tab(title: c, value: c) }
             }
             .padding(.horizontal)

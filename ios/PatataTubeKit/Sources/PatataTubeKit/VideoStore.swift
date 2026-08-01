@@ -37,7 +37,7 @@ public final class VideoStore: ObservableObject {
         self.cache = cache
         self.mediaCache = mediaCache
         self.defaults = defaults
-        self.filter = defaults.string(forKey: Self.filterKey)
+        self.filter = defaults.string(forKey: Self.filterKey) ?? "children"
     }
 
     /// Reads + JSON-decodes the persisted list off the main actor. Done inline it
