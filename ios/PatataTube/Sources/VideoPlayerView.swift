@@ -12,6 +12,10 @@ struct VideoPlayerView: View {
     /// When true, "next" (manual skip and autoplay-on-end) draws from a
     /// shuffled, no-immediate-repeat order instead of the sequential list.
     let randomize: Bool
+    /// Where to start the *first* item, in seconds. Only ever non-zero when the
+    /// user chose "Resume" in the grid's prompt — every later item in the queue
+    /// starts at 0.
+    let startSecs: Double
     @State private var currentIndex: Int
     /// Random-mode only: cursor state over a shuffled permutation of
     /// `videos.indices`, grown with a fresh shuffle whenever it's exhausted
@@ -21,11 +25,13 @@ struct VideoPlayerView: View {
     @StateObject private var orientationLock: OrientationLockCoordinator
     @StateObject private var orientationControlVisibility = OrientationControlVisibility()
 
-    init(videos: [Video], startIndex: Int, sleepMode: Bool = false, randomize: Bool = false) {
+    init(videos: [Video], startIndex: Int, sleepMode: Bool = false,
+         randomize: Bool = false, startSecs: Double = 0) {
         self.videos = videos
         self.startIndex = startIndex
         self.sleepMode = sleepMode
         self.randomize = randomize
+        self.startSecs = startSecs
         _currentIndex = State(initialValue: startIndex)
         _sleepAfterCurrent = State(initialValue: sleepMode)
         _orientationLock = StateObject(wrappedValue: OrientationLockCoordinator())
@@ -45,6 +51,8 @@ struct VideoPlayerView: View {
     @State private var readyTimeoutTask: Task<Void, Never>?
     @State private var nowPlaying = NowPlayingManager()
     @State private var playToEndObserver: NSObjectProtocol?
+    /// Periodic time observer that feeds the resume reporter. Removed on dismiss.
+    @State private var positionObserver: Any?
     /// false while backgrounded: player detached from the video layer so audio continues.
     @State private var attached = true
     /// Captured before suspension so backgrounding never restarts user-paused playback.
@@ -102,6 +110,7 @@ struct VideoPlayerView: View {
             switch phase {
             case .inactive:
                 resumeAfterDetaching = player.map { $0.timeControlStatus != .paused } ?? false
+                reportPosition()
             case .background:
                 attached = false
             case .active:
@@ -114,12 +123,15 @@ struct VideoPlayerView: View {
         .onDisappear {
             orientationControlVisibility.hide()
             orientationLock.endPlayerSession()
+            reportPosition()
             player?.pause()
             removePlayToEndObserver()
             readyObserver?.invalidate()
             readyObserver = nil
             readyTimeoutTask?.cancel()
             readyTimeoutTask = nil
+            if let positionObserver { player?.removeTimeObserver(positionObserver) }
+            positionObserver = nil
             nowPlaying.detach()
             deactivateAudioSession()
             playbackProbe.detach()
@@ -172,6 +184,12 @@ struct VideoPlayerView: View {
         player.allowsExternalPlayback = true
         player.usesExternalPlaybackWhileExternalScreenIsActive = true
         self.player = player
+        if let target = Self.seekTarget(startSecs: startSecs) {
+            DevLog.event(.play, "resuming", [
+                "video_id": "\(video.id)", "secs": "\(Int(startSecs))",
+            ])
+            await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
         playbackProbe.attach(item: item, player: player, video: video, source: source)
         playWhenReady(item: item, on: player)
         Task { await applyAudioSelection(item: item, lang: video.audioLang) }
@@ -180,7 +198,38 @@ struct VideoPlayerView: View {
         nowPlaying.attach(player: player, title: title(of: video))
         nowPlaying.setNextEnabled(randomize ? hasAnyPlayableVideo : playableIndex(from: currentIndex, direction: 1) != nil)
         bindPlayToEnd()
+        positionObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 10, preferredTimescale: 600), queue: .main
+        ) { time in
+            guard player.timeControlStatus == .playing else { return }
+            let id = video.id
+            let duration = player.currentItem?.duration.seconds
+            let secs = time.seconds
+            Task { await model.positions.record(id: id, secs: secs,
+                                                duration: duration?.isFinite == true ? duration : nil,
+                                                force: false) }
+        }
+        await model.positions.flushPending()
         await loadArtwork(for: player)
+    }
+
+    /// Sub-second offsets aren't worth a seek — they only cost a buffer stall.
+    static func seekTarget(startSecs: Double) -> CMTime? {
+        guard startSecs >= 1 else { return nil }
+        return CMTime(seconds: startSecs, preferredTimescale: 600)
+    }
+
+    /// Forced write for the moments with no later chance: pause, background,
+    /// dismiss, and queue advance.
+    private func reportPosition(force: Bool = true) {
+        guard let player else { return }
+        let id = video.id
+        let secs = player.currentTime().seconds
+        guard secs.isFinite else { return }
+        let duration = player.currentItem?.duration.seconds
+        Task { await model.positions.record(id: id, secs: secs,
+                                            duration: duration?.isFinite == true ? duration : nil,
+                                            force: force) }
     }
 
     /// Show a spinner until `item` has buffered enough to play, then mount the
@@ -359,6 +408,7 @@ struct VideoPlayerView: View {
             object: player?.currentItem, queue: .main
         ) { _ in
             Task { @MainActor in
+                reportPosition()
                 switch playbackEndAction(
                     autoplay: model.autoplay,
                     isForeground: UIApplication.shared.applicationState == .active,
@@ -436,6 +486,7 @@ struct VideoPlayerView: View {
     /// ends (sequential mode) or when nothing playable remains at all
     /// (random mode — otherwise it loops forever via reshuffling).
     private func advance(by direction: Int) {
+        reportPosition()
         guard let player else { return }
         let nextIndex = randomize
             ? randomStep(direction: direction)
