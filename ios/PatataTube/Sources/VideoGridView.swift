@@ -174,51 +174,15 @@ struct VideoGridView: View {
                 ToolbarItem(placement: .principal) {
                     filterTabs
                 }
+                // Pin the search field ahead of the menu so the ellipsis sits
+                // to its right. Without this the system appends search last
+                // and the menu ends up on the far side of the bar.
+                // iOS 26+ only; older systems keep the default ordering.
+                if #available(iOS 26.0, *) {
+                    DefaultToolbarItem(kind: .search, placement: .topBarTrailing)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            showUpload = true
-                        } label: { Label("New video", systemImage: "plus") }
-
-                        Toggle(isOn: $model.autoplay) {
-                            Label("Autoplay", systemImage: "play.circle")
-                        }
-
-                        Toggle(isOn: model.randomizeBinding(for: store.filter)) {
-                            Label("Randomize", systemImage: "shuffle")
-                        }
-
-                        Divider()
-
-                        Button {
-                            presentDownloadAll()
-                        } label: { Label("Download all", systemImage: "arrow.down.circle") }
-                        .disabled(downloadingAll)
-
-                        Button {
-                            showDownloads = true
-                        } label: {
-                            Label("Downloads", systemImage: "arrow.down.circle")
-                        }
-
-                        Button {
-                            cellSize = max(cellSize - cellSizeStep, minCellSize)
-                        } label: { Label("Smaller cells", systemImage: "minus.magnifyingglass") }
-                        .disabled(cellSize <= minCellSize)
-
-                        Button {
-                            cellSize = min(cellSize + cellSizeStep, maxCellSize)
-                        } label: { Label("Bigger cells", systemImage: "plus.magnifyingglass") }
-                        .disabled(cellSize >= maxCellSize)
-
-                        Divider()
-
-                        Button {
-                            showSettings = true
-                        } label: { Label("Settings", systemImage: "gear") }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
+                    optionsMenu
                 }
             }
             .onChange(of: model.webBridgeRequests) { _, _ in showWebBridge = true }
@@ -274,6 +238,53 @@ struct VideoGridView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
+    }
+
+    private var optionsMenu: some View {
+        Menu {
+            Button {
+                showUpload = true
+            } label: { Label("New video", systemImage: "plus") }
+
+            Toggle(isOn: $model.autoplay) {
+                Label("Autoplay", systemImage: "play.circle")
+            }
+
+            Toggle(isOn: model.randomizeBinding(for: store.filter)) {
+                Label("Randomize", systemImage: "shuffle")
+            }
+
+            Divider()
+
+            Button {
+                presentDownloadAll()
+            } label: { Label("Download all", systemImage: "arrow.down.circle") }
+            .disabled(downloadingAll)
+
+            Button {
+                showDownloads = true
+            } label: {
+                Label("Downloads", systemImage: "arrow.down.circle")
+            }
+
+            Button {
+                cellSize = max(cellSize - cellSizeStep, minCellSize)
+            } label: { Label("Smaller cells", systemImage: "minus.magnifyingglass") }
+            .disabled(cellSize <= minCellSize)
+
+            Button {
+                cellSize = min(cellSize + cellSizeStep, maxCellSize)
+            } label: { Label("Bigger cells", systemImage: "plus.magnifyingglass") }
+            .disabled(cellSize >= maxCellSize)
+
+            Divider()
+
+            Button {
+                showSettings = true
+            } label: { Label("Settings", systemImage: "gear") }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
     }
 
     private func initialLoad() async {
