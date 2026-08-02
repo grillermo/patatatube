@@ -4,11 +4,11 @@ import Foundation
 
 private func makeVideo(id: Int, classification: String = "children", status: String = "completed",
                        errorMsg: String? = nil, chosenVersionId: Int? = nil,
-                       versions: [VideoVersion] = []) -> Video {
+                       versions: [VideoVersion] = [], resumeSecs: Double = 0) -> Video {
     Video(id: id, url: "u\(id)", title: "t\(id)", platform: nil, sourceKey: nil,
           previewUrl: nil, classification: classification, position: id,
           status: status, errorMsg: errorMsg, streamPath: "/videos/\(id)/stream",
-          chosenVersionId: chosenVersionId, versions: versions)
+          chosenVersionId: chosenVersionId, versions: versions, resumeSecs: resumeSecs)
 }
 
 private final class FakeAPI: VideoAPI, @unchecked Sendable {
@@ -61,6 +61,7 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     var prepareResult = "done"
     var videoResults: [Video] = []
     private(set) var videoCalls = 0
+    private(set) var savedPositions: [(id: Int, secs: Double)] = []
 
     var scanError: Error?
     func scanLibrary() async throws -> ScanResult {
@@ -81,6 +82,7 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     }
     func savePosition(id: Int, secs: Double) async throws {
         if let mutationError { throw mutationError }
+        savedPositions.append((id, secs))
     }
     func prepare(id: Int, bulk: Bool) async throws -> String { prepareResult }
     func video(id: Int) async throws -> Video {
@@ -88,6 +90,49 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         return videoResults.isEmpty ? makeVideo(id: id) : videoResults[min(videoCalls, videoResults.count) - 1]
     }
     func imageData(path: String) async throws -> Data { Data() }
+}
+
+@MainActor @Test func successfulPositionSaveWinsOverStaleRowAndOfflineCacheUntilFreshList() async throws {
+    let api = FakeAPI()
+    let stale = makeVideo(id: 7, classification: "movies", resumeSecs: 10)
+    let cache = tempCache()
+    cache.save([stale], classification: "children")
+    let defaults = try #require(UserDefaults(suiteName: "position-grid-\(UUID().uuidString)"))
+    let positions = ResumePositionStore(defaults: defaults, serverURL: URL(string: "https://srv.test"))
+    let reporter = PlaybackPositionReporter(api: api, store: positions)
+
+    await reporter.record(id: 7, secs: 120, duration: 1_000, force: true)
+
+    #expect(api.savedPositions.map(\.secs) == [120])
+    #expect(positions.pending().isEmpty)
+    #expect(ResumeDecision.decide(
+        resumeSecs: positions.resolved(server: stale.resumeSecs, for: stale.id),
+        classification: stale.classification
+    ) == .ask(secs: 120))
+
+    api.videosError = URLError(.notConnectedToInternet)
+    let videoStore = VideoStore(api: api, cache: cache, positionStore: positions, defaults: defaults)
+    await videoStore.load()
+    let cached = try #require(videoStore.videos.first)
+    #expect(ResumeDecision.decide(
+        resumeSecs: positions.resolved(server: cached.resumeSecs, for: cached.id),
+        classification: cached.classification
+    ) == .ask(secs: 120))
+}
+
+@MainActor @Test func freshOnlineListReplacesSyncedLocalPosition() async throws {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 7, classification: "children", resumeSecs: 45)]
+    let defaults = try #require(UserDefaults(suiteName: "position-fresh-\(UUID().uuidString)"))
+    let positions = ResumePositionStore(defaults: defaults, serverURL: URL(string: "https://srv.test"))
+    positions.setLocal(120, for: 7)
+    positions.markSynced(id: 7)
+    let videoStore = VideoStore(api: api, positionStore: positions, defaults: defaults)
+
+    await videoStore.load()
+
+    let fresh = try #require(videoStore.videos.first)
+    #expect(positions.resolved(server: fresh.resumeSecs, for: fresh.id) == 45)
 }
 
 @Test func videoDecodesVersionsAndDefaultsMissingVersions() throws {
@@ -597,9 +642,15 @@ private func tempCache() -> VideoListCache {
 // discard the stale "adults" result in favor of the current "children" tab.
 @MainActor @Test func switchFilterRapidDoubleSwitchResolvesToLastTab() async {
     let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1, classification: "adults"),
+    api.videosToReturn = [makeVideo(id: 1, classification: "adults", resumeSecs: 10),
                           makeVideo(id: 2, classification: "children")]
-    let store = VideoStore(api: api, cache: tempCache())
+    let defaults = UserDefaults(suiteName: "rapid-filter-\(UUID().uuidString)")!
+    let positions = ResumePositionStore(defaults: defaults)
+    positions.setLocal(120, for: 1)
+    positions.markSynced(id: 1)
+    let store = VideoStore(
+        api: api, cache: tempCache(), positionStore: positions, defaults: defaults
+    )
 
     // Delay only the "adults" fetch, so it's still in flight when the
     // "children" switch lands and finishes first.
@@ -617,4 +668,7 @@ private func tempCache() -> VideoListCache {
     #expect(store.filter == "children")
     #expect(store.videos.map(\.id) == [2])
     #expect(store.isLoading == false)
+    // The discarded adults response must not clear the local value while its
+    // row is absent from the list that actually reached the grid.
+    #expect(positions.resolved(server: 10, for: 1) == 120)
 }

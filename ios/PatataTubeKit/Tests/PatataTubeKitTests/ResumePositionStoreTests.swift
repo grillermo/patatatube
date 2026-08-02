@@ -38,11 +38,30 @@ final class ResumePositionStoreTests: XCTestCase {
         XCTAssertEqual(store.resolved(server: 10, for: 7), 300)
     }
 
-    func testResolvedPrefersServerOnceSynced() throws {
+    func testResolvedPrefersSyncedLocalUntilFreshServerList() throws {
         let store = ResumePositionStore(defaults: try makeDefaults())
         store.setLocal(300, for: 7)
         store.markSynced(id: 7)
+        XCTAssertEqual(store.resolved(server: 10, for: 7), 300)
+    }
+
+    func testFreshServerListReplacesSyncedLocalValue() throws {
+        let store = ResumePositionStore(defaults: try makeDefaults())
+        store.setLocal(300, for: 7)
+        store.markSynced(id: 7)
+
+        store.reconcileFreshServerPositions([7: 10])
+
         XCTAssertEqual(store.resolved(server: 10, for: 7), 10)
+    }
+
+    func testFreshServerListDoesNotReplacePendingLocalValue() throws {
+        let store = ResumePositionStore(defaults: try makeDefaults())
+        store.setLocal(300, for: 7)
+
+        store.reconcileFreshServerPositions([7: 10])
+
+        XCTAssertEqual(store.resolved(server: 10, for: 7), 300)
     }
 
     func testResolvedFallsBackToServerWithoutLocal() throws {
@@ -55,5 +74,22 @@ final class ResumePositionStoreTests: XCTestCase {
         store.setLocal(0, for: 7)
         XCTAssertEqual(store.local(for: 7), 0)
         XCTAssertEqual(store.resolved(server: 500, for: 7), 0)
+    }
+
+    func testPendingPositionsAreNamespacedByNormalizedServer() throws {
+        let defaults = try makeDefaults()
+        let store = ResumePositionStore(
+            defaults: defaults,
+            serverURL: URL(string: "HTTPS://Example.COM:443/api/")
+        )
+        store.setLocal(91.5, for: 7)
+
+        store.useServer(URL(string: "https://other.example/api"))
+        XCTAssertNil(store.local(for: 7))
+        XCTAssertEqual(store.pending(), [:])
+
+        store.useServer(URL(string: "https://example.com/api"))
+        XCTAssertEqual(store.local(for: 7), 91.5)
+        XCTAssertEqual(store.pending(), [7: 91.5])
     }
 }

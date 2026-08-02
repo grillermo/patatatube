@@ -203,6 +203,27 @@ final class PlaybackPositionReporterTests: XCTestCase {
         XCTAssertEqual(store.pending(), [:])
     }
 
+    func testFlushDoesNotSendAnotherServersPendingPosition() async throws {
+        let api = SpyAPI()
+        let defaults = try XCTUnwrap(
+            UserDefaults(suiteName: "reporter-server-\(UUID().uuidString)")
+        )
+        let store = ResumePositionStore(
+            defaults: defaults,
+            serverURL: URL(string: "https://server-a.test")
+        )
+        store.setLocal(30, for: 5)
+        store.useServer(URL(string: "https://server-b.test"))
+        let reporter = PlaybackPositionReporter(api: api, store: store)
+
+        await reporter.flushPending()
+
+        XCTAssertTrue(api.saved.isEmpty)
+        store.useServer(URL(string: "https://server-a.test"))
+        await reporter.flushPending()
+        XCTAssertEqual(api.saved.map(\.secs), [30])
+    }
+
     func testOlderInFlightSuccessDoesNotClearNewerThrottledPosition() async throws {
         let api = ControlledSpyAPI()
         api.blockNextSave()

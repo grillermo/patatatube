@@ -56,6 +56,13 @@ def test_set_resume_secs_clamps_negative(tmp_db):
     assert tmp_db.get_video(video_id)["resume_secs"] == 0
 
 
+@pytest.mark.parametrize("secs", [float("nan"), float("inf"), float("-inf")])
+def test_set_resume_secs_rejects_non_finite(tmp_db, secs):
+    video_id = tmp_db.add_video("https://x.com/i/status/finite", "twitter")
+    with pytest.raises(ValueError, match="finite"):
+        tmp_db.set_resume_secs(video_id, secs)
+
+
 def test_init_db_is_idempotent_with_resume_secs(tmp_db):
     tmp_db.init_db()
     tmp_db.init_db()

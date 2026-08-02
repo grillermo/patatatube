@@ -1,89 +1,171 @@
 import Foundation
 
-/// Local mirror of the server's resume positions.
+/// Identifies the exact local write acknowledged by an asynchronous save.
+public struct ResumePositionGeneration: Sendable {
+    fileprivate let serverIdentity: String
+    fileprivate let value: UInt64
+}
+
+/// Local mirror of the configured server's resume positions.
 ///
-/// The server is the source of truth, but a device watching a downloaded file
-/// on a dead network still has to resume correctly, and a write that failed
-/// must not be lost. Every write lands here first and is marked pending until
-/// the API accepts it; a pending value outranks whatever the list endpoint
-/// last said, because it is strictly newer.
+/// Every key is scoped to a normalized server identity, so changing the API
+/// base URL can never send server A's pending row id to server B. A successful
+/// write remains authoritative over the currently displayed/cached list until
+/// a later successful list fetch supplies a fresh value for that row.
 public final class ResumePositionStore: @unchecked Sendable {
     private let defaults: UserDefaults
     private let lock = NSLock()
-    private var generations: [Int: UInt64] = [:]
+    private var serverIdentity: String
+    private var generations: [String: UInt64] = [:]
 
-    public init(defaults: UserDefaults = .standard) {
+    public init(defaults: UserDefaults = .standard, serverURL: URL? = nil) {
         self.defaults = defaults
+        self.serverIdentity = Self.normalizedServerIdentity(serverURL)
     }
 
-    private func valueKey(_ id: Int) -> String { "resumeSecs.\(id)" }
-    private func pendingKey(_ id: Int) -> String { "resumeSecsPending.\(id)" }
+    /// Switches reads, writes, and pending enumeration to one server namespace.
+    public func useServer(_ serverURL: URL?) {
+        lock.lock(); defer { lock.unlock() }
+        serverIdentity = Self.normalizedServerIdentity(serverURL)
+    }
+
+    public static func normalizedServerIdentity(_ serverURL: URL?) -> String {
+        guard let serverURL,
+              var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false)
+        else { return "unconfigured" }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        if (components.scheme == "https" && components.port == 443)
+            || (components.scheme == "http" && components.port == 80) {
+            components.port = nil
+        }
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+        while components.path.count > 1 && components.path.hasSuffix("/") {
+            components.path.removeLast()
+        }
+        return components.string ?? serverURL.absoluteString
+    }
+
+    private func namespacePrefix(_ identity: String) -> String {
+        "resumePosition.\(identity)."
+    }
+
+    private func valueKey(_ id: Int, identity: String) -> String {
+        "\(namespacePrefix(identity))value.\(id)"
+    }
+
+    private func pendingKey(_ id: Int, identity: String) -> String {
+        "\(namespacePrefix(identity))pending.\(id)"
+    }
+
+    private func awaitingServerKey(_ id: Int, identity: String) -> String {
+        "\(namespacePrefix(identity))awaitingServer.\(id)"
+    }
+
+    private func generationKey(_ id: Int, identity: String) -> String {
+        "\(identity)|\(id)"
+    }
 
     public func local(for id: Int) -> Double? {
         lock.lock(); defer { lock.unlock() }
-        guard defaults.object(forKey: valueKey(id)) != nil else { return nil }
-        return defaults.double(forKey: valueKey(id))
+        let key = valueKey(id, identity: serverIdentity)
+        guard defaults.object(forKey: key) != nil else { return nil }
+        return defaults.double(forKey: key)
     }
 
-    /// Stores a value and returns its in-process generation for conditional
-    /// acknowledgement after an asynchronous API write.
+    /// Stores a value and returns its server-scoped in-process generation for
+    /// conditional acknowledgement after an asynchronous API write.
     @discardableResult
-    public func setLocal(_ secs: Double, for id: Int) -> UInt64 {
+    public func setLocal(_ secs: Double, for id: Int) -> ResumePositionGeneration {
         lock.lock(); defer { lock.unlock() }
-        let generation = generations[id, default: 0] &+ 1
-        generations[id] = generation
-        defaults.set(max(0, secs), forKey: valueKey(id))
-        defaults.set(true, forKey: pendingKey(id))
-        return generation
+        let identity = serverIdentity
+        let key = generationKey(id, identity: identity)
+        let generation = generations[key, default: 0] &+ 1
+        generations[key] = generation
+        defaults.set(max(0, secs), forKey: valueKey(id, identity: identity))
+        defaults.set(true, forKey: pendingKey(id, identity: identity))
+        defaults.removeObject(forKey: awaitingServerKey(id, identity: identity))
+        return ResumePositionGeneration(serverIdentity: identity, value: generation)
     }
 
     public func markSynced(id: Int) {
         lock.lock(); defer { lock.unlock() }
-        defaults.removeObject(forKey: pendingKey(id))
+        markSyncedLocked(id: id, identity: serverIdentity)
     }
 
     /// Clears a pending marker only when no newer local write superseded the
-    /// value that the caller sent.
-    public func markSynced(id: Int, generation: UInt64) {
+    /// value that the caller sent, and retains local authority until a fresh
+    /// server list is reconciled.
+    public func markSynced(id: Int, generation: ResumePositionGeneration) {
         lock.lock(); defer { lock.unlock() }
-        guard generations[id, default: 0] == generation else { return }
-        defaults.removeObject(forKey: pendingKey(id))
+        let key = generationKey(id, identity: generation.serverIdentity)
+        guard generations[key, default: 0] == generation.value else { return }
+        markSyncedLocked(id: id, identity: generation.serverIdentity)
     }
 
-    /// Ids whose latest local value never reached the server, newest value each.
+    private func markSyncedLocked(id: Int, identity: String) {
+        defaults.removeObject(forKey: pendingKey(id, identity: identity))
+        defaults.set(true, forKey: awaitingServerKey(id, identity: identity))
+    }
+
+    /// Ids whose latest local value never reached the current server.
     public func pending() -> [Int: Double] {
         lock.lock(); defer { lock.unlock() }
-        var result: [Int: Double] = [:]
-        for (key, _) in defaults.dictionaryRepresentation() where key.hasPrefix("resumeSecsPending.") {
-            let suffix = String(key.dropFirst("resumeSecsPending.".count))
-            guard let id = Int(suffix), defaults.bool(forKey: key) else { continue }
-            result[id] = defaults.double(forKey: valueKey(id))
+        return pendingLocked(identity: serverIdentity).reduce(into: [:]) {
+            $0[$1.id] = $1.secs
         }
-        return result
     }
 
-    /// Pending values with their in-process generations, for safe async
-    /// acknowledgements. Existing persisted values have generation zero until
-    /// a newer local write occurs in this process.
-    public func pendingWithGenerations() -> [(id: Int, secs: Double, generation: UInt64)] {
+    /// Pending values with server-scoped generations for safe async acks.
+    public func pendingWithGenerations() -> [(
+        id: Int, secs: Double, generation: ResumePositionGeneration
+    )] {
         lock.lock(); defer { lock.unlock() }
-        var result: [(id: Int, secs: Double, generation: UInt64)] = []
-        for (key, _) in defaults.dictionaryRepresentation() where key.hasPrefix("resumeSecsPending.") {
-            let suffix = String(key.dropFirst("resumeSecsPending.".count))
+        let identity = serverIdentity
+        return pendingLocked(identity: identity).map { item in
+            let generation = generations[generationKey(item.id, identity: identity), default: 0]
+            return (
+                item.id,
+                item.secs,
+                ResumePositionGeneration(serverIdentity: identity, value: generation)
+            )
+        }
+    }
+
+    private func pendingLocked(identity: String) -> [(id: Int, secs: Double)] {
+        let prefix = "\(namespacePrefix(identity))pending."
+        var result: [(id: Int, secs: Double)] = []
+        for (key, _) in defaults.dictionaryRepresentation() where key.hasPrefix(prefix) {
+            let suffix = String(key.dropFirst(prefix.count))
             guard let id = Int(suffix), defaults.bool(forKey: key) else { continue }
-            result.append((id, defaults.double(forKey: valueKey(id)), generations[id, default: 0]))
+            result.append((id, defaults.double(forKey: valueKey(id, identity: identity))))
         }
         return result
     }
 
-    /// The position to actually use: a pending local write wins, otherwise the
-    /// server's value.
+    /// A successful online list response is the next authoritative observation
+    /// after a write. It may acknowledge the same value or replace it with a
+    /// newer value written by another client. Pending (unsent) values still win.
+    public func reconcileFreshServerPositions(_ positions: [Int: Double]) {
+        lock.lock(); defer { lock.unlock() }
+        let identity = serverIdentity
+        for id in positions.keys where !defaults.bool(forKey: pendingKey(id, identity: identity)) {
+            defaults.removeObject(forKey: awaitingServerKey(id, identity: identity))
+        }
+    }
+
+    /// Pending and successfully-sent-but-not-yet-refetched local values outrank
+    /// the currently displayed row, which may have come from an offline cache.
     public func resolved(server: Double, for id: Int) -> Double {
-        lock.lock()
-        let isPending = defaults.bool(forKey: pendingKey(id))
-        let hasLocal = defaults.object(forKey: valueKey(id)) != nil
-        let localValue = defaults.double(forKey: valueKey(id))
-        lock.unlock()
-        return (isPending && hasLocal) ? localValue : server
+        lock.lock(); defer { lock.unlock() }
+        let identity = serverIdentity
+        let valueKey = valueKey(id, identity: identity)
+        let hasLocal = defaults.object(forKey: valueKey) != nil
+        let isLocallyAuthoritative = defaults.bool(forKey: pendingKey(id, identity: identity))
+            || defaults.bool(forKey: awaitingServerKey(id, identity: identity))
+        return (hasLocal && isLocallyAuthoritative) ? defaults.double(forKey: valueKey) : server
     }
 }

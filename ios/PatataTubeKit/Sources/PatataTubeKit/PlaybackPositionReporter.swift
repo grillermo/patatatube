@@ -51,7 +51,7 @@ public actor PlaybackPositionReporter: PositionReporting {
         }
     }
 
-    private func send(id: Int, secs: Double, generation: UInt64) async {
+    private func send(id: Int, secs: Double, generation: ResumePositionGeneration) async {
         do {
             try await api.savePosition(id: id, secs: secs)
             store.markSynced(id: id, generation: generation)

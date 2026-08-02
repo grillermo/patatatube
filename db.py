@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import json
+import math
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -525,7 +526,10 @@ def set_audio_lang(video_id: int, lang: str) -> None:
 
 def set_resume_secs(video_id: int, secs: float) -> None:
     """Persist where playback got to. Negative input clamps to 0."""
-    value = max(0.0, float(secs))
+    value = float(secs)
+    if not math.isfinite(value):
+        raise ValueError("resume seconds must be finite")
+    value = max(0.0, value)
     with _conn() as conn:
         conn.execute("UPDATE videos SET resume_secs = ? WHERE id = ?", (value, video_id))
 

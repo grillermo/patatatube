@@ -17,6 +17,11 @@ final class ResumeDecisionTests: XCTestCase {
                        .playFromStart)
     }
 
+    func testAsksAtExactThreshold() {
+        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 60.0, classification: "movies"),
+                       .ask(secs: 60.0))
+    }
+
     func testDoesNotAskAtZero() {
         XCTAssertEqual(ResumeDecision.decide(resumeSecs: 0, classification: "tv"),
                        .playFromStart)

@@ -1865,6 +1865,19 @@ def test_position_requires_secs(client, monkeypatch):
     assert resp.status_code == 422
 
 
+@pytest.mark.parametrize("secs", [float("nan"), float("inf"), float("-inf")])
+def test_position_rejects_non_finite_seconds(client, monkeypatch, secs):
+    video_id = _make_done_video(
+        client, monkeypatch, f"https://twitter.com/x/status/nonfinite-{repr(secs)}"
+    )
+    resp = client.post(
+        f"/api/videos/{video_id}/position",
+        json={"secs": secs},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 422
+
+
 def test_video_list_includes_resume_secs(client, monkeypatch):
     import db
     video_id = _make_done_video(client, monkeypatch, "https://twitter.com/x/status/903")

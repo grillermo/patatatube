@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import re
 import secrets
@@ -14,7 +15,7 @@ from email.utils import formatdate
 import anyio
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, FiniteFloat, field_validator
 
 import db
 import devlog
@@ -146,7 +147,18 @@ class AudioRequest(BaseModel):
 
 
 class PositionRequest(BaseModel):
-    secs: float
+    secs: FiniteFloat
+
+    @field_validator("secs", mode="before")
+    @classmethod
+    def make_non_finite_validation_input_json_safe(cls, value):
+        # Starlette serializes Pydantic's rejected input into the 422 body.
+        # Non-standard JSON numeric NaN/Infinity would otherwise make that
+        # error response itself fail JSON encoding. A string still fails the
+        # FiniteFloat constraint while remaining safe to report.
+        if isinstance(value, float) and not math.isfinite(value):
+            return str(value)
+        return value
 
 
 class PrepareRequest(BaseModel):

@@ -15,7 +15,7 @@ final class AppModel: ObservableObject {
     /// Local mirror of server resume positions, and the throttled writer that
     /// keeps the server in sync. Shared so the grid can read a position at tap
     /// time and the player can report against the same store.
-    let resumeStore = ResumePositionStore()
+    let resumeStore: ResumePositionStore
     lazy var positions = PlaybackPositionReporter(api: api, store: resumeStore)
     let videoListCache: VideoListCache
     private let downloadSettings: DownloadStreamSettings
@@ -59,6 +59,7 @@ final class AppModel: ObservableObject {
         simultaneousSettings: SimultaneousDownloadSettings = SimultaneousDownloadSettings()
     ) {
         let api = APIClient(store: credentials)
+        let resumeStore = ResumePositionStore(serverURL: credentials.baseURL)
         let streamCache = StreamCache()
         let cache = CacheManager(root: cacheRoot, streamCache: streamCache)
         self.credentials = credentials
@@ -70,9 +71,15 @@ final class AppModel: ObservableObject {
             offlineRoot: cache.videosRoot
         )
         self.api = api
+        self.resumeStore = resumeStore
         let videoListCache = VideoListCache()
         self.videoListCache = videoListCache
-        self.store = VideoStore(api: api, cache: videoListCache, mediaCache: cache)
+        self.store = VideoStore(
+            api: api,
+            cache: videoListCache,
+            mediaCache: cache,
+            positionStore: resumeStore
+        )
         self.downloadSettings = downloadSettings
         self.simultaneousSettings = simultaneousSettings
         self.downloadStreamCount = downloadSettings.load()
@@ -89,6 +96,7 @@ final class AppModel: ObservableObject {
     func saveSettings() {
         credentials.baseURL = URL(string: baseURLText.trimmingCharacters(in: .whitespaces))
         credentials.token = tokenText.isEmpty ? nil : tokenText
+        resumeStore.useServer(credentials.baseURL)
         DevLog.connect(baseURL: credentials.baseURL, token: credentials.token)
         downloadStreamCount = min(
             max(downloadStreamCount, DownloadStreamSettings.allowedCounts.lowerBound),
@@ -133,6 +141,7 @@ final class AppModel: ObservableObject {
     func resetSettings() {
         credentials.token = nil
         credentials.baseURL = nil
+        resumeStore.useServer(nil)
         tokenText = ""
         baseURLText = ""
         downloadStreamCount = DownloadStreamSettings.defaultCount

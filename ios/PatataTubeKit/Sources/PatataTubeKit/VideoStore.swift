@@ -23,6 +23,7 @@ public final class VideoStore: ObservableObject {
     private let api: VideoAPI
     private let cache: VideoListCaching?
     private let mediaCache: MediaCaching?
+    private let positionStore: ResumePositionStore?
     private let defaults: UserDefaults
     private static let filterKey = "selectedClassification"
 
@@ -32,10 +33,13 @@ public final class VideoStore: ObservableObject {
     private var loadGeneration = 0
 
     public init(api: VideoAPI, cache: VideoListCaching? = nil,
-                mediaCache: MediaCaching? = nil, defaults: UserDefaults = .standard) {
+                mediaCache: MediaCaching? = nil,
+                positionStore: ResumePositionStore? = nil,
+                defaults: UserDefaults = .standard) {
         self.api = api
         self.cache = cache
         self.mediaCache = mediaCache
+        self.positionStore = positionStore
         self.defaults = defaults
         self.filter = defaults.string(forKey: Self.filterKey) ?? "children"
     }
@@ -112,6 +116,9 @@ public final class VideoStore: ObservableObject {
             // Only apply this fetch if nothing newer has started since -- a stale,
             // slower call must never overwrite a faster/later one's results.
             if generation == loadGeneration {
+                positionStore?.reconcileFreshServerPositions(
+                    Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0.resumeSecs) })
+                )
                 videos = fetched
             }
         } catch {
