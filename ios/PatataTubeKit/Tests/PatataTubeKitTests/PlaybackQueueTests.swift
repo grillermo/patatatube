@@ -45,4 +45,18 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertFalse(PlaybackQueue(video: tapped, queueSnapshot: []).sleepMode)
         XCTAssertTrue(PlaybackQueue(video: tapped, queueSnapshot: [], sleepMode: true).sleepMode)
     }
+
+    func testStartSecsDefaultsToZero() {
+        let tapped = video(id: 1)
+        let queue = PlaybackQueue(video: tapped, queueSnapshot: [tapped])
+
+        XCTAssertEqual(queue.startSecs, 0)
+    }
+
+    func testStartSecsIsCarried() {
+        let tapped = video(id: 1)
+        let queue = PlaybackQueue(video: tapped, queueSnapshot: [tapped], startSecs: 91.5)
+
+        XCTAssertEqual(queue.startSecs, 91.5)
+    }
 }

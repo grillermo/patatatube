@@ -10,6 +10,15 @@ struct DownloadAllRequest: Identifiable {
     let freeBytes: Int64?
 }
 
+/// A play tap parked behind the resume prompt.
+struct PendingResume: Identifiable {
+    let id: Int
+    let video: Video
+    let queueSnapshot: [Video]
+    let sleepMode: Bool
+    let secs: Double
+}
+
 struct VideoGridView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
@@ -23,6 +32,9 @@ struct VideoGridView: View {
     /// presenting from separate state raced the boot load and could hand the
     /// player an empty queue on the first cold-launch tap (index crash).
     @State private var playing: PlaybackQueue?
+    /// Set when a tv/movies tap has a resume point worth asking about; the
+    /// alert below turns it into either a seek or a fresh start.
+    @State private var pendingResume: PendingResume?
     @State private var preparationTracker = VideoPreparationTracker()
     @State private var downloadingAll = false
     @State private var pendingDownloadAll: DownloadAllRequest?
@@ -209,15 +221,40 @@ struct VideoGridView: View {
             } message: { request in
                 Text(Self.downloadAllMessage(count: request.targets.count, freeBytes: request.freeBytes))
             }
+            .alert(
+                "Resume playback",
+                isPresented: Binding(
+                    get: { pendingResume != nil },
+                    set: { if !$0 { pendingResume = nil } }
+                ),
+                presenting: pendingResume
+            ) { request in
+                Button("Resume from \(ResumeDecision.timestamp(request.secs))") {
+                    pendingResume = nil
+                    begin(request.video, queueSnapshot: request.queueSnapshot,
+                          sleepMode: request.sleepMode, startSecs: request.secs)
+                }
+                Button("Play from start") {
+                    pendingResume = nil
+                    begin(request.video, queueSnapshot: request.queueSnapshot,
+                          sleepMode: request.sleepMode, startSecs: 0)
+                }
+                Button("Cancel", role: .cancel) { pendingResume = nil }
+            } message: { request in
+                Text("You stopped at \(ResumeDecision.timestamp(request.secs)).")
+            }
             .fullScreenCover(item: $playing) { request in
                 VideoPlayerView(videos: request.videos, startIndex: request.startIndex,
-                                sleepMode: request.sleepMode, randomize: model.randomize(for: store.filter))
+                                sleepMode: request.sleepMode,
+                                randomize: model.randomize(for: store.filter),
+                                startSecs: request.startSecs)
             }
             .task { await initialLoad() }
             .overlay { if let error = store.errorText { errorBanner(error) } }
         }
         .environment(preparationTracker)
     }
+
     /// Segmented control over the classifications. `""` stands in for a nil
     /// filter so the picker has a non-optional selection; it is never offered
     /// as a segment, it only keeps the control in a valid state before the
@@ -341,8 +378,35 @@ struct VideoGridView: View {
 
     /// Starts playback from the tap-time queue snapshot. `video` may be the
     /// ensureReady-updated copy, so it replaces its stale row in the snapshot.
+    /// tv/movies rows with real progress stop here and ask first.
     private func startPlayback(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false) {
-        playing = PlaybackQueue(video: video, queueSnapshot: queueSnapshot, sleepMode: sleepMode)
+        let secs = model.resumeStore.resolved(server: video.resumeSecs, for: video.id)
+        switch ResumeDecision.decide(resumeSecs: secs, classification: video.classification) {
+        case .ask(let secs):
+            pendingResume = PendingResume(
+                id: video.id,
+                video: video,
+                queueSnapshot: queueSnapshot,
+                sleepMode: sleepMode,
+                secs: secs
+            )
+        case .playFromStart:
+            begin(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, startSecs: 0)
+        }
+    }
+
+    private func begin(
+        _ video: Video,
+        queueSnapshot: [Video],
+        sleepMode: Bool,
+        startSecs: Double
+    ) {
+        playing = PlaybackQueue(
+            video: video,
+            queueSnapshot: queueSnapshot,
+            sleepMode: sleepMode,
+            startSecs: startSecs
+        )
     }
 
     /// Downloads a video for offline playback. Returns true only when the MP4

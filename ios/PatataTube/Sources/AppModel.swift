@@ -12,6 +12,11 @@ final class AppModel: ObservableObject {
     let streamProxy: StreamProxy
     let store: VideoStore
     let api: APIClient
+    /// Local mirror of server resume positions, and the throttled writer that
+    /// keeps the server in sync. Shared so the grid can read a position at tap
+    /// time and the player can report against the same store.
+    let resumeStore = ResumePositionStore()
+    lazy var positions = PlaybackPositionReporter(api: api, store: resumeStore)
     let videoListCache: VideoListCache
     private let downloadSettings: DownloadStreamSettings
     private let simultaneousSettings: SimultaneousDownloadSettings
