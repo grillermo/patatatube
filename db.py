@@ -144,6 +144,11 @@ def init_db():
             _add_column(conn, "ALTER TABLE videos ADD COLUMN preview_version TEXT")
         if "show_preview_version" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN show_preview_version TEXT")
+        # Playback resume point in seconds, written by the iOS player every
+        # ~10s and on exit. 0 means "start from the beginning" — reaching the
+        # end of a video resets it to 0, so a finished video never prompts.
+        if "resume_secs" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN resume_secs REAL NOT NULL DEFAULT 0")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS video_versions (
@@ -516,6 +521,13 @@ def set_chosen_version(video_id: int, version_id: int) -> bool:
 def set_audio_lang(video_id: int, lang: str) -> None:
     with _conn() as conn:
         conn.execute("UPDATE videos SET audio_lang = ? WHERE id = ?", (lang, video_id))
+
+
+def set_resume_secs(video_id: int, secs: float) -> None:
+    """Persist where playback got to. Negative input clamps to 0."""
+    value = max(0.0, float(secs))
+    with _conn() as conn:
+        conn.execute("UPDATE videos SET resume_secs = ? WHERE id = ?", (value, video_id))
 
 
 def set_version_audio_langs(version_id: int, audio_langs_json: str) -> None:

@@ -39,6 +39,30 @@ def test_update_video_error(tmp_db):
     assert tmp_db.get_video(vid_id) is None
 
 
+def test_set_resume_secs_round_trips(tmp_db):
+    video_id = tmp_db.add_video("https://x.com/i/status/1", "twitter")
+    tmp_db.set_resume_secs(video_id, 123.5)
+    assert tmp_db.get_video(video_id)["resume_secs"] == 123.5
+
+
+def test_resume_secs_defaults_to_zero(tmp_db):
+    video_id = tmp_db.add_video("https://x.com/i/status/2", "twitter")
+    assert tmp_db.get_video(video_id)["resume_secs"] == 0
+
+
+def test_set_resume_secs_clamps_negative(tmp_db):
+    video_id = tmp_db.add_video("https://x.com/i/status/3", "twitter")
+    tmp_db.set_resume_secs(video_id, -5)
+    assert tmp_db.get_video(video_id)["resume_secs"] == 0
+
+
+def test_init_db_is_idempotent_with_resume_secs(tmp_db):
+    tmp_db.init_db()
+    tmp_db.init_db()
+    video_id = tmp_db.add_video("https://x.com/i/status/4", "twitter")
+    assert tmp_db.get_video(video_id)["resume_secs"] == 0
+
+
 def test_init_db_deletes_legacy_error_videos(tmp_db):
     good_id = tmp_db.add_video("https://twitter.com/x/status/123")
     bad_id = tmp_db.add_video("https://twitter.com/x/status/789")

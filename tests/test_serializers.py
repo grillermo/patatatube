@@ -72,6 +72,7 @@ def test_serialize_video_full_shape():
         "preview_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
         "classification": "children",
         "position": 3,
+        "resume_secs": 0,
         "status": "done",
         "error_msg": None,
         "stream_path": "/videos/7/stream",
@@ -237,3 +238,22 @@ def test_serialize_download_not_done_has_no_preview():
     """Nothing to grab a frame from until the file exists."""
     row = {"id": 30, "url": "https://x.com/a/status/1", "status": "queued"}
     assert serialize_video(row)["preview_url"] is None
+
+
+def test_serialize_video_exposes_resume_secs():
+    from views.serializers import serialize_video
+
+    data = serialize_video({
+        "id": 7,
+        "url": "https://x.com/i/status/7",
+        "status": "done",
+        "resume_secs": 61.25,
+    })
+    assert data["resume_secs"] == 61.25
+
+
+def test_serialize_video_resume_secs_defaults_to_zero():
+    from views.serializers import serialize_video
+
+    data = serialize_video({"id": 8, "url": "u", "status": "done"})
+    assert data["resume_secs"] == 0

@@ -80,6 +80,7 @@ def serialize_video(video: dict) -> dict:
         "preview_url": preview_url_for(video),
         "classification": video.get("classification") or "children",
         "position": video.get("position"),
+        "resume_secs": video.get("resume_secs") or 0,
         "status": video["status"],
         "error_msg": video.get("error_msg"),
         "stream_path": f"/videos/{video['id']}/stream",
