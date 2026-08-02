@@ -59,4 +59,18 @@ final class PlaybackQueueTests: XCTestCase {
 
         XCTAssertEqual(queue.startSecs, 91.5)
     }
+
+    func testStartPausedDefaultsToFalseAndRoundTrips() {
+        let video = Video(id: 1, url: "/x", title: "A", platform: nil, sourceKey: nil,
+                          previewUrl: nil, classification: "movies", position: 1,
+                          status: "done", errorMsg: nil, streamPath: "/videos/1/stream",
+                          source: "library", showTitle: nil, season: nil, episode: nil,
+                          summary: nil, showPreviewUrl: nil)
+
+        XCTAssertFalse(PlaybackQueue(video: video, queueSnapshot: [video]).startPaused)
+        XCTAssertTrue(
+            PlaybackQueue(video: video, queueSnapshot: [video],
+                          startSecs: 30, startPaused: true).startPaused
+        )
+    }
 }

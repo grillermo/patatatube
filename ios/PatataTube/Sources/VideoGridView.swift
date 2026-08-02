@@ -247,7 +247,8 @@ struct VideoGridView: View {
                 VideoPlayerView(videos: request.videos, startIndex: request.startIndex,
                                 sleepMode: request.sleepMode,
                                 randomize: model.randomize(for: store.filter),
-                                startSecs: request.startSecs)
+                                startSecs: request.startSecs,
+                                startPaused: request.startPaused)
             }
             .task { await initialLoad() }
             .overlay { if let error = store.errorText { errorBanner(error) } }
