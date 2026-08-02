@@ -175,14 +175,6 @@ struct VideoGridView: View {
                     filterTabs
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showWebBridge = true
-                    } label: {
-                        Image(systemName: "globe")
-                    }
-                    .accessibilityLabel("Live")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
                             showUpload = true
