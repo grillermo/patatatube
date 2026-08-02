@@ -15,8 +15,9 @@ import PatataTubeKit
 /// there rather than to a match. The sheet reopens on the last committed page.
 ///
 /// Presented as a `fullScreenCover` and deliberately without a `NavigationStack`
-/// — the title bar bought nothing and cost a whole row, so Done lives in the
-/// address bar and everything below it is web.
+/// — the title bar bought nothing and cost a whole row, so dismissal lives in
+/// the address bar (chevron + app icon, read as "back to PatataTube") and
+/// everything below it is web.
 struct WebBridgeView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: WebBridgeModel
@@ -45,8 +46,17 @@ struct WebBridgeView: View {
 
     private var addressBar: some View {
         HStack(spacing: 12) {
-            Button { dismiss() } label: { Image(systemName: "xmark") }
-                .accessibilityLabel("Done")
+            Button { dismiss() } label: {
+                HStack(spacing: 2) {
+                    Image(systemName: "chevron.backward")
+                        .font(.caption.weight(.semibold))
+                    Image("AppIconSmall")
+                        .resizable()
+                        .frame(width: 22, height: 22)
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                }
+            }
+            .accessibilityLabel("Back to PatataTube")
 
             Button { model.goBack() } label: { Image(systemName: "chevron.backward") }
                 .disabled(!model.canGoBack)
