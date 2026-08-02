@@ -10,6 +10,7 @@ import Foundation
 public final class ResumePositionStore: @unchecked Sendable {
     private let defaults: UserDefaults
     private let lock = NSLock()
+    private var generations: [Int: UInt64] = [:]
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -24,14 +25,28 @@ public final class ResumePositionStore: @unchecked Sendable {
         return defaults.double(forKey: valueKey(id))
     }
 
-    public func setLocal(_ secs: Double, for id: Int) {
+    /// Stores a value and returns its in-process generation for conditional
+    /// acknowledgement after an asynchronous API write.
+    @discardableResult
+    public func setLocal(_ secs: Double, for id: Int) -> UInt64 {
         lock.lock(); defer { lock.unlock() }
+        let generation = generations[id, default: 0] &+ 1
+        generations[id] = generation
         defaults.set(max(0, secs), forKey: valueKey(id))
         defaults.set(true, forKey: pendingKey(id))
+        return generation
     }
 
     public func markSynced(id: Int) {
         lock.lock(); defer { lock.unlock() }
+        defaults.removeObject(forKey: pendingKey(id))
+    }
+
+    /// Clears a pending marker only when no newer local write superseded the
+    /// value that the caller sent.
+    public func markSynced(id: Int, generation: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        guard generations[id, default: 0] == generation else { return }
         defaults.removeObject(forKey: pendingKey(id))
     }
 
@@ -43,6 +58,20 @@ public final class ResumePositionStore: @unchecked Sendable {
             let suffix = String(key.dropFirst("resumeSecsPending.".count))
             guard let id = Int(suffix), defaults.bool(forKey: key) else { continue }
             result[id] = defaults.double(forKey: valueKey(id))
+        }
+        return result
+    }
+
+    /// Pending values with their in-process generations, for safe async
+    /// acknowledgements. Existing persisted values have generation zero until
+    /// a newer local write occurs in this process.
+    public func pendingWithGenerations() -> [(id: Int, secs: Double, generation: UInt64)] {
+        lock.lock(); defer { lock.unlock() }
+        var result: [(id: Int, secs: Double, generation: UInt64)] = []
+        for (key, _) in defaults.dictionaryRepresentation() where key.hasPrefix("resumeSecsPending.") {
+            let suffix = String(key.dropFirst("resumeSecsPending.".count))
+            guard let id = Int(suffix), defaults.bool(forKey: key) else { continue }
+            result.append((id, defaults.double(forKey: valueKey(id)), generations[id, default: 0]))
         }
         return result
     }

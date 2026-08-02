@@ -35,33 +35,33 @@ public actor PlaybackPositionReporter: PositionReporting {
 
     public func record(id: Int, secs: Double, duration: Double?, force: Bool) async {
         let value = Self.effectiveSecs(secs: secs, duration: duration, endWindowSecs: endWindowSecs)
-        store.setLocal(value, for: id)
+        let generation = store.setLocal(value, for: id)
 
         let timestamp = now()
         if !force, let last = lastSentAt[id], timestamp.timeIntervalSince(last) < minimumIntervalSecs {
             return
         }
         lastSentAt[id] = timestamp
-        await send(id: id, secs: value)
+        await send(id: id, secs: value, generation: generation)
     }
 
     public func flushPending() async {
-        for (id, secs) in store.pending() {
-            await send(id: id, secs: secs)
+        for pending in store.pendingWithGenerations() {
+            await send(id: pending.id, secs: pending.secs, generation: pending.generation)
         }
     }
 
-    private func send(id: Int, secs: Double) async {
+    private func send(id: Int, secs: Double, generation: UInt64) async {
         do {
             try await api.savePosition(id: id, secs: secs)
-            store.markSynced(id: id)
+            store.markSynced(id: id, generation: generation)
             DevLog.event(.net, "position saved", [
                 "video_id": "\(id)",
                 "secs": "\(Int(secs))",
                 "status": "ok",
             ])
         } catch {
-            DevLog.error(error, "position save failed", [
+            DevLog.event(.error, "position save failed", [
                 "video_id": "\(id)",
                 "status": "failed",
             ])

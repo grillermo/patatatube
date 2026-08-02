@@ -47,6 +47,68 @@ private final class TestClock: @unchecked Sendable {
     }
 }
 
+private final class ControlledSpyAPI: VideoAPI, @unchecked Sendable {
+    private let lock = NSLock()
+    private var shouldBlockNextSave = false
+    private var blockedSave: CheckedContinuation<Void, Never>?
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+    var saved: [(id: Int, secs: Double)] = []
+
+    func blockNextSave() {
+        lock.withLock { shouldBlockNextSave = true }
+    }
+
+    func waitForBlockedSave() async {
+        if lock.withLock({ blockedSave != nil }) { return }
+        await withCheckedContinuation { continuation in
+            let alreadyBlocked = lock.withLock { () -> Bool in
+                if blockedSave != nil { return true }
+                startedWaiter = continuation
+                return false
+            }
+            if alreadyBlocked { continuation.resume() }
+        }
+    }
+
+    func releaseBlockedSave() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            defer { blockedSave = nil }
+            return blockedSave
+        }
+        continuation?.resume()
+    }
+
+    func savePosition(id: Int, secs: Double) async throws {
+        let shouldBlock = lock.withLock { () -> Bool in
+            defer { shouldBlockNextSave = false }
+            return shouldBlockNextSave
+        }
+        if shouldBlock {
+            await withCheckedContinuation { continuation in
+                let waiter = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                    blockedSave = continuation
+                    defer { startedWaiter = nil }
+                    return startedWaiter
+                }
+                waiter?.resume()
+            }
+        }
+        lock.withLock { saved.append((id, secs)) }
+    }
+
+    func videos(classification: String?) async throws -> [Video] { [] }
+    func classifications() async throws -> [String] { [] }
+    func classify(id: Int, classification: String) async throws -> ClassifyResult { ClassifyResult(ok: true) }
+    func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
+    func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
+    func upload(url: String) async throws -> Int { 0 }
+    func delete(id: Int) async throws -> Bool { true }
+    func scanLibrary() async throws -> ScanResult { ScanResult(added: 0, updated: 0, skipped: 0) }
+    func prepare(id: Int, bulk: Bool) async throws -> String { "done" }
+    func video(id: Int) async throws -> Video { throw APIError.notConfigured }
+    func imageData(path: String) async throws -> Data { Data() }
+}
+
 final class PlaybackPositionReporterTests: XCTestCase {
     private func makeStore() throws -> ResumePositionStore {
         ResumePositionStore(defaults: try XCTUnwrap(UserDefaults(suiteName: "reporter-\(UUID().uuidString)")))
@@ -139,5 +201,26 @@ final class PlaybackPositionReporterTests: XCTestCase {
         let reporter = PlaybackPositionReporter(api: api, store: store)
         await reporter.record(id: 5, secs: 30, duration: 1000, force: true)
         XCTAssertEqual(store.pending(), [:])
+    }
+
+    func testOlderInFlightSuccessDoesNotClearNewerThrottledPosition() async throws {
+        let api = ControlledSpyAPI()
+        api.blockNextSave()
+        let store = try makeStore()
+        let clock = TestClock(Date(timeIntervalSince1970: 0))
+        let reporter = PlaybackPositionReporter(api: api, store: store, now: { clock.now() })
+
+        let firstRecord = Task {
+            await reporter.record(id: 5, secs: 30, duration: 1000, force: false)
+        }
+        await api.waitForBlockedSave()
+
+        clock.set(Date(timeIntervalSince1970: 4))
+        await reporter.record(id: 5, secs: 34, duration: 1000, force: false)
+        api.releaseBlockedSave()
+        await firstRecord.value
+
+        XCTAssertEqual(store.pending(), [5: 34])
+        XCTAssertEqual(store.resolved(server: 30, for: 5), 34)
     }
 }
