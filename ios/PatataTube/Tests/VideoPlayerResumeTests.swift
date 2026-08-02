@@ -1,11 +1,31 @@
+import AVFoundation
 import XCTest
 import PatataTubeKit
 @testable import PatataTube
 
+@MainActor
 final class VideoPlayerResumeTests: XCTestCase {
     func testSeeksOnlyForMeaningfulOffsets() {
         XCTAssertNil(VideoPlayerView.seekTarget(startSecs: 0))
         XCTAssertNil(VideoPlayerView.seekTarget(startSecs: 0.4))
         XCTAssertEqual(VideoPlayerView.seekTarget(startSecs: 91.5)?.seconds ?? 0, 91.5, accuracy: 0.01)
+    }
+
+    func testForceReportsOnlyPauseTransitions() {
+        XCTAssertTrue(VideoPlayerView.shouldForceReportPosition(for: .paused))
+        XCTAssertFalse(VideoPlayerView.shouldForceReportPosition(for: .playing))
+        XCTAssertFalse(VideoPlayerView.shouldForceReportPosition(for: .waitingToPlayAtSpecifiedRate))
+    }
+
+    func testSetupCannotContinueAfterCancellationOrDisappearance() {
+        XCTAssertTrue(VideoPlayerView.canContinueSetup(
+            taskIsCancelled: false, hasDisappeared: false
+        ))
+        XCTAssertFalse(VideoPlayerView.canContinueSetup(
+            taskIsCancelled: true, hasDisappeared: false
+        ))
+        XCTAssertFalse(VideoPlayerView.canContinueSetup(
+            taskIsCancelled: false, hasDisappeared: true
+        ))
     }
 }

@@ -53,6 +53,11 @@ struct VideoPlayerView: View {
     @State private var playToEndObserver: NSObjectProtocol?
     /// Periodic time observer that feeds the resume reporter. Removed on dismiss.
     @State private var positionObserver: Any?
+    /// KVO for foreground/remote-control pauses. Invalidated before teardown pauses.
+    @State private var pauseTransitionObserver: NSKeyValueObservation?
+    /// Setup suspends on proxy startup and resume seeking; it must not attach
+    /// observers after this presentation has already disappeared.
+    @State private var hasDisappeared = false
     /// false while backgrounded: player detached from the video layer so audio continues.
     @State private var attached = true
     /// Captured before suspension so backgrounding never restarts user-paused playback.
@@ -105,6 +110,7 @@ struct VideoPlayerView: View {
         // brings it back on touch and hides it again after idle.
         .persistentSystemOverlays(.hidden)
         .simultaneousGesture(pullDownToDismiss)
+        .onAppear { hasDisappeared = false }
         .task { await setup() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -121,9 +127,12 @@ struct VideoPlayerView: View {
             }
         }
         .onDisappear {
+            hasDisappeared = true
             orientationControlVisibility.hide()
             orientationLock.endPlayerSession()
             reportPosition()
+            pauseTransitionObserver?.invalidate()
+            pauseTransitionObserver = nil
             player?.pause()
             removePlayToEndObserver()
             readyObserver?.invalidate()
@@ -179,6 +188,12 @@ struct VideoPlayerView: View {
         // `offlineHLSURL` hand out an address nothing answers on, and AVPlayer
         // reports that as a 12s buffer followed by -1004.
         await model.streamProxy.ensureRunning()
+        guard Self.canContinueSetup(
+            taskIsCancelled: Task.isCancelled, hasDisappeared: hasDisappeared
+        ) else {
+            deactivateAudioSession()
+            return
+        }
         guard let (item, source) = playerItemWithSource(for: video) else { return }
         let player = AVPlayer(playerItem: item)
         player.allowsExternalPlayback = true
@@ -190,6 +205,12 @@ struct VideoPlayerView: View {
             ])
             await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
         }
+        guard Self.canContinueSetup(
+            taskIsCancelled: Task.isCancelled, hasDisappeared: hasDisappeared
+        ) else {
+            abandonSetup(player: player)
+            return
+        }
         playbackProbe.attach(item: item, player: player, video: video, source: source)
         playWhenReady(item: item, on: player)
         Task { await applyAudioSelection(item: item, lang: video.audioLang) }
@@ -198,6 +219,19 @@ struct VideoPlayerView: View {
         nowPlaying.attach(player: player, title: title(of: video))
         nowPlaying.setNextEnabled(randomize ? hasAnyPlayableVideo : playableIndex(from: currentIndex, direction: 1) != nil)
         bindPlayToEnd()
+        guard Self.canContinueSetup(
+            taskIsCancelled: Task.isCancelled, hasDisappeared: hasDisappeared
+        ) else {
+            abandonSetup(player: player)
+            return
+        }
+        pauseTransitionObserver = player.observe(\.timeControlStatus, options: [.new]) { player, _ in
+            guard Self.shouldForceReportPosition(for: player.timeControlStatus) else { return }
+            Task { @MainActor in
+                guard self.player === player, !hasDisappeared else { return }
+                reportPosition(force: true)
+            }
+        }
         positionObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 10, preferredTimescale: 600), queue: .main
         ) { time in
@@ -217,6 +251,40 @@ struct VideoPlayerView: View {
     static func seekTarget(startSecs: Double) -> CMTime? {
         guard startSecs >= 1 else { return nil }
         return CMTime(seconds: startSecs, preferredTimescale: 600)
+    }
+
+    /// Only an actual pause transition needs an immediate forced write.
+    nonisolated static func shouldForceReportPosition(
+        for status: AVPlayer.TimeControlStatus
+    ) -> Bool {
+        status == .paused
+    }
+
+    /// A canceled or departed SwiftUI task may resume after an `await`, but it
+    /// no longer owns a visible player session and must not install observers.
+    nonisolated static func canContinueSetup(
+        taskIsCancelled: Bool, hasDisappeared: Bool
+    ) -> Bool {
+        !taskIsCancelled && !hasDisappeared
+    }
+
+    /// Release anything setup attached before noticing cancellation. Safe to
+    /// call after `onDisappear` has already performed the same teardown.
+    private func abandonSetup(player expectedPlayer: AVPlayer) {
+        expectedPlayer.pause()
+        readyObserver?.invalidate()
+        readyObserver = nil
+        readyTimeoutTask?.cancel()
+        readyTimeoutTask = nil
+        removePlayToEndObserver()
+        pauseTransitionObserver?.invalidate()
+        pauseTransitionObserver = nil
+        if let positionObserver { expectedPlayer.removeTimeObserver(positionObserver) }
+        positionObserver = nil
+        nowPlaying.detach()
+        playbackProbe.detach()
+        if player === expectedPlayer { player = nil }
+        deactivateAudioSession()
     }
 
     /// Forced write for the moments with no later chance: pause, background,
