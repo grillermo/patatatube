@@ -202,6 +202,8 @@ struct VideoGridView: View {
                 Button("Download") {
                     let targets = request.targets
                     pendingDownloadAll = nil
+                    // Push Downloads so the confirm lands on the progress list.
+                    showDownloads = true
                     Task { await runDownloadAll(targets) }
                 }
             } message: { request in

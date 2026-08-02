@@ -73,6 +73,7 @@ struct EpisodesDownloadAllBatchTests {
 
         await EpisodesView.downloadEligibleEpisodes(
             grouped.episodes,
+            limit: 1,
             currentCacheState: { states[$0.id] ?? .notCached },
             onDownload: { await probe.download($0) }
         )
@@ -149,6 +150,30 @@ private func downloadAllButton<V: View>(
     }
 }
 
+/// Download all now opens a confirmation first; the batch only starts when the
+/// alert's Download button is tapped.
+@MainActor
+private func confirmDownloadAll<V: View>(
+    in sut: V,
+    function: String = #function
+) async throws {
+    // Matched on the label *text*: the per-episode download buttons carry the
+    // accessibility label "Download" too, and their labels are images.
+    func confirmButton() throws -> InspectableView<ViewType.Button> {
+        try sut.inspect(function: function).find(ViewType.Button.self) { button in
+            (try? button.labelView().text().string()) == "Download"
+        }
+    }
+    for _ in 0..<100 {
+        if let confirm = try? confirmButton() {
+            try confirm.tap()
+            return
+        }
+        await Task.yield()
+    }
+    try confirmButton().tap()
+}
+
 @Suite("Episode download all view", .serialized)
 @MainActor
 struct EpisodesDownloadAllViewTests {
@@ -214,6 +239,7 @@ struct EpisodesDownloadAllViewTests {
             return (try? button.isDisabled()) == false
         }
         try downloadAllButton(in: sut).tap()
+        try await confirmDownloadAll(in: sut)
         await eventually("Batch never started the first episode") {
             gate.startedIDs == [1]
         }
@@ -239,13 +265,16 @@ struct EpisodesDownloadAllViewTests {
         ])
         let source = EpisodeCacheStateSource([1: .notCached, 2: .notCached])
         let gate = EpisodeDownloadGate()
+        // One at a time, so episode 2 is still queued when the view goes away.
+        let model = AppModel()
+        model.cache.setMaxConcurrentDownloads(1)
         let sut = EpisodesView(
             show: grouped,
             onPlay: { _, _ in },
             onDownload: { await gate.wait(for: $0) },
             currentCacheState: { source.read($0) }
         )
-        .environmentObject(AppModel())
+        .environmentObject(model)
         .environment(VideoPreparationTracker())
 
         ViewHosting.host(view: sut)
@@ -254,6 +283,7 @@ struct EpisodesDownloadAllViewTests {
             return (try? button.isDisabled()) == false
         }
         try downloadAllButton(in: sut).tap()
+        try await confirmDownloadAll(in: sut)
         await eventually("Batch never started episode 1") {
             gate.startedIDs == [1]
         }

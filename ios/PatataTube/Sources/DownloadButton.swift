@@ -145,7 +145,9 @@ struct DownloadButton: View {
     var didAppear: ((Self) -> Void)? = nil
 
     @Environment(\.continuousClock) private var clock
-    @Environment(VideoPreparationTracker.self) private var preparationTracker
+    // Optional: a missing tracker means "nothing preparing" rather than a trap,
+    // so the button renders anywhere in the hierarchy (including inspection).
+    @Environment(VideoPreparationTracker.self) private var preparationTracker: VideoPreparationTracker?
     @State private var state: DownloadButtonState
 
     private struct ObservationID: Hashable {
@@ -202,7 +204,7 @@ struct DownloadButton: View {
 
     @ViewBuilder
     private var control: some View {
-        if preparationTracker.isPreparing(videoID: identity.videoID) {
+        if preparationTracker?.isPreparing(videoID: identity.videoID) == true {
             ProgressView()
                 .frame(width: 44, height: 44)
                 .accessibilityLabel("Preparing video")

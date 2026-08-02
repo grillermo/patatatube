@@ -8,6 +8,10 @@ import PatataTubeKit
 final class EpisodesDownloadAllState {
     private(set) var canDownloadAll = false
     private(set) var isDownloading = false
+    /// Confirmation in flight, and whether Downloads has been pushed. Held here
+    /// rather than in `@State` so the whole Download-all flow has one owner.
+    var pendingDownloadAll: DownloadAllRequest?
+    var showDownloads = false
 
     func setEligibility(_ value: Bool) {
         canDownloadAll = value
@@ -58,9 +62,7 @@ struct EpisodesView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    Task { @MainActor in
-                        await downloadAll()
-                    }
+                    presentDownloadAll()
                 } label: {
                     if downloadState.isDownloading {
                         ProgressView()
@@ -72,9 +74,57 @@ struct EpisodesView: View {
                 .accessibilityLabel("Download all episodes")
             }
         }
+        .alert(
+            "Download all",
+            isPresented: Binding(
+                get: { downloadState.pendingDownloadAll != nil },
+                set: { if !$0 { downloadState.pendingDownloadAll = nil } }
+            ),
+            presenting: downloadState.pendingDownloadAll
+        ) { request in
+            Button("Cancel", role: .cancel) { downloadState.pendingDownloadAll = nil }
+            Button("Download") {
+                let targets = request.targets
+                downloadState.pendingDownloadAll = nil
+                // Push Downloads so the confirm lands on the progress list.
+                downloadState.showDownloads = true
+                Task { @MainActor in await downloadAll(targets) }
+            }
+        } message: { request in
+            Text(VideoGridView.downloadAllMessage(count: request.targets.count, freeBytes: request.freeBytes))
+        }
+        // Pushed onto the enclosing stack — the same Downloads list the grid
+        // shows, scoped to this show's episodes for title lookup.
+        .navigationDestination(isPresented: Binding(
+            get: { downloadState.showDownloads },
+            set: { downloadState.showDownloads = $0 }
+        )) {
+            DownloadsView(
+                active: { model.cache.activeDownloads() },
+                recent: { model.cache.recentDownloads() },
+                video: { id, versionID in
+                    VideoGridView.downloadVideo(id: id, versionID: versionID, videos: show.episodes)
+                },
+                onCancel: { activity in
+                    model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
+                },
+                onPlay: { video in onPlay(video, show.episodes) }
+            )
+        }
         .task {
             await observeDownloadAllEligibility()
         }
+    }
+
+    /// Snapshots the not-yet-cached episodes and asks for confirmation, so the
+    /// count in the dialog is the work that actually starts.
+    private func presentDownloadAll() {
+        let targets = show.episodes.filter { currentCacheState(for: $0) == .notCached }
+        guard !targets.isEmpty else { return }
+        downloadState.pendingDownloadAll = DownloadAllRequest(
+            targets: targets,
+            freeBytes: DeviceStorage.availableBytes(at: model.cache.cacheRootURL)
+        )
     }
 
     @MainActor
@@ -125,7 +175,7 @@ struct EpisodesView: View {
         }
     }
 
-    private func downloadAll() async {
+    private func downloadAll(_ targets: [Video]) async {
         downloadState.setDownloading(true)
         defer {
             downloadState.setEligibility(Self.hasEligibleEpisode(
@@ -135,7 +185,7 @@ struct EpisodesView: View {
             downloadState.setDownloading(false)
         }
         await Self.downloadEligibleEpisodes(
-            show.episodes,
+            targets,
             limit: model.cache.maxConcurrentDownloads,
             currentCacheState: currentCacheState(for:),
             onDownload: onDownload

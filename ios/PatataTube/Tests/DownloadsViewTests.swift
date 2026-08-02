@@ -39,6 +39,7 @@ struct DownloadsViewTests {
             onCancel: { cancelled = $0.id },
             onPlay: { _ in }
         )
+        .environmentObject(AppModel())
 
         let inspected = try sut.inspect()
         try inspected.find(button: "Cancel").tap()
@@ -61,6 +62,7 @@ struct DownloadsViewTests {
             onCancel: { cancelled = ($0.videoID, $0.versionID) },
             onPlay: { _ in }
         )
+        .environmentObject(AppModel())
 
         try sut.inspect().find(button: "Cancel").tap()
         #expect(cancelled?.0 == 12)
@@ -77,6 +79,7 @@ struct DownloadsViewTests {
             onCancel: { _ in },
             onPlay: { played = $0.id }
         )
+        .environmentObject(AppModel())
         try recent.inspect().find(button: "Video 8").tap()
         #expect(played == 8)
 
@@ -87,6 +90,7 @@ struct DownloadsViewTests {
             onCancel: { _ in },
             onPlay: { _ in }
         )
+        .environmentObject(AppModel())
         #expect((try? empty.inspect().find(text: "In Progress")) == nil)
         #expect((try? empty.inspect().find(text: "Recently Completed")) == nil)
     }
