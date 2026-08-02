@@ -92,6 +92,39 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     func imageData(path: String) async throws -> Data { Data() }
 }
 
+private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
+    private let lock = NSLock()
+    private let releaseGate = DispatchSemaphore(value: 0)
+    private var saveStarted = false
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+
+    func save(_ videos: [Video], classification: String?) {
+        let waiter = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            saveStarted = true
+            defer { startedWaiter = nil }
+            return startedWaiter
+        }
+        waiter?.resume()
+        releaseGate.wait()
+    }
+
+    func waitForSaveToStart() async {
+        if lock.withLock({ saveStarted }) { return }
+        await withCheckedContinuation { continuation in
+            let alreadyStarted = lock.withLock { () -> Bool in
+                if saveStarted { return true }
+                startedWaiter = continuation
+                return false
+            }
+            if alreadyStarted { continuation.resume() }
+        }
+    }
+
+    func releaseSave() { releaseGate.signal() }
+    func load(classification: String?) -> [Video]? { nil }
+    func clear() {}
+}
+
 @MainActor @Test func successfulPositionSaveWinsOverStaleRowAndOfflineCacheUntilFreshList() async throws {
     let api = FakeAPI()
     let stale = makeVideo(id: 7, classification: "movies", resumeSecs: 10)
@@ -133,6 +166,28 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
 
     let fresh = try #require(videoStore.videos.first)
     #expect(positions.resolved(server: fresh.resumeSecs, for: fresh.id) == 45)
+}
+
+@MainActor @Test func listFetchedBeforeSuccessfulSaveCannotAcknowledgeNewerPosition() async throws {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 7, classification: "children", resumeSecs: 10)]
+    let cache = BlockingSaveCache()
+    let defaults = try #require(UserDefaults(suiteName: "position-cache-race-\(UUID().uuidString)"))
+    let positions = ResumePositionStore(defaults: defaults)
+    let reporter = PlaybackPositionReporter(api: api, store: positions)
+    let videoStore = VideoStore(
+        api: api, cache: cache, positionStore: positions, defaults: defaults
+    )
+
+    let load = Task { await videoStore.load() }
+    await cache.waitForSaveToStart()
+    await reporter.record(id: 7, secs: 120, duration: 1_000, force: true)
+    cache.releaseSave()
+    await load.value
+
+    let stale = try #require(videoStore.videos.first)
+    #expect(positions.pending().isEmpty)
+    #expect(positions.resolved(server: stale.resumeSecs, for: stale.id) == 120)
 }
 
 @Test func videoDecodesVersionsAndDefaultsMissingVersions() throws {

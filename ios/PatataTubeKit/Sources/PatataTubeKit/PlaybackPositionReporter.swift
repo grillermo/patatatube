@@ -53,7 +53,11 @@ public actor PlaybackPositionReporter: PositionReporting {
 
     private func send(id: Int, secs: Double, generation: ResumePositionGeneration) async {
         do {
-            try await api.savePosition(id: id, secs: secs)
+            try await api.savePosition(
+                id: id,
+                secs: secs,
+                destinationServerIdentity: generation.serverIdentity
+            )
             store.markSynced(id: id, generation: generation)
             DevLog.event(.net, "position saved", [
                 "video_id": "\(id)",

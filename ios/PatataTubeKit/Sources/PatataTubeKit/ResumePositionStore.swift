@@ -2,8 +2,14 @@ import Foundation
 
 /// Identifies the exact local write acknowledged by an asynchronous save.
 public struct ResumePositionGeneration: Sendable {
-    fileprivate let serverIdentity: String
+    let serverIdentity: String
     fileprivate let value: UInt64
+}
+
+/// Resume authority that an online list request is allowed to acknowledge.
+public struct ResumePositionReconciliationSnapshot: Sendable {
+    fileprivate let serverIdentity: String
+    fileprivate let reconcilableGenerations: [Int: UInt64]
 }
 
 /// Local mirror of the configured server's resume positions.
@@ -146,13 +152,49 @@ public final class ResumePositionStore: @unchecked Sendable {
         return result
     }
 
+    /// Captures only already-synced local values before an online list request.
+    /// Pending writes cannot be acknowledged by that request, even if their
+    /// POST succeeds while the response is being decoded or cached.
+    public func freshServerReconciliationSnapshot() -> ResumePositionReconciliationSnapshot {
+        lock.lock(); defer { lock.unlock() }
+        let identity = serverIdentity
+        let prefix = "\(namespacePrefix(identity))awaitingServer."
+        var reconcilable: [Int: UInt64] = [:]
+        for (key, _) in defaults.dictionaryRepresentation() where key.hasPrefix(prefix) {
+            let suffix = String(key.dropFirst(prefix.count))
+            guard let id = Int(suffix),
+                  defaults.bool(forKey: key),
+                  !defaults.bool(forKey: pendingKey(id, identity: identity))
+            else { continue }
+            reconcilable[id] = generations[generationKey(id, identity: identity), default: 0]
+        }
+        return ResumePositionReconciliationSnapshot(
+            serverIdentity: identity,
+            reconcilableGenerations: reconcilable
+        )
+    }
+
     /// A successful online list response is the next authoritative observation
     /// after a write. It may acknowledge the same value or replace it with a
     /// newer value written by another client. Pending (unsent) values still win.
     public func reconcileFreshServerPositions(_ positions: [Int: Double]) {
+        let snapshot = freshServerReconciliationSnapshot()
+        reconcileFreshServerPositions(positions, capturedBy: snapshot)
+    }
+
+    public func reconcileFreshServerPositions(
+        _ positions: [Int: Double],
+        capturedBy snapshot: ResumePositionReconciliationSnapshot
+    ) {
         lock.lock(); defer { lock.unlock() }
         let identity = serverIdentity
-        for id in positions.keys where !defaults.bool(forKey: pendingKey(id, identity: identity)) {
+        guard identity == snapshot.serverIdentity else { return }
+        for id in positions.keys {
+            guard let capturedGeneration = snapshot.reconcilableGenerations[id],
+                  generations[generationKey(id, identity: identity), default: 0]
+                    == capturedGeneration,
+                  !defaults.bool(forKey: pendingKey(id, identity: identity))
+            else { continue }
             defaults.removeObject(forKey: awaitingServerKey(id, identity: identity))
         }
     }

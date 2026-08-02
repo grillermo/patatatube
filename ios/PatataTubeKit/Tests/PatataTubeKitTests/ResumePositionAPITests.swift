@@ -51,6 +51,27 @@ extension APIClientTests {
             }
         }
 
+        @Test func boundSaveRefusesAChangedDestinationBeforeRequest() async {
+            let credentials = InMemoryCredentialStore(
+                baseURL: URL(string: "https://server-a.test")!, token: "tok"
+            )
+            let client = APIClient(store: credentials, session: mockSession())
+            let serverA = ResumePositionStore.normalizedServerIdentity(credentials.baseURL)
+            credentials.baseURL = URL(string: "https://server-b.test")!
+            MockURLProtocol.handler = { request in
+                Issue.record("unexpected request to \(request.url?.absoluteString ?? "-")")
+                return (jsonResponse(request.url!, status: 204), Data())
+            }
+
+            await #expect(throws: APIError.serverChanged) {
+                try await client.savePosition(
+                    id: 12,
+                    secs: 10,
+                    destinationServerIdentity: serverA
+                )
+            }
+        }
+
         private func makeClient(statusToken token: String) -> APIClient {
             let store = InMemoryCredentialStore(
                 baseURL: URL(string: "https://srv.test")!, token: token

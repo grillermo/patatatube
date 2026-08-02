@@ -3,6 +3,7 @@ import Foundation
 public enum APIError: Error, Equatable {
     case badStatus(Int)
     case notConfigured
+    case serverChanged
     case decoding(String)
 }
 
@@ -43,12 +44,23 @@ public protocol VideoAPI: Sendable {
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool
     func chooseAudio(id: Int, lang: String) async throws -> Bool
     func savePosition(id: Int, secs: Double) async throws
+    func savePosition(
+        id: Int, secs: Double, destinationServerIdentity: String
+    ) async throws
     func upload(url: String) async throws -> Int
     func delete(id: Int) async throws -> Bool
     func scanLibrary() async throws -> ScanResult
     func prepare(id: Int, bulk: Bool) async throws -> String
     func video(id: Int) async throws -> Video
     func imageData(path: String) async throws -> Data
+}
+
+public extension VideoAPI {
+    func savePosition(
+        id: Int, secs: Double, destinationServerIdentity: String
+    ) async throws {
+        try await savePosition(id: id, secs: secs)
+    }
 }
 
 public final class APIClient: VideoAPI, @unchecked Sendable {
@@ -128,7 +140,20 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
     /// Reports where playback got to. The server answers 204 with no body, so
     /// there is nothing to decode — a throw is the only failure signal.
     public func savePosition(id: Int, secs: Double) async throws {
-        _ = try await authedPost("api/videos/\(id)/position", body: ["secs": secs])
+        let destination = ResumePositionStore.normalizedServerIdentity(try base())
+        try await savePosition(
+            id: id, secs: secs, destinationServerIdentity: destination
+        )
+    }
+
+    public func savePosition(
+        id: Int, secs: Double, destinationServerIdentity: String
+    ) async throws {
+        _ = try await authedPost(
+            "api/videos/\(id)/position",
+            body: ["secs": secs],
+            destinationServerIdentity: destinationServerIdentity
+        )
     }
 
     public func delete(id: Int) async throws -> Bool {
@@ -204,9 +229,18 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         return data
     }
 
-    private func authedPost(_ path: String, body: [String: Any]) async throws -> Data {
+    private func authedPost(
+        _ path: String,
+        body: [String: Any],
+        destinationServerIdentity: String? = nil
+    ) async throws -> Data {
         guard let token = store.token, !token.isEmpty else { throw APIError.notConfigured }
-        var request = URLRequest(url: try base().appendingPathComponent(path))
+        let baseURL = try base()
+        if let destinationServerIdentity,
+           ResumePositionStore.normalizedServerIdentity(baseURL) != destinationServerIdentity {
+            throw APIError.serverChanged
+        }
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

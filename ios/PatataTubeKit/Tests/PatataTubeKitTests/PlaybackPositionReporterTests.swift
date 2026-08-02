@@ -109,6 +109,82 @@ private final class ControlledSpyAPI: VideoAPI, @unchecked Sendable {
     func imageData(path: String) async throws -> Data { Data() }
 }
 
+private final class DestinationControlledAPI: VideoAPI, @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeServerIdentity: String
+    private var blockedSave: CheckedContinuation<Void, Never>?
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+    private(set) var sentServerIdentities: [String] = []
+
+    init(activeServerIdentity: String) {
+        self.activeServerIdentity = activeServerIdentity
+    }
+
+    func setActiveServerIdentity(_ identity: String) {
+        lock.withLock { activeServerIdentity = identity }
+    }
+
+    func waitForBlockedSave() async {
+        if lock.withLock({ blockedSave != nil }) { return }
+        await withCheckedContinuation { continuation in
+            let alreadyBlocked = lock.withLock { () -> Bool in
+                if blockedSave != nil { return true }
+                startedWaiter = continuation
+                return false
+            }
+            if alreadyBlocked { continuation.resume() }
+        }
+    }
+
+    func releaseBlockedSave() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            defer { blockedSave = nil }
+            return blockedSave
+        }
+        continuation?.resume()
+    }
+
+    func savePosition(id: Int, secs: Double) async throws {
+        try await controlledSave(destinationServerIdentity: nil)
+    }
+
+    func savePosition(
+        id: Int, secs: Double, destinationServerIdentity: String
+    ) async throws {
+        try await controlledSave(destinationServerIdentity: destinationServerIdentity)
+    }
+
+    private func controlledSave(destinationServerIdentity: String?) async throws {
+        await withCheckedContinuation { continuation in
+            let waiter = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                blockedSave = continuation
+                defer { startedWaiter = nil }
+                return startedWaiter
+            }
+            waiter?.resume()
+        }
+        try lock.withLock {
+            if let destinationServerIdentity,
+               destinationServerIdentity != activeServerIdentity {
+                throw APIError.badStatus(409)
+            }
+            sentServerIdentities.append(activeServerIdentity)
+        }
+    }
+
+    func videos(classification: String?) async throws -> [Video] { [] }
+    func classifications() async throws -> [String] { [] }
+    func classify(id: Int, classification: String) async throws -> ClassifyResult { ClassifyResult(ok: true) }
+    func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
+    func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
+    func upload(url: String) async throws -> Int { 0 }
+    func delete(id: Int) async throws -> Bool { true }
+    func scanLibrary() async throws -> ScanResult { ScanResult(added: 0, updated: 0, skipped: 0) }
+    func prepare(id: Int, bulk: Bool) async throws -> String { "done" }
+    func video(id: Int) async throws -> Video { throw APIError.notConfigured }
+    func imageData(path: String) async throws -> Data { Data() }
+}
+
 final class PlaybackPositionReporterTests: XCTestCase {
     private func makeStore() throws -> ResumePositionStore {
         ResumePositionStore(defaults: try XCTUnwrap(UserDefaults(suiteName: "reporter-\(UUID().uuidString)")))
@@ -222,6 +298,36 @@ final class PlaybackPositionReporterTests: XCTestCase {
         store.useServer(URL(string: "https://server-a.test"))
         await reporter.flushPending()
         XCTAssertEqual(api.saved.map(\.secs), [30])
+    }
+
+    func testServerSwitchAfterFlushCaptureDoesNotSendToNewServer() async throws {
+        let serverA = ResumePositionStore.normalizedServerIdentity(
+            URL(string: "https://server-a.test")
+        )
+        let serverB = ResumePositionStore.normalizedServerIdentity(
+            URL(string: "https://server-b.test")
+        )
+        let api = DestinationControlledAPI(activeServerIdentity: serverA)
+        let defaults = try XCTUnwrap(
+            UserDefaults(suiteName: "reporter-server-race-\(UUID().uuidString)")
+        )
+        let store = ResumePositionStore(
+            defaults: defaults,
+            serverURL: URL(string: "https://server-a.test")
+        )
+        store.setLocal(30, for: 5)
+        let reporter = PlaybackPositionReporter(api: api, store: store)
+
+        let flush = Task { await reporter.flushPending() }
+        await api.waitForBlockedSave()
+        store.useServer(URL(string: "https://server-b.test"))
+        api.setActiveServerIdentity(serverB)
+        api.releaseBlockedSave()
+        await flush.value
+
+        XCTAssertTrue(api.sentServerIdentities.isEmpty)
+        store.useServer(URL(string: "https://server-a.test"))
+        XCTAssertEqual(store.pending(), [5: 30])
     }
 
     func testOlderInFlightSuccessDoesNotClearNewerThrottledPosition() async throws {

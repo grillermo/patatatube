@@ -94,6 +94,7 @@ public final class VideoStore: ObservableObject {
     public func load() async {
         loadGeneration += 1
         let generation = loadGeneration
+        let positionSnapshot = positionStore?.freshServerReconciliationSnapshot()
         isLoading = true
         errorText = nil
         defer { if generation == loadGeneration { isLoading = false } }
@@ -116,9 +117,12 @@ public final class VideoStore: ObservableObject {
             // Only apply this fetch if nothing newer has started since -- a stale,
             // slower call must never overwrite a faster/later one's results.
             if generation == loadGeneration {
-                positionStore?.reconcileFreshServerPositions(
-                    Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0.resumeSecs) })
-                )
+                if let positionSnapshot {
+                    positionStore?.reconcileFreshServerPositions(
+                        Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0.resumeSecs) }),
+                        capturedBy: positionSnapshot
+                    )
+                }
                 videos = fetched
             }
         } catch {
