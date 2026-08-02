@@ -79,6 +79,9 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         chosenAudio.append((id, lang))
         return chooseAudioResult
     }
+    func savePosition(id: Int, secs: Double) async throws {
+        if let mutationError { throw mutationError }
+    }
     func prepare(id: Int, bulk: Bool) async throws -> String { prepareResult }
     func video(id: Int) async throws -> Video {
         videoCalls += 1

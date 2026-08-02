@@ -23,6 +23,7 @@ private final class PromoteAPI: VideoAPI, @unchecked Sendable {
     }
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
     func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
+    func savePosition(id: Int, secs: Double) async throws {}
     func upload(url: String) async throws -> Int { 0 }
     func delete(id: Int) async throws -> Bool { true }
     func scanLibrary() async throws -> ScanResult { ScanResult(added: 0, updated: 0, skipped: 0) }

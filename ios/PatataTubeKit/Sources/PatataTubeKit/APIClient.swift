@@ -42,6 +42,7 @@ public protocol VideoAPI: Sendable {
     func classify(id: Int, classification: String) async throws -> ClassifyResult
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool
     func chooseAudio(id: Int, lang: String) async throws -> Bool
+    func savePosition(id: Int, secs: Double) async throws
     func upload(url: String) async throws -> Int
     func delete(id: Int) async throws -> Bool
     func scanLibrary() async throws -> ScanResult
@@ -122,6 +123,12 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
 
     public func chooseAudio(id: Int, lang: String) async throws -> Bool {
         try await postOK("api/videos/\(id)/audio", body: ["lang": lang])
+    }
+
+    /// Reports where playback got to. The server answers 204 with no body, so
+    /// there is nothing to decode — a throw is the only failure signal.
+    public func savePosition(id: Int, secs: Double) async throws {
+        _ = try await authedPost("api/videos/\(id)/position", body: ["secs": secs])
     }
 
     public func delete(id: Int) async throws -> Bool {
