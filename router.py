@@ -145,6 +145,10 @@ class AudioRequest(BaseModel):
     lang: str
 
 
+class PositionRequest(BaseModel):
+    secs: float
+
+
 class PrepareRequest(BaseModel):
     audio_lang: str | None = None
     # "bulk" is the iOS Download-all path. Anything else, including omitted,
@@ -865,6 +869,22 @@ async def api_choose_audio(video_id: int, body: AudioRequest, request: Request):
             priority=db.PRIORITY_INTERACTIVE,
         )
     return {"ok": True}
+
+
+@router.post("/api/videos/{video_id}/position", status_code=204)
+async def api_save_position(video_id: int, body: PositionRequest, request: Request):
+    """Where playback got to, reported by the iOS player.
+
+    Fire-and-forget from the client's point of view: no body comes back, and a
+    lost write only costs a few seconds of accuracy. 0 means "watched to the
+    end" — the client sends it once playback reaches the final seconds.
+    """
+    _check_token(request)
+    video = db.get_video(video_id)
+    if not video or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Video not found")
+    db.set_resume_secs(video_id, body.secs)
+    return Response(status_code=204)
 
 
 @router.post("/api/video/{video_id}/delete")

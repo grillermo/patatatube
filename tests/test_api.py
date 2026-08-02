@@ -1809,3 +1809,67 @@ def test_delete_removes_cached_download_preview(client, tmp_path, monkeypatch):
         assert not poster.exists()
     finally:
         f.unlink(missing_ok=True)
+
+
+def _make_done_video(client, monkeypatch, url="https://twitter.com/x/status/900"):
+    """Insert a row directly; the API's own upload path schedules downloads."""
+    import db
+    return db.add_video(url, "twitter")
+
+
+def test_position_requires_token(client):
+    resp = client.post("/api/videos/1/position", json={"secs": 12.0})
+    assert resp.status_code == 401
+
+
+def test_position_saves_seconds(client, monkeypatch):
+    import db
+    video_id = _make_done_video(client, monkeypatch)
+    resp = client.post(
+        f"/api/videos/{video_id}/position",
+        json={"secs": 91.5},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 204
+    assert db.get_video(video_id)["resume_secs"] == 91.5
+
+
+def test_position_clamps_negative(client, monkeypatch):
+    import db
+    video_id = _make_done_video(client, monkeypatch, "https://twitter.com/x/status/901")
+    resp = client.post(
+        f"/api/videos/{video_id}/position",
+        json={"secs": -3},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 204
+    assert db.get_video(video_id)["resume_secs"] == 0
+
+
+def test_position_unknown_video_is_404(client):
+    resp = client.post(
+        "/api/videos/999999/position",
+        json={"secs": 5},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 404
+
+
+def test_position_requires_secs(client, monkeypatch):
+    video_id = _make_done_video(client, monkeypatch, "https://twitter.com/x/status/902")
+    resp = client.post(
+        f"/api/videos/{video_id}/position",
+        json={},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 422
+
+
+def test_video_list_includes_resume_secs(client, monkeypatch):
+    import db
+    video_id = _make_done_video(client, monkeypatch, "https://twitter.com/x/status/903")
+    db.set_resume_secs(video_id, 42.0)
+    resp = client.get("/api/videos", headers={"Authorization": "Bearer test-secret"})
+    assert resp.status_code == 200
+    row = next(v for v in resp.json() if v["id"] == video_id)
+    assert row["resume_secs"] == 42.0
