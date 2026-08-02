@@ -225,13 +225,7 @@ struct VideoPlayerView: View {
             abandonSetup(player: player)
             return
         }
-        pauseTransitionObserver = player.observe(\.timeControlStatus, options: [.new]) { player, _ in
-            guard Self.shouldForceReportPosition(for: player.timeControlStatus) else { return }
-            Task { @MainActor in
-                guard self.player === player, !hasDisappeared else { return }
-                reportPosition(force: true)
-            }
-        }
+        bindPauseTransitions(player: player, item: item, videoID: video.id)
         positionObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 10, preferredTimescale: 600), queue: .main
         ) { time in
@@ -258,6 +252,43 @@ struct VideoPlayerView: View {
         for status: AVPlayer.TimeControlStatus
     ) -> Bool {
         status == .paused
+    }
+
+    /// A queued pause callback belongs to one queue item, not merely to the
+    /// reusable AVPlayer. Both identities must still match before reporting.
+    nonisolated static func isSamePauseSession(
+        observedVideoID: Int,
+        observedItem: AVPlayerItem,
+        activeVideoID: Int,
+        activeItem: AVPlayerItem?
+    ) -> Bool {
+        observedVideoID == activeVideoID && observedItem === activeItem
+    }
+
+    /// Rebind pause reporting whenever the queue replaces the current item.
+    /// Already-queued callbacks from the old binding are rejected by the item
+    /// and video identity check inside their main-actor task.
+    private func bindPauseTransitions(
+        player: AVPlayer,
+        item observedItem: AVPlayerItem,
+        videoID observedVideoID: Int
+    ) {
+        pauseTransitionObserver?.invalidate()
+        pauseTransitionObserver = player.observe(\.timeControlStatus, options: [.new]) { player, _ in
+            guard Self.shouldForceReportPosition(for: player.timeControlStatus),
+                  player.currentItem === observedItem else { return }
+            Task { @MainActor in
+                guard self.player === player,
+                      !hasDisappeared,
+                      Self.isSamePauseSession(
+                        observedVideoID: observedVideoID,
+                        observedItem: observedItem,
+                        activeVideoID: video.id,
+                        activeItem: player.currentItem
+                      ) else { return }
+                reportPosition(force: true)
+            }
+        }
     }
 
     /// A canceled or departed SwiftUI task may resume after an `await`, but it
@@ -567,6 +598,7 @@ struct VideoPlayerView: View {
         }
         currentIndex = nextIndex
         player.replaceCurrentItem(with: item)
+        bindPauseTransitions(player: player, item: item, videoID: videos[nextIndex].id)
         playbackProbe.attach(item: item, player: player, video: videos[nextIndex], source: source)
         Task { await applyAudioSelection(item: item, lang: videos[nextIndex].audioLang) }
         bindPlayToEnd()

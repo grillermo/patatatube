@@ -17,6 +17,28 @@ final class VideoPlayerResumeTests: XCTestCase {
         XCTAssertFalse(VideoPlayerView.shouldForceReportPosition(for: .waitingToPlayAtSpecifiedRate))
     }
 
+    func testPauseSessionRequiresSameVideoAndItem() {
+        let observedItem = AVPlayerItem(asset: AVMutableComposition())
+        let nextItem = AVPlayerItem(asset: AVMutableComposition())
+
+        XCTAssertTrue(VideoPlayerView.isSamePauseSession(
+            observedVideoID: 41, observedItem: observedItem,
+            activeVideoID: 41, activeItem: observedItem
+        ))
+        XCTAssertFalse(VideoPlayerView.isSamePauseSession(
+            observedVideoID: 41, observedItem: observedItem,
+            activeVideoID: 42, activeItem: observedItem
+        ))
+        XCTAssertFalse(VideoPlayerView.isSamePauseSession(
+            observedVideoID: 41, observedItem: observedItem,
+            activeVideoID: 41, activeItem: nextItem
+        ))
+        XCTAssertFalse(VideoPlayerView.isSamePauseSession(
+            observedVideoID: 41, observedItem: observedItem,
+            activeVideoID: 41, activeItem: nil
+        ))
+    }
+
     func testSetupCannotContinueAfterCancellationOrDisappearance() {
         XCTAssertTrue(VideoPlayerView.canContinueSetup(
             taskIsCancelled: false, hasDisappeared: false
