@@ -183,6 +183,14 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
   there, and history only decides for text that isn't an address on its own.
   Resolution fills in `https://` and refuses anything without a host. There is
   deliberately no search-engine fallback.
+- **Resume positions live on the server.** `videos.resume_secs` is written by
+  `POST /api/videos/{id}/position`; the iOS player reports every 10s and on
+  pause/background/dismiss/advance via `PlaybackPositionReporter`, mirroring
+  each write into `UserDefaults` (`ResumePositionStore`) so offline playback
+  still resumes and failed writes flush later. The Resume/Play-from-start
+  alert only appears for `tv`/`movies` rows past 60s (`ResumeDecision`);
+  reaching the last 30s stores 0, and auto-advance inside the player always
+  starts the next item at 0.
 
 ### Plex library (library rows)
 
