@@ -90,7 +90,6 @@ struct VideoGridView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                filterTabs
                 if store.isLoading && filteredVideos.isEmpty {
                     if store.filter == "tv" || store.filter == "movies" {
                         SkeletonGrid(columns: columns, aspectRatio: 2.0/3.0,
@@ -161,7 +160,7 @@ struct VideoGridView: View {
                     onPlay: { video in play(video) }
                 )
             }
-            .navigationTitle("PatataTube")
+            .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "Search videos")
             .onChange(of: searchText) { _, newValue in
                 searchDebounceTask?.cancel()
@@ -172,6 +171,9 @@ struct VideoGridView: View {
                 }
             }
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    filterTabs
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showWebBridge = true
@@ -258,21 +260,28 @@ struct VideoGridView: View {
         }
         .environment(preparationTracker)
     }
-    private var filterTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack {
-                ForEach(classifications, id: \.self) { c in tab(title: c, value: c) }
+    /// Segmented control over the classifications. `""` stands in for a nil
+    /// filter so the picker has a non-optional selection; it is never offered
+    /// as a segment, it only keeps the control in a valid state before the
+    /// first filter lands.
+    private var filterBinding: Binding<String> {
+        Binding(
+            get: { store.filter ?? "" },
+            set: { newValue in
+                guard newValue != store.filter else { return }
+                Task { await store.switchFilter(to: newValue) }
             }
-            .padding(.horizontal)
-        }
+        )
     }
 
-    private func tab(title: String, value: String?) -> some View {
-        Button(title) {
-            Task { await store.switchFilter(to: value) }
+    private var filterTabs: some View {
+        Picker("Classification", selection: filterBinding) {
+            ForEach(classifications, id: \.self) { c in
+                Text(c.capitalized).tag(c)
+            }
         }
-        .buttonStyle(.borderedProminent)
-        .tint(store.filter == value ? .accentColor : .gray)
+        .pickerStyle(.segmented)
+        .labelsHidden()
     }
 
     private func initialLoad() async {
