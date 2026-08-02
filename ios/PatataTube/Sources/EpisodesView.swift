@@ -8,10 +8,9 @@ import PatataTubeKit
 final class EpisodesDownloadAllState {
     private(set) var canDownloadAll = false
     private(set) var isDownloading = false
-    /// Confirmation in flight, and whether Downloads has been pushed. Held here
-    /// rather than in `@State` so the whole Download-all flow has one owner.
+    /// Confirmation in flight. Held here rather than in `@State` so the whole
+    /// Download-all flow has one owner.
     var pendingDownloadAll: DownloadAllRequest?
-    var showDownloads = false
 
     func setEligibility(_ value: Bool) {
         canDownloadAll = value
@@ -28,6 +27,9 @@ struct EpisodesView: View {
     let onPlay: (Video, [Video]) -> Void
     let onDownload: @MainActor @Sendable (Video) async -> Bool
     private let cacheStateOverride: (@MainActor @Sendable (Video) -> CacheState)?
+    /// Pushing Downloads belongs to the stack's owner — this view no longer
+    /// declares destinations.
+    var showDownloads: () -> Void = {}
 
     @EnvironmentObject var model: AppModel
     @Environment(\.continuousClock) private var clock
@@ -37,12 +39,14 @@ struct EpisodesView: View {
         show: ShowGroup,
         onPlay: @escaping (Video, [Video]) -> Void,
         onDownload: @escaping @MainActor @Sendable (Video) async -> Bool,
-        currentCacheState: (@MainActor @Sendable (Video) -> CacheState)? = nil
+        currentCacheState: (@MainActor @Sendable (Video) -> CacheState)? = nil,
+        showDownloads: @escaping () -> Void = {}
     ) {
         self.show = show
         self.onPlay = onPlay
         self.onDownload = onDownload
         self.cacheStateOverride = currentCacheState
+        self.showDownloads = showDownloads
     }
 
     var body: some View {
@@ -87,29 +91,11 @@ struct EpisodesView: View {
                 let targets = request.targets
                 downloadState.pendingDownloadAll = nil
                 // Push Downloads so the confirm lands on the progress list.
-                downloadState.showDownloads = true
+                showDownloads()
                 Task { @MainActor in await downloadAll(targets) }
             }
         } message: { request in
             Text(VideoGridView.downloadAllMessage(count: request.targets.count, freeBytes: request.freeBytes))
-        }
-        // Pushed onto the enclosing stack — the same Downloads list the grid
-        // shows, scoped to this show's episodes for title lookup.
-        .navigationDestination(isPresented: Binding(
-            get: { downloadState.showDownloads },
-            set: { downloadState.showDownloads = $0 }
-        )) {
-            DownloadsView(
-                active: { model.cache.activeDownloads() },
-                recent: { model.cache.recentDownloads() },
-                video: { id, versionID in
-                    VideoGridView.downloadVideo(id: id, versionID: versionID, videos: show.episodes)
-                },
-                onCancel: { activity in
-                    model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
-                },
-                onPlay: { video in onPlay(video, show.episodes) }
-            )
         }
         .task {
             await observeDownloadAllEligibility()

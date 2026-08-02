@@ -26,8 +26,11 @@ struct VideoGridView: View {
     @State private var classifications: [String] = ["children", "adults", "education", "tv", "movies"]
     @State private var showSettings = false
     @State private var showUpload = false
-    @State private var showDownloads = false
     @State private var showWebBridge = false
+    /// Explicit navigation path. Required for restoration — an implicit stack
+    /// cannot be replayed — and the reason `.downloads` is a route rather than
+    /// an `isPresented` destination: SwiftUI desyncs a stack that mixes the two.
+    @State private var path: [Route] = []
     /// Queue snapshot + start index, built at tap time. A single cover item —
     /// presenting from separate state raced the boot load and could hand the
     /// player an empty queue on the first cold-launch tap (index crash).
@@ -100,7 +103,7 @@ struct VideoGridView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 if store.isLoading && filteredVideos.isEmpty {
                     if store.filter == "tv" || store.filter == "movies" {
@@ -115,7 +118,8 @@ struct VideoGridView: View {
                         onPlay: { video, queue in
                             play(video, queueSnapshot: queue)
                         },
-                        onDownload: { await download($0) }
+                        onDownload: { await download($0) },
+                        showDownloads: { path.append(.downloads) }
                     )
                 } else if store.filter == "movies" {
                     LazyVGrid(columns: columns, spacing: 16) {
@@ -154,23 +158,37 @@ struct VideoGridView: View {
                     .padding()
                 }
             }
-            .navigationDestination(for: Video.self) { pushed in
-                MovieDetailView(video: pushed,
-                                onPlay: { play($0) },
-                                onDownload: { await download($0) })
-            }
-            .navigationDestination(isPresented: $showDownloads) {
-                DownloadsView(
-                    active: { model.cache.activeDownloads() },
-                    recent: { model.cache.recentDownloads() },
-                    video: { id, versionID in
-                        Self.downloadVideo(id: id, versionID: versionID, videos: store.videos)
-                    },
-                    onCancel: { activity in
-                        model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
-                    },
-                    onPlay: { video in play(video) }
-                )
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .show(let title):
+                    // Resolved late, against the list actually on screen: a
+                    // route holds only an id, so a renamed or deleted show
+                    // resolves to nothing instead of a phantom screen.
+                    if let show = ShowGroup.group(filteredVideos).first(where: { $0.id == title }) {
+                        EpisodesView(show: show,
+                                     onPlay: { video, queue in play(video, queueSnapshot: queue) },
+                                     onDownload: { await download($0) },
+                                     showDownloads: { path.append(.downloads) })
+                    }
+                case .movie(let id):
+                    if let video = store.videos.first(where: { $0.id == id }) {
+                        MovieDetailView(video: video,
+                                        onPlay: { play($0) },
+                                        onDownload: { await download($0) })
+                    }
+                case .downloads:
+                    DownloadsView(
+                        active: { model.cache.activeDownloads() },
+                        recent: { model.cache.recentDownloads() },
+                        video: { id, versionID in
+                            Self.downloadVideo(id: id, versionID: versionID, videos: store.videos)
+                        },
+                        onCancel: { activity in
+                            model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
+                        },
+                        onPlay: { video in play(video) }
+                    )
+                }
             }
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "Search videos")
@@ -215,7 +233,7 @@ struct VideoGridView: View {
                     let targets = request.targets
                     pendingDownloadAll = nil
                     // Push Downloads so the confirm lands on the progress list.
-                    showDownloads = true
+                    path.append(.downloads)
                     Task { await runDownloadAll(targets) }
                 }
             } message: { request in
@@ -302,7 +320,7 @@ struct VideoGridView: View {
             .disabled(downloadingAll)
 
             Button {
-                showDownloads = true
+                path.append(.downloads)
             } label: {
                 Label("Downloads", systemImage: "arrow.down.circle")
             }

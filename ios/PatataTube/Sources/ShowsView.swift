@@ -14,7 +14,7 @@ struct ShowsView: View {
     var body: some View {
         LazyVGrid(columns: columns, spacing: 16) {
             ForEach(ShowGroup.group(videos)) { show in
-                NavigationLink(value: show) {
+                NavigationLink(value: Route.show(title: show.title)) {
                     VStack(alignment: .leading, spacing: 6) {
                         AuthedImage(path: show.posterPath,
                                     localFileURL: cachedPosterURL(for: show),
@@ -31,9 +31,6 @@ struct ShowsView: View {
             }
         }
         .padding()
-        .navigationDestination(for: ShowGroup.self) { show in
-            EpisodesView(show: show, onPlay: onPlay, onDownload: onDownload)
-        }
     }
 
     private func cachedPosterURL(for show: ShowGroup) -> URL? {
