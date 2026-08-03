@@ -6,10 +6,18 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-CLASSIFICATIONS = ["children", "adults", "anabel", "asmr", "tv", "movies"]
-# The classifications the iOS Videos tab shows as groups (`MediaTab.videoGroups`),
-# and the only ones that can carry an emoji cover.
-VIDEO_GROUPS = CLASSIFICATIONS[:4]
+# Plex media types. Deliberately NOT groups: they have their own tabs, their own
+# scan source (plex.py), their own directories, and their own playback rules.
+PLEX_KINDS = ("tv", "movies")
+
+# Seeded into `groups` on a fresh database. After that the table is the truth —
+# this list is not consulted again and must never be imported as "the groups".
+DEFAULT_GROUPS = [
+    ("children", "Children", 0),
+    ("adults", "Adults", 1),
+    ("anabel", "Anabel", 2),
+    ("asmr", "ASMR", 3),
+]
 
 JOB_KINDS = ("convert", "hls", "normalize")
 PRIORITY_INTERACTIVE = 0
@@ -202,8 +210,19 @@ def init_db():
                 emoji TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                label TEXT NOT NULL,
+                emoji TEXT,
+                position INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
+        _seed_default_groups(conn)
         version_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(video_versions)").fetchall()
         }
@@ -554,25 +573,90 @@ def set_version_audio_langs(version_id: int, audio_langs_json: str) -> None:
         )
 
 
-def get_group_covers() -> dict[str, str]:
-    """Every group's chosen emoji cover, keyed by classification name."""
-    with _conn() as conn:
-        rows = conn.execute("SELECT name, emoji FROM group_covers").fetchall()
-        return {row["name"]: row["emoji"] for row in rows}
+def _seed_default_groups(conn: sqlite3.Connection) -> None:
+    """Seed the four starting groups, once, on a database that has none.
+
+    Gated on emptiness rather than on the old `classification` column, so a
+    brand-new install gets them too. Never re-runs: a user who deletes a group
+    by hand does not get it resurrected on the next boot.
+    """
+    if conn.execute("SELECT 1 FROM groups LIMIT 1").fetchone():
+        return
+    conn.executemany(
+        "INSERT INTO groups (name, label, position) VALUES (?, ?, ?)",
+        DEFAULT_GROUPS,
+    )
 
 
-def set_group_cover(name: str, emoji: str | None) -> None:
-    """Store (or, with `emoji` falsy, clear) one group's cover."""
+def list_groups() -> list[dict]:
     with _conn() as conn:
-        if emoji:
-            conn.execute(
-                "INSERT INTO group_covers (name, emoji, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)"
-                " ON CONFLICT(name) DO UPDATE SET emoji = excluded.emoji,"
-                " updated_at = CURRENT_TIMESTAMP",
-                (name, emoji),
-            )
-        else:
-            conn.execute("DELETE FROM group_covers WHERE name = ?", (name,))
+        rows = conn.execute(
+            "SELECT * FROM groups ORDER BY position ASC, id ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_group(group_id: int) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_group_by_name(name: str) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM groups WHERE name = ?", (name,)).fetchone()
+        return dict(row) if row else None
+
+
+def create_group(
+    name: str, label: str, emoji: str | None = None, position: int | None = None
+) -> dict:
+    """Raises sqlite3.IntegrityError when `name` is taken."""
+    with _conn() as conn:
+        if position is None:
+            row = conn.execute("SELECT MAX(position) AS m FROM groups").fetchone()
+            position = 0 if row["m"] is None else row["m"] + 1
+        cur = conn.execute(
+            "INSERT INTO groups (name, label, emoji, position) VALUES (?, ?, ?, ?)",
+            (name, label, emoji, position),
+        )
+        row = conn.execute("SELECT * FROM groups WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return dict(row)
+
+
+def update_group(
+    group_id: int,
+    *,
+    label: str | None = None,
+    emoji: str | None = None,
+    clear_emoji: bool = False,
+    position: int | None = None,
+) -> dict | None:
+    """Partial update. `clear_emoji` is how a caller sets the emoji to NULL —
+    `emoji=None` means "leave it alone", since that is what an omitted JSON
+    field decodes to."""
+    sets: list[str] = []
+    params: list = []
+    if label is not None:
+        sets.append("label = ?")
+        params.append(label)
+    if clear_emoji:
+        sets.append("emoji = NULL")
+    elif emoji is not None:
+        sets.append("emoji = ?")
+        params.append(emoji)
+    if position is not None:
+        sets.append("position = ?")
+        params.append(position)
+    with _conn() as conn:
+        if not conn.execute("SELECT 1 FROM groups WHERE id = ?", (group_id,)).fetchone():
+            return None
+        if sets:
+            sets.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(group_id)
+            conn.execute(f"UPDATE groups SET {', '.join(sets)} WHERE id = ?", params)
+        row = conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
+        return dict(row)
 
 
 def get_video(video_id: int) -> dict | None:
