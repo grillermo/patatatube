@@ -81,13 +81,16 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, platform, sourceKey, previewUrl, position
-        case groupID = "group_id"
-        case plexKind = "plex_kind"
+        case groupID = "groupId", plexKind
         case status, errorMsg, streamPath, source, showTitle, season, episode, summary
         case showPreviewUrl, chosenVersionId, versions, hlsPath, subtitleTracks
         case sourceFilename
         case audioLang
         case resumeSecs
+    }
+
+    private enum RawGroupCodingKeys: String, CodingKey {
+        case groupID = "group_id", plexKind = "plex_kind"
     }
 
     public var isLibrary: Bool { source == "library" }
@@ -120,14 +123,17 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try decoder.container(keyedBy: RawGroupCodingKeys.self)
         self.id = try c.decode(Int.self, forKey: .id)
         self.url = try c.decode(String.self, forKey: .url)
         self.title = try c.decodeIfPresent(String.self, forKey: .title)
         self.platform = try c.decodeIfPresent(String.self, forKey: .platform)
         self.sourceKey = try c.decodeIfPresent(String.self, forKey: .sourceKey)
         self.previewUrl = try c.decodeIfPresent(String.self, forKey: .previewUrl)
-        self.groupID = try c.decodeIfPresent(Int.self, forKey: .groupID)
-        self.plexKind = try c.decodeIfPresent(PlexKind.self, forKey: .plexKind)
+        self.groupID = try raw.decodeIfPresent(Int.self, forKey: .groupID)
+            ?? c.decodeIfPresent(Int.self, forKey: .groupID)
+        self.plexKind = try raw.decodeIfPresent(PlexKind.self, forKey: .plexKind)
+            ?? c.decodeIfPresent(PlexKind.self, forKey: .plexKind)
         self.position = try c.decodeIfPresent(Int.self, forKey: .position)
         self.status = try c.decode(String.self, forKey: .status)
         self.errorMsg = try c.decodeIfPresent(String.self, forKey: .errorMsg)

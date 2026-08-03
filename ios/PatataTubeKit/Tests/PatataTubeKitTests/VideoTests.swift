@@ -45,6 +45,15 @@ private let sampleJSON = """
     #expect(video.isPlexItem == true)
 }
 
+@Test func decodesGroupIDAndPlexKindWithSnakeCaseDecoder() throws {
+    let json = #"{"id":2,"url":"u","status":"done","group_id":3,"plex_kind":"tv","subtitle_tracks":[]}"#
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let video = try decoder.decode(Video.self, from: Data(json.utf8))
+    #expect(video.groupID == 3)
+    #expect(video.plexKind == .tv)
+}
+
 @Test func decodesAnUnsortedVideo() throws {
     let json = #"{"id":3,"url":"u","status":"done","subtitle_tracks":[]}"#
     let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
