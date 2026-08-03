@@ -163,6 +163,54 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     func clear() {}
 }
 
+private final class DelayedVideoListCache: VideoListCaching, @unchecked Sendable {
+    private let backing = VideoListCache(
+        root: FileManager.default.temporaryDirectory
+            .appendingPathComponent("delayed-vlc-\(UUID().uuidString)")
+    )
+    private let lock = NSLock()
+    private let releaseGate = DispatchSemaphore(value: 0)
+    private var delayedFeed: Feed?
+    private var saveStarted = false
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+
+    func delayNextSave(feed: Feed) {
+        lock.withLock {
+            delayedFeed = feed
+            saveStarted = false
+        }
+    }
+
+    func save(_ videos: [Video], feed: Feed) {
+        let delay = lock.withLock { () -> (Bool, CheckedContinuation<Void, Never>?) in
+            guard delayedFeed == feed else { return (false, nil) }
+            delayedFeed = nil
+            saveStarted = true
+            defer { startedWaiter = nil }
+            return (true, startedWaiter)
+        }
+        delay.1?.resume()
+        if delay.0 { releaseGate.wait() }
+        backing.save(videos, feed: feed)
+    }
+
+    func waitForDelayedSave() async {
+        if lock.withLock({ saveStarted }) { return }
+        await withCheckedContinuation { continuation in
+            let alreadyStarted = lock.withLock { () -> Bool in
+                if saveStarted { return true }
+                startedWaiter = continuation
+                return false
+            }
+            if alreadyStarted { continuation.resume() }
+        }
+    }
+
+    func releaseDelayedSave() { releaseGate.signal() }
+    func load(feed: Feed) -> [Video]? { backing.load(feed: feed) }
+    func clear() { backing.clear() }
+}
+
 private final class BlockingLoadCache: VideoListCaching, @unchecked Sendable {
     private let lock = NSLock()
     private let releaseGate = DispatchSemaphore(value: 0)
@@ -708,6 +756,32 @@ private actor GroupMoveGate {
     #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
 }
 
+@MainActor @Test func olderSuccessSettlesAfterNewerFailureFinishesFirst() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, groupID: 1)]
+    let gate = GroupMoveGate()
+    api.setGroupHook = { _, groupID in
+        await gate.arrive(groupID)
+        return groupID == 2
+    }
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.load()
+
+    async let older: Void = store.setGroup(id: 1, groupID: 2)
+    await gate.waitForArrival(2)
+    async let newer: Void = store.setGroup(id: 1, groupID: 3)
+    await gate.waitForArrival(3)
+    await gate.release(3)
+    await newer
+
+    await gate.release(2)
+    await older
+
+    #expect(store.videos.first?.groupID == 2)
+    #expect(cache.load(feed: .all)?.first?.groupID == 2)
+}
+
 @MainActor @Test func twoFailedMovesRollBackToTheLastConfirmedGroup() async {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1, groupID: 1)]
@@ -760,6 +834,28 @@ private actor GroupMoveGate {
     #expect(store.videos.isEmpty)
     #expect(cache.load(feed: .all)?.isEmpty == true)
     #expect(store.errorText == nil)
+}
+
+@MainActor @Test func deletePurgesCachesAfterAlreadyStartedGroupSave() async {
+    let video = makeVideo(id: 1, groupID: 1)
+    let api = FakeAPI()
+    api.videosToReturn = [video]
+    let cache = DelayedVideoListCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.switchFeed(to: .group(id: 1))
+    cache.save([video], feed: .all)
+    cache.save([video], feed: .group(id: 2))
+    cache.delayNextSave(feed: .all)
+
+    async let move: Void = store.setGroup(id: 1, groupID: 2)
+    await cache.waitForDelayedSave()
+    async let deletion: Void = store.delete(id: 1)
+    cache.releaseDelayedSave()
+    _ = await (move, deletion)
+
+    #expect(cache.load(feed: .all)?.isEmpty == true)
+    #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
+    #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
 }
 
 @MainActor @Test func staleSourceCacheEvictionDoesNotOverwriteNewerSameVideoMove() async {

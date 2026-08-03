@@ -214,12 +214,38 @@ public final class VideoStore: ObservableObject {
         await writeTask.value
     }
 
-    private func confirmGroupMutation(_ mutation: GroupMutation) {
-        if mutation.sequence > (confirmedGroups[mutation.id]?.sequence ?? -1) {
-            confirmedGroups[mutation.id] = ConfirmedGroup(
-                sequence: mutation.sequence, groupID: mutation.groupID
-            )
+    private func removeDeletedVideo(id: Int) async {
+        var groupIDs = groupMutations[id]?.affectedGroupIDs ?? []
+        if let groupID = videos.first(where: { $0.id == id })?.groupID {
+            groupIDs.insert(groupID)
         }
+        if let groupID = confirmedGroups[id]?.groupID { groupIDs.insert(groupID) }
+        groupMutations[id] = nil
+        confirmedGroups[id] = nil
+        videos.removeAll { $0.id == id }
+
+        guard let cache else { return }
+        let feeds = [Feed.all] + groupIDs.sorted().map { Feed.group(id: $0) }
+        let previousWrite = groupCacheWriteTask
+        let writeTask = Task.detached(priority: .utility) {
+            if let previousWrite { await previousWrite.value }
+            for feed in feeds {
+                guard var videos = cache.load(feed: feed) else { continue }
+                videos.removeAll { $0.id == id }
+                cache.save(videos, feed: feed)
+            }
+        }
+        groupCacheWriteTask = writeTask
+        await writeTask.value
+    }
+
+    private func confirmGroupMutation(_ mutation: GroupMutation) {
+        guard let confirmed = confirmedGroups[mutation.id],
+              mutation.sequence > confirmed.sequence else { return }
+        confirmedGroups[mutation.id] = ConfirmedGroup(
+            sequence: mutation.sequence, groupID: mutation.groupID
+        )
+        if groupMutations[mutation.id] == nil { groupMutations[mutation.id] = mutation }
     }
 
     private func finishGroupMutation(_ mutation: GroupMutation, succeeded: Bool) async -> Bool {
@@ -296,10 +322,8 @@ public final class VideoStore: ObservableObject {
         guard videos.contains(where: { $0.id == id }) else { return }
         do {
             guard try await api.promote(id: id, kind: kind) else { return }
-            groupMutations[id] = nil
-            confirmedGroups[id] = nil
-            videos.removeAll { $0.id == id }
             mediaCache?.removeAllCached(id: id)
+            await removeDeletedVideo(id: id)
             // Server hard-deletes the row on promotion, so re-fetch + re-persist
             // the list now -- otherwise the on-disk cache still contains this
             // video and a future bootLoad() renders it as a ghost card whose
@@ -346,8 +370,7 @@ public final class VideoStore: ObservableObject {
     public func delete(id: Int) async {
         do {
             if try await api.delete(id: id) {
-                groupMutations[id] = nil
-                confirmedGroups[id] = nil
+                await removeDeletedVideo(id: id)
             }
             await load()
         } catch {
