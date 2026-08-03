@@ -38,7 +38,11 @@ private struct RestorationTracking: ViewModifier {
             .onChange(of: activeSearch) { _, newValue in
                 model.restorationStore.mutate { $0.search = newValue }
             }
-            .onChange(of: path) { _, newValue in
+            .onChange(of: path) { oldValue, newValue in
+                DevLog.event(.nav, "grid path changed", [
+                    "from": RestorationTracking.describe(oldValue),
+                    "to": RestorationTracking.describe(newValue),
+                ])
                 model.restorationStore.mutate { $0.path = newValue }
             }
             .onChange(of: filter) { _, newValue in
@@ -47,7 +51,11 @@ private struct RestorationTracking: ViewModifier {
             .onChange(of: currentGridOrder) { _, newValue in
                 gridTracker.setOrder(newValue)
             }
-            .onChange(of: playing) { _, newValue in
+            .onChange(of: playing) { oldValue, newValue in
+                DevLog.event(.nav, "grid playing changed", [
+                    "from": oldValue.map { "\($0.videos[$0.startIndex].id)" } ?? "nil",
+                    "to": newValue.map { "\($0.videos[$0.startIndex].id)" } ?? "nil",
+                ])
                 model.restorationStore.mutate { state in
                     state.player = newValue.map { queue in
                         let video = queue.videos[queue.startIndex]
@@ -65,6 +73,16 @@ private struct RestorationTracking: ViewModifier {
                     model.restorationStore.mutate { $0.scrollAnchors[key] = topmost }
                 }
             }
+    }
+
+    static func describe(_ path: [Route]) -> String {
+        path.map { route in
+            switch route {
+            case .show(let title): return "show(\(title))"
+            case .movie(let id): return "movie(\(id))"
+            case .downloads: return "downloads"
+            }
+        }.joined(separator: ">")
     }
 }
 
@@ -428,6 +446,10 @@ struct VideoGridView: View {
                              onPlay: { video, queue in play(video, queueSnapshot: queue) },
                              onDownload: { await download($0) },
                              showDownloads: { path.append(.downloads) })
+            } else {
+                EmptyView().onAppear {
+                    DevLog.event(.nav, "show route unresolved", ["title": title])
+                }
             }
         case .movie(let id):
             if let video = store.videos.first(where: { $0.id == id }) {

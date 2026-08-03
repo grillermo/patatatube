@@ -169,6 +169,7 @@ struct VideoPlayerView: View {
             }
             .onEnded { value in
                 if value.translation.height > 150 {
+                    DevLog.event(.nav, "pull-down dismiss", ["video_id": "\(video.id)", "translation": "\(value.translation.height)"])
                     dismiss()
                 } else {
                     withAnimation(.spring()) { dragOffset = 0 }

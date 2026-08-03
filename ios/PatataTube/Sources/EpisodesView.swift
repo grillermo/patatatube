@@ -75,6 +75,7 @@ struct EpisodesView: View {
                 }
             }
             .onAppear {
+                DevLog.event(.nav, "episodes appear", ["show": show.title])
                 visibleTracker.setOrder(show.episodes.map { String($0.id) })
                 if let anchor = model.restorationStore.load().scrollAnchors[anchorKey] {
                     Task {
@@ -82,6 +83,9 @@ struct EpisodesView: View {
                         proxy.scrollTo(anchor, anchor: .top)
                     }
                 }
+            }
+            .onDisappear {
+                DevLog.event(.nav, "episodes disappear", ["show": show.title])
             }
         }
         .navigationTitle(show.title)
