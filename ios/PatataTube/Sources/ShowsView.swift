@@ -8,7 +8,7 @@ struct ShowsView: View {
     let onPlay: (Video, [Video]) -> Void
     let onDownload: @MainActor @Sendable (Video) async -> Bool
     /// Feeds the grid's shared scroll-position tracker; this screen shares the
-    /// root grid's `"grid:<filter>"` anchor rather than owning one itself.
+    /// root grid's `"grid:<feed>"` anchor rather than owning one itself.
     var onItemAppear: (String) -> Void = { _ in }
     var onItemDisappear: (String) -> Void = { _ in }
     @EnvironmentObject var model: AppModel

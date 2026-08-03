@@ -32,6 +32,19 @@ def test_set_group_rejects_an_unknown_group(fresh_db):
     assert fresh_db.get_video(vid)["group_id"] is None
 
 
+def test_set_group_rejects_a_plex_video(fresh_db):
+    import services
+
+    importlib.reload(services)
+    gid = fresh_db.get_group_by_name("children")["id"]
+    vid = fresh_db.add_video("https://example.com/show", platform="upload")
+    fresh_db.set_video_plex_kind(vid, "tv")
+
+    assert services.set_group(vid, gid) is False
+    assert fresh_db.get_video(vid)["plex_kind"] == "tv"
+    assert fresh_db.get_video(vid)["group_id"] is None
+
+
 def test_promote_rejects_an_unknown_kind(fresh_db):
     import services
 

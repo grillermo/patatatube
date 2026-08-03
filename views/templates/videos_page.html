@@ -41,10 +41,10 @@
   var group_id=params.get('group_id');
   if(group_id){
     document.cookie='preferred_group_id='+encodeURIComponent(group_id)+';path=/;max-age=31536000;SameSite=Lax';
-  }else{
+  }{% if not current_plex_kind %}else{
     var m=document.cookie.match(/(?:^|;\s*)preferred_group_id=([^;]+)/);
     if(m){window.location.replace('/?group_id='+m[1]);}
-  }
+  }{% endif %}
 })();
 </script>
 <h2 style="text-align:center;margin-bottom:12px;font-size:1.1em;max-width:900px;margin-left:auto;margin-right:auto">Patata Videos</h2>

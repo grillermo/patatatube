@@ -19,8 +19,7 @@ struct VideoPlayerView: View {
     /// Restoration only: seek to `startSecs`, then wait for a tap instead of
     /// playing. Applies to the first item only — auto-advance always plays.
     let startPaused: Bool
-    /// Classification this queue came from — autoplay is a per-group setting,
-    /// so the player has to know which group's answer to read.
+    /// Feed/show scope this queue came from, used for its autoplay setting.
     let autoplayScope: String?
     @State private var currentIndex: Int
     /// Random-mode only: cursor state over a shuffled permutation of

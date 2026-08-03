@@ -2,9 +2,9 @@
 import SwiftUI
 import PatataTubeKit
 
-/// Portrait 2:3 poster for the "movies" filter tab. Just the artwork as a
+/// Portrait 2:3 poster for the Movies feed. Just the artwork as a
 /// NavigationLink to MovieDetailView — no chrome, no controls; the detail
-/// view owns download/classify/delete.
+/// view owns playback and download actions.
 struct MovieCell: View {
     let video: Video
     @EnvironmentObject var model: AppModel

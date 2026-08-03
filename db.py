@@ -358,13 +358,16 @@ def add_video(
     source_key: str | None = None,
     title: str | None = None,
     preview_url: str | None = None,
+    group_id: int | None = None,
 ) -> int:
     with _conn() as conn:
         next_position = (conn.execute("SELECT MAX(position) FROM videos").fetchone()[0] or 0) + 1
         cur = conn.execute(
             """
-            INSERT INTO videos (url, platform, source_key, title, preview_url, created_at, position)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO videos (
+                url, platform, source_key, title, preview_url, created_at, position, group_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 url,
@@ -374,6 +377,7 @@ def add_video(
                 preview_url,
                 datetime.now(timezone.utc).isoformat(),
                 next_position,
+                group_id,
             ),
         )
         return cur.lastrowid
@@ -580,12 +584,20 @@ def _seed_default_groups(conn: sqlite3.Connection) -> None:
     brand-new install gets them too. Never re-runs: a user who deletes a group
     by hand does not get it resurrected on the next boot.
     """
-    if conn.execute("SELECT 1 FROM groups LIMIT 1").fetchone():
-        return
-    conn.executemany(
-        "INSERT INTO groups (name, label, position) VALUES (?, ?, ?)",
-        DEFAULT_GROUPS,
-    )
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        seeded = conn.execute(
+            "SELECT 1 FROM sqlite_sequence WHERE name = 'groups'"
+        ).fetchone()
+        if not seeded and not conn.execute("SELECT 1 FROM groups LIMIT 1").fetchone():
+            conn.executemany(
+                "INSERT INTO groups (name, label, position) VALUES (?, ?, ?)",
+                DEFAULT_GROUPS,
+            )
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def _migrate_classifications_to_groups(conn: sqlite3.Connection) -> int:
@@ -771,16 +783,23 @@ def _attach_versions(conn: sqlite3.Connection, videos: list[dict]) -> None:
 def set_video_group(video_id: int, group_id: int | None) -> None:
     """Put a video in a group, or (with None) leave it unsorted.
 
-    Never touches plex_kind: promoting into Plex deletes the row entirely
-    (see promote.py), so a row cannot end up carrying both.
+    Setting a group clears Plex identity; clearing a group leaves it alone.
     """
     with _conn() as conn:
-        conn.execute("UPDATE videos SET group_id = ? WHERE id = ?", (group_id, video_id))
+        conn.execute(
+            "UPDATE videos SET group_id = ?, "
+            "plex_kind = CASE WHEN ? IS NULL THEN plex_kind ELSE NULL END WHERE id = ?",
+            (group_id, group_id, video_id),
+        )
 
 
 def set_video_plex_kind(video_id: int, kind: str | None) -> None:
     with _conn() as conn:
-        conn.execute("UPDATE videos SET plex_kind = ? WHERE id = ?", (kind, video_id))
+        conn.execute(
+            "UPDATE videos SET plex_kind = ?, "
+            "group_id = CASE WHEN ? IS NULL THEN group_id ELSE NULL END WHERE id = ?",
+            (kind, kind, video_id),
+        )
 
 
 def set_hls_status(video_id: int, status: str) -> None:
@@ -955,7 +974,7 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
             conn.execute(
                 """
                 UPDATE videos
-                SET url = ?, title = ?, plex_kind = ?, show_title = ?, season = ?,
+                SET url = ?, title = ?, plex_kind = ?, group_id = NULL, show_title = ?, season = ?,
                     episode = ?, summary = ?, plex_rating_key = ?, show_rating_key = ?,
                     preview_version = ?, show_preview_version = ?,
                     created_at = COALESCE(?, created_at),

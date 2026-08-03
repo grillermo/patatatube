@@ -6,10 +6,10 @@ private let sampleJSON = """
 [
   {"id": 7, "url": "https://youtu.be/abc", "title": "Hi", "platform": "youtube",
    "source_key": "abc12345678", "preview_url": "https://img/abc.jpg",
-   "classification": "children", "position": 3, "status": "completed",
+   "group_id": 1, "plex_kind": null, "position": 3, "status": "completed",
    "error_msg": null, "stream_path": "/videos/7/stream"},
   {"id": 8, "url": "https://x/y", "title": null, "platform": null,
-   "source_key": null, "preview_url": null, "classification": "adults",
+   "source_key": null, "preview_url": null, "group_id": 2, "plex_kind": null,
    "position": null, "status": "pending", "error_msg": "boom",
    "stream_path": "/videos/8/stream"}
 ]
@@ -65,7 +65,7 @@ private let sampleJSON = """
     let json = """
     {"id": 7, "url": "/vol/ep.mkv", "title": "System", "platform": null,
      "source_key": null, "preview_url": "/videos/7/preview",
-     "classification": "tv", "position": 3, "status": "unconverted",
+     "group_id": null, "plex_kind": "tv", "position": 3, "status": "unconverted",
      "error_msg": null, "stream_path": "/videos/7/stream",
      "source": "library", "show_title": "The Bear", "season": 1,
      "episode": 1, "summary": "Carmy.", "show_preview_url": "/videos/7/preview?kind=show"}
@@ -85,7 +85,7 @@ private let sampleJSON = """
 @Test func testDecodesLegacyPayloadWithoutLibraryFields() throws {
     let json = """
     {"id": 1, "url": "https://x.com/s/1", "title": null, "platform": "twitter",
-     "source_key": null, "preview_url": null, "classification": "children",
+     "source_key": null, "preview_url": null, "group_id": 1, "plex_kind": null,
      "position": 1, "status": "done", "error_msg": null,
      "stream_path": "/videos/1/stream"}
     """.data(using: .utf8)!
@@ -99,7 +99,7 @@ private let sampleJSON = """
 @Test func decodesAudioMetadataAndDefaultsLegacyVersions() throws {
     let json = """
     {"id": 1, "url": "u", "title": null, "platform": null,
-     "source_key": null, "preview_url": null, "classification": "children",
+     "source_key": null, "preview_url": null, "group_id": 1, "plex_kind": null,
      "position": 1, "status": "done", "error_msg": null,
      "stream_path": "/videos/1/stream", "audio_lang": "es",
      "versions": [{"id": 2, "label": "HD", "status": "done", "is_chosen": true},

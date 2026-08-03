@@ -34,7 +34,7 @@ public final class VideoStore: ObservableObject {
     /// call can tell it's been superseded and must not clobber `videos`/`isLoading`
     /// with results that no longer match the current tab/request.
     private var loadGeneration = 0
-    private var mutationGeneration = 0
+    private var groupMutationRequests: [Int: UUID] = [:]
 
     public init(api: VideoAPI, cache: VideoListCaching? = nil,
                 mediaCache: MediaCaching? = nil,
@@ -84,7 +84,6 @@ public final class VideoStore: ObservableObject {
     /// captures its own generation and only applies what it fetches if no newer
     /// switchFeed()/load() call has started in the meantime.
     public func switchFeed(to value: Feed) async {
-        mutationGeneration += 1
         loadGeneration += 1
         let generation = loadGeneration
         feed = value
@@ -97,7 +96,6 @@ public final class VideoStore: ObservableObject {
     }
 
     public func load() async {
-        mutationGeneration += 1
         loadGeneration += 1
         let generation = loadGeneration
         let positionSnapshot = positionStore?.freshServerReconciliationSnapshot()
@@ -163,21 +161,25 @@ public final class VideoStore: ObservableObject {
 
     public func setGroup(id: Int, groupID: Int) async {
         guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
-        mutationGeneration += 1
-        let generation = mutationGeneration
         let previous = videos[index]
+        guard !previous.isPlexItem else { return }
+        let request = UUID()
+        groupMutationRequests[id] = request
+        defer {
+            if groupMutationRequests[id] == request { groupMutationRequests[id] = nil }
+        }
         videos[index] = previous.withGroupID(groupID)
         let requestedFeed = feed
         do {
             guard try await api.setGroup(id: id, groupID: groupID) else {
-                if generation == mutationGeneration,
-                   videos.indices.contains(index), videos[index].id == id,
-                   videos[index].groupID == groupID {
-                    videos[index] = previous
+                if groupMutationRequests[id] == request, feed == requestedFeed,
+                   let current = videos.firstIndex(where: { $0.id == id }),
+                   videos[current].groupID == groupID {
+                    videos[current] = previous
                 }
                 return
             }
-            guard generation == mutationGeneration else { return }
+            guard groupMutationRequests[id] == request, feed == requestedFeed else { return }
             if case .group(let sourceGroupID) = requestedFeed, sourceGroupID != groupID {
                 videos.removeAll { $0.id == id }
             }
@@ -188,10 +190,10 @@ public final class VideoStore: ObservableObject {
                 }.value
             }
         } catch {
-            if generation == mutationGeneration,
-               videos.indices.contains(index), videos[index].id == id,
-               videos[index].groupID == groupID {
-                videos[index] = previous
+            guard groupMutationRequests[id] == request, feed == requestedFeed else { return }
+            if let current = videos.firstIndex(where: { $0.id == id }),
+               videos[current].groupID == groupID {
+                videos[current] = previous
             }
             report(error)
         }
@@ -259,7 +261,9 @@ public final class VideoStore: ObservableObject {
 
     public func upload(url: String) async {
         do {
-            _ = try await api.upload(url: url)
+            let groupID: Int?
+            if case .group(let id) = feed { groupID = id } else { groupID = nil }
+            _ = try await api.upload(url: url, groupID: groupID)
             await load()
         } catch {
             report(error)

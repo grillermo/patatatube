@@ -215,6 +215,20 @@ def test_upsert_library_video_updates_existing(fresh_db):
     assert db.get_video(vid)["title"] == "System (renamed)"
 
 
+def test_upsert_library_video_clears_a_stale_group(fresh_db):
+    import db
+
+    vid, _ = db.upsert_library_video(LIB_ITEM)
+    group_id = db.get_group_by_name("children")["id"]
+    db.set_video_group(vid, group_id)
+
+    db.upsert_library_video(LIB_ITEM)
+
+    row = db.get_video(vid)
+    assert row["group_id"] is None
+    assert row["plex_kind"] == "tv"
+
+
 def test_upsert_same_path_new_rating_key_updates_not_collides(fresh_db):
     # Plex changed the ratingKey on rescan (or two items share a file). The
     # rating-key lookup misses, but source_path is globally UNIQUE, so a naive

@@ -126,12 +126,14 @@ struct VideoCell: View {
                 }
                 Menu {
                     Button("Info", systemImage: "info.circle") { showingInfo = true }
-                    ForEach(groups) { group in
-                        Button(group.label) { onSetGroup(group.id) }
-                    }
-                    Section("Move to Plex") {
-                        ForEach(PlexKind.allCases, id: \.self) { kind in
-                            Button(kind == .tv ? "TV" : "Movies") { onPromote(kind) }
+                    if !video.isPlexItem {
+                        ForEach(groups) { group in
+                            Button(group.label) { onSetGroup(group.id) }
+                        }
+                        Section("Move to Plex") {
+                            ForEach(PlexKind.allCases, id: \.self) { kind in
+                                Button(kind == .tv ? "TV" : "Movies") { onPromote(kind) }
+                            }
                         }
                     }
                     Divider()

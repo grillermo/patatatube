@@ -7,7 +7,7 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 ### Video grid
 - Backend-driven grid of video previews, populated from the JSON API
 - Video title shown as an overlay on the preview (on a black background in each cell)
-- Tab bar — Videos / TV / Movies. Videos opens on four group cards (Children, Adults, Anabel, ASMR); tapping one pushes that group's grid. TV and Movies load their category directly.
+- Tab bar — Videos / TV / Movies. Videos opens on the server's group cards (initially Children, Adults, Anabel, ASMR); tapping one pushes that group's grid. TV and Movies load their Plex feeds directly.
 - Selected tab and the open group persist across app launches
 - Adjustable grid cell size via +/- zoom buttons (originally a pinch/spread gesture, since replaced)
 - Pull-to-refresh
@@ -16,12 +16,12 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 ### Playback
 - Tap a cell to open a fullscreen player that autoplays
 - Auto-dismisses on end of video in the foreground when autoplay is off; with autoplay on, a finished video advances to the next playable queue item (foreground or backgrounded); with autoplay off and backgrounded, playback pauses instead of dismissing
-- Randomize toggle (overflow menu) — per classification tab, works with or without autoplay: "next" (Control Center) and autoplay-on-end pick from a shuffled order instead of the fixed list; the same video doesn't repeat back-to-back when the shuffle loops; toggling it off on a tab reverts that tab's "next" to sequential order the next time the player is opened (state remembered per tab while the app stays open)
+- Randomize toggle (overflow menu) — per feed, works with or without autoplay: "next" (Control Center) and autoplay-on-end pick from a shuffled order instead of the fixed list; the same video doesn't repeat back-to-back when the shuffle loops; toggling it off reverts that feed's "next" to sequential order the next time the player is opened (state remembered while the app stays open)
 - Tap to dismiss
 - Pull-down-to-dismiss gesture (the close "X" was removed in favor of gestures)
 
 ### Per-video actions
-- Classify — move a video to a different category
+- Move a download to another group or promote it into Plex TV/Movies
 - Delete videos
 - Download a single video for offline playback, with visual feedback on the download button
 
@@ -33,13 +33,13 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 - "Cache all videos" action in Settings downloads every visible video
 
 ### Upload
-- Add a video by pasting a Twitter/X or YouTube URL; it appears in the grid once the backend finishes processing
+- Add a video by pasting a Twitter/X or YouTube URL; uploads from a group stay in that group, otherwise they go to the server's first group
 - Requires a valid upload token (backend returns 401 otherwise)
 
 ### Settings & connection
 - Configurable base URL and upload token
 - "Test connection" to verify server reachability
-- Optimistic UI: classify/upload reflect immediately, then reconcile with the server
+- Optimistic UI: group moves reflect immediately, then reconcile with the server
 
 ### App shell
 - App icon and launch splash generated from SVG
@@ -96,7 +96,7 @@ On first launch grid is empty / errors — need server config:
 
 - [ ] Tab bar shows Videos / TV / Movies; Videos opens on the four group cards
       (Children, Adults, Anabel, ASMR) and ASMR is empty until something is
-      classified into it.
+      moved into it.
 - [ ] Tapping a group opens that group's grid; search only appears there, not on
       the group screen.
 - [ ] Force-quit inside a group (and inside a show under TV) and relaunch: the
@@ -109,7 +109,7 @@ On first launch grid is empty / errors — need server config:
 - **Grid loads**: after saving settings, pull-to-refresh or relaunch → videos populate grid
 - **Tab bar**: Videos / TV / Movies — tap one, its content loads; under Videos, tap a group card to load that group
 - **Play video**: tap a cell → fullscreen player opens, autoplays, closes automatically on end-of-video; X button also dismisses
-- **Classify**: use classify control on cell → pick new classification, confirm video moves/reflects under the new tab or group
+- **Move**: use a cell's menu → pick another group and confirm the video leaves the current grid; promote a download with the separate Move to Plex section
 - **Download/cache**: tap download on a cell → check cache state changes (icon/indicator); play same video again → should stream from local cache (test by killing network access to server and replaying)
 - [ ] Set Streams per video to 4, download a large video, and confirm the
       server receives four disjoint byte ranges while the existing circular
@@ -129,7 +129,7 @@ On first launch grid is empty / errors — need server config:
       completes as a legacy one-stream transfer.
 - [ ] Cached video: tap the green checkmark → it turns into a red X; tap again → the local file is deleted and the button returns to the download arrow. Wait ~3s after arming without a second tap → it reverts to the green checkmark.
 - **Cache all**: Settings → "Cache all videos" → downloads every visible video
-- **Upload**: tap + (top-right) → paste video URL → Add → new video appears in grid after processing
+- **Upload**: open a group, tap + (top-right) → paste video URL → Add → new video appears in that group after processing
 - **Error banner**: point Base URL at unreachable host → red error banner appears at bottom of grid
 - **Missing token**: clear upload token in Settings, try Add Video → upload should fail (401 from backend)
 
@@ -192,7 +192,7 @@ On first launch grid is empty / errors — need server config:
       live or completed cache state.
 - [ ] Delete a cached movie from MovieDetailView: the green checkmark changes to
       the download arrow immediately, without waiting for a poll.
-- [ ] Movie card ellipsis menu still offers Info / classify / Delete.
+- [ ] Movie detail ellipsis menu still offers its cache action.
 
 ### Audio language selector (library movies)
 - [ ] Open a MULTI movie's detail page: an "Audio" picker appears next to the
@@ -228,7 +228,7 @@ On first launch grid is empty / errors — need server config:
 3. On the last video, **next** stops playback (button greyed out).
 4. Locked with autoplay on: a video ending auto-advances to the next one.
 5. Foreground with autoplay off: a video ending dismisses the player.
-6. With a classification tab or search active, the queue respects that filter.
+6. With a feed or search active, the queue respects it.
 7. Unplayable rows (unconverted library items) are skipped when advancing.
 
 ### Autoplay toggle

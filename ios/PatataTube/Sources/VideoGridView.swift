@@ -731,7 +731,7 @@ struct VideoGridView: View {
 
     private func scheduleGridAnchorSave() {
         // Retained inactive stacks keep delivering onDisappear after a tab
-        // switch, and `key` comes from the *shared* store filter — which has
+        // switch, and `key` comes from the *shared* store feed — which has
         // already flipped to the incoming tab. Ungated, the outgoing tab's
         // topmost id lands under the incoming tab's key and clobbers its
         // anchor. Same scoping every other restoration write uses.

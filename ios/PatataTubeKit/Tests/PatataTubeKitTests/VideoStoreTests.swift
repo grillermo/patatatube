@@ -2,17 +2,10 @@ import Testing
 import Foundation
 @testable import PatataTubeKit
 
-private func makeVideo(id: Int, classification: String = "children", status: String = "completed",
+private func makeVideo(id: Int, groupID: Int? = 1, plexKind: PlexKind? = nil,
+                       status: String = "completed",
                        errorMsg: String? = nil, previewUrl: String? = nil, chosenVersionId: Int? = nil,
                        versions: [VideoVersion] = [], resumeSecs: Double = 0) -> Video {
-    let plexKind = PlexKind(rawValue: classification)
-    let groupID: Int? = switch classification {
-    case "children": 1
-    case "adults": 2
-    case "anabel": 3
-    case "asmr": 4
-    default: nil
-    }
     return Video(id: id, url: "u\(id)", title: "t\(id)", platform: nil, sourceKey: nil,
           previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: id,
           status: status, errorMsg: errorMsg, streamPath: "/videos/\(id)/stream",
@@ -56,6 +49,7 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     var mutationError: Error?
     var setGroupHook: (@Sendable (Int, Int) async throws -> Bool)?
     private(set) var setGroupRequests: [(id: Int, groupID: Int)] = []
+    private(set) var uploadGroupIDs: [Int?] = []
     func setGroup(id: Int, groupID: Int) async throws -> Bool {
         if let mutationError { throw mutationError }
         if throwOnSetGroup { throw APIError.badStatus(500) }
@@ -63,8 +57,9 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         if let setGroupHook { return try await setGroupHook(id, groupID) }
         return setGroupResult
     }
-    func upload(url: String) async throws -> Int {
+    func upload(url: String, groupID: Int?) async throws -> Int {
         if let mutationError { throw mutationError }
+        uploadGroupIDs.append(groupID)
         return uploadId
     }
     var deleteResult = true
@@ -169,7 +164,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
 
 @MainActor @Test func successfulPositionSaveWinsOverStaleRowAndOfflineCacheUntilFreshList() async throws {
     let api = FakeAPI()
-    let stale = makeVideo(id: 7, classification: "movies", resumeSecs: 10)
+    let stale = makeVideo(id: 7, groupID: nil, plexKind: .movies, resumeSecs: 10)
     let cache = tempCache()
     cache.save([stale], feed: .all)
     let defaults = try #require(UserDefaults(suiteName: "position-grid-\(UUID().uuidString)"))
@@ -197,7 +192,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
 
 @MainActor @Test func freshOnlineListReplacesSyncedLocalPosition() async throws {
     let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 7, classification: "children", resumeSecs: 45)]
+    api.videosToReturn = [makeVideo(id: 7, resumeSecs: 45)]
     let defaults = try #require(UserDefaults(suiteName: "position-fresh-\(UUID().uuidString)"))
     let positions = ResumePositionStore(defaults: defaults, serverURL: URL(string: "https://srv.test"))
     positions.setLocal(120, for: 7)
@@ -212,7 +207,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
 
 @MainActor @Test func listFetchedBeforeSuccessfulSaveCannotAcknowledgeNewerPosition() async throws {
     let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 7, classification: "children", resumeSecs: 10)]
+    api.videosToReturn = [makeVideo(id: 7, resumeSecs: 10)]
     let cache = BlockingSaveCache()
     let defaults = try #require(UserDefaults(suiteName: "position-cache-race-\(UUID().uuidString)"))
     let positions = ResumePositionStore(defaults: defaults)
@@ -244,7 +239,8 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
       "platform": null,
       "source_key": null,
       "preview_url": null,
-      "classification": "movies",
+      "group_id": null,
+      "plex_kind": "movies",
       "position": 1,
       "status": "done",
       "error_msg": null,
@@ -273,7 +269,8 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
       "platform": null,
       "source_key": null,
       "preview_url": null,
-      "classification": "children",
+      "group_id": 1,
+      "plex_kind": null,
       "position": 1,
       "status": "done",
       "error_msg": null,
@@ -304,7 +301,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
 }
 
 @MainActor @Test func setGroupUpdatesTheListAndCacheOnSuccess() async {
-    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
     let cache = tempCache()
     let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
     await store.load()
@@ -316,7 +313,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
 }
 
 @MainActor @Test func setGroupRemovesConfirmedMoveFromSourceGroupFeedAndCache() async {
-    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
     let cache = tempCache()
     let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
     await store.switchFeed(to: .group(id: 1))
@@ -328,7 +325,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
 }
 
 @MainActor @Test func setGroupDoesNotReportServerNotOk() async {
-    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
     api.setGroupResult = false
     let store = VideoStore(api: api)
     await store.load()
@@ -337,8 +334,21 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     #expect(store.videos[0].groupID == 1)
 }
 
+@MainActor @Test func setGroupIgnoresPlexVideos() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, groupID: nil, plexKind: .movies)]
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.load()
+
+    await store.setGroup(id: 1, groupID: 2)
+
+    #expect(api.setGroupRequests.isEmpty)
+    #expect(store.videos[0].groupID == nil)
+    #expect(store.videos[0].plexKind == .movies)
+}
+
 @MainActor @Test func setGroupSetsErrorOnThrow() async {
-    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
     api.throwOnSetGroup = true
     let store = VideoStore(api: api)
     await store.load()
@@ -349,7 +359,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
 
 @MainActor @Test func olderSetGroupFailureDoesNotRevertANewerGroup() async {
     let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1, classification: "children")]
+    api.videosToReturn = [makeVideo(id: 1)]
     api.setGroupHook = { _, groupID in
         if groupID == 2 {
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -368,6 +378,27 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     #expect(store.videos[0].groupID == 3)
 }
 
+@MainActor @Test func concurrentMovesOfDifferentVideosBothLeaveTheSourceFeed() async {
+    let api = FakeAPI()
+    api.videosToReturn = [
+        makeVideo(id: 1),
+        makeVideo(id: 2),
+    ]
+    api.setGroupHook = { id, _ in
+        if id == 1 { try await Task.sleep(nanoseconds: 50_000_000) }
+        return true
+    }
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.switchFeed(to: .group(id: 1))
+
+    async let first: Void = store.setGroup(id: 1, groupID: 2)
+    try? await Task.sleep(nanoseconds: 5_000_000)
+    async let second: Void = store.setGroup(id: 2, groupID: 2)
+    _ = await (first, second)
+
+    #expect(store.videos.isEmpty)
+}
+
 @MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async throws {
     let versions = [
         VideoVersion(id: 10, label: "1080p", status: "done", isChosen: true),
@@ -375,7 +406,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     ]
     let api = FakeAPI()
     api.videosToReturn = [
-        makeVideo(id: 1, classification: "movies", chosenVersionId: 10, versions: versions)
+        makeVideo(id: 1, groupID: nil, plexKind: .movies, chosenVersionId: 10, versions: versions)
     ]
     let defaultsSuite = "VideoStoreTests.chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess"
     let defaults = try #require(UserDefaults(suiteName: defaultsSuite))
@@ -403,7 +434,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     ]
     let api = FakeAPI()
     api.videosToReturn = [
-        makeVideo(id: 1, classification: "movies", chosenVersionId: 10, versions: versions)
+        makeVideo(id: 1, groupID: nil, plexKind: .movies, chosenVersionId: 10, versions: versions)
     ]
     api.chooseVersionResult = false
     let defaultsSuite = "VideoStoreTests.chooseVersionRevertsOnFailure"
@@ -518,7 +549,7 @@ private func tempCache() -> VideoListCache {
 
 // Same rule for the mutating endpoints: a cancelled write still rolls the
 // optimistic edit back (the server never confirmed it), but must not banner.
-@MainActor @Test func classifyIgnoresCancellation() async {
+@MainActor @Test func setGroupIgnoresCancellation() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
     let store = VideoStore(api: api, cache: tempCache())
     await store.load()
@@ -560,6 +591,20 @@ private func tempCache() -> VideoListCache {
     api.mutationError = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
     await store.upload(url: "https://example.com/v")
     #expect(store.errorText == nil)
+}
+
+@MainActor @Test func uploadTargetsAndReloadsTheCurrentGroup() async {
+    let api = FakeAPI()
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.switchFeed(to: .group(id: 2))
+    api.videosToReturn = [makeVideo(id: api.uploadId, groupID: 2)]
+
+    await store.upload(url: "https://example.com/new")
+
+    #expect(api.uploadGroupIDs.count == 1)
+    #expect(api.uploadGroupIDs[0] == 2)
+    #expect(api.lastFeed == .group(id: 2))
+    #expect(store.videos.map(\.id) == [api.uploadId])
 }
 
 @MainActor @Test func refreshLibraryIgnoresScanCancellation() async {
@@ -715,10 +760,10 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func switchFeedShowsCachedListBeforeNetworkReturns() async {
     let cache = tempCache()
-    cache.save([makeVideo(id: 9, classification: "adults")], feed: .group(id: 2))
+    cache.save([makeVideo(id: 9, groupID: 2)], feed: .group(id: 2))
     let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1, classification: "adults"),
-                          makeVideo(id: 2, classification: "adults")]
+    api.videosToReturn = [makeVideo(id: 1, groupID: 2),
+                          makeVideo(id: 2, groupID: 2)]
     let store = VideoStore(api: api, cache: cache)
 
     api.beforeVideosReturn = { @MainActor in
@@ -737,7 +782,7 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func switchFeedShowsEmptyThenFillsWhenNoCache() async {
     let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 5, classification: "children")]
+    api.videosToReturn = [makeVideo(id: 5)]
     let store = VideoStore(api: api, cache: tempCache())
 
     api.beforeVideosReturn = { @MainActor in
@@ -754,8 +799,8 @@ private func tempCache() -> VideoListCache {
 @MainActor @Test func switchFeedNeverShowsPreviousFeedsVideos() async {
     let cache = tempCache()
     let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1, classification: "adults"),
-                          makeVideo(id: 7, classification: "children")]
+    api.videosToReturn = [makeVideo(id: 1, groupID: 2),
+                          makeVideo(id: 7)]
     let store = VideoStore(api: api, cache: cache)
 
     // Land on "adults" first (populates videos with id 1 and caches it).
@@ -776,8 +821,8 @@ private func tempCache() -> VideoListCache {
 // discard the stale "adults" result in favor of the current "children" tab.
 @MainActor @Test func switchFeedRapidDoubleSwitchResolvesToLastFeed() async {
     let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1, classification: "adults", previewUrl: "/videos/1/preview", resumeSecs: 10),
-                          makeVideo(id: 2, classification: "children", previewUrl: "/videos/2/preview")]
+    api.videosToReturn = [makeVideo(id: 1, groupID: 2, previewUrl: "/videos/1/preview", resumeSecs: 10),
+                          makeVideo(id: 2, previewUrl: "/videos/2/preview")]
     let defaults = UserDefaults(suiteName: "rapid-filter-\(UUID().uuidString)")!
     let positions = ResumePositionStore(defaults: defaults)
     positions.setLocal(120, for: 1)
@@ -810,8 +855,8 @@ private func tempCache() -> VideoListCache {
 @MainActor @Test func staleFeedResponseCannotOverwriteTheNewFeedsCache() async {
     let api = FakeAPI()
     api.videosToReturn = [
-        makeVideo(id: 1, classification: "children"),
-        makeVideo(id: 2, classification: "adults"),
+        makeVideo(id: 1),
+        makeVideo(id: 2, groupID: 2),
     ]
     let cache = tempCache()
     let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())

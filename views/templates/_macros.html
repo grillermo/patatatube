@@ -40,7 +40,9 @@
 
 {% macro card(v, groups, current_group_id, upload_token) -%}
 <div class="card">
+{% if not v.plex_kind -%}
 {{ group_menu(v, groups, current_group_id) }}
+{%- endif %}
 {% if v.status == "done" -%}
 <div class="video-wrap">
   <div class="name-overlay">{{ v | display_name }}</div>

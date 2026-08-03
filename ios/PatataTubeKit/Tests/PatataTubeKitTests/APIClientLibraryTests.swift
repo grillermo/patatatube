@@ -53,7 +53,7 @@ extension APIClientTests {
                 #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
                 let body = #"""
                 {"id": 7, "url": "/x", "title": null, "platform": null,
-                    "source_key": null, "preview_url": null, "classification": "tv",
+                    "source_key": null, "preview_url": null, "group_id": null, "plex_kind": "tv",
                     "position": 1, "status": "done", "error_msg": null,
                     "stream_path": "/videos/7/stream", "source": "library"}
                 """#

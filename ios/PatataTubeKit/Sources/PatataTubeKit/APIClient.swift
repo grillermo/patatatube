@@ -30,7 +30,7 @@ public protocol VideoAPI: Sendable {
     func savePosition(
         id: Int, secs: Double, destinationServerIdentity: String
     ) async throws
-    func upload(url: String) async throws -> Int
+    func upload(url: String, groupID: Int?) async throws -> Int
     func delete(id: Int) async throws -> Bool
     func scanLibrary() async throws -> ScanResult
     func prepare(id: Int, bulk: Bool) async throws -> String
@@ -107,7 +107,10 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
     }
 
     public func groups() async throws -> [VideoGroup] {
-        let data = try await authedGet("api/groups")
+        let (data, response) = try await session.data(
+            from: try base().appendingPathComponent("api/groups")
+        )
+        try Self.check(response)
         struct Envelope: Decodable { let groups: [VideoGroup] }
         do {
             return try Self.makeDecoder().decode(Envelope.self, from: data)
@@ -172,8 +175,10 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         try await postOK("api/video/\(id)/delete", body: [:])
     }
 
-    public func upload(url: String) async throws -> Int {
-        let data = try await authedPost("upload", body: ["url": url])
+    public func upload(url: String, groupID: Int?) async throws -> Int {
+        var body: [String: Any] = ["url": url]
+        if let groupID { body["group_id"] = groupID }
+        let data = try await authedPost("upload", body: body)
         struct Result: Decodable { let id: Int }
         do { return try JSONDecoder().decode(Result.self, from: data).id }
         catch { throw APIError.decoding(String(describing: error)) }

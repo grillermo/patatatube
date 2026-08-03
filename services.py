@@ -14,7 +14,8 @@ def set_group(video_id: int, group_id: int) -> bool:
     a different verb with different consequences (the file moves, the row is
     deleted), and it used to be spelled as a value of this same call.
     """
-    if db.get_group(group_id) is None:
+    video = db.get_video(video_id)
+    if db.get_group(group_id) is None or not video or video.get("plex_kind") is not None:
         return False
     db.set_video_group(video_id, group_id)
     return True

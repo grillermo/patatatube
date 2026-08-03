@@ -1,5 +1,6 @@
 import importlib
 import sqlite3
+import threading
 
 import pytest
 
@@ -29,6 +30,82 @@ def test_fresh_db_seeds_the_four_default_groups(fresh_db):
 def test_init_db_twice_does_not_reseed(fresh_db):
     fresh_db.init_db()
     assert len(fresh_db.list_groups()) == 4
+
+
+def test_init_db_does_not_resurrect_deleted_groups(fresh_db):
+    with fresh_db._conn() as conn:
+        conn.execute("DELETE FROM groups")
+
+    fresh_db.init_db()
+
+    assert fresh_db.list_groups() == []
+
+
+def test_concurrent_default_seed_is_atomic(tmp_path, monkeypatch):
+    path = tmp_path / "concurrent.sqlite"
+    monkeypatch.setenv("DB_PATH", str(path))
+    import db as db_module
+
+    importlib.reload(db_module)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE groups (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "name TEXT NOT NULL UNIQUE, label TEXT NOT NULL, emoji TEXT, "
+            "position INTEGER NOT NULL, created_at TEXT, updated_at TEXT)"
+        )
+
+    barrier = threading.Barrier(2)
+    errors = []
+
+    class PausingCursor:
+        def __init__(self, cursor, serialized):
+            self.cursor = cursor
+            self.serialized = serialized
+
+        def fetchone(self):
+            row = self.cursor.fetchone()
+            if not self.serialized:
+                barrier.wait(timeout=2)
+            return row
+
+    class Connection:
+        def __init__(self):
+            self.raw = sqlite3.connect(path, timeout=2)
+            self.serialized = False
+
+        def execute(self, sql, parameters=()):
+            if sql == "BEGIN IMMEDIATE":
+                self.serialized = True
+            cursor = self.raw.execute(sql, parameters)
+            if sql == "SELECT 1 FROM groups LIMIT 1":
+                return PausingCursor(cursor, self.serialized)
+            return cursor
+
+        def executemany(self, sql, parameters):
+            return self.raw.executemany(sql, parameters)
+
+        def close(self):
+            self.raw.close()
+
+    def seed():
+        conn = Connection()
+        try:
+            db_module._seed_default_groups(conn)
+            conn.raw.commit()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=seed) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    assert not errors
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM groups").fetchone()[0] == 4
 
 
 def test_get_group_and_get_group_by_name(fresh_db):
@@ -108,6 +185,24 @@ def test_plex_kind_filter_is_separate_from_groups(fresh_db):
 
     assert [v["id"] for v in fresh_db.get_all_videos(plex_kind="tv")] == [show]
     assert [v["id"] for v in fresh_db.get_all_videos(group_id=kids)] == [kid]
+
+
+def test_video_group_and_plex_kind_writes_are_mutually_exclusive(fresh_db):
+    kids = fresh_db.get_group_by_name("children")["id"]
+    vid = fresh_db.add_video("https://example.com/exclusive", platform="upload")
+
+    fresh_db.set_video_plex_kind(vid, "tv")
+    fresh_db.set_video_group(vid, kids)
+    assert (fresh_db.get_video(vid)["group_id"], fresh_db.get_video(vid)["plex_kind"]) == (
+        kids,
+        None,
+    )
+
+    fresh_db.set_video_plex_kind(vid, "movies")
+    assert (fresh_db.get_video(vid)["group_id"], fresh_db.get_video(vid)["plex_kind"]) == (
+        None,
+        "movies",
+    )
 
 
 @pytest.fixture

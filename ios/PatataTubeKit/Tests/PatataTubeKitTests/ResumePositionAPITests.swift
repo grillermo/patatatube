@@ -8,7 +8,7 @@ extension APIClientTests {
     struct ResumePositionTests {
         @Test func videoDecodesResumeSecs() throws {
             let json = """
-            {"id": 1, "url": "u", "classification": "movies", "status": "done",
+            {"id": 1, "url": "u", "group_id": null, "plex_kind": "movies", "status": "done",
              "stream_path": "/videos/1/stream", "resume_secs": 91.5}
             """.data(using: .utf8)!
             let decoder = JSONDecoder()
@@ -19,7 +19,7 @@ extension APIClientTests {
 
         @Test func videoResumeSecsDefaultsToZeroWhenMissing() throws {
             let json = """
-            {"id": 1, "url": "u", "classification": "movies", "status": "done",
+            {"id": 1, "url": "u", "group_id": null, "plex_kind": "movies", "status": "done",
              "stream_path": "/videos/1/stream"}
             """.data(using: .utf8)!
             let decoder = JSONDecoder()

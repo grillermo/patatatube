@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Placeholder cells shown while a classification's videos load and none are
+/// Placeholder cells shown while a feed's videos load and none are
 /// yet on screen. Keeps the grid from ever appearing empty or lingering on the
 /// previous tab's content. Aspect ratios match the real cells: tv/movies use
 /// 2:3 Plex posters, everything else uses a 16:9 frame.

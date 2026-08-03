@@ -20,7 +20,7 @@ struct APIClientTests {
                 #expect(req.url?.path == "/api/videos")
                 let body = """
                 [{"id":1,"url":"u","title":"t","platform":"youtube","source_key":"k",
-                  "preview_url":"p","classification":"children","position":1,
+                  "preview_url":"p","group_id":1,"plex_kind":null,"position":1,
                   "status":"completed","error_msg":null,"stream_path":"/videos/1/stream"}]
                 """.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)
@@ -65,11 +65,21 @@ struct APIClientTests {
             #expect(groups[0].emoji == "🧒")
         }
 
+        @Test func groupsDoesNotRequireOrSendAToken() async throws {
+            MockURLProtocol.handler = { req in
+                #expect(req.url?.path == "/api/groups")
+                #expect(req.value(forHTTPHeaderField: "Authorization") == nil)
+                return (jsonResponse(req.url!), #"{"groups":[]}"#.data(using: .utf8)!)
+            }
+
+            #expect(try await makeClient(token: nil).groups().isEmpty)
+        }
+
         @Test func decodesHlsAndSubtitleMetadata() async throws {
             MockURLProtocol.handler = { req in
                 let body = """
                 [{"id":1,"url":"u","title":"t","platform":null,"source_key":null,
-                  "preview_url":null,"classification":"children","position":1,
+                  "preview_url":null,"group_id":1,"plex_kind":null,"position":1,
                   "status":"done","error_msg":null,"stream_path":"/videos/1/stream",
                   "hls_path":"/videos/1/hls/master.m3u8",
                   "subtitle_tracks":[{"language":"en","name":"English","default":true,"forced":false}]}]
@@ -88,7 +98,7 @@ struct APIClientTests {
             MockURLProtocol.handler = { req in
                 let body = """
                 [{"id":2,"url":"u","title":null,"platform":null,"source_key":null,
-                  "preview_url":null,"classification":"children","position":1,
+                  "preview_url":null,"group_id":1,"plex_kind":null,"position":1,
                   "status":"done","error_msg":null,"stream_path":"/videos/2/stream"}]
                 """.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)
@@ -150,11 +160,12 @@ struct APIClientTests {
         @Test func uploadReturnsNewId() async throws {
             MockURLProtocol.handler = { req in
                 #expect(req.url?.path == "/upload")
-                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: String]
-                #expect(json["url"] == "https://youtu.be/xyz")
+                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: Any]
+                #expect(json["url"] as? String == "https://youtu.be/xyz")
+                #expect(json["group_id"] as? Int == 3)
                 return (jsonResponse(req.url!, status: 202), #"{"id":42,"status":"queued"}"#.data(using: .utf8)!)
             }
-            let id = try await makeClient().upload(url: "https://youtu.be/xyz")
+            let id = try await makeClient().upload(url: "https://youtu.be/xyz", groupID: 3)
             #expect(id == 42)
         }
 

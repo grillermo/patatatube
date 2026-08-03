@@ -135,6 +135,7 @@ def _check_token_or_query(request: Request):
 
 class UploadRequest(BaseModel):
     url: str
+    group_id: int | None = None
 
 
 class SetGroupRequest(BaseModel):
@@ -286,6 +287,14 @@ async def check_auth(request: Request):
 @router.post("/upload", status_code=202)
 async def upload(body: UploadRequest, request: Request, background_tasks: BackgroundTasks):
     _check_token(request)
+    group_id = body.group_id
+    if group_id is None:
+        groups = db.list_groups()
+        if not groups:
+            raise HTTPException(status_code=409, detail="No video groups configured")
+        group_id = groups[0]["id"]
+    elif db.get_group(group_id) is None:
+        raise HTTPException(status_code=400, detail="No such group")
     try:
         source = _classify_url(body.url)
     except HTTPException as exc:
@@ -296,6 +305,7 @@ async def upload(body: UploadRequest, request: Request, background_tasks: Backgr
     if source["platform"] == "youtube":
         existing = db.get_completed_video_by_source("youtube", source["source_key"])
         if existing:
+            services.set_group(existing["id"], group_id)
             return {"id": existing["id"], "status": "queued"}
 
     video_id = db.add_video(
@@ -303,6 +313,7 @@ async def upload(body: UploadRequest, request: Request, background_tasks: Backgr
         platform=source["platform"],
         source_key=source["source_key"],
         preview_url=_youtube_preview_url(source["source_key"]) if source["platform"] == "youtube" else None,
+        group_id=group_id,
     )
     background_tasks.add_task(download_video, video_id)
     return {"id": video_id, "status": "queued"}
