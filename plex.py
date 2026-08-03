@@ -90,7 +90,7 @@ def _movie_item(meta: dict) -> dict | None:
     return {
         "source_path": path,
         "title": meta.get("title"),
-        "classification": "movies",
+        "plex_kind": "movies",
         "show_title": None,
         "season": None,
         "episode": None,
@@ -111,7 +111,7 @@ def _episode_item(meta: dict) -> dict | None:
     return {
         "source_path": path,
         "title": meta.get("title"),
-        "classification": "tv",
+        "plex_kind": "tv",
         "show_title": meta.get("grandparentTitle"),
         "season": meta.get("parentIndex"),
         "episode": meta.get("index"),

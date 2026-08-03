@@ -84,10 +84,10 @@ async def test_fails_open_when_redis_down(monkeypatch):
 
 
 def test_get_is_cached_and_served_from_cache(client):
-    first = client.get("/api/classifications")
+    first = client.get("/api/groups")
     assert first.status_code == 200
     assert "x-cache" not in first.headers
-    second = client.get("/api/classifications")
+    second = client.get("/api/groups")
     assert second.status_code == 200
     assert second.headers["x-cache"] == "hit"
     assert second.content == first.content
@@ -97,7 +97,7 @@ def test_query_params_are_part_of_key(client):
     client.get("/api/videos")
     hit = client.get("/api/videos")
     assert hit.headers.get("x-cache") == "hit"
-    other = client.get("/api/videos?classification=children")
+    other = client.get("/api/videos?group_id=1")
     assert "x-cache" not in other.headers
 
 

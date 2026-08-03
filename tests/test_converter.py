@@ -53,7 +53,7 @@ def test_convert_failure_resets_video_and_marks_job_failed(tmp_db, monkeypatch, 
     video_id, _ = tmp_db.upsert_library_video({
         "source_path": str(source),
         "title": "Movie",
-        "classification": "movies",
+        "plex_kind": "movies",
         "summary": None,
         "plex_rating_key": "1",
     })
@@ -240,7 +240,7 @@ def test_convert_job_uses_persisted_version_after_selection_changes(
     video_id, _ = tmp_db.upsert_library_video({
         "source_path": str(source_1080),
         "title": "Movie",
-        "classification": "movies",
+        "plex_kind": "movies",
         "summary": None,
         "plex_rating_key": "1",
         "versions": [
@@ -284,7 +284,7 @@ def test_convert_job_without_version_id_does_not_touch_chosen_version(
     video_id, _ = tmp_db.upsert_library_video({
         "source_path": str(source),
         "title": "Movie",
-        "classification": "movies",
+        "plex_kind": "movies",
         "summary": None,
         "plex_rating_key": "1",
     })
@@ -308,7 +308,7 @@ def test_cleanup_orphan_uses_persisted_version_after_selection_changes(tmp_db, t
     video_id, _ = tmp_db.upsert_library_video({
         "source_path": str(source_1080),
         "title": "Movie",
-        "classification": "movies",
+        "plex_kind": "movies",
         "summary": None,
         "plex_rating_key": "1",
         "versions": [
@@ -342,7 +342,7 @@ def test_exhausted_convert_orphan_resets_its_version(tmp_db, monkeypatch, tmp_pa
     video_id, _ = tmp_db.upsert_library_video({
         "source_path": str(source_1080),
         "title": "Movie",
-        "classification": "movies",
+        "plex_kind": "movies",
         "summary": None,
         "plex_rating_key": "1",
         "versions": [
@@ -381,7 +381,7 @@ def test_recover_orphans_repairs_exhausted_version_after_interrupted_recovery(
     video_id, _ = tmp_db.upsert_library_video({
         "source_path": str(source),
         "title": "Movie",
-        "classification": "movies",
+        "plex_kind": "movies",
         "summary": None,
         "plex_rating_key": "1",
     })
@@ -412,7 +412,7 @@ def test_legacy_exhausted_job_does_not_override_newer_explicit_version_work(
     video_id, _ = tmp_db.upsert_library_video({
         "source_path": str(source),
         "title": "Movie",
-        "classification": "movies",
+        "plex_kind": "movies",
         "summary": None,
         "plex_rating_key": "1",
     })

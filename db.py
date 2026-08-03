@@ -955,7 +955,7 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
             conn.execute(
                 """
                 UPDATE videos
-                SET url = ?, title = ?, classification = ?, show_title = ?, season = ?,
+                SET url = ?, title = ?, plex_kind = ?, show_title = ?, season = ?,
                     episode = ?, summary = ?, plex_rating_key = ?, show_rating_key = ?,
                     preview_version = ?, show_preview_version = ?,
                     created_at = COALESCE(?, created_at),
@@ -965,7 +965,7 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
                 (
                     item["source_path"],
                     item.get("title"),
-                    item["classification"],
+                    item["plex_kind"],
                     item.get("show_title"),
                     item.get("season"),
                     item.get("episode"),
@@ -987,7 +987,7 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
         cur = conn.execute(
             """
             INSERT INTO videos (
-                url, title, status, classification, source, source_path,
+                url, title, status, plex_kind, source, source_path,
                 show_title, season, episode, summary, plex_rating_key,
                 show_rating_key, preview_version, show_preview_version,
                 created_at, position
@@ -997,7 +997,7 @@ def upsert_library_video(item: dict) -> tuple[int, str]:
             (
                 item["source_path"],
                 item.get("title"),
-                item["classification"],
+                item["plex_kind"],
                 item["source_path"],
                 item.get("show_title"),
                 item.get("season"),

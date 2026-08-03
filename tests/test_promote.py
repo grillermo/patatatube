@@ -19,7 +19,7 @@ def test_dest_dir_reads_env_on_every_call(monkeypatch, tmp_path):
     assert promote.dest_dir("movies") == tmp_path / "other"
 
 
-def test_dest_dir_rejects_a_non_library_classification():
+def test_dest_dir_rejects_a_non_library_kind():
     with pytest.raises(promote.PromotionError):
         promote.dest_dir("children")
 
@@ -84,7 +84,7 @@ def promote_env(monkeypatch, tmp_path):
     # Most tests do not want to talk to Plex. The real function is stashed under
     # _real_refresh_plex so the few tests that do can put it back.
     monkeypatch.setattr(promote, "_real_refresh_plex", promote._refresh_plex, raising=False)
-    monkeypatch.setattr(promote, "_refresh_plex", lambda classification: None)
+    monkeypatch.setattr(promote, "_refresh_plex", lambda kind: None)
     return db, videos_dir, movies_dir, tv_dir
 
 

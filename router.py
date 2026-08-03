@@ -137,8 +137,12 @@ class UploadRequest(BaseModel):
     url: str
 
 
-class ClassifyRequest(BaseModel):
-    classification: str
+class SetGroupRequest(BaseModel):
+    group_id: int
+
+
+class PromoteRequest(BaseModel):
+    kind: str
 
 
 class VersionRequest(BaseModel):
@@ -309,16 +313,11 @@ async def upload_file(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    classification: str = Form(...),
+    group_id: int = Form(...),
 ):
     _check_token(request)
-    if classification not in CLASSIFICATIONS:
-        raise HTTPException(status_code=400, detail="Invalid classification")
-    if classification in promote.PROMOTED_CLASSIFICATIONS:
-        raise HTTPException(
-            status_code=400,
-            detail="Upload into children/adults/anabel, then classify it to move it into Plex",
-        )
+    if db.get_group(group_id) is None:
+        raise HTTPException(status_code=400, detail="No such group")
 
     suffix = Path(file.filename or "").suffix or ".mp4"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -329,7 +328,7 @@ async def upload_file(
 
     title = Path(file.filename or "").stem or None
     video_id = db.add_video(str(tmp_path), platform="upload", title=title)
-    services.apply_classification(video_id, classification)
+    services.set_group(video_id, group_id)
     background_tasks.add_task(process_uploaded_video, video_id)
     return {"id": video_id, "status": "queued"}
 
@@ -814,20 +813,33 @@ async def manifest():
     )
 
 
-@router.post("/videos/{video_id}/classify")
-async def classify_video_endpoint(video_id: int, classification: str = Form(...), current_classification: str | None = Form(default=None)):
+@router.post("/videos/{video_id}/group")
+async def set_video_group_endpoint(
+    video_id: int, group_id: int = Form(...), current_group_id: int | None = Form(default=None)
+):
+    await asyncio.to_thread(services.set_group, video_id, group_id)
+    redirect_url = f"/?group_id={current_group_id}" if current_group_id else "/"
+    return RedirectResponse(url=redirect_url, status_code=303)
+
+
+@router.post("/videos/{video_id}/promote")
+async def promote_video_endpoint(
+    video_id: int, kind: str = Form(...), current_group_id: int | None = Form(default=None)
+):
     try:
-        await asyncio.to_thread(services.apply_classification, video_id, classification)
+        await asyncio.to_thread(services.promote, video_id, kind)
     except promote.PromotionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    redirect_url = f"/?classification={current_classification}" if current_classification else "/"
+    redirect_url = f"/?group_id={current_group_id}" if current_group_id else "/"
     return RedirectResponse(url=redirect_url, status_code=303)
 
 
 @router.post("/videos/{video_id}/version")
-async def choose_video_version_endpoint(video_id: int, version_id: int = Form(...), classification: str | None = Form(default=None)):
+async def choose_video_version_endpoint(
+    video_id: int, version_id: int = Form(...), group_id: int | None = Form(default=None)
+):
     services.choose_version(video_id, version_id)
-    redirect_url = f"/?classification={classification}" if classification else "/"
+    redirect_url = f"/?group_id={group_id}" if group_id else "/"
     return RedirectResponse(url=redirect_url, status_code=303)
 
 
@@ -891,23 +903,32 @@ def _validated_emoji(raw: str | None) -> str | None:
 
 
 @router.get("/api/videos")
-async def api_videos(classification: str | None = None):
-    if classification and classification not in CLASSIFICATIONS:
-        classification = None
-    videos = db.get_all_videos(classification)
+async def api_videos(group_id: int | None = None, plex_kind: str | None = None):
+    if plex_kind is not None and plex_kind not in db.PLEX_KINDS:
+        return []
+    videos = db.get_all_videos(group_id=group_id, plex_kind=plex_kind)
     return [serialize_video(v) for v in videos]
 
 
-@router.post("/api/videos/{video_id}/classify")
-async def api_classify_video(video_id: int, body: ClassifyRequest, request: Request):
+@router.post("/api/videos/{video_id}/group")
+async def api_set_video_group(video_id: int, body: SetGroupRequest, request: Request):
     _check_token(request)
-    if body.classification not in CLASSIFICATIONS:
-        raise HTTPException(status_code=400, detail="Invalid classification")
+    if not await asyncio.to_thread(services.set_group, video_id, body.group_id):
+        raise HTTPException(status_code=400, detail="No such group")
+    return {"ok": True}
+
+
+@router.post("/api/videos/{video_id}/promote")
+async def api_promote_video(video_id: int, body: PromoteRequest, request: Request):
+    """Hand a downloaded file to Plex; it returns later as a library row after scanning."""
+    _check_token(request)
     try:
-        result = await asyncio.to_thread(services.apply_classification, video_id, body.classification)
+        promoted = await asyncio.to_thread(services.promote, video_id, body.kind)
     except promote.PromotionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"ok": result.ok, "promoted": result.promoted}
+    if not promoted:
+        raise HTTPException(status_code=400, detail="Not a promotable video or kind")
+    return {"ok": True, "promoted": True}
 
 
 @router.post("/api/videos/{video_id}/version")

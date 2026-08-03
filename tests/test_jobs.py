@@ -185,7 +185,7 @@ def test_recover_exhausted_convert_versions_ignores_failure_superseded_by_newer_
     video_id, _ = tmp_db.upsert_library_video({
         "source_path": str(source),
         "title": "Movie",
-        "classification": "movies",
+        "plex_kind": "movies",
         "summary": None,
         "plex_rating_key": "1",
     })
@@ -212,7 +212,7 @@ def test_recover_exhausted_convert_versions_ignores_legacy_zero_id(
     video_id, _ = tmp_db.upsert_library_video({
         "source_path": str(source),
         "title": "Movie",
-        "classification": "movies",
+        "plex_kind": "movies",
         "summary": None,
         "plex_rating_key": "1",
     })

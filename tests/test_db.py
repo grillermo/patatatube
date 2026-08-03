@@ -125,7 +125,7 @@ def test_get_all_videos_batches_version_queries(fresh_db, monkeypatch):
         return original_conn()
 
     monkeypatch.setattr(db, "_conn", counting_conn)
-    videos = db.get_all_videos("movies")
+    videos = db.get_all_videos(plex_kind="movies")
 
     # Two library rows, each with two versions. The whole listing must use a
     # single connection — no per-row version fetch (the N+1 that leaked FDs).
@@ -178,7 +178,7 @@ def test_init_db_backfills_youtube_preview_urls(tmp_db):
 LIB_ITEM = {
     "source_path": "/Volumes/Media/media/tv/The.Bear.S01/The.Bear.S01E01.mkv",
     "title": "System",
-    "classification": "tv",
+    "plex_kind": "tv",
     "show_title": "The Bear",
     "season": 1,
     "episode": 1,
@@ -188,9 +188,9 @@ LIB_ITEM = {
 }
 
 
-def test_classifications_updated():
+def test_plex_kinds_are_fixed():
     import db
-    assert db.CLASSIFICATIONS == ["children", "adults", "anabel", "asmr", "tv", "movies"]
+    assert db.PLEX_KINDS == ("tv", "movies")
 
 
 def test_upsert_library_video_creates_row(fresh_db):
@@ -203,7 +203,7 @@ def test_upsert_library_video_creates_row(fresh_db):
     assert row["source_path"] == LIB_ITEM["source_path"]
     assert row["show_title"] == "The Bear"
     assert row["season"] == 1 and row["episode"] == 1
-    assert row["classification"] == "tv"
+    assert row["plex_kind"] == "tv"
     assert row["deleted_at"] is None
 
 
@@ -306,7 +306,7 @@ def _versioned_movie_item(rating_key="42", versions=None):
     return {
         "source_path": "/m/1080.mkv",
         "title": "Akira",
-        "classification": "movies",
+        "plex_kind": "movies",
         "show_title": None,
         "season": None,
         "episode": None,
@@ -348,7 +348,7 @@ def test_backfill_creates_one_version_per_library_row(fresh_db):
         conn.execute(
             """
             INSERT INTO videos (
-                url, title, status, classification, source, source_path,
+                url, title, status, plex_kind, source, source_path,
                 converted_path, plex_rating_key, created_at, position
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -368,7 +368,7 @@ def test_backfill_creates_one_version_per_library_row(fresh_db):
         )
 
     db.init_db()
-    video = db.get_all_videos("movies")[0]
+    video = db.get_all_videos(plex_kind="movies")[0]
     versions = db.get_video_versions(video["id"])
 
     assert video["chosen_version_id"] == versions[0]["id"]
@@ -443,7 +443,7 @@ def _lib_item(tmp_path, name="m.mkv", key="k1"):
     return {
         "source_path": str(src),
         "title": "M",
-        "classification": "movies",
+        "plex_kind": "movies",
         "show_title": None,
         "season": None,
         "episode": None,

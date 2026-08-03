@@ -96,7 +96,7 @@ def test_choose_version_invalidates_existing_hls_package(fresh_db, monkeypatch):
         {
             "source_path": "/media/movie-1080p.mkv",
             "title": "Movie",
-            "classification": "movies",
+            "plex_kind": "movies",
             "versions": [
                 {"source_path": "/media/movie-1080p.mkv", "label": "1080p"},
                 {"source_path": "/media/movie-4k.mkv", "label": "4K"},

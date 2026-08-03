@@ -4,7 +4,7 @@ from views.serializers import serialize_video
 def _library_video(**over):
     video = {
         "id": 1, "url": "/x/y.mkv", "status": "done", "source": "library",
-        "classification": "movies", "chosen_version_id": 10, "audio_lang": "spa",
+        "plex_kind": "movies", "chosen_version_id": 10, "audio_lang": "spa",
         "versions": [{
             "id": 10, "label": "1080p", "status": "done", "is_chosen": True,
             "audio_langs": (
@@ -56,7 +56,7 @@ def test_serialize_video_full_shape():
         "platform": "youtube",
         "source_key": "dQw4w9WgXcQ",
         "preview_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
-        "classification": "children",
+        "group_id": 3,
         "position": 3,
         "status": "done",
         "error_msg": None,
@@ -70,7 +70,8 @@ def test_serialize_video_full_shape():
         "platform": "youtube",
         "source_key": "dQw4w9WgXcQ",
         "preview_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
-        "classification": "children",
+        "group_id": 3,
+        "plex_kind": None,
         "position": 3,
         "resume_secs": 0,
         "status": "done",
@@ -111,7 +112,19 @@ def test_injected_subtitle_tracks_are_passed_through():
     assert data["hls_path"] == "/videos/8/hls/master.m3u8"
 
 
-def test_serialize_video_defaults_classification_and_omits_internal_fields():
+def test_serialize_video_emits_group_id_and_plex_kind():
+    data = serialize_video({"id": 1, "url": "u", "status": "done", "group_id": 3})
+    assert data["group_id"] == 3
+    assert data["plex_kind"] is None
+    assert "classification" not in data
+
+
+def test_serialize_video_leaves_an_unsorted_video_null():
+    data = serialize_video({"id": 1, "url": "u", "status": "done"})
+    assert data["group_id"] is None
+
+
+def test_serialize_video_omits_internal_fields():
     video = {
         "id": 1,
         "url": "https://twitter.com/x/status/1",
@@ -119,7 +132,8 @@ def test_serialize_video_defaults_classification_and_omits_internal_fields():
         "filename": None,
     }
     result = serialize_video(video)
-    assert result["classification"] == "children"
+    assert result["group_id"] is None
+    assert result["plex_kind"] is None
     assert result["title"] is None
     assert result["stream_path"] == "/videos/1/stream"
     assert "filename" not in result
@@ -128,7 +142,7 @@ def test_serialize_video_defaults_classification_and_omits_internal_fields():
 def test_serialize_library_episode():
     row = {
         "id": 7, "url": "/vol/tv/ep.mkv", "title": "System", "platform": None,
-        "source_key": None, "preview_url": None, "classification": "tv",
+        "source_key": None, "preview_url": None, "plex_kind": "tv",
         "position": 3, "status": "unconverted", "error_msg": None,
         "source": "library", "show_title": "The Bear", "season": 1, "episode": 1,
         "summary": "Carmy.", "plex_rating_key": "1264", "show_rating_key": "1262",
@@ -200,7 +214,7 @@ def test_serialize_upload_video_redacts_tmp_path_from_url():
         "title": "My Upload",
         "platform": "upload",
         "status": "queued",
-        "classification": "children",
+        "group_id": 1,
     }
     data = serialize_video(row)
     assert data["url"] == ""

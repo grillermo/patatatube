@@ -54,11 +54,11 @@ def test_fetch_library_items(monkeypatch):
     items = plex.fetch_library_items()
     assert len(items) == 2
 
-    movie = next(i for i in items if i["classification"] == "movies")
+    movie = next(i for i in items if i["plex_kind"] == "movies")
     assert movie == {
         "source_path": "/Volumes/Media/media/movies/Akira/Akira.mkv",
         "title": "Akira",
-        "classification": "movies",
+        "plex_kind": "movies",
         "show_title": None,
         "season": None,
         "episode": None,
@@ -71,11 +71,11 @@ def test_fetch_library_items(monkeypatch):
         "versions": [{"source_path": "/Volumes/Media/media/movies/Akira/Akira.mkv", "label": "Version 1"}],
     }
 
-    ep = next(i for i in items if i["classification"] == "tv")
+    ep = next(i for i in items if i["plex_kind"] == "tv")
     assert ep == {
         "source_path": "/Volumes/Media/media/tv/The.Bear/S01E01.mkv",
         "title": "System",
-        "classification": "tv",
+        "plex_kind": "tv",
         "show_title": "The Bear",
         "season": 1,
         "episode": 1,

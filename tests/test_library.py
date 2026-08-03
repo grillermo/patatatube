@@ -223,7 +223,7 @@ def lib_row(tmp_path, name="ep.mkv"):
     vid, _ = db.upsert_library_video({
         "source_path": str(src),
         "title": "Ep",
-        "classification": "tv",
+        "plex_kind": "tv",
         "show_title": "Show",
         "season": 1,
         "episode": 1,
@@ -358,7 +358,7 @@ def test_scan_library(fresh_db, tmp_path, monkeypatch):
     converted.write_bytes(b"x")
 
     def item(path):
-        return {"source_path": str(path), "title": path.stem, "classification": "movies",
+        return {"source_path": str(path), "title": path.stem, "plex_kind": "movies",
                 "show_title": None, "season": None, "episode": None, "summary": None,
                 "plex_rating_key": path.stem, "show_rating_key": None}
 
@@ -382,7 +382,7 @@ def test_scan_library_heals_missing_conversion(fresh_db, tmp_path, monkeypatch):
     src = tmp_path / "movie.mkv"
     src.write_bytes(b"x")
 
-    item = {"source_path": str(src), "title": "Movie", "classification": "movies",
+    item = {"source_path": str(src), "title": "Movie", "plex_kind": "movies",
             "show_title": None, "season": None, "episode": None, "summary": None,
             "plex_rating_key": "7", "show_rating_key": None}
     monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
@@ -410,20 +410,20 @@ def test_scan_library_tombstones_plex_deletions(fresh_db, tmp_path, monkeypatch)
     goner.write_bytes(b"x")
 
     def item(path):
-        return {"source_path": str(path), "title": path.stem, "classification": "movies",
+        return {"source_path": str(path), "title": path.stem, "plex_kind": "movies",
                 "show_title": None, "season": None, "episode": None, "summary": None,
                 "plex_rating_key": path.stem, "show_rating_key": None}
 
     monkeypatch.setattr(plex, "fetch_library_items", lambda: [item(keep), item(goner)])
     assert library.scan_library()["added"] == 2
-    assert {v["plex_rating_key"] for v in db.get_all_videos("movies")} == {"keep", "goner"}
+    assert {v["plex_rating_key"] for v in db.get_all_videos(plex_kind="movies")} == {"keep", "goner"}
 
     # Delete goner from Plex: no longer returned by the scan.
     goner.unlink()
     monkeypatch.setattr(plex, "fetch_library_items", lambda: [item(keep)])
     result = library.scan_library()
     assert result["removed"] == 1
-    assert {v["plex_rating_key"] for v in db.get_all_videos("movies")} == {"keep"}
+    assert {v["plex_rating_key"] for v in db.get_all_videos(plex_kind="movies")} == {"keep"}
 
 
 def test_scan_library_filters_versions_per_file(fresh_db, tmp_path, monkeypatch):
@@ -436,7 +436,7 @@ def test_scan_library_filters_versions_per_file(fresh_db, tmp_path, monkeypatch)
     missing = tmp_path / "4k.mkv"       # never created, must be excluded
 
     item = {
-        "source_path": str(converted), "title": "Akira", "classification": "movies",
+        "source_path": str(converted), "title": "Akira", "plex_kind": "movies",
         "show_title": None, "season": None, "episode": None, "summary": None,
         "plex_rating_key": "42", "show_rating_key": None,
         "versions": [
@@ -450,14 +450,14 @@ def test_scan_library_filters_versions_per_file(fresh_db, tmp_path, monkeypatch)
     seed_src = tmp_path / "seed.mkv"
     seed_src.write_bytes(b"x")
     vid0, _ = db.upsert_library_video(
-        {"source_path": str(seed_src), "title": "seed", "classification": "movies",
+        {"source_path": str(seed_src), "title": "seed", "plex_kind": "movies",
          "show_title": None, "season": None, "episode": None, "summary": None,
          "plex_rating_key": "seed", "show_rating_key": None})
     db.set_library_state(vid0, "done", converted_path=str(converted))
 
     result = library.scan_library()
     assert result["added"] == 1
-    movie = next(v for v in db.get_all_videos("movies") if v["plex_rating_key"] == "42")
+    movie = next(v for v in db.get_all_videos(plex_kind="movies") if v["plex_rating_key"] == "42")
     paths = [v["source_path"] for v in db.get_video_versions(movie["id"])]
     assert paths == [str(real)]  # converted sibling + missing file both dropped
 
@@ -467,7 +467,7 @@ def test_scan_probes_missing_audio_langs(fresh_db, tmp_path, monkeypatch):
     import plex
     src = tmp_path / "a.mkv"
     src.write_bytes(b"x")
-    item = {"source_path": str(src), "title": "a", "classification": "movies",
+    item = {"source_path": str(src), "title": "a", "plex_kind": "movies",
             "show_title": None, "season": None, "episode": None, "summary": None,
             "plex_rating_key": "a", "show_rating_key": None}
     monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
@@ -479,7 +479,7 @@ def test_scan_probes_missing_audio_langs(fresh_db, tmp_path, monkeypatch):
 
     monkeypatch.setattr(library, "probe_source", fake_probe)
     library.scan_library()
-    movie = db.get_all_videos("movies")[0]
+    movie = db.get_all_videos(plex_kind="movies")[0]
     version = db.get_video_versions(movie["id"])[0]
     import json
     assert [t["lang"] for t in json.loads(version["audio_langs"])] == ["cat", "eng", "spa", "spa"]
@@ -494,7 +494,7 @@ def test_scan_survives_probe_failure(fresh_db, tmp_path, monkeypatch):
     import plex
     src = tmp_path / "a.mkv"
     src.write_bytes(b"x")
-    item = {"source_path": str(src), "title": "a", "classification": "movies",
+    item = {"source_path": str(src), "title": "a", "plex_kind": "movies",
             "show_title": None, "season": None, "episode": None, "summary": None,
             "plex_rating_key": "a", "show_rating_key": None}
     monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
@@ -505,5 +505,5 @@ def test_scan_survives_probe_failure(fresh_db, tmp_path, monkeypatch):
     monkeypatch.setattr(library, "probe_source", boom)
     result = library.scan_library()
     assert result["added"] == 1  # scan not aborted
-    movie = db.get_all_videos("movies")[0]
+    movie = db.get_all_videos(plex_kind="movies")[0]
     assert db.get_video_versions(movie["id"])[0]["audio_langs"] is None  # retried next scan

@@ -68,16 +68,16 @@ def test_upload_file_missing_token(client):
     resp = client.post(
         "/upload/file",
         files={"file": ("video.mp4", b"bytes", "video/mp4")},
-        data={"classification": "children"},
+        data={"group_id": "1"},
     )
     assert resp.status_code == 401
 
 
-def test_upload_file_invalid_classification(client):
+def test_upload_file_rejects_unknown_group(client):
     resp = client.post(
         "/upload/file",
         files={"file": ("video.mp4", b"bytes", "video/mp4")},
-        data={"classification": "not-a-real-one"},
+        data={"group_id": "9999"},
         headers={"Authorization": "Bearer test-secret"},
     )
     assert resp.status_code == 400
@@ -88,12 +88,12 @@ def test_upload_file_success(client, monkeypatch):
 
     queued = []
     monkeypatch.setattr("router.process_uploaded_video", lambda *a, **kw: queued.append((a, kw)), raising=False)
-    classification = db.CLASSIFICATIONS[0]
+    group_id = db.get_group_by_name("children")["id"]
 
     resp = client.post(
         "/upload/file",
         files={"file": ("my video.mp4", b"fake-video-bytes", "video/mp4")},
-        data={"classification": classification},
+        data={"group_id": str(group_id)},
         headers={"Authorization": "Bearer test-secret"},
     )
 
@@ -105,7 +105,7 @@ def test_upload_file_success(client, monkeypatch):
     video = db.get_video(data["id"])
     assert video["platform"] == "upload"
     assert video["title"] == "my video"
-    assert video["classification"] == classification
+    assert video["group_id"] == group_id
     assert Path(video["url"]).exists()
     assert Path(video["url"]).read_bytes() == b"fake-video-bytes"
 
@@ -741,25 +741,24 @@ def test_api_videos_returns_serialized_list(client):
     assert "filename" not in item
 
 
-def test_api_videos_filters_by_classification(client):
+def test_api_videos_filters_by_group(client):
     import db
-    target_classification = next(cls for cls in db.CLASSIFICATIONS if cls != "children")
+    group_id = db.get_group_by_name("adults")["id"]
     a = db.add_video("https://twitter.com/x/status/1")
     b = db.add_video("https://twitter.com/x/status/2")
-    db.set_video_classification(a, target_classification)
-    db.set_video_classification(b, "children")
-    resp = client.get("/api/videos", params={"classification": target_classification})
+    db.set_video_group(a, group_id)
+    resp = client.get("/api/videos", params={"group_id": group_id})
     assert resp.status_code == 200
     ids = {v["id"] for v in resp.json()}
     assert a in ids and b not in ids
 
 
-def test_api_videos_ignores_unknown_classification(client):
+def test_unknown_group_id_filter_returns_nothing(client):
     import db
-    vid = db.add_video("https://twitter.com/x/status/1")
-    resp = client.get("/api/videos", params={"classification": "bogus"})
+    db.add_video("https://twitter.com/x/status/1")
+    resp = client.get("/api/videos", params={"group_id": 9999})
     assert resp.status_code == 200
-    assert any(v["id"] == vid for v in resp.json())
+    assert resp.json() == []
 
 
 def test_get_groups_lists_the_defaults(client):
@@ -823,63 +822,60 @@ def test_old_classification_and_cover_endpoints_are_gone(client):
     assert client.get("/api/group-covers").status_code == 404
 
 
-def test_api_classify_accepts_asmr(client):
+def test_set_group_endpoint(client, auth_headers):
     import db
-
-    vid = db.add_video("https://twitter.com/x/status/1")
+    gid = db.get_group_by_name("adults")["id"]
+    vid = db.add_video("https://example.com/v")
     resp = client.post(
-        f"/api/videos/{vid}/classify",
-        json={"classification": "asmr"},
-        headers={"Authorization": "Bearer test-secret"},
+        f"/api/videos/{vid}/group", json={"group_id": gid}, headers=auth_headers
     )
-    assert resp.status_code == 200
-    assert db.get_video(vid)["classification"] == "asmr"
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    assert client.get(f"/api/videos?group_id={gid}").json()[0]["id"] == vid
 
 
-def test_api_classify_still_rejects_unknown(client):
+def test_set_group_rejects_an_unknown_group(client, auth_headers):
     import db
-
-    vid = db.add_video("https://twitter.com/x/status/1")
+    vid = db.add_video("https://example.com/v2")
     resp = client.post(
-        f"/api/videos/{vid}/classify",
-        json={"classification": "not-a-real-one"},
-        headers={"Authorization": "Bearer test-secret"},
+        f"/api/videos/{vid}/group", json={"group_id": 9999}, headers=auth_headers
     )
     assert resp.status_code == 400
 
 
-def test_api_classify_requires_token(client):
+def test_set_group_requires_token(client):
     import db
     vid = db.add_video("https://twitter.com/x/status/1")
-    resp = client.post(f"/api/videos/{vid}/classify", json={"classification": "children"})
+    resp = client.post(f"/api/videos/{vid}/group", json={"group_id": 1})
     assert resp.status_code == 401
 
 
-def test_api_classify_sets_and_returns_ok(client):
+def test_promote_endpoint_rejects_an_unknown_kind(client, auth_headers):
     import db
-    target_classification = next(cls for cls in db.CLASSIFICATIONS if cls != "children")
-    vid = db.add_video("https://twitter.com/x/status/1")
+    vid = db.add_video("https://example.com/v3")
     resp = client.post(
-        f"/api/videos/{vid}/classify",
-        json={"classification": target_classification},
-        headers={"Authorization": "Bearer test-secret"},
-    )
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "promoted": False}
-    assert db.get_video(vid)["classification"] == target_classification
-
-
-def test_api_classify_invalid_returns_bad_request(client):
-    import db
-    vid = db.add_video("https://twitter.com/x/status/1")
-    db.set_video_classification(vid, "children")
-    resp = client.post(
-        f"/api/videos/{vid}/classify",
-        json={"classification": "bogus"},
-        headers={"Authorization": "Bearer test-secret"},
+        f"/api/videos/{vid}/promote", json={"kind": "podcasts"}, headers=auth_headers
     )
     assert resp.status_code == 400
-    assert db.get_video(vid)["classification"] == "children"
+
+
+def test_promote_requires_token(client):
+    import db
+    vid = db.add_video("https://twitter.com/x/status/1")
+    assert client.post(f"/api/videos/{vid}/promote", json={"kind": "tv"}).status_code == 401
+
+
+def test_promote_endpoint_returns_409_on_promotion_error(client, auth_headers, monkeypatch):
+    import db
+    import promote
+
+    def boom(video, kind):
+        raise promote.PromotionError("volume not mounted")
+
+    monkeypatch.setattr(promote, "promote_to_plex", boom)
+    vid = db.add_video("https://example.com/v4")
+    resp = client.post(f"/api/videos/{vid}/promote", json={"kind": "tv"}, headers=auth_headers)
+    assert resp.status_code == 409
+    assert "volume not mounted" in resp.json()["detail"]
 
 
 def test_api_delete_requires_token(client):
@@ -912,7 +908,7 @@ AUTH = {"Authorization": "Bearer test-secret"}
 
 LIB_ITEM_API = {
     "source_path": None,  # filled per-test with tmp file
-    "title": "System", "classification": "tv", "show_title": "The Bear",
+    "title": "System", "plex_kind": "tv", "show_title": "The Bear",
     "season": 1, "episode": 1, "summary": "Carmy.",
     "plex_rating_key": "1264", "show_rating_key": "1262",
 }
@@ -986,7 +982,7 @@ def _seed_multi_audio_movie(tmp_path, converted_langs='["eng", "spa"]', status="
     src = tmp_path / "m.mkv"
     src.write_bytes(b"x")
     vid, _ = db.upsert_library_video({
-        "source_path": str(src), "title": "M", "classification": "movies",
+        "source_path": str(src), "title": "M", "plex_kind": "movies",
         "show_title": None, "season": None, "episode": None, "summary": None,
         "plex_rating_key": "m1", "show_rating_key": None,
     })
@@ -1138,7 +1134,7 @@ def make_versioned_movie(tmp_path):
             **LIB_ITEM_API,
             "source_path": str(src_1080),
             "title": "Movie",
-            "classification": "movies",
+            "plex_kind": "movies",
             "show_title": None,
             "season": None,
             "episode": None,
@@ -1743,7 +1739,7 @@ def test_hls_rejects_path_traversal(client, monkeypatch, tmp_path):
         p.unlink(missing_ok=True)
 
 
-def test_api_classify_to_movies_promotes_and_reports_it(client, monkeypatch, tmp_path):
+def test_promote_to_movies_moves_the_file(client, monkeypatch, tmp_path):
     import db
     import promote
     videos_dir = tmp_path / "videos"
@@ -1752,14 +1748,14 @@ def test_api_classify_to_movies_promotes_and_reports_it(client, monkeypatch, tmp
     movies_dir.mkdir()
     monkeypatch.setattr(promote, "VIDEOS_DIR", videos_dir)
     monkeypatch.setenv("LIBRARY_MOVIES_DIR", str(movies_dir))
-    monkeypatch.setattr(promote, "_refresh_plex", lambda classification: None)
+    monkeypatch.setattr(promote, "_refresh_plex", lambda kind: None)
     video_id = db.add_video("https://youtu.be/abc", platform="youtube", title="Akira")
     (videos_dir / f"{video_id}.mp4").write_bytes(b"bytes")
     db.update_video(video_id, "done", filename=f"{video_id}.mp4")
 
     resp = client.post(
-        f"/api/videos/{video_id}/classify",
-        json={"classification": "movies"},
+        f"/api/videos/{video_id}/promote",
+        json={"kind": "movies"},
         headers={"Authorization": "Bearer test-secret"},
     )
 
@@ -1769,22 +1765,7 @@ def test_api_classify_to_movies_promotes_and_reports_it(client, monkeypatch, tmp
     assert db.get_video(video_id) is None
 
 
-def test_api_classify_to_children_does_not_promote(client, monkeypatch):
-    import db
-    video_id = db.add_video("https://youtu.be/abc", platform="youtube", title="Akira")
-    db.update_video(video_id, "done", filename=f"{video_id}.mp4")
-
-    resp = client.post(
-        f"/api/videos/{video_id}/classify",
-        json={"classification": "children"},
-        headers={"Authorization": "Bearer test-secret"},
-    )
-
-    assert resp.json() == {"ok": True, "promoted": False}
-    assert db.get_video(video_id)["classification"] == "children"
-
-
-def test_api_classify_returns_409_when_the_move_fails(client, monkeypatch, tmp_path):
+def test_promote_returns_409_when_the_move_fails(client, monkeypatch, tmp_path):
     import db
     import promote
     videos_dir = tmp_path / "videos"
@@ -1794,20 +1775,17 @@ def test_api_classify_returns_409_when_the_move_fails(client, monkeypatch, tmp_p
     video_id = db.add_video("https://youtu.be/abc", platform="youtube", title="Akira")
     (videos_dir / f"{video_id}.mp4").write_bytes(b"bytes")
     db.update_video(video_id, "done", filename=f"{video_id}.mp4")
-    db.set_video_classification(video_id, "children")
-
     resp = client.post(
-        f"/api/videos/{video_id}/classify",
-        json={"classification": "movies"},
+        f"/api/videos/{video_id}/promote",
+        json={"kind": "movies"},
         headers={"Authorization": "Bearer test-secret"},
     )
 
     assert resp.status_code == 409
     assert (videos_dir / f"{video_id}.mp4").exists()
-    assert db.get_video(video_id)["classification"] == "children"
 
 
-def test_ssr_classify_returns_409_when_the_move_fails(client, monkeypatch, tmp_path):
+def test_ssr_promote_returns_409_when_the_move_fails(client, monkeypatch, tmp_path):
     import db
     import promote
     videos_dir = tmp_path / "videos"
@@ -1819,8 +1797,8 @@ def test_ssr_classify_returns_409_when_the_move_fails(client, monkeypatch, tmp_p
     db.update_video(video_id, "done", filename=f"{video_id}.mp4")
 
     resp = client.post(
-        f"/videos/{video_id}/classify",
-        data={"classification": "movies"},
+        f"/videos/{video_id}/promote",
+        data={"kind": "movies"},
         follow_redirects=False,
     )
 
@@ -1828,14 +1806,16 @@ def test_ssr_classify_returns_409_when_the_move_fails(client, monkeypatch, tmp_p
     assert db.get_video(video_id) is not None
 
 
-def test_upload_file_rejects_a_library_classification(client):
+def test_upload_file_no_longer_rejects_plex_kinds(client, auth_headers):
+    import db
+    gid = db.get_group_by_name("children")["id"]
     resp = client.post(
         "/upload/file",
-        files={"file": ("video.mp4", b"bytes", "video/mp4")},
-        data={"classification": "movies"},
-        headers={"Authorization": "Bearer test-secret"},
+        files={"file": ("clip.mp4", b"\x00\x00", "video/mp4")},
+        data={"group_id": str(gid)},
+        headers=auth_headers,
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 202
 
 
 def test_preview_grabs_frame_for_download_without_thumbnail(client, tmp_path, monkeypatch):
