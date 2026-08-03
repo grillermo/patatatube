@@ -34,7 +34,7 @@ public final class VideoStore: ObservableObject {
     /// call can tell it's been superseded and must not clobber `videos`/`isLoading`
     /// with results that no longer match the current tab/request.
     private var loadGeneration = 0
-    private var groupMutationRequests: [Int: UUID] = [:]
+    private var groupMutationRequests: [Feed: [Int: UUID]] = [:]
     private var cacheSaveTask: Task<Void, Never>?
 
     public init(api: VideoAPI, cache: VideoListCaching? = nil,
@@ -161,9 +161,12 @@ public final class VideoStore: ObservableObject {
     }
 
     private func finishGroupMutation(id: Int, request: UUID, feed requestedFeed: Feed) async {
-        guard groupMutationRequests[id] == request else { return }
-        groupMutationRequests[id] = nil
-        guard let cache, feed == requestedFeed, groupMutationRequests.isEmpty else { return }
+        guard groupMutationRequests[requestedFeed]?[id] == request else { return }
+        groupMutationRequests[requestedFeed]?.removeValue(forKey: id)
+        if groupMutationRequests[requestedFeed]?.isEmpty == true {
+            groupMutationRequests[requestedFeed] = nil
+        }
+        guard let cache, feed == requestedFeed, groupMutationRequests[requestedFeed] == nil else { return }
 
         // Persist only a settled source-feed snapshot. A concurrent optimistic
         // move can still fail and roll itself back while this request is away.
@@ -181,13 +184,13 @@ public final class VideoStore: ObservableObject {
         guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
         let previous = videos[index]
         guard !previous.isPlexItem else { return }
-        let request = UUID()
-        groupMutationRequests[id] = request
-        videos[index] = previous.withGroupID(groupID)
         let requestedFeed = feed
+        let request = UUID()
+        groupMutationRequests[requestedFeed, default: [:]][id] = request
+        videos[index] = previous.withGroupID(groupID)
         do {
             guard try await api.setGroup(id: id, groupID: groupID) else {
-                if groupMutationRequests[id] == request, feed == requestedFeed,
+                if groupMutationRequests[requestedFeed]?[id] == request, feed == requestedFeed,
                    let current = videos.firstIndex(where: { $0.id == id }),
                    videos[current].groupID == groupID {
                     videos[current] = previous
@@ -195,7 +198,7 @@ public final class VideoStore: ObservableObject {
                 await finishGroupMutation(id: id, request: request, feed: requestedFeed)
                 return
             }
-            guard groupMutationRequests[id] == request else { return }
+            guard groupMutationRequests[requestedFeed]?[id] == request else { return }
             guard feed == requestedFeed else {
                 await finishGroupMutation(id: id, request: request, feed: requestedFeed)
                 return
@@ -205,7 +208,7 @@ public final class VideoStore: ObservableObject {
             }
             await finishGroupMutation(id: id, request: request, feed: requestedFeed)
         } catch {
-            guard groupMutationRequests[id] == request else { return }
+            guard groupMutationRequests[requestedFeed]?[id] == request else { return }
             if feed == requestedFeed,
                let current = videos.firstIndex(where: { $0.id == id }),
                videos[current].groupID == groupID {
