@@ -315,6 +315,18 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     #expect(cache.load(feed: .all)?[0].groupID == 2)
 }
 
+@MainActor @Test func setGroupRemovesConfirmedMoveFromSourceGroupFeedAndCache() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.switchFeed(to: .group(id: 1))
+
+    await store.setGroup(id: 1, groupID: 2)
+
+    #expect(store.videos.isEmpty)
+    #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
+}
+
 @MainActor @Test func setGroupDoesNotReportServerNotOk() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
     api.setGroupResult = false

@@ -167,7 +167,6 @@ public final class VideoStore: ObservableObject {
         let generation = mutationGeneration
         let previous = videos[index]
         videos[index] = previous.withGroupID(groupID)
-        let updatedVideos = videos
         let requestedFeed = feed
         do {
             guard try await api.setGroup(id: id, groupID: groupID) else {
@@ -178,7 +177,12 @@ public final class VideoStore: ObservableObject {
                 }
                 return
             }
-            if generation == mutationGeneration, let cache {
+            guard generation == mutationGeneration else { return }
+            if case .group(let sourceGroupID) = requestedFeed, sourceGroupID != groupID {
+                videos.removeAll { $0.id == id }
+            }
+            if let cache {
+                let updatedVideos = videos
                 await Task.detached(priority: .utility) {
                     cache.save(updatedVideos, feed: requestedFeed)
                 }.value

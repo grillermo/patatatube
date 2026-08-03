@@ -259,11 +259,7 @@ struct VideoGridView: View {
             ScrollViewReader { proxy in
                 tabRoot
                 .task { await initialLoad(scrollProxy: proxy) }
-                .task {
-                    if let remote = try? await model.api.groups() {
-                        groups.apply(remote)
-                    }
-                }
+                .task { await refreshGroups() }
             }
             .navigationDestination(for: Route.self) { route in
                 destination(for: route)
@@ -357,11 +353,17 @@ struct VideoGridView: View {
     @ViewBuilder
     private var tabRoot: some View {
         if tab == .videos {
-            rootScrollView
+            rootScrollView.refreshable { await refreshGroups() }
         } else {
             rootScrollView
                 .searchable(text: $searchText, prompt: "Search videos")
                 .refreshable { await store.refreshLibrary() }
+        }
+    }
+
+    private func refreshGroups() async {
+        if let remote = try? await model.api.groups() {
+            groups.apply(remote)
         }
     }
 
