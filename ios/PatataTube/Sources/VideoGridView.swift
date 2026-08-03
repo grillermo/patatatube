@@ -24,6 +24,7 @@ struct PendingResume: Identifiable {
 /// modifier chain, they pushed the type checker past its time budget.
 private struct RestorationTracking: ViewModifier {
     let path: [Route]
+    let tab: MediaTab
     let filter: String?
     let activeSearch: String
     let playing: PlaybackQueue?
@@ -43,7 +44,10 @@ private struct RestorationTracking: ViewModifier {
                     "from": RestorationTracking.describe(oldValue),
                     "to": RestorationTracking.describe(newValue),
                 ])
-                model.restorationStore.mutate { $0.path = newValue }
+                model.restorationStore.mutate {
+                    $0.tab = tab
+                    $0.path = newValue
+                }
             }
             .onChange(of: filter) { _, newValue in
                 model.restorationStore.mutate { $0.filter = newValue }
@@ -78,6 +82,7 @@ private struct RestorationTracking: ViewModifier {
     static func describe(_ path: [Route]) -> String {
         path.map { route in
             switch route {
+            case .group(let name): return "group(\(name))"
             case .show(let title): return "show(\(title))"
             case .movie(let id): return "movie(\(id))"
             case .downloads: return "downloads"
@@ -88,14 +93,14 @@ private struct RestorationTracking: ViewModifier {
 
 private extension View {
     func restorationTracking(
-        path: [Route], filter: String?, activeSearch: String,
+        path: [Route], tab: MediaTab, filter: String?, activeSearch: String,
         playing: PlaybackQueue?, scenePhase: ScenePhase,
         model: AppModel, gridTracker: VisibleItemsTracker,
         gridAnchorDebounceTask: Binding<Task<Void, Never>?>,
         currentGridOrder: [String]
     ) -> some View {
         modifier(RestorationTracking(
-            path: path, filter: filter, activeSearch: activeSearch,
+            path: path, tab: tab, filter: filter, activeSearch: activeSearch,
             playing: playing, scenePhase: scenePhase,
             model: model, gridTracker: gridTracker,
             gridAnchorDebounceTask: gridAnchorDebounceTask,
@@ -105,11 +110,15 @@ private extension View {
 }
 
 struct VideoGridView: View {
+    /// Which tab this instance is the content of. Fixed for the lifetime of the
+    /// view — `RootTabView` builds one instance per tab.
+    let tab: MediaTab
+
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var classifications: [String] = ["children", "adults", "education", "tv", "movies"]
+    @State private var classifications: [String] = ["children", "adults", "anabel", "asmr", "tv", "movies"]
     @State private var showSettings = false
     @State private var showUpload = false
     @State private var showWebBridge = false
@@ -196,37 +205,13 @@ struct VideoGridView: View {
     var body: some View {
         NavigationStack(path: $path) {
             ScrollViewReader { proxy in
-                ScrollView {
-                    if store.isLoading && filteredVideos.isEmpty {
-                        if store.filter == "tv" || store.filter == "movies" {
-                            SkeletonGrid(columns: columns, aspectRatio: 2.0/3.0,
-                                         showsTextBars: store.filter == "tv")
-                        } else {
-                            SkeletonGrid(columns: columns, aspectRatio: 16.0/9.0)
-                        }
-                    } else if store.filter == "tv" {
-                        ShowsView(
-                            videos: filteredVideos,
-                            onPlay: { video, queue in
-                                play(video, queueSnapshot: queue, caller: "shows")
-                            },
-                            onDownload: { await download($0) },
-                            onItemAppear: { gridItemAppeared($0) },
-                            onItemDisappear: { gridItemDisappeared($0) }
-                        )
-                    } else if store.filter == "movies" {
-                        moviesGrid
-                    } else {
-                        defaultGrid
-                    }
-                }
+                tabRoot
                 .task { await initialLoad(scrollProxy: proxy) }
             }
             .navigationDestination(for: Route.self) { route in
                 destination(for: route)
             }
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchText, prompt: "Search videos")
             .onChange(of: searchText) { _, newValue in
                 searchDebounceTask?.cancel()
                 searchDebounceTask = Task {
@@ -236,16 +221,13 @@ struct VideoGridView: View {
                 }
             }
             .restorationTracking(
-                path: path, filter: store.filter, activeSearch: activeSearch,
+                path: path, tab: tab, filter: store.filter, activeSearch: activeSearch,
                 playing: playing, scenePhase: scenePhase,
                 model: model, gridTracker: gridTracker,
                 gridAnchorDebounceTask: $gridAnchorDebounceTask,
                 currentGridOrder: currentGridOrder
             )
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    filterTabs
-                }
                 // Pin the search field ahead of the menu so the ellipsis sits
                 // to its right. Without this the system appends search last
                 // and the menu ends up on the far side of the bar.
@@ -256,6 +238,12 @@ struct VideoGridView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     optionsMenu
                 }
+            }
+            .onChange(of: path) { _, newPath in
+                guard tab == .videos else { return }
+                guard case .group(let name)? = newPath.first else { return }
+                guard store.filter != name else { return }
+                Task { await store.switchFilter(to: name) }
             }
             .onChange(of: model.webBridgeRequests) { _, _ in showWebBridge = true }
             .refreshable { await store.refreshLibrary() }
@@ -311,6 +299,42 @@ struct VideoGridView: View {
             .overlay { if let error = store.errorText { errorBanner(error) } }
         }
         .environment(preparationTracker)
+    }
+
+    @ViewBuilder
+    private var tabRoot: some View {
+        if tab == .videos {
+            rootScrollView
+        } else {
+            rootScrollView
+                .searchable(text: $searchText, prompt: "Search videos")
+        }
+    }
+
+    private var rootScrollView: some View {
+        ScrollView {
+            if store.isLoading && filteredVideos.isEmpty && tab != .videos {
+                SkeletonGrid(columns: columns, aspectRatio: 2.0/3.0,
+                             showsTextBars: tab == .tv)
+            } else {
+                switch tab {
+                case .videos:
+                    GroupsView(posters: model.groupPosters)
+                case .tv:
+                    ShowsView(
+                        videos: filteredVideos,
+                        onPlay: { video, queue in
+                            play(video, queueSnapshot: queue, caller: "shows")
+                        },
+                        onDownload: { await download($0) },
+                        onItemAppear: { gridItemAppeared($0) },
+                        onItemDisappear: { gridItemDisappeared($0) }
+                    )
+                case .movies:
+                    moviesGrid
+                }
+            }
+        }
     }
 
     /// The cover's content, as a plain function rather than inline in the
@@ -377,30 +401,6 @@ struct VideoGridView: View {
         .padding()
     }
 
-    /// Segmented control over the classifications. `""` stands in for a nil
-    /// filter so the picker has a non-optional selection; it is never offered
-    /// as a segment, it only keeps the control in a valid state before the
-    /// first filter lands.
-    private var filterBinding: Binding<String> {
-        Binding(
-            get: { store.filter ?? "" },
-            set: { newValue in
-                guard newValue != store.filter else { return }
-                Task { await store.switchFilter(to: newValue) }
-            }
-        )
-    }
-
-    private var filterTabs: some View {
-        Picker("Classification", selection: filterBinding) {
-            ForEach(classifications, id: \.self) { c in
-                Text(c.capitalized).tag(c)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-    }
-
     private var optionsMenu: some View {
         Menu {
             Button {
@@ -455,6 +455,15 @@ struct VideoGridView: View {
     @ViewBuilder
     private func destination(for route: Route) -> some View {
         switch route {
+        case .group:
+            ScrollView {
+                if store.isLoading && filteredVideos.isEmpty {
+                    SkeletonGrid(columns: columns, aspectRatio: 16.0/9.0)
+                } else {
+                    defaultGrid
+                }
+            }
+            .searchable(text: $searchText, prompt: "Search videos")
         case .show(let title):
             if let show = ShowGroup.group(filteredVideos).first(where: { $0.id == title }) {
                 EpisodesView(show: show,
@@ -500,6 +509,11 @@ struct VideoGridView: View {
     /// popped `EpisodesView` under the user's tap
     /// (`docs/restoration-buggy.md`).
     private func initialLoad(scrollProxy: ScrollViewProxy) async {
+        let restoredTab = model.restorationStore.load().tab ?? .videos
+        guard tab == restoredTab else {
+            DevLog.event(.nav, "initial load skipped", ["reason": "other tab", "tab": tab.rawValue])
+            return
+        }
         guard model.restorationGate.claim() else {
             DevLog.event(.nav, "initial load skipped", ["reason": "already restored"])
             return
@@ -509,7 +523,22 @@ struct VideoGridView: View {
         if let list = try? await api.classifications() { classifications = list }
 
         let restored = model.restorationStore.load()
-        await store.bootLoad()
+        // Videos tab restored at its root has no classification to fetch.
+        let restoredGroup: String? = {
+            if case .group(let name)? = restored.path.first { return name }
+            return nil
+        }()
+        if tab == .videos {
+            if let restoredGroup {
+                await store.switchFilter(to: restoredGroup)
+            }
+        } else {
+            if store.filter != tab.filter {
+                await store.switchFilter(to: tab.filter)
+            } else {
+                await store.bootLoad()
+            }
+        }
 
         searchText = restored.search
         activeSearch = restored.search

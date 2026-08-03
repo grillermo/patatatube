@@ -114,5 +114,5 @@ struct PatataTubeApp: App {
 }
 
 struct RootView: View {
-    var body: some View { VideoGridView() }
+    var body: some View { RootTabView() }
 }
