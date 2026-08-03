@@ -24,7 +24,6 @@ final class AppModel: ObservableObject {
     /// in the view, so exactly one run per launch can apply saved state.
     let restorationGate = RestorationGate()
     let videoListCache: VideoListCache
-    let groupPosters = GroupPosterStore()
     let groupCovers = GroupCoverStore()
     private let downloadSettings: DownloadStreamSettings
     private let simultaneousSettings: SimultaneousDownloadSettings
@@ -129,8 +128,7 @@ final class AppModel: ObservableObject {
             api: api,
             cache: videoListCache,
             mediaCache: cache,
-            positionStore: resumeStore,
-            groupPosters: groupPosters
+            positionStore: resumeStore
         )
         self.downloadSettings = downloadSettings
         self.simultaneousSettings = simultaneousSettings

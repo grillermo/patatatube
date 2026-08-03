@@ -1,8 +1,7 @@
 import Foundation
 
-/// A user-chosen emoji cover for one Videos group. Takes precedence over the
-/// `GroupPosterStore` art on the group card, so a group whose newest preview is
-/// a bad frame can still be recognised at a glance.
+/// A user-chosen emoji cover for one Videos group — the only art a group card
+/// has, so a group without one shows a placeholder tile.
 ///
 /// **The server owns these** (`GET/POST /api/group-covers`) so a choice made on
 /// one device shows up on the others. UserDefaults is only a mirror, kept so

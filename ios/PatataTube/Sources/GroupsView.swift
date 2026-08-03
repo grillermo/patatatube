@@ -5,13 +5,12 @@ import PatataTubeKit
 /// Root of the Videos tab: one poster card per group, sized like `ShowsView`'s
 /// show cards (2:3, adaptive 160pt columns). Tapping pushes that group's grid.
 ///
-/// Issues no requests: art comes from `GroupPosterStore` (written whenever a
-/// group's list was fetched anyway) plus the preview disk cache, so a group
-/// never opened on this device simply shows a placeholder tile. A card's menu
-/// can override that with an emoji (`GroupCoverStore`), which wins over the
-/// poster.
+/// Issues no requests: art is the emoji cover a card's menu assigns
+/// (`GroupCoverStore`), and a group without one shows a placeholder tile.
+/// Video previews were tried here and removed — `cover` is empty for the first
+/// render, so every card flashed the last video's frame before its emoji
+/// arrived.
 struct GroupsView: View {
-    let posters: GroupPosterStore
     let covers: GroupCoverStore
     @EnvironmentObject var model: AppModel
 
@@ -141,14 +140,8 @@ struct GroupsView: View {
                     .minimumScaleFactor(0.2)
                     .frame(width: geo.size.width, height: geo.size.height)
             }
-        } else if let poster = posters.poster(for: group),
-                  let localFileURL = model.cache.cachedPreviewURL(for: poster.videoID, path: poster.path) {
-            AuthedImage(
-                path: poster.path,
-                localFileURL: localFileURL
-            )
         } else {
-            // No spinner: nothing is loading, there is simply nothing recorded yet.
+            // No spinner: nothing is loading, there is simply no cover set.
             Color.clear.overlay(
                 Image(systemName: "rectangle.stack")
                     .font(.largeTitle)

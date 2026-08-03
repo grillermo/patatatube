@@ -25,7 +25,6 @@ public final class VideoStore: ObservableObject {
     private let mediaCache: MediaCaching?
     private let positionStore: ResumePositionStore?
     private let defaults: UserDefaults
-    private let groupPosters: GroupPosterStore?
     private static let filterKey = "selectedClassification"
 
     /// Bumped by every switchFilter()/load() invocation so a stale, still-in-flight
@@ -36,14 +35,12 @@ public final class VideoStore: ObservableObject {
     public init(api: VideoAPI, cache: VideoListCaching? = nil,
                 mediaCache: MediaCaching? = nil,
                 positionStore: ResumePositionStore? = nil,
-                defaults: UserDefaults = .standard,
-                groupPosters: GroupPosterStore? = nil) {
+                defaults: UserDefaults = .standard) {
         self.api = api
         self.cache = cache
         self.mediaCache = mediaCache
         self.positionStore = positionStore
         self.defaults = defaults
-        self.groupPosters = groupPosters
         self.filter = defaults.string(forKey: Self.filterKey) ?? "children"
     }
 
@@ -127,7 +124,6 @@ public final class VideoStore: ObservableObject {
                     )
                 }
                 videos = fetched
-                groupPosters?.record(fetched, for: filter)
             }
         } catch {
             // A cancelled fetch is routine SwiftUI lifecycle (.task and .refreshable
