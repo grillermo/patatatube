@@ -35,6 +35,14 @@ public final class RestorationStore: @unchecked Sendable {
         saveLocked(state)
     }
 
+    /// Drops the stored blob entirely, so the next launch starts at the root
+    /// with no player and no scroll anchors. Backs the "Clear restoration"
+    /// quick action.
+    public func clear() {
+        lock.lock(); defer { lock.unlock() }
+        defaults.removeObject(forKey: Self.storageKey)
+    }
+
     private func loadLocked() -> RestorationState {
         guard let data = defaults.data(forKey: Self.storageKey),
               let state = try? JSONDecoder().decode(RestorationState.self, from: data)

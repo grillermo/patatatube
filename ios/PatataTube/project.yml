@@ -63,6 +63,9 @@ targets:
           - UIApplicationShortcutItemType: com.patatatube.resetSettings
             UIApplicationShortcutItemTitle: Reset Settings
             UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
+          - UIApplicationShortcutItemType: com.patatatube.clearRestoration
+            UIApplicationShortcutItemTitle: Clear Restoration
+            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
         UILaunchStoryboardName: LaunchScreen
         "UISupportedInterfaceOrientations~iphone":
           - UIInterfaceOrientationPortrait

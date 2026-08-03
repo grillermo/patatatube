@@ -208,7 +208,7 @@ struct VideoGridView: View {
                         ShowsView(
                             videos: filteredVideos,
                             onPlay: { video, queue in
-                                play(video, queueSnapshot: queue)
+                                play(video, queueSnapshot: queue, caller: "shows")
                             },
                             onDownload: { await download($0) },
                             onItemAppear: { gridItemAppeared($0) },
@@ -292,27 +292,42 @@ struct VideoGridView: View {
                 Button("Resume from \(ResumeDecision.timestamp(request.secs))") {
                     pendingResume = nil
                     begin(request.video, queueSnapshot: request.queueSnapshot,
-                          sleepMode: request.sleepMode, startSecs: request.secs)
+                          sleepMode: request.sleepMode, startSecs: request.secs,
+                          caller: "resume-alert")
                 }
                 Button("Play from start") {
                     pendingResume = nil
                     begin(request.video, queueSnapshot: request.queueSnapshot,
-                          sleepMode: request.sleepMode, startSecs: 0)
+                          sleepMode: request.sleepMode, startSecs: 0,
+                          caller: "resume-alert-start")
                 }
                 Button("Cancel", role: .cancel) { pendingResume = nil }
             } message: { request in
                 Text("You stopped at \(ResumeDecision.timestamp(request.secs)).")
             }
             .fullScreenCover(item: $playing) { request in
-                VideoPlayerView(videos: request.videos, startIndex: request.startIndex,
-                                sleepMode: request.sleepMode,
-                                randomize: model.randomize(for: store.filter),
-                                startSecs: request.startSecs,
-                                startPaused: request.startPaused)
+                playerCover(request)
             }
             .overlay { if let error = store.errorText { errorBanner(error) } }
         }
         .environment(preparationTracker)
+    }
+
+    /// The cover's content, as a plain function rather than inline in the
+    /// `fullScreenCover` builder, so each evaluation can be logged: a rebuild
+    /// here without a `begin playback` above it means SwiftUI re-created the
+    /// presentation's content rather than the app re-presenting it.
+    private func playerCover(_ request: PlaybackQueue) -> some View {
+        DevLog.event(.nav, "player cover built", [
+            "video_id": "\(request.id)",
+            "start_secs": "\(request.startSecs)",
+            "start_paused": "\(request.startPaused)",
+        ])
+        return VideoPlayerView(videos: request.videos, startIndex: request.startIndex,
+                               sleepMode: request.sleepMode,
+                               randomize: model.randomize(for: store.filter),
+                               startSecs: request.startSecs,
+                               startPaused: request.startPaused)
     }
 
     /// Split out of `body` alongside `defaultGrid` — inlined, the combined
@@ -345,8 +360,8 @@ struct VideoGridView: View {
                     cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl),
                     localFileURL: cache.localURL(for: videoId, versionId: versionId),
                     classifications: classifications,
-                    onPlay: { play(video) },
-                    onPlaySleep: { play(video, sleepMode: true) },
+                    onPlay: { play(video, caller: "grid-cell") },
+                    onPlaySleep: { play(video, sleepMode: true, caller: "grid-cell-sleep") },
                     onDownload: { await download(video) },
                     onCancel: { cache.cancel(id: videoId, versionId: versionId) },
                     onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
@@ -443,7 +458,7 @@ struct VideoGridView: View {
         case .show(let title):
             if let show = ShowGroup.group(filteredVideos).first(where: { $0.id == title }) {
                 EpisodesView(show: show,
-                             onPlay: { video, queue in play(video, queueSnapshot: queue) },
+                             onPlay: { video, queue in play(video, queueSnapshot: queue, caller: "episodes") },
                              onDownload: { await download($0) },
                              showDownloads: { path.append(.downloads) })
             } else {
@@ -454,7 +469,7 @@ struct VideoGridView: View {
         case .movie(let id):
             if let video = store.videos.first(where: { $0.id == id }) {
                 MovieDetailView(video: video,
-                                onPlay: { play($0) },
+                                onPlay: { play($0, caller: "movie-detail") },
                                 onDownload: { await download($0) })
             }
         case .downloads:
@@ -467,7 +482,7 @@ struct VideoGridView: View {
                 onCancel: { activity in
                     model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
                 },
-                onPlay: { video in play(video) }
+                onPlay: { video in play(video, caller: "downloads") }
             )
         }
     }
@@ -493,6 +508,10 @@ struct VideoGridView: View {
             videos: store.videos,
             hasPendingQuickAction: QuickActionRouter.shared.pending != nil
         )
+        DevLog.event(.nav, "initial load applying", [
+            "path": RestorationTracking.describe(resolved.path),
+            "player": resolved.player.map { "\($0.video.id)" } ?? "nil",
+        ])
         path = resolved.path
         if let player = resolved.player {
             let startSecs = model.resumeStore.resolved(server: player.video.resumeSecs, for: player.video.id)
@@ -549,21 +568,22 @@ struct VideoGridView: View {
         }
     }
 
-    private func play(_ video: Video, sleepMode: Bool = false) {
+    private func play(_ video: Video, sleepMode: Bool = false, caller: String = "?") {
         let queueSnapshot = filteredVideos
-        play(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode)
+        play(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, caller: caller)
     }
 
-    private func play(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false) {
+    private func play(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false, caller: String = "?") {
+        DevLog.event(.nav, "play requested", ["video_id": "\(video.id)", "caller": caller])
         // Already downloaded to device: play the local file directly, no network.
         // ensureReady() would hit /prepare and fail offline (-1009) even though
         // the cached MP4 is ready to play. VideoPlayerView plays from cache too.
         if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
-            startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode)
+            startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, caller: caller)
             return
         }
         guard video.isLibrary, video.status != "done" else {
-            startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode)
+            startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, caller: caller)
             return
         }
         Task {
@@ -579,7 +599,8 @@ struct VideoGridView: View {
                 startPlayback(
                     readyVideo,
                     queueSnapshot: queueSnapshot,
-                    sleepMode: sleepMode
+                    sleepMode: sleepMode,
+                    caller: caller
                 )
             } catch {
                 store.errorText = String(describing: error)
@@ -590,7 +611,7 @@ struct VideoGridView: View {
     /// Starts playback from the tap-time queue snapshot. `video` may be the
     /// ensureReady-updated copy, so it replaces its stale row in the snapshot.
     /// tv/movies rows with real progress stop here and ask first.
-    private func startPlayback(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false) {
+    private func startPlayback(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false, caller: String = "?") {
         let secs = model.resumeStore.resolved(server: video.resumeSecs, for: video.id)
         switch ResumeDecision.decide(resumeSecs: secs, classification: video.classification) {
         case .ask(let secs):
@@ -602,7 +623,7 @@ struct VideoGridView: View {
                 secs: secs
             )
         case .playFromStart:
-            begin(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, startSecs: 0)
+            begin(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, startSecs: 0, caller: caller)
         }
     }
 
@@ -610,8 +631,13 @@ struct VideoGridView: View {
         _ video: Video,
         queueSnapshot: [Video],
         sleepMode: Bool,
-        startSecs: Double
+        startSecs: Double,
+        caller: String = "?"
     ) {
+        DevLog.event(.nav, "begin playback", [
+            "video_id": "\(video.id)", "caller": caller, "start_secs": "\(startSecs)",
+            "had_playing": playing.map { "\($0.id)" } ?? "nil",
+        ])
         playing = PlaybackQueue(
             video: video,
             queueSnapshot: queueSnapshot,

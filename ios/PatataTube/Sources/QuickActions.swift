@@ -9,6 +9,7 @@ enum QuickAction: String {
     case clearCovers = "com.patatatube.clearCovers"
     case clearLists = "com.patatatube.clearLists"
     case resetSettings = "com.patatatube.resetSettings"
+    case clearRestoration = "com.patatatube.clearRestoration"
 
     init?(shortcutItem: UIApplicationShortcutItem) {
         self.init(rawValue: shortcutItem.type)

@@ -81,6 +81,11 @@ struct VideoPlayerView: View {
     /// Records the AVPlayer/AVPlayerItem state machine into DevLog. Inert
     /// without the DEVLOG condition.
     @State private var playbackProbe = PlaybackProbe()
+    /// Debug only: identifies one *view identity*. `@State` is created once per
+    /// identity, so a repeated id across appear/setup means SwiftUI re-created
+    /// this presentation's content; a fresh id means a genuinely new
+    /// presentation. That is the discriminator for the re-presenting-player bug.
+    @State private var instanceID = String(UUID().uuidString.prefix(8))
 
     var body: some View {
         ZStack {
@@ -118,7 +123,13 @@ struct VideoPlayerView: View {
         // brings it back on touch and hides it again after idle.
         .persistentSystemOverlays(.hidden)
         .simultaneousGesture(pullDownToDismiss)
-        .onAppear { hasDisappeared = false }
+        .onAppear {
+            hasDisappeared = false
+            DevLog.event(.nav, "player appear", [
+                "video_id": "\(video.id)", "inst": instanceID,
+                "start_secs": "\(startSecs)", "start_paused": "\(startPaused)",
+            ])
+        }
         .task { await setup() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -152,7 +163,7 @@ struct VideoPlayerView: View {
             nowPlaying.detach()
             deactivateAudioSession()
             playbackProbe.detach()
-            DevLog.event(.nav, "player dismissed", ["video_id": "\(video.id)"])
+            DevLog.event(.nav, "player dismissed", ["video_id": "\(video.id)", "inst": instanceID])
             DevLog.flush()
         }
     }
@@ -169,7 +180,7 @@ struct VideoPlayerView: View {
             }
             .onEnded { value in
                 if value.translation.height > 150 {
-                    DevLog.event(.nav, "pull-down dismiss", ["video_id": "\(video.id)", "translation": "\(value.translation.height)"])
+                    DevLog.event(.nav, "pull-down dismiss", ["video_id": "\(video.id)", "inst": instanceID, "translation": "\(value.translation.height)"])
                     dismiss()
                 } else {
                     withAnimation(.spring()) { dragOffset = 0 }
@@ -181,6 +192,10 @@ struct VideoPlayerView: View {
     private var backdropOpacity: Double { max(1 - dragOffset / 400, 0.4) }
 
     private func setup() async {
+        DevLog.event(.nav, "player setup", [
+            "video_id": "\(videos.indices.contains(currentIndex) ? videos[currentIndex].id : -1)",
+            "inst": instanceID,
+        ])
         // Defensive: a malformed presentation must dismiss, not trap on videos[currentIndex].
         guard videos.indices.contains(currentIndex) else {
             dismiss()

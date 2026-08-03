@@ -76,6 +76,14 @@
 			<key>UIApplicationShortcutItemType</key>
 			<string>com.patatatube.resetSettings</string>
 		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeShare</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Clear Restoration</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.patatatube.clearRestoration</string>
+		</dict>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>

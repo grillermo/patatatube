@@ -119,7 +119,16 @@ final class AppModel: ObservableObject {
         case .clearCovers: await clearCovers()
         case .clearLists: await clearLists()
         case .resetSettings: resetSettings()
+        case .clearRestoration: clearRestoration()
         }
+    }
+
+    /// Wipes the saved path/player/scroll state. The running session keeps
+    /// whatever is on screen — the point is a clean slate for the *next*
+    /// launch, so a bad restored state can't be replayed forever.
+    func clearRestoration() {
+        restorationStore.clear()
+        DevLog.event(.state, "restoration cleared")
     }
 
     func clearVideos() async {
