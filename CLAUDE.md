@@ -163,6 +163,16 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
 
 - `ios/PatataTubeKit/` — a local SwiftPM package holding all logic (`APIClient`, `CacheManager`, `VideoStore`, `Video`, `CredentialStore`). This is the testable core; build/isolate bugs here with `swift build`.
 - `ios/PatataTube/` — the SwiftUI app shell (`Sources/*.swift`), an XcodeGen target. `Video` decodes the server's snake_case JSON; `CacheManager` downloads MP4s for offline playback; `VideoStore` does optimistic classify/upload against `APIClient`.
+- **Navigation is a `TabView` over `MediaTab` (videos/tv/movies).** `RootTabView`
+  builds one `VideoGridView` per tab, each with its own `NavigationStack`;
+  `VideoStore.filter` is still the single source of what's loaded, and tab
+  selection calls `switchFilter` the way the old toolbar picker did. The Videos
+  tab's root is `GroupsView` — four classification cards (children, adults,
+  anabel, asmr) that fetch nothing; their art comes from `GroupPosterStore`, a
+  UserDefaults record of each group's newest `preview_url` written by
+  `VideoStore.load()`. Tapping a card pushes `Route.group(name:)`, and the
+  `path` change is what sets the filter, so a hand tap and a restored path take
+  the same code path.
 - **Download-all is bounded on the client too.** `withBoundedTaskGroup`
   (PatataTubeKit) runs at most `CacheManager.maxConcurrentDownloads` operations
   at once. This is not the same bound as `DownloadConcurrencyGate`, which covers

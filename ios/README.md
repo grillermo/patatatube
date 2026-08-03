@@ -94,6 +94,16 @@ On first launch grid is empty / errors — need server config:
 
 ## 5. Manual test checklist
 
+- [ ] Tab bar shows Videos / TV / Movies; Videos opens on the four group cards
+      (Children, Adults, Anabel, ASMR) and ASMR is empty until something is
+      classified into it.
+- [ ] Tapping a group opens that group's grid; search only appears there, not on
+      the group screen.
+- [ ] Force-quit inside a group (and inside a show under TV) and relaunch: the
+      app returns to that screen with its scroll position.
+- [ ] A group never opened on this device shows a placeholder tile, not a
+      spinner; after visiting it once, its card shows the newest video's
+      preview.
 - **Grid loads**: after saving settings, pull-to-refresh or relaunch → videos populate grid
 - **Filter tabs**: horizontal scroll tabs (all / children / adults / education / entertainment) — tap one, grid reloads filtered
 - **Play video**: tap a cell → fullscreen player opens, autoplays, closes automatically on end-of-video; X button also dismisses
