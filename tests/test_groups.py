@@ -108,3 +108,103 @@ def test_plex_kind_filter_is_separate_from_groups(fresh_db):
 
     assert [v["id"] for v in fresh_db.get_all_videos(plex_kind="tv")] == [show]
     assert [v["id"] for v in fresh_db.get_all_videos(group_id=kids)] == [kid]
+
+
+@pytest.fixture
+def legacy_db(tmp_path, monkeypatch):
+    """A database in the pre-groups shape: `classification` text, group_covers."""
+    path = tmp_path / "legacy.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            platform TEXT,
+            title TEXT,
+            classification TEXT,
+            status TEXT NOT NULL DEFAULT 'queued',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE group_covers (
+            name TEXT PRIMARY KEY,
+            emoji TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO videos (url, classification) VALUES
+            ('u1', 'children'),
+            ('u2', 'asmr'),
+            ('u3', 'tv'),
+            ('u4', 'movies'),
+            ('u5', 'ancient-typo'),
+            ('u6', NULL);
+        INSERT INTO group_covers (name, emoji) VALUES ('asmr', '🎧'), ('adults', '🍷');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("DB_PATH", str(path))
+    import db as db_module
+
+    importlib.reload(db_module)
+    return db_module
+
+
+def _by_url(db_module):
+    with db_module._conn() as conn:
+        return {
+            r["url"]: dict(r)
+            for r in conn.execute("SELECT * FROM videos").fetchall()
+        }
+
+
+def test_migration_backfills_group_id_from_classification(legacy_db):
+    legacy_db.init_db()
+    groups = {g["name"]: g["id"] for g in legacy_db.list_groups()}
+    rows = _by_url(legacy_db)
+    assert rows["u1"]["group_id"] == groups["children"]
+    assert rows["u2"]["group_id"] == groups["asmr"]
+
+
+def test_migration_backfills_plex_kind_and_leaves_group_null(legacy_db):
+    legacy_db.init_db()
+    rows = _by_url(legacy_db)
+    assert (rows["u3"]["plex_kind"], rows["u3"]["group_id"]) == ("tv", None)
+    assert (rows["u4"]["plex_kind"], rows["u4"]["group_id"]) == ("movies", None)
+
+
+def test_migration_leaves_unmatched_and_null_rows_unsorted(legacy_db):
+    legacy_db.init_db()
+    rows = _by_url(legacy_db)
+    for url in ("u5", "u6"):
+        assert rows[url]["group_id"] is None
+        assert rows[url]["plex_kind"] is None
+
+
+def test_migration_folds_group_covers_into_groups(legacy_db):
+    legacy_db.init_db()
+    covers = {g["name"]: g["emoji"] for g in legacy_db.list_groups()}
+    assert covers["asmr"] == "🎧"
+    assert covers["adults"] == "🍷"
+    assert covers["children"] is None
+
+
+def test_migration_drops_the_old_column_and_table(legacy_db):
+    legacy_db.init_db()
+    with legacy_db._conn() as conn:
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
+        tables = {
+            r["name"]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    assert "classification" not in columns
+    assert "group_covers" not in tables
+
+
+def test_migration_is_idempotent(legacy_db):
+    legacy_db.init_db()
+    first = _by_url(legacy_db)
+    legacy_db.init_db()
+    assert _by_url(legacy_db) == first
+    assert len(legacy_db.list_groups()) == 4

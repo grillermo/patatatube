@@ -121,8 +121,6 @@ def init_db():
             _add_column(conn, "ALTER TABLE videos ADD COLUMN preview_url TEXT")
         if "position" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN position INTEGER")
-        if "classification" not in columns:
-            _add_column(conn, "ALTER TABLE videos ADD COLUMN classification TEXT NOT NULL DEFAULT 'children'")
         if "source" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN source TEXT NOT NULL DEFAULT 'download'")
         if "source_path" not in columns:
@@ -161,6 +159,13 @@ def init_db():
         # end of a video resets it to 0, so a finished video never prompts.
         if "resume_secs" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN resume_secs REAL NOT NULL DEFAULT 0")
+        # A video is either in a group or is a Plex item — never both, never
+        # neither-but-meaningful. Nullability is the discriminator; there is no
+        # `kind` column.
+        if "group_id" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN group_id INTEGER REFERENCES groups(id)")
+        if "plex_kind" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN plex_kind TEXT")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS video_versions (
@@ -205,12 +210,6 @@ def init_db():
         )
         conn.executescript(
             """
-            CREATE TABLE IF NOT EXISTS group_covers (
-                name TEXT PRIMARY KEY,
-                emoji TEXT NOT NULL,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
             CREATE TABLE IF NOT EXISTS groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -223,13 +222,7 @@ def init_db():
             """
         )
         _seed_default_groups(conn)
-        # A video is either in a group or is a Plex item — never both, never
-        # neither-but-meaningful. Nullability is the discriminator; there is no
-        # `kind` column.
-        if "group_id" not in columns:
-            _add_column(conn, "ALTER TABLE videos ADD COLUMN group_id INTEGER REFERENCES groups(id)")
-        if "plex_kind" not in columns:
-            _add_column(conn, "ALTER TABLE videos ADD COLUMN plex_kind TEXT")
+        _migrate_classifications_to_groups(conn)
         version_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(video_versions)").fetchall()
         }
@@ -593,6 +586,47 @@ def _seed_default_groups(conn: sqlite3.Connection) -> None:
         "INSERT INTO groups (name, label, position) VALUES (?, ?, ?)",
         DEFAULT_GROUPS,
     )
+
+
+def _migrate_classifications_to_groups(conn: sqlite3.Connection) -> int:
+    """Fold the old `classification` text column into `groups` + `plex_kind`."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()}
+    if "classification" not in columns:
+        return 0
+
+    placeholders = ",".join("?" for _ in PLEX_KINDS)
+    conn.execute(
+        "UPDATE videos SET group_id = ("
+        "  SELECT groups.id FROM groups WHERE groups.name = videos.classification"
+        f") WHERE classification IS NOT NULL AND classification NOT IN ({placeholders})",
+        PLEX_KINDS,
+    )
+    conn.execute(
+        f"UPDATE videos SET plex_kind = classification WHERE classification IN ({placeholders})",
+        PLEX_KINDS,
+    )
+    unmatched = conn.execute(
+        "SELECT COUNT(*) AS n FROM videos"
+        " WHERE classification IS NOT NULL AND group_id IS NULL AND plex_kind IS NULL"
+    ).fetchone()["n"]
+
+    tables = {
+        row["name"]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    if "group_covers" in tables:
+        conn.execute(
+            "UPDATE groups SET emoji = ("
+            "  SELECT emoji FROM group_covers WHERE group_covers.name = groups.name"
+            ") WHERE EXISTS (SELECT 1 FROM group_covers WHERE group_covers.name = groups.name)"
+        )
+        conn.execute("DROP TABLE group_covers")
+
+    conn.execute("ALTER TABLE videos DROP COLUMN classification")
+
+    if unmatched:
+        print(f"[migrate] {unmatched} video(s) had an unknown classification and are now unsorted")
+    return unmatched
 
 
 def list_groups() -> list[dict]:
