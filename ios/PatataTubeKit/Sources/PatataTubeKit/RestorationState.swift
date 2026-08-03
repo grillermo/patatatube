@@ -7,6 +7,7 @@ import Foundation
 /// longer resolves (deleted video, renamed show) can be dropped instead of
 /// decoding into a phantom screen. It also keeps the persisted blob small.
 public enum Route: Codable, Hashable, Sendable {
+    case group(name: String)  // classification value
     case show(title: String)   // ShowGroup.id
     case movie(id: Int)        // Video.id
     case downloads
@@ -33,6 +34,9 @@ public struct RestorationState: Codable, Equatable, Sendable {
     /// applied at boot: `VideoStore` already persists the selected
     /// classification itself under `selectedClassification`.
     public var filter: String?
+    /// Which tab was on screen. Optional so blobs written before the tab bar
+    /// existed still decode; `nil` is read as `.videos` by callers.
+    public var tab: MediaTab?
     /// Root-first.
     public var path: [Route]
     /// The committed search text (`activeSearch`), not the in-flight field.
@@ -42,16 +46,18 @@ public struct RestorationState: Codable, Equatable, Sendable {
     public var player: PlayerState?
 
     public static let empty = RestorationState(
-        filter: nil, path: [], search: "", scrollAnchors: [:], player: nil
+        filter: nil, path: [], search: "", scrollAnchors: [:], player: nil, tab: nil
     )
 
     public init(filter: String?, path: [Route], search: String,
-                scrollAnchors: [String: String], player: PlayerState?) {
+                scrollAnchors: [String: String], player: PlayerState?,
+                tab: MediaTab? = nil) {
         self.filter = filter
         self.path = path
         self.search = search
         self.scrollAnchors = scrollAnchors
         self.player = player
+        self.tab = tab
     }
 
     /// Scroll-anchor key for the root grid on one classification tab.

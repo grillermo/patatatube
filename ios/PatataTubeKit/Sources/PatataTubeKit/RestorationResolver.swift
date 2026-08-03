@@ -43,6 +43,8 @@ public enum RestorationResolver {
         // whatever was pushed from inside it is unreachable now.
         for route in state.path {
             switch route {
+            case .group:
+                break
             case .show(let title):
                 guard shows.contains(where: { $0.id == title }) else {
                     return finish(path: path, state: state, videos: videos,

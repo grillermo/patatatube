@@ -65,4 +65,25 @@ final class RestorationStoreTests: XCTestCase {
         XCTAssertNotEqual(RestorationState.showKey(title: "The Bear"),
                           RestorationState.gridKey(filter: "The Bear"))
     }
+
+    func testRoundTripsSelectedTab() {
+        let defaults = makeDefaults()
+        var state = RestorationState.empty
+        state.tab = .movies
+        state.path = [.group(name: "anabel")]
+        RestorationStore(defaults: defaults).save(state)
+        XCTAssertEqual(RestorationStore(defaults: defaults).load(), state)
+    }
+
+    func testBlobWithoutTabStillDecodes() {
+        let defaults = makeDefaults()
+        // A blob written by a build that predates MediaTab: no "tab" key.
+        let legacy = """
+        {"filter":"children","path":[],"search":"","scrollAnchors":{}}
+        """.data(using: .utf8)!
+        defaults.set(legacy, forKey: RestorationStore.storageKey)
+        let loaded = RestorationStore(defaults: defaults).load()
+        XCTAssertNil(loaded.tab)
+        XCTAssertEqual(loaded.filter, "children")
+    }
 }
