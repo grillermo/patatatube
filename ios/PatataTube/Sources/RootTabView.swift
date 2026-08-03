@@ -13,16 +13,17 @@ struct RootTabView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
     @State private var selection: MediaTab = .videos
+    @State private var activation: MediaTab?
 
     var body: some View {
-        TabView(selection: $selection) {
-            VideoGridView(tab: .videos)
+        TabView(selection: selectionBinding) {
+            VideoGridView(tab: .videos, activation: activation)
                 .tabItem { Label("Videos", systemImage: "play.rectangle.on.rectangle") }
                 .tag(MediaTab.videos)
-            VideoGridView(tab: .tv)
+            VideoGridView(tab: .tv, activation: activation)
                 .tabItem { Label("TV", systemImage: "tv") }
                 .tag(MediaTab.tv)
-            VideoGridView(tab: .movies)
+            VideoGridView(tab: .movies, activation: activation)
                 .tabItem { Label("Movies", systemImage: "film") }
                 .tag(MediaTab.movies)
         }
@@ -31,9 +32,19 @@ struct RootTabView: View {
         }
         .onChange(of: selection) { _, newValue in
             DevLog.event(.nav, "tab selected", ["tab": newValue.rawValue])
-            model.restorationStore.mutate { $0.tab = newValue }
             guard let filter = newValue.filter, store.filter != filter else { return }
             Task { await store.switchFilter(to: filter) }
         }
+    }
+
+    private var selectionBinding: Binding<MediaTab> {
+        Binding(
+            get: { selection },
+            set: { newValue in
+                guard newValue != selection else { return }
+                selection = newValue
+                activation = newValue
+            }
+        )
     }
 }

@@ -25,6 +25,7 @@ struct PendingResume: Identifiable {
 private struct RestorationTracking: ViewModifier {
     let path: [Route]
     let tab: MediaTab
+    let activation: MediaTab?
     let filter: String?
     let activeSearch: String
     let playing: PlaybackQueue?
@@ -33,6 +34,7 @@ private struct RestorationTracking: ViewModifier {
     let gridTracker: VisibleItemsTracker
     @Binding var gridAnchorDebounceTask: Task<Void, Never>?
     let currentGridOrder: [String]
+    let activateGroup: (String) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -51,6 +53,22 @@ private struct RestorationTracking: ViewModifier {
             }
             .onChange(of: filter) { _, newValue in
                 model.restorationStore.mutate { $0.filter = newValue }
+            }
+            .onChange(of: activation) { _, selectedTab in
+                guard selectedTab == tab else { return }
+                let selectedFilter: String?
+                if tab == .videos, case .group(let name)? = path.first {
+                    selectedFilter = name
+                } else {
+                    selectedFilter = tab.filter
+                }
+                model.restorationStore.mutate {
+                    $0.tab = tab
+                    $0.filter = selectedFilter
+                    $0.path = path
+                    $0.search = selectedFilter == nil ? "" : activeSearch
+                }
+                if tab == .videos, let selectedFilter { activateGroup(selectedFilter) }
             }
             .onChange(of: currentGridOrder) { _, newValue in
                 gridTracker.setOrder(newValue)
@@ -93,18 +111,20 @@ private struct RestorationTracking: ViewModifier {
 
 private extension View {
     func restorationTracking(
-        path: [Route], tab: MediaTab, filter: String?, activeSearch: String,
+        path: [Route], tab: MediaTab, activation: MediaTab?,
+        filter: String?, activeSearch: String,
         playing: PlaybackQueue?, scenePhase: ScenePhase,
         model: AppModel, gridTracker: VisibleItemsTracker,
         gridAnchorDebounceTask: Binding<Task<Void, Never>?>,
-        currentGridOrder: [String]
+        currentGridOrder: [String], activateGroup: @escaping (String) -> Void
     ) -> some View {
         modifier(RestorationTracking(
-            path: path, tab: tab, filter: filter, activeSearch: activeSearch,
+            path: path, tab: tab, activation: activation,
+            filter: filter, activeSearch: activeSearch,
             playing: playing, scenePhase: scenePhase,
             model: model, gridTracker: gridTracker,
             gridAnchorDebounceTask: gridAnchorDebounceTask,
-            currentGridOrder: currentGridOrder
+            currentGridOrder: currentGridOrder, activateGroup: activateGroup
         ))
     }
 }
@@ -113,12 +133,22 @@ struct VideoGridView: View {
     /// Which tab this instance is the content of. Fixed for the lifetime of the
     /// view — `RootTabView` builds one instance per tab.
     let tab: MediaTab
+    /// Set only for a user-initiated tab selection. Launch restoration changes
+    /// `RootTabView.selection` directly so an empty stack cannot overwrite it.
+    let activation: MediaTab?
+
+    init(tab: MediaTab, activation: MediaTab? = nil) {
+        self.tab = tab
+        self.activation = activation
+    }
 
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var classifications: [String] = ["children", "adults", "anabel", "asmr", "tv", "movies"]
+    @State private var classificationsLoaded = false
+    @State private var loadedGroup: String?
     @State private var showSettings = false
     @State private var showUpload = false
     @State private var showWebBridge = false
@@ -221,11 +251,13 @@ struct VideoGridView: View {
                 }
             }
             .restorationTracking(
-                path: path, tab: tab, filter: store.filter, activeSearch: activeSearch,
+                path: path, tab: tab, activation: activation,
+                filter: store.filter, activeSearch: activeSearch,
                 playing: playing, scenePhase: scenePhase,
                 model: model, gridTracker: gridTracker,
                 gridAnchorDebounceTask: $gridAnchorDebounceTask,
-                currentGridOrder: currentGridOrder
+                currentGridOrder: currentGridOrder,
+                activateGroup: { name in Task { await loadGroup(name) } }
             )
             .toolbar {
                 // Pin the search field ahead of the menu so the ellipsis sits
@@ -241,12 +273,15 @@ struct VideoGridView: View {
             }
             .onChange(of: path) { _, newPath in
                 guard tab == .videos else { return }
-                guard case .group(let name)? = newPath.first else { return }
-                guard store.filter != name else { return }
-                Task { await store.switchFilter(to: name) }
+                guard case .group(let name)? = newPath.first else {
+                    searchDebounceTask?.cancel()
+                    searchText = ""
+                    activeSearch = ""
+                    return
+                }
+                Task { await loadGroup(name) }
             }
             .onChange(of: model.webBridgeRequests) { _, _ in showWebBridge = true }
-            .refreshable { await store.refreshLibrary() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
             .fullScreenCover(isPresented: $showWebBridge) { WebBridgeView() }
@@ -308,6 +343,7 @@ struct VideoGridView: View {
         } else {
             rootScrollView
                 .searchable(text: $searchText, prompt: "Search videos")
+                .refreshable { await store.refreshLibrary() }
         }
     }
 
@@ -464,6 +500,7 @@ struct VideoGridView: View {
                 }
             }
             .searchable(text: $searchText, prompt: "Search videos")
+            .refreshable { await store.refreshLibrary() }
         case .show(let title):
             if let show = ShowGroup.group(filteredVideos).first(where: { $0.id == title }) {
                 EpisodesView(show: show,
@@ -519,9 +556,6 @@ struct VideoGridView: View {
             return
         }
 
-        let api = APIClient(store: model.credentials)
-        if let list = try? await api.classifications() { classifications = list }
-
         let restored = model.restorationStore.load()
         // Videos tab restored at its root has no classification to fetch.
         let restoredGroup: String? = {
@@ -530,7 +564,7 @@ struct VideoGridView: View {
         }()
         if tab == .videos {
             if let restoredGroup {
-                await store.switchFilter(to: restoredGroup)
+                await loadGroup(restoredGroup)
             }
         } else {
             if store.filter != tab.filter {
@@ -588,6 +622,17 @@ struct VideoGridView: View {
             "video_count": store.videos.count,
             "active_downloads": model.cache.activeDownloads().count,
         ])
+    }
+
+    private func loadGroup(_ name: String) async {
+        if loadedGroup != name || store.filter != name {
+            loadedGroup = name
+            await store.switchFilter(to: name)
+        }
+        guard !classificationsLoaded else { return }
+        classificationsLoaded = true
+        let api = APIClient(store: model.credentials)
+        if let list = try? await api.classifications() { classifications = list }
     }
 
     private var currentGridOrder: [String] {
