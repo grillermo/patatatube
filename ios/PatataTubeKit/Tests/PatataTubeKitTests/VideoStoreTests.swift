@@ -67,6 +67,7 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     func delete(id: Int) async throws -> Bool {
         if let mutationError { throw mutationError }
         deletedIds.append(id)
+        if deleteResult { videosToReturn.removeAll { $0.id == id } }
         return deleteResult
     }
     var scanResult = ScanResult(added: 0, updated: 0, skipped: 0)
@@ -426,6 +427,37 @@ private actor GroupMoveGate {
     #expect(store.videos[0].groupID == 1)
 }
 
+@MainActor @Test func groupSettlementPreservesNewerVideoFieldsInUIAndCache() async throws {
+    let versions = [
+        VideoVersion(id: 10, label: "old", status: "done", isChosen: true),
+        VideoVersion(id: 11, label: "new", status: "done", isChosen: false),
+    ]
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, chosenVersionId: 10, versions: versions)]
+    let gate = GroupMoveGate()
+    api.setGroupHook = { _, groupID in
+        await gate.arrive(groupID)
+        return true
+    }
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.load()
+
+    async let move: Void = store.setGroup(id: 1, groupID: 2)
+    await gate.waitForArrival(2)
+    await store.chooseVersion(id: 1, versionId: 11)
+    let fresh = try #require(store.videos.first)
+    cache.save([fresh.withGroupID(1)], feed: .all)
+
+    await gate.release(2)
+    await move
+
+    #expect(store.videos.first?.groupID == 2)
+    #expect(store.videos.first?.chosenVersionId == 11)
+    #expect(cache.load(feed: .all)?.first?.groupID == 2)
+    #expect(cache.load(feed: .all)?.first?.chosenVersionId == 11)
+}
+
 @MainActor @Test func olderSetGroupFailureDoesNotRevertANewerGroup() async {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1)]
@@ -550,14 +582,14 @@ private actor GroupMoveGate {
     #expect(cache.load(feed: .all)?.first?.groupID == 3)
     #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
     #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
-    #expect(cache.load(feed: .group(id: 3))?.map(\.id) == [1])
+    #expect(cache.load(feed: .group(id: 3))?.isEmpty == true)
 
     await gate.release(2)
     await older
 
     #expect(cache.load(feed: .all)?.first?.groupID == 3)
     #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
-    #expect(cache.load(feed: .group(id: 3))?.first?.groupID == 3)
+    #expect(cache.load(feed: .group(id: 3))?.isEmpty == true)
 }
 
 @MainActor @Test func newerSameVideoMovePersistsBeforeOlderRequestCompletes() async {
@@ -585,13 +617,13 @@ private actor GroupMoveGate {
     #expect(cache.load(feed: .all)?.first?.groupID == 3)
     #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
     #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
-    #expect(cache.load(feed: .group(id: 3))?.map(\.id) == [1])
+    #expect(cache.load(feed: .group(id: 3))?.isEmpty == true)
 
     await gate.release(2)
     await older
     #expect(cache.load(feed: .all)?.first?.groupID == 3)
     #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
-    #expect(cache.load(feed: .group(id: 3))?.first?.groupID == 3)
+    #expect(cache.load(feed: .group(id: 3))?.isEmpty == true)
 }
 
 @MainActor @Test func newerAllFeedMoveEvictsItsSourceGroupWhileOlderMoveIsPending() async {
@@ -673,7 +705,61 @@ private actor GroupMoveGate {
     #expect(store.videos.first?.groupID == 2)
     #expect(cache.load(feed: .all)?.first?.groupID == 2)
     #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
-    #expect(cache.load(feed: .group(id: 2))?.map(\.id) == [1])
+    #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
+}
+
+@MainActor @Test func twoFailedMovesRollBackToTheLastConfirmedGroup() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, groupID: 1)]
+    let gate = GroupMoveGate()
+    api.setGroupHook = { _, groupID in
+        await gate.arrive(groupID)
+        return false
+    }
+    let cache = tempCache()
+    cache.save([makeVideo(id: 1, groupID: 1)], feed: .group(id: 1))
+    cache.save([], feed: .group(id: 2))
+    cache.save([], feed: .group(id: 3))
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.load()
+
+    async let older: Void = store.setGroup(id: 1, groupID: 2)
+    await gate.waitForArrival(2)
+    async let newer: Void = store.setGroup(id: 1, groupID: 3)
+    await gate.waitForArrival(3)
+    await gate.release(2)
+    await older
+    await gate.release(3)
+    await newer
+
+    #expect(store.videos.first?.groupID == 1)
+    #expect(cache.load(feed: .all)?.first?.groupID == 1)
+    #expect(cache.load(feed: .group(id: 1))?.map(\.id) == [1])
+    #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
+    #expect(cache.load(feed: .group(id: 3))?.isEmpty == true)
+}
+
+@MainActor @Test func deletedVideoIsNotResurrectedByDelayedGroupFailure() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, groupID: 1)]
+    let gate = GroupMoveGate()
+    api.setGroupHook = { _, groupID in
+        await gate.arrive(groupID)
+        throw APIError.badStatus(500)
+    }
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.load()
+
+    async let move: Void = store.setGroup(id: 1, groupID: 2)
+    await gate.waitForArrival(2)
+    await store.delete(id: 1)
+    await gate.release(2)
+    await move
+
+    #expect(store.videos.isEmpty)
+    #expect(cache.load(feed: .all)?.isEmpty == true)
+    #expect(store.errorText == nil)
 }
 
 @MainActor @Test func staleSourceCacheEvictionDoesNotOverwriteNewerSameVideoMove() async {

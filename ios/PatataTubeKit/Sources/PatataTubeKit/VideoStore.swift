@@ -14,10 +14,16 @@ public protocol MediaCaching: Sendable {
 @MainActor
 public final class VideoStore: ObservableObject {
     private struct GroupMutation {
+        let id: Int
         let request: UUID
-        let previous: Video
-        let updated: Video
+        let sequence: Int
+        let groupID: Int
         let affectedGroupIDs: Set<Int>
+    }
+
+    private struct ConfirmedGroup {
+        let sequence: Int
+        let groupID: Int?
     }
 
     @Published public private(set) var videos: [Video] = []
@@ -41,7 +47,9 @@ public final class VideoStore: ObservableObject {
     /// call can tell it's been superseded and must not clobber `videos`/`isLoading`
     /// with results that no longer match the current tab/request.
     private var loadGeneration = 0
+    private var groupMutationSequence = 0
     private var groupMutations: [Int: GroupMutation] = [:]
+    private var confirmedGroups: [Int: ConfirmedGroup] = [:]
     private var groupCacheWriteTask: Task<Void, Never>?
 
     public init(api: VideoAPI, cache: VideoListCaching? = nil,
@@ -172,7 +180,7 @@ public final class VideoStore: ObservableObject {
     }
 
     private func reconcileGroupMutationCache(
-        _ video: Video, groupIDs: Set<Int>, request: UUID
+        id: Int, groupID: Int?, groupIDs: Set<Int>, request: UUID
     ) async {
         guard let cache else { return }
         let feeds = [Feed.all] + groupIDs.sorted().map { Feed.group(id: $0) }
@@ -180,25 +188,21 @@ public final class VideoStore: ObservableObject {
         let writeTask = Task.detached(priority: .utility) {
             if let previousWrite { await previousWrite.value }
             for feed in feeds {
-                guard await self.ownsGroupMutation(id: video.id, request: request) else { return }
+                guard await self.ownsGroupMutation(id: id, request: request) else { return }
                 guard var videos = cache.load(feed: feed) else { continue }
-                guard await self.ownsGroupMutation(id: video.id, request: request) else { return }
+                guard await self.ownsGroupMutation(id: id, request: request) else { return }
                 switch feed {
                 case .all:
-                    if let index = videos.firstIndex(where: { $0.id == video.id }) {
-                        videos[index] = video
-                    } else {
-                        videos.append(video)
+                    if let index = videos.firstIndex(where: { $0.id == id }) {
+                        videos[index] = videos[index].withGroupID(groupID)
                     }
-                case .group(let groupID):
-                    if video.groupID == groupID {
-                        if let index = videos.firstIndex(where: { $0.id == video.id }) {
-                            videos[index] = video
-                        } else {
-                            videos.append(video)
+                case .group(let cachedGroupID):
+                    if groupID == cachedGroupID {
+                        if let index = videos.firstIndex(where: { $0.id == id }) {
+                            videos[index] = videos[index].withGroupID(groupID)
                         }
                     } else {
-                        videos.removeAll { $0.id == video.id }
+                        videos.removeAll { $0.id == id }
                     }
                 case .plex:
                     break
@@ -210,33 +214,49 @@ public final class VideoStore: ObservableObject {
         await writeTask.value
     }
 
+    private func confirmGroupMutation(_ mutation: GroupMutation) {
+        if mutation.sequence > (confirmedGroups[mutation.id]?.sequence ?? -1) {
+            confirmedGroups[mutation.id] = ConfirmedGroup(
+                sequence: mutation.sequence, groupID: mutation.groupID
+            )
+        }
+    }
+
     private func finishGroupMutation(_ mutation: GroupMutation, succeeded: Bool) async -> Bool {
-        guard ownsGroupMutation(id: mutation.previous.id, request: mutation.request) else {
+        guard ownsGroupMutation(id: mutation.id, request: mutation.request) else {
             return false
         }
-        let settled = succeeded ? mutation.updated : mutation.previous
+        let settledGroupID: Int?
+        if succeeded {
+            settledGroupID = mutation.groupID
+        } else if let confirmed = confirmedGroups[mutation.id] {
+            settledGroupID = confirmed.groupID
+        } else {
+            settledGroupID = nil
+        }
 
         switch feed {
         case .all:
-            if let index = videos.firstIndex(where: { $0.id == settled.id }) {
-                videos[index] = settled
+            if let index = videos.firstIndex(where: { $0.id == mutation.id }) {
+                videos[index] = videos[index].withGroupID(settledGroupID)
             }
         case .group(let groupID):
-            if settled.groupID == groupID {
-                if let index = videos.firstIndex(where: { $0.id == settled.id }) {
-                    videos[index] = settled
+            if settledGroupID == groupID {
+                if let index = videos.firstIndex(where: { $0.id == mutation.id }) {
+                    videos[index] = videos[index].withGroupID(settledGroupID)
                 }
             } else {
-                videos.removeAll { $0.id == settled.id }
+                videos.removeAll { $0.id == mutation.id }
             }
         case .plex:
             break
         }
         await reconcileGroupMutationCache(
-            settled, groupIDs: mutation.affectedGroupIDs, request: mutation.request
+            id: mutation.id, groupID: settledGroupID,
+            groupIDs: mutation.affectedGroupIDs, request: mutation.request
         )
-        let ownsMutation = ownsGroupMutation(id: settled.id, request: mutation.request)
-        if ownsMutation { groupMutations[settled.id] = nil }
+        let ownsMutation = ownsGroupMutation(id: mutation.id, request: mutation.request)
+        if ownsMutation { groupMutations[mutation.id] = nil }
         return ownsMutation
     }
 
@@ -245,19 +265,26 @@ public final class VideoStore: ObservableObject {
         let previous = videos[index]
         guard !previous.isPlexItem else { return }
         let updated = previous.withGroupID(groupID)
-        var affectedGroupIDs = groupMutations[id]?.affectedGroupIDs ?? []
+        let activeMutation = groupMutations[id]
+        groupMutationSequence += 1
+        if activeMutation == nil {
+            confirmedGroups[id] = ConfirmedGroup(
+                sequence: groupMutationSequence - 1, groupID: previous.groupID
+            )
+        }
+        var affectedGroupIDs = activeMutation?.affectedGroupIDs ?? []
         if let previousGroupID = previous.groupID { affectedGroupIDs.insert(previousGroupID) }
         affectedGroupIDs.insert(groupID)
         let mutation = GroupMutation(
-            request: UUID(), previous: previous, updated: updated,
+            id: id, request: UUID(), sequence: groupMutationSequence, groupID: groupID,
             affectedGroupIDs: affectedGroupIDs
         )
         groupMutations[id] = mutation
         videos[index] = updated
         do {
-            _ = await finishGroupMutation(
-                mutation, succeeded: try await api.setGroup(id: id, groupID: groupID)
-            )
+            let succeeded = try await api.setGroup(id: id, groupID: groupID)
+            if succeeded { confirmGroupMutation(mutation) }
+            _ = await finishGroupMutation(mutation, succeeded: succeeded)
         } catch {
             if await finishGroupMutation(mutation, succeeded: false) { report(error) }
         }
@@ -269,6 +296,8 @@ public final class VideoStore: ObservableObject {
         guard videos.contains(where: { $0.id == id }) else { return }
         do {
             guard try await api.promote(id: id, kind: kind) else { return }
+            groupMutations[id] = nil
+            confirmedGroups[id] = nil
             videos.removeAll { $0.id == id }
             mediaCache?.removeAllCached(id: id)
             // Server hard-deletes the row on promotion, so re-fetch + re-persist
@@ -316,7 +345,10 @@ public final class VideoStore: ObservableObject {
     /// Deletes on the server, then refreshes the list (and cache) from the API.
     public func delete(id: Int) async {
         do {
-            _ = try await api.delete(id: id)
+            if try await api.delete(id: id) {
+                groupMutations[id] = nil
+                confirmedGroups[id] = nil
+            }
             await load()
         } catch {
             report(error)

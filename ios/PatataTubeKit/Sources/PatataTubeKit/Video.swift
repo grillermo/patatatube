@@ -173,7 +173,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               sourceFilename: sourceFilename, audioLang: audioLang, resumeSecs: resumeSecs)
     }
 
-    func withGroupID(_ groupID: Int) -> Video {
+    func withGroupID(_ groupID: Int?) -> Video {
         Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
               previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: position,
               status: status, errorMsg: errorMsg, streamPath: streamPath,
