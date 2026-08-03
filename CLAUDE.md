@@ -153,7 +153,7 @@ down on 2026-07-31; see `docs/superpowers/specs/2026-07-31-ffmpeg-job-queue-desi
 - `views/serializers.py` — `serialize_video` is the canonical video-to-dict presenter for the JSON API. Keep the API shape here.
 - `views/render.py` + `views/templates/*.html` — the server-rendered HTML page + PWA splash images.
 
-`CLASSIFICATIONS` (in `db.py`: children/adults/education/entertainment) is the source of truth for video categories, imported everywhere that validates a classification.
+`CLASSIFICATIONS` (in `db.py`: children/adults/anabel/asmr/tv/movies) is the source of truth for video categories, imported everywhere that validates a classification. The first four are also the iOS Videos tab's groups (`MediaTab.videoGroups`), which hardcodes them and must be kept in sync.
 
 ### Auth
 

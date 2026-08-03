@@ -258,6 +258,7 @@ struct VideoGridView: View {
             ScrollViewReader { proxy in
                 tabRoot
                 .task { await initialLoad(scrollProxy: proxy) }
+                .task { await loadClassifications() }
             }
             .navigationDestination(for: Route.self) { route in
                 destination(for: route)
@@ -441,6 +442,11 @@ struct VideoGridView: View {
                     cacheState: cache.state(for: videoId, versionId: versionId),
                     currentCacheState: { cache.state(for: videoId, versionId: versionId) },
                     cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl),
+                    onPreviewLoaded: { data in
+                        guard let path = video.previewUrl,
+                              cache.cachedPreviewURL(for: videoId, path: path) == nil else { return }
+                        cache.storePreview(data, for: videoId, path: path)
+                    },
                     localFileURL: cache.localURL(for: videoId, versionId: versionId),
                     classifications: classifications,
                     onPlay: { play(video, caller: "grid-cell") },
@@ -665,10 +671,19 @@ struct VideoGridView: View {
             loadedGroup = name
             await store.switchFilter(to: name)
         }
+    }
+
+    /// The server owns the classification list; the hardcoded default is only a
+    /// first paint. Every tab needs it — the reclassify menu lives on cells in
+    /// all three — so this is deliberately not tied to opening a group. Only a
+    /// successful fetch latches, so a cancelled `.task` (tab switch mid-flight)
+    /// retries on the next appearance.
+    private func loadClassifications() async {
         guard !classificationsLoaded else { return }
-        classificationsLoaded = true
         let api = APIClient(store: model.credentials)
-        if let list = try? await api.classifications() { classifications = list }
+        guard let list = try? await api.classifications() else { return }
+        classifications = list
+        classificationsLoaded = true
     }
 
     private var currentGridOrder: [String] {
@@ -695,6 +710,12 @@ struct VideoGridView: View {
     }
 
     private func scheduleGridAnchorSave() {
+        // Retained inactive stacks keep delivering onDisappear after a tab
+        // switch, and `key` comes from the *shared* store filter — which has
+        // already flipped to the incoming tab. Ungated, the outgoing tab's
+        // topmost id lands under the incoming tab's key and clobbers its
+        // anchor. Same scoping every other restoration write uses.
+        guard selectedTab == tab else { return }
         let key = RestorationState.gridKey(filter: store.filter)
         gridAnchorDebounceTask?.cancel()
         gridAnchorDebounceTask = Task {

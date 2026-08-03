@@ -8,6 +8,10 @@ struct VideoCell: View {
     let currentCacheState: @Sendable () -> CacheState
     /// Local file URL of the cached preview image, when the video is cached offline.
     var cachedPreviewURL: URL? = nil
+    /// Called with the preview bytes when they came off the network, so the
+    /// caller can persist them. `GroupsView` renders its cards from that disk
+    /// cache alone, so without this a group's poster never has a local file.
+    var onPreviewLoaded: ((Data) -> Void)? = nil
     /// Local file URL of the cached MP4 (may not exist on disk yet).
     var localFileURL: URL? = nil
     let classifications: [String]
@@ -54,7 +58,8 @@ struct VideoCell: View {
                         Rectangle().fill(.clear)
                             .overlay {
                                 AuthedImage(path: video.previewUrl, localFileURL: cachedPreviewURL,
-                                            fill: !isPoster)
+                                            fill: !isPoster,
+                                            onNetworkLoad: onPreviewLoaded)
                             }
                             .clipped()
                     }

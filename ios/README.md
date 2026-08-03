@@ -7,8 +7,8 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 ### Video grid
 - Backend-driven grid of video previews, populated from the JSON API
 - Video title shown as an overlay on the preview (on a black background in each cell)
-- Filter tabs — all / children / adults / education / entertainment; tapping one reloads the grid filtered to that category
-- Selected category persists across app launches
+- Tab bar — Videos / TV / Movies. Videos opens on four group cards (Children, Adults, Anabel, ASMR); tapping one pushes that group's grid. TV and Movies load their category directly.
+- Selected tab and the open group persist across app launches
 - Adjustable grid cell size via +/- zoom buttons (originally a pinch/spread gesture, since replaced)
 - Pull-to-refresh
 - Red error banner at the bottom when the server is unreachable
@@ -102,12 +102,14 @@ On first launch grid is empty / errors — need server config:
 - [ ] Force-quit inside a group (and inside a show under TV) and relaunch: the
       app returns to that screen with its scroll position.
 - [ ] A group never opened on this device shows a placeholder tile, not a
-      spinner; after visiting it once, its card shows the newest video's
-      preview.
+      spinner; after visiting it once (far enough for the first previewed video
+      to render, which is what writes the preview disk cache the card reads),
+      going back shows that video's preview on the card, and it survives
+      relaunch with the network off.
 - **Grid loads**: after saving settings, pull-to-refresh or relaunch → videos populate grid
-- **Filter tabs**: horizontal scroll tabs (all / children / adults / education / entertainment) — tap one, grid reloads filtered
+- **Tab bar**: Videos / TV / Movies — tap one, its content loads; under Videos, tap a group card to load that group
 - **Play video**: tap a cell → fullscreen player opens, autoplays, closes automatically on end-of-video; X button also dismisses
-- **Classify**: use classify control on cell → pick new classification, confirm video moves/reflects under new filter tab
+- **Classify**: use classify control on cell → pick new classification, confirm video moves/reflects under the new tab or group
 - **Download/cache**: tap download on a cell → check cache state changes (icon/indicator); play same video again → should stream from local cache (test by killing network access to server and replaying)
 - [ ] Set Streams per video to 4, download a large video, and confirm the
       server receives four disjoint byte ranges while the existing circular
@@ -172,7 +174,6 @@ On first launch grid is empty / errors — need server config:
 - [ ] Delete on a library video removes it from the list; the original file on /Volumes/Media is untouched; a later refresh does not resurrect it.
 - [ ] A conversion failure (e.g. unplug the Media volume mid-convert) shows an error and the episode can be retried.
 - [ ] Movies tab shows portrait 2:3 poster cards (no letterbox bars); other tabs unchanged.
-- [ ] "all" tab still shows movies as 16:9 letterboxed VideoCells.
 - [ ] Tap a movie card poster → detail page with poster, title, summary.
 - [ ] Play from a movie detail page works for an unconverted library movie
   while the matching download button shows a spinner and no blocking overlay
