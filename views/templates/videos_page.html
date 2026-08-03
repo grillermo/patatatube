@@ -23,9 +23,9 @@
   <form id="upload-form">
     <h3>Upload video</h3>
     <input type="file" id="upload-file-input" accept="video/*" required>
-    <select id="upload-classification">
-      {% for cls in classifications -%}
-      <option value="{{ cls }}">{{ cls }}</option>
+    <select id="upload-group">
+      {% for g in groups -%}
+      <option value="{{ g.id }}">{{ g.label }}</option>
       {% endfor -%}
     </select>
     <p id="upload-error" style="display:none;color:#f66;font-size:0.85em"></p>
@@ -38,20 +38,20 @@
 <script>
 (function(){
   var params=new URLSearchParams(window.location.search);
-  var cls=params.get('classification');
-  if(cls){
-    document.cookie='preferred_classification='+encodeURIComponent(cls)+';path=/;max-age=31536000;SameSite=Lax';
+  var group_id=params.get('group_id');
+  if(group_id){
+    document.cookie='preferred_group_id='+encodeURIComponent(group_id)+';path=/;max-age=31536000;SameSite=Lax';
   }else{
-    var m=document.cookie.match(/(?:^|;\s*)preferred_classification=([^;]+)/);
-    if(m){window.location.replace('/?classification='+m[1]);}
+    var m=document.cookie.match(/(?:^|;\s*)preferred_group_id=([^;]+)/);
+    if(m){window.location.replace('/?group_id='+m[1]);}
   }
 })();
 </script>
 <h2 style="text-align:center;margin-bottom:12px;font-size:1.1em;max-width:900px;margin-left:auto;margin-right:auto">Patata Videos</h2>
-{{ m.nav(classifications, current_classification) }}
+{{ m.nav(groups, current_group_id, current_plex_kind) }}
 <div class="grid">
 {% for v in videos -%}
-{{ m.card(v, classifications, current_classification, upload_token) }}
+{{ m.card(v, groups, current_group_id, upload_token) }}
 {% else -%}
 <p style="color:#aaa;text-align:center">No videos yet.</p>
 {% endfor -%}

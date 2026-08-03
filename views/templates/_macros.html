@@ -5,33 +5,42 @@
 {% endfor -%}
 {%- endmacro %}
 
-{% macro nav(classifications, current) -%}
+{% macro nav(groups, current_group_id, current_plex_kind) -%}
 <nav class="nav">
-{%- for cls in classifications -%}
-<a href="/?classification={{ cls }}" class="nav-link{{ ' active' if cls == current else '' }}">{{ cls }}</a>
+{%- for g in groups -%}
+<a href="/?group_id={{ g.id }}" class="nav-link{{ ' active' if g.id == current_group_id else '' }}">{{ g.emoji ~ ' ' if g.emoji }}{{ g.label }}</a>
 {%- endfor -%}
+<a href="/?plex_kind=tv" class="nav-link{{ ' active' if current_plex_kind == 'tv' else '' }}">TV</a>
+<a href="/?plex_kind=movies" class="nav-link{{ ' active' if current_plex_kind == 'movies' else '' }}">Movies</a>
 <button type="button" id="autoplay-toggle" class="nav-link" aria-pressed="false">autoplay</button>
 </nav>
 {%- endmacro %}
 
-{% macro classification_menu(v, classifications, current) -%}
+{% macro group_menu(v, groups, current_group_id) -%}
 <details class="menu">
 <summary>&#8942;</summary>
 <div class="menu-dropdown">
-{%- for cls in classifications -%}
-<form method="post" action="/videos/{{ v.id }}/classify">
-<input type="hidden" name="current_classification" value="{{ current or '' }}">
-<input type="hidden" name="classification" value="{{ cls }}">
-<button type="submit" class="menu-btn{{ ' active-cls' if cls == (v.classification or 'children') else '' }}">{{ cls }}</button>
+{%- for g in groups -%}
+<form method="post" action="/videos/{{ v.id }}/group">
+<input type="hidden" name="current_group_id" value="{{ current_group_id or '' }}">
+<input type="hidden" name="group_id" value="{{ g.id }}">
+<button type="submit" class="menu-btn{{ ' active-cls' if g.id == v.group_id else '' }}">{{ g.label }}</button>
+</form>
+{%- endfor -%}
+{%- for kind, label in [('tv', 'Move to TV'), ('movies', 'Move to Movies')] -%}
+<form method="post" action="/videos/{{ v.id }}/promote">
+<input type="hidden" name="current_group_id" value="{{ current_group_id or '' }}">
+<input type="hidden" name="kind" value="{{ kind }}">
+<button type="submit" class="menu-btn promote-btn">{{ label }}</button>
 </form>
 {%- endfor -%}
 </div>
 </details>
 {%- endmacro %}
 
-{% macro card(v, classifications, current, upload_token) -%}
+{% macro card(v, groups, current_group_id, upload_token) -%}
 <div class="card">
-{{ classification_menu(v, classifications, current) }}
+{{ group_menu(v, groups, current_group_id) }}
 {% if v.status == "done" -%}
 <div class="video-wrap">
   <div class="name-overlay">{{ v | display_name }}</div>

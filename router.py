@@ -1161,8 +1161,8 @@ async def api_prepare_video(
 
 @router.get("/", response_class=HTMLResponse)
 @router.get("/videos", response_class=HTMLResponse)
-async def videos_page(classification: str | None = None):
-    if classification and classification not in CLASSIFICATIONS:
-        classification = None
-    videos = db.get_all_videos(classification)
-    return build_videos_page(videos, CLASSIFICATIONS, classification)
+async def videos_page(group_id: int | None = None, plex_kind: str | None = None):
+    if plex_kind is not None and plex_kind not in db.PLEX_KINDS:
+        plex_kind = None
+    videos = db.get_all_videos(group_id=group_id, plex_kind=plex_kind)
+    return build_videos_page(videos, db.list_groups(), group_id, plex_kind)

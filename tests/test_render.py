@@ -1,5 +1,10 @@
-from db import CLASSIFICATIONS
 from views.render import build_videos_page
+
+
+GROUPS = [
+    {"id": 1, "name": "children", "label": "Children", "emoji": None, "position": 0},
+    {"id": 2, "name": "adults", "label": "Adults", "emoji": "🍷", "position": 1},
+]
 
 
 def _video(**kw):
@@ -10,7 +15,7 @@ def _video(**kw):
         "status": "done",
         "platform": "twitter",
         "source": "download",
-        "classification": "children",
+        "group_id": 1,
         "error_msg": None,
         "preview_url": None,
     }
@@ -19,7 +24,7 @@ def _video(**kw):
 
 
 def test_renders_done_card():
-    html = build_videos_page([_video()], CLASSIFICATIONS, "children")
+    html = build_videos_page([_video()], GROUPS, 1, None)
 
     assert 'class="card"' in html
     assert "/videos/1/stream" in html
@@ -32,7 +37,7 @@ def test_status_variants():
         _video(id=3, status="queued"),
     ]
 
-    html = build_videos_page(videos, CLASSIFICATIONS, "children")
+    html = build_videos_page(videos, GROUPS, 1, None)
 
     assert "Error: boom" in html
     assert "Video is queued" in html
@@ -41,33 +46,61 @@ def test_status_variants():
 def test_named_title_used_for_youtube():
     html = build_videos_page(
         [_video(platform="youtube", title="My Clip")],
-        CLASSIFICATIONS,
-        "children",
+        GROUPS,
+        1,
+        None,
     )
 
     assert "My Clip" in html
 
 
 def test_empty_state():
-    html = build_videos_page([], CLASSIFICATIONS, None)
+    html = build_videos_page([], GROUPS, None, None)
 
     assert "No videos yet." in html
 
 
 def test_no_delimiter_leaks():
-    html = build_videos_page([_video()], CLASSIFICATIONS, "children")
+    html = build_videos_page([_video()], GROUPS, 1, None)
 
     assert "{{" not in html
     assert "{%" not in html
 
 
 def test_dialog_and_assets_present():
-    html = build_videos_page([], CLASSIFICATIONS, None)
+    html = build_videos_page([], GROUPS, None, None)
 
     assert 'id="upload-dialog"' in html
     assert "/assets/app/videos.css" in html
     assert "/assets/app/videos.js" in html
     assert "window.UPLOAD_TOKEN" in html
+
+
+def test_page_renders_group_labels_not_names():
+    html = build_videos_page([_video()], GROUPS, 1, None)
+
+    assert "Children" in html
+    assert "?group_id=1" in html
+
+
+def test_page_marks_the_current_group_active():
+    html = build_videos_page([_video()], GROUPS, 2, None)
+
+    assert 'class="nav-link active"' in html
+
+
+def test_page_offers_plex_links():
+    html = build_videos_page([], GROUPS, None, None)
+
+    assert "?plex_kind=tv" in html
+    assert "?plex_kind=movies" in html
+
+
+def test_card_menu_posts_to_the_group_endpoint():
+    html = build_videos_page([_video()], GROUPS, 1, None)
+
+    assert "/group" in html
+    assert "/promote" in html
 
 
 def test_app_asset_route_serves_css_and_js(tmp_path, monkeypatch):

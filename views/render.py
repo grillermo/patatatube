@@ -95,12 +95,18 @@ _env.filters["display_name"] = _display_name
 _env.filters["download_name"] = _download_name
 
 
-def build_videos_page(videos: list[dict], classifications: list[str], current_classification: str | None) -> str:
+def build_videos_page(
+    videos: list[dict],
+    groups: list[dict],
+    current_group_id: int | None,
+    current_plex_kind: str | None,
+) -> str:
     template = _env.get_template("videos_page.html")
     return template.render(
         videos=videos,
-        classifications=classifications,
-        current_classification=current_classification,
+        groups=groups,
+        current_group_id=current_group_id,
+        current_plex_kind=current_plex_kind,
         upload_token=os.getenv("UPLOAD_TOKEN", ""),
         splash_images=SPLASH_STARTUP_IMAGES,
     )

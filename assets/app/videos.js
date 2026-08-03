@@ -243,7 +243,7 @@ var UPLOAD_TOKEN = window.UPLOAD_TOKEN || "";
 document.getElementById('upload-form').addEventListener('submit', function(e){
   e.preventDefault();
   var fileInput = document.getElementById('upload-file-input');
-  var clsSelect = document.getElementById('upload-classification');
+  var groupSelect = document.getElementById('upload-group');
   var errorEl = document.getElementById('upload-error');
   var file = fileInput.files[0];
   if(!file) return;
@@ -251,7 +251,7 @@ document.getElementById('upload-form').addEventListener('submit', function(e){
   errorEl.style.display = 'none';
   var formData = new FormData();
   formData.append('file', file);
-  formData.append('classification', clsSelect.value);
+  formData.append('group_id', groupSelect.value);
 
   var xhr = new XMLHttpRequest();
   xhr.open('POST', '/upload/file');

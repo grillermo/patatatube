@@ -500,8 +500,7 @@ def test_videos_page_has_upload_button_and_dialog(client):
     assert 'id="upload-fab"' in resp.text
     assert 'id="upload-dialog"' in resp.text
     assert 'id="upload-form"' in resp.text
-    assert '<option value="children">children</option>' in resp.text
-    assert '<option value="tv">tv</option>' in resp.text
+    assert '<option value="1">Children</option>' in resp.text
 
 
 def test_videos_page_loads_vendored_nprogress(client):
