@@ -832,6 +832,8 @@ async def api_videos(classification: str | None = None):
 @router.post("/api/videos/{video_id}/classify")
 async def api_classify_video(video_id: int, body: ClassifyRequest, request: Request):
     _check_token(request)
+    if body.classification not in CLASSIFICATIONS:
+        raise HTTPException(status_code=400, detail="Invalid classification")
     try:
         result = await asyncio.to_thread(services.apply_classification, video_id, body.classification)
     except promote.PromotionError as exc:

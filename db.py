@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-CLASSIFICATIONS = ["children", "adults", "anabel", "tv", "movies"]
+CLASSIFICATIONS = ["children", "adults", "anabel", "asmr", "tv", "movies"]
 
 JOB_KINDS = ("convert", "hls", "normalize")
 PRIORITY_INTERACTIVE = 0

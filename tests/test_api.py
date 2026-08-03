@@ -764,6 +764,39 @@ def test_api_classifications_lists_all(client):
     assert resp.json() == {"classifications": db.CLASSIFICATIONS}
 
 
+def test_api_classifications_includes_asmr(client):
+    resp = client.get("/api/classifications")
+    assert resp.status_code == 200
+    assert resp.json()["classifications"] == [
+        "children", "adults", "anabel", "asmr", "tv", "movies"
+    ]
+
+
+def test_api_classify_accepts_asmr(client):
+    import db
+
+    vid = db.add_video("https://twitter.com/x/status/1")
+    resp = client.post(
+        f"/api/videos/{vid}/classify",
+        json={"classification": "asmr"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 200
+    assert db.get_video(vid)["classification"] == "asmr"
+
+
+def test_api_classify_still_rejects_unknown(client):
+    import db
+
+    vid = db.add_video("https://twitter.com/x/status/1")
+    resp = client.post(
+        f"/api/videos/{vid}/classify",
+        json={"classification": "not-a-real-one"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 400
+
+
 def test_api_classify_requires_token(client):
     import db
     vid = db.add_video("https://twitter.com/x/status/1")
@@ -785,7 +818,7 @@ def test_api_classify_sets_and_returns_ok(client):
     assert db.get_video(vid)["classification"] == target_classification
 
 
-def test_api_classify_invalid_returns_not_ok(client):
+def test_api_classify_invalid_returns_bad_request(client):
     import db
     vid = db.add_video("https://twitter.com/x/status/1")
     db.set_video_classification(vid, "children")
@@ -794,8 +827,7 @@ def test_api_classify_invalid_returns_not_ok(client):
         json={"classification": "bogus"},
         headers={"Authorization": "Bearer test-secret"},
     )
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": False, "promoted": False}
+    assert resp.status_code == 400
     assert db.get_video(vid)["classification"] == "children"
 
 
