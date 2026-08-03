@@ -2,40 +2,33 @@ import XCTest
 @testable import PatataTubeKit
 
 final class ResumeDecisionTests: XCTestCase {
-    func testAsksWhenPastThresholdOnMovies() {
-        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 120, classification: "movies"),
+    func testPromptsForAPlexItemPastSixtySeconds() {
+        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 120, plexKind: .movies),
                        .ask(secs: 120))
     }
 
     func testAsksOnTv() {
-        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 61, classification: "tv"),
+        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 61, plexKind: .tv),
                        .ask(secs: 61))
     }
 
     func testDoesNotAskBelowThreshold() {
-        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 59.9, classification: "movies"),
+        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 59.9, plexKind: .movies),
                        .playFromStart)
     }
 
     func testAsksAtExactThreshold() {
-        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 60.0, classification: "movies"),
+        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 60.0, plexKind: .movies),
                        .ask(secs: 60.0))
     }
 
     func testDoesNotAskAtZero() {
-        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 0, classification: "tv"),
+        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 0, plexKind: .tv),
                        .playFromStart)
     }
 
-    func testDoesNotAskForOtherClassifications() {
-        for classification in ["children", "adults", "education"] {
-            XCTAssertEqual(ResumeDecision.decide(resumeSecs: 500, classification: classification),
-                           .playFromStart, classification)
-        }
-    }
-
-    func testDoesNotAskWithoutClassification() {
-        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 500, classification: nil),
+    func testDoesNotPromptForAGroupVideo() {
+        XCTAssertEqual(ResumeDecision.decide(resumeSecs: 120, plexKind: nil),
                        .playFromStart)
     }
 

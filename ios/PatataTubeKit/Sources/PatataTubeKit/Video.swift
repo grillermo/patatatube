@@ -57,7 +57,10 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let platform: String?
     public let sourceKey: String?
     public let previewUrl: String?
-    public let classification: String
+    /// The group this video is in, or nil when it is a Plex item or unsorted.
+    public let groupID: Int?
+    /// Set for Plex library rows; mutually exclusive with `groupID`.
+    public let plexKind: PlexKind?
     public let position: Int?
     public let status: String
     public let errorMsg: String?
@@ -77,7 +80,9 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let resumeSecs: Double
 
     enum CodingKeys: String, CodingKey {
-        case id, url, title, platform, sourceKey, previewUrl, classification, position
+        case id, url, title, platform, sourceKey, previewUrl, position
+        case groupID = "group_id"
+        case plexKind = "plex_kind"
         case status, errorMsg, streamPath, source, showTitle, season, episode, summary
         case showPreviewUrl, chosenVersionId, versions, hlsPath, subtitleTracks
         case sourceFilename
@@ -87,8 +92,12 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
 
     public var isLibrary: Bool { source == "library" }
 
+    /// Plex items get the resume prompt and the episode/movie chrome; group
+    /// videos do not. This used to be a name comparison against "tv"/"movies".
+    public var isPlexItem: Bool { plexKind != nil }
+
     public init(id: Int, url: String, title: String?, platform: String?,
-                sourceKey: String?, previewUrl: String?, classification: String,
+                sourceKey: String?, previewUrl: String?, groupID: Int?, plexKind: PlexKind?,
             position: Int?, status: String, errorMsg: String?, streamPath: String,
             source: String? = nil, showTitle: String? = nil, season: Int? = nil,
             episode: Int? = nil, summary: String? = nil, showPreviewUrl: String? = nil,
@@ -98,7 +107,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
             resumeSecs: Double = 0) {
         self.id = id; self.url = url; self.title = title; self.platform = platform
         self.sourceKey = sourceKey; self.previewUrl = previewUrl
-        self.classification = classification; self.position = position
+        self.groupID = groupID; self.plexKind = plexKind; self.position = position
         self.status = status; self.errorMsg = errorMsg; self.streamPath = streamPath
         self.source = source; self.showTitle = showTitle; self.season = season
         self.episode = episode; self.summary = summary; self.showPreviewUrl = showPreviewUrl
@@ -117,11 +126,12 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.platform = try c.decodeIfPresent(String.self, forKey: .platform)
         self.sourceKey = try c.decodeIfPresent(String.self, forKey: .sourceKey)
         self.previewUrl = try c.decodeIfPresent(String.self, forKey: .previewUrl)
-        self.classification = try c.decode(String.self, forKey: .classification)
+        self.groupID = try c.decodeIfPresent(Int.self, forKey: .groupID)
+        self.plexKind = try c.decodeIfPresent(PlexKind.self, forKey: .plexKind)
         self.position = try c.decodeIfPresent(Int.self, forKey: .position)
         self.status = try c.decode(String.self, forKey: .status)
         self.errorMsg = try c.decodeIfPresent(String.self, forKey: .errorMsg)
-        self.streamPath = try c.decode(String.self, forKey: .streamPath)
+        self.streamPath = try c.decodeIfPresent(String.self, forKey: .streamPath) ?? ""
         self.source = try c.decodeIfPresent(String.self, forKey: .source)
         self.showTitle = try c.decodeIfPresent(String.self, forKey: .showTitle)
         self.season = try c.decodeIfPresent(Int.self, forKey: .season)
@@ -137,17 +147,6 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.resumeSecs = try c.decodeIfPresent(Double.self, forKey: .resumeSecs) ?? 0
     }
 
-    func withClassification(_ c: String) -> Video {
-        return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
-            previewUrl: previewUrl, classification: c, position: position,
-            status: status, errorMsg: errorMsg, streamPath: streamPath,
-            source: source, showTitle: showTitle, season: season,
-            episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
-            chosenVersionId: chosenVersionId, versions: versions,
-            hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-            sourceFilename: sourceFilename, audioLang: audioLang, resumeSecs: resumeSecs)
-    }
-
     public func withChosenVersion(_ versionId: Int) -> Video {
         withChosenVersion(Optional(versionId))
     }
@@ -155,7 +154,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public func withChosenVersion(_ versionId: Int?) -> Video {
         let selected = versions.first { $0.id == versionId }
         return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
-              previewUrl: previewUrl, classification: classification, position: position,
+              previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: position,
               status: selected?.status ?? status, errorMsg: errorMsg, streamPath: streamPath,
               source: source, showTitle: showTitle, season: season,
               episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
@@ -170,7 +169,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
 
     func withAudioLang(_ lang: String) -> Video {
         return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
-              previewUrl: previewUrl, classification: classification, position: position,
+              previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: position,
               status: status, errorMsg: errorMsg, streamPath: streamPath,
               source: source, showTitle: showTitle, season: season,
               episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,

@@ -159,9 +159,7 @@ public final class VideoStore: ObservableObject {
     /// server moved the file into Plex and deleted the row, so the video is
     /// dropped from the list and its download purged instead.
     public func classify(id: Int, to classification: String) async {
-        guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
-        let previous = videos
-        videos[index] = videos[index].withClassification(classification)
+        guard videos.contains(where: { $0.id == id }) else { return }
         do {
             let result = try await api.classify(id: id, classification: classification)
             if result.promoted {
@@ -172,11 +170,8 @@ public final class VideoStore: ObservableObject {
                 // video and a future bootLoad() renders it as a ghost card whose
                 // stream 404s and whose local file was just purged above.
                 await load()
-            } else if !result.ok {
-                videos = previous
             }
         } catch {
-            videos = previous
             report(error)
         }
     }

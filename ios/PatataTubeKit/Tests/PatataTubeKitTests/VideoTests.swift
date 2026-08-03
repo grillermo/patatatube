@@ -30,14 +30,26 @@ private let sampleJSON = """
     #expect(videos[1].errorMsg == "boom")
 }
 
-@Test func withClassificationReplacesOnlyClassification() {
-    let v = Video(id: 1, url: "u", title: "t", platform: nil, sourceKey: nil,
-                  previewUrl: nil, classification: "children", position: 1,
-                  status: "completed", errorMsg: nil, streamPath: "/videos/1/stream")
-    let updated = v.withClassification("adults")
-    #expect(updated.classification == "adults")
-    #expect(updated.id == 1)
-    #expect(updated.status == "completed")
+@Test func decodesGroupIDAndPlexKind() throws {
+    let json = #"{"id":1,"url":"u","status":"done","group_id":3,"plex_kind":null,"subtitle_tracks":[]}"#
+    let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
+    #expect(video.groupID == 3)
+    #expect(video.plexKind == nil)
+    #expect(video.isPlexItem == false)
+}
+
+@Test func decodesAPlexItem() throws {
+    let json = #"{"id":2,"url":"u","status":"done","group_id":null,"plex_kind":"tv","subtitle_tracks":[]}"#
+    let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
+    #expect(video.plexKind == .tv)
+    #expect(video.isPlexItem == true)
+}
+
+@Test func decodesAnUnsortedVideo() throws {
+    let json = #"{"id":3,"url":"u","status":"done","subtitle_tracks":[]}"#
+    let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
+    #expect(video.groupID == nil)
+    #expect(video.plexKind == nil)
 }
 
 @Test func testDecodesLibraryFields() throws {

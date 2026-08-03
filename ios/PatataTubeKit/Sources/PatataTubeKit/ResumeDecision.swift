@@ -2,7 +2,7 @@ import Foundation
 
 /// Whether a play tap should offer "resume" or just start.
 ///
-/// Only long-form rows (`tv`, `movies`) ever prompt, and only past a floor —
+/// Only Plex rows ever prompt, and only past a floor —
 /// a 20-second accidental open must not put a modal in front of the next tap.
 /// There is deliberately no upper bound here: reaching the end of a video
 /// resets the stored position to 0 (see `PlaybackPositionReporter`), so a
@@ -13,17 +13,14 @@ public enum ResumeDecision: Equatable, Sendable {
 
     public static let defaultMinimumSecs: Double = 60
 
-    /// Classifications that get the prompt. Mirrors the server's tv/movies rows.
-    public static let promptingClassifications: Set<String> = ["tv", "movies"]
-
+    /// Only Plex items prompt. That used to be a hardcoded list of two
+    /// classification names; it is now literally "is this a Plex item".
     public static func decide(
         resumeSecs: Double,
-        classification: String?,
+        plexKind: PlexKind?,
         minimumSecs: Double = ResumeDecision.defaultMinimumSecs
     ) -> ResumeDecision {
-        guard let classification, promptingClassifications.contains(classification) else {
-            return .playFromStart
-        }
+        guard plexKind != nil else { return .playFromStart }
         guard resumeSecs >= minimumSecs else { return .playFromStart }
         return .ask(secs: resumeSecs)
     }
