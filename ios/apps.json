@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.1.63",
+          "buildVersion": "119",
+          "date": "2026-08-03T14:02:29Z",
+          "localizedDescription": "Videos, TV and Movies are now tabs\n\n• A tab bar replaces the old segmented category picker\n• The Videos tab opens on four group cards - Children, Adults, Anabel and ASMR - each with its own grid\n• New ASMR category\n• Group cards show the newest video's poster and keep showing it offline\n• Each tab keeps its own scroll position and reopens where you left off after a force-quit",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.1.63/PatataTube-1.1.63.ipa",
+          "size": 4077133,
+          "sha256": "f03e605f282e92e7578a36b2706cdb300f4ed23a201f97c476bb9cba11fc880e",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.1.62",
           "buildVersion": "118",
           "date": "2026-08-03T05:37:31Z",
@@ -1114,11 +1124,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.1.62",
-      "versionDate": "2026-08-03T05:37:31Z",
-      "versionDescription": "Release 1.1.62.",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.1.62/PatataTube-1.1.62.ipa",
-      "size": 4056527
+      "version": "1.1.63",
+      "versionDate": "2026-08-03T14:02:29Z",
+      "versionDescription": "Videos, TV and Movies are now tabs\n\n• A tab bar replaces the old segmented category picker\n• The Videos tab opens on four group cards - Children, Adults, Anabel and ASMR - each with its own grid\n• New ASMR category\n• Group cards show the newest video's poster and keep showing it offline\n• Each tab keeps its own scroll position and reopens where you left off after a force-quit",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.1.63/PatataTube-1.1.63.ipa",
+      "size": 4077133
     }
   ],
   "news": []
