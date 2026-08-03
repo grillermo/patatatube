@@ -37,8 +37,15 @@ struct EpisodesView: View {
     @State private var downloadState = EpisodesDownloadAllState()
     @State private var visibleTracker = VisibleItemsTracker()
     @State private var anchorDebounceTask: Task<Void, Never>?
+    @State private var showSettings = false
+    @State private var showUpload = false
 
     private var anchorKey: String { RestorationState.showKey(title: show.title) }
+
+    /// Settings bucket for this list. Per show, not per tab: the menu's options
+    /// are scoped to the episodes on screen. `VideoGridView.playbackScope`
+    /// resolves the same key when it presents the player.
+    private var scope: String { AppModel.showScope(show.title) }
 
     init(
         show: ShowGroup,
@@ -91,24 +98,11 @@ struct EpisodesView: View {
         .navigationTitle(show.title)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                // Episodes only ever exist under the tv tab, so that's the
-                // scope this toggle writes.
-                AutoplayToggle(isOn: model.autoplayBinding(for: "tv"))
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    presentDownloadAll()
-                } label: {
-                    if downloadState.isDownloading {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "arrow.down.circle")
-                    }
-                }
-                .disabled(downloadState.isDownloading || !downloadState.canDownloadAll)
-                .accessibilityLabel("Download all episodes")
+                optionsMenu
             }
         }
+        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showUpload) { UploadView() }
         .alert(
             "Download all",
             isPresented: Binding(
@@ -137,6 +131,50 @@ struct EpisodesView: View {
             if let topmost = visibleTracker.topmost {
                 let key = anchorKey
                 model.restorationStore.mutate { $0.scrollAnchors[key] = topmost }
+            }
+        }
+    }
+
+    /// The grid's menu, minus what a season list has no use for: there are no
+    /// grid cells to resize here. Every setting is keyed by `scope`, so
+    /// autoplay and randomize answer for this show alone, and Download all
+    /// only ever sees `show.episodes`.
+    private var optionsMenu: some View {
+        Menu {
+            Button {
+                showUpload = true
+            } label: { Label("New video", systemImage: "plus") }
+
+            Toggle(isOn: model.autoplayBinding(for: scope)) {
+                Label("Autoplay", systemImage: "play.circle")
+            }
+
+            Toggle(isOn: model.randomizeBinding(for: scope)) {
+                Label("Randomize", systemImage: "shuffle")
+            }
+
+            Divider()
+
+            Button {
+                presentDownloadAll()
+            } label: { Label("Download all", systemImage: "arrow.down.circle") }
+            .disabled(downloadState.isDownloading || !downloadState.canDownloadAll)
+            .accessibilityLabel("Download all episodes")
+
+            Button {
+                showDownloads()
+            } label: { Label("Downloads", systemImage: "arrow.down.circle") }
+
+            Divider()
+
+            Button {
+                showSettings = true
+            } label: { Label("Settings", systemImage: "gear") }
+        } label: {
+            if downloadState.isDownloading {
+                ProgressView()
+            } else {
+                Image(systemName: "ellipsis.circle")
             }
         }
     }

@@ -399,10 +399,10 @@ struct VideoGridView: View {
         ])
         return VideoPlayerView(videos: request.videos, startIndex: request.startIndex,
                                sleepMode: request.sleepMode,
-                               randomize: model.randomize(for: store.filter),
+                               randomize: model.randomize(for: playbackScope),
                                startSecs: request.startSecs,
                                startPaused: request.startPaused,
-                               autoplayScope: store.filter)
+                               autoplayScope: playbackScope)
     }
 
     /// Split out of `body` alongside `defaultGrid` — inlined, the combined
@@ -703,6 +703,16 @@ struct VideoGridView: View {
     }
 
     /// The group whose grid is on screen, or nil on the tv/movies tabs.
+    /// Bucket the playback settings (autoplay, randomize) are read from: the
+    /// open show when one is pushed, otherwise the tab/group filter. Read at
+    /// presentation time — the path cannot change under a full-screen player.
+    private var playbackScope: String? {
+        for route in path.reversed() {
+            if case .show(let title) = route { return AppModel.showScope(title) }
+        }
+        return store.filter
+    }
+
     private var currentGroupName: String? {
         guard tab == .videos, case .group(let name)? = path.first else { return nil }
         return name

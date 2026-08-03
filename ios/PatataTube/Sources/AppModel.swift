@@ -53,6 +53,10 @@ final class AppModel: ObservableObject {
     private static let cellSizeDefaultsKey = "gridCellSizes"
     private static let legacyCellSizeKey = "gridCellSize"
 
+    /// Scope key for one TV show's episode list. Prefixed so a show titled
+    /// "movies" can never share a bucket with the movies tab.
+    static func showScope(_ title: String) -> String { "show:\(title)" }
+
     func autoplay(for classification: String?) -> Bool {
         autoplayByClassification[classification ?? "all"] ?? false
     }
