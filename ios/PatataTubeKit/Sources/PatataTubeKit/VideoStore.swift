@@ -50,7 +50,7 @@ public final class VideoStore: ObservableObject {
     private var groupMutationSequence = 0
     private var groupMutations: [Int: GroupMutation] = [:]
     private var confirmedGroups: [Int: ConfirmedGroup] = [:]
-    private var groupCacheWriteTask: Task<Void, Never>?
+    private var cacheWriteTask: Task<Void, Never>?
 
     public init(api: VideoAPI, cache: VideoListCaching? = nil,
                 mediaCache: MediaCaching? = nil,
@@ -124,15 +124,16 @@ public final class VideoStore: ObservableObject {
             // Encode + atomic disk write off the main actor: doing it inline here
             // (this method is @MainActor) blocked the main thread long enough to
             // trip Sentry's app-hang detector (PATATATUBE-2, NSFileHandle.write).
-            if let cache {
+            if let cache, generation == loadGeneration {
                 let toSave = fetched
-                // await the detached task's value: the main actor suspends (freeing
-                // the main thread to render) while the encode + write runs on a
-                // background thread, then resumes. Not fire-and-forget, so callers
-                // still observe the save as complete once load() returns.
-                await Task.detached(priority: .utility) {
+                let previousWrite = cacheWriteTask
+                let writeTask = Task.detached(priority: .utility) {
+                    if let previousWrite { await previousWrite.value }
+                    guard await self.loadGeneration == generation else { return }
                     cache.save(toSave, feed: requestedFeed)
-                }.value
+                }
+                cacheWriteTask = writeTask
+                await writeTask.value
             }
             // Only apply this fetch if nothing newer has started since -- a stale,
             // slower call must never overwrite a faster/later one's results.
@@ -184,7 +185,7 @@ public final class VideoStore: ObservableObject {
     ) async {
         guard let cache else { return }
         let feeds = [Feed.all] + groupIDs.sorted().map { Feed.group(id: $0) }
-        let previousWrite = groupCacheWriteTask
+        let previousWrite = cacheWriteTask
         let writeTask = Task.detached(priority: .utility) {
             if let previousWrite { await previousWrite.value }
             for feed in feeds {
@@ -210,7 +211,7 @@ public final class VideoStore: ObservableObject {
                 cache.save(videos, feed: feed)
             }
         }
-        groupCacheWriteTask = writeTask
+        cacheWriteTask = writeTask
         await writeTask.value
     }
 
@@ -226,7 +227,7 @@ public final class VideoStore: ObservableObject {
 
         guard let cache else { return }
         let feeds = [Feed.all] + groupIDs.sorted().map { Feed.group(id: $0) }
-        let previousWrite = groupCacheWriteTask
+        let previousWrite = cacheWriteTask
         let writeTask = Task.detached(priority: .utility) {
             if let previousWrite { await previousWrite.value }
             for feed in feeds {
@@ -235,7 +236,7 @@ public final class VideoStore: ObservableObject {
                 cache.save(videos, feed: feed)
             }
         }
-        groupCacheWriteTask = writeTask
+        cacheWriteTask = writeTask
         await writeTask.value
     }
 
@@ -252,38 +253,39 @@ public final class VideoStore: ObservableObject {
         guard ownsGroupMutation(id: mutation.id, request: mutation.request) else {
             return false
         }
-        let settledGroupID: Int?
-        if succeeded {
-            settledGroupID = mutation.groupID
-        } else if let confirmed = confirmedGroups[mutation.id] {
-            settledGroupID = confirmed.groupID
-        } else {
-            settledGroupID = nil
-        }
+        while true {
+            let confirmed = confirmedGroups[mutation.id]
+            let settledGroupID = succeeded ? mutation.groupID : confirmed?.groupID
+            let settledSequence = succeeded ? mutation.sequence : (confirmed?.sequence ?? -1)
 
-        switch feed {
-        case .all:
-            if let index = videos.firstIndex(where: { $0.id == mutation.id }) {
-                videos[index] = videos[index].withGroupID(settledGroupID)
-            }
-        case .group(let groupID):
-            if settledGroupID == groupID {
+            switch feed {
+            case .all:
                 if let index = videos.firstIndex(where: { $0.id == mutation.id }) {
                     videos[index] = videos[index].withGroupID(settledGroupID)
                 }
-            } else {
-                videos.removeAll { $0.id == mutation.id }
+            case .group(let groupID):
+                if settledGroupID == groupID {
+                    if let index = videos.firstIndex(where: { $0.id == mutation.id }) {
+                        videos[index] = videos[index].withGroupID(settledGroupID)
+                    }
+                } else {
+                    videos.removeAll { $0.id == mutation.id }
+                }
+            case .plex:
+                break
             }
-        case .plex:
-            break
+            await reconcileGroupMutationCache(
+                id: mutation.id, groupID: settledGroupID,
+                groupIDs: mutation.affectedGroupIDs, request: mutation.request
+            )
+            guard ownsGroupMutation(id: mutation.id, request: mutation.request) else {
+                return false
+            }
+            if succeeded || (confirmedGroups[mutation.id]?.sequence ?? -1) == settledSequence {
+                groupMutations[mutation.id] = nil
+                return true
+            }
         }
-        await reconcileGroupMutationCache(
-            id: mutation.id, groupID: settledGroupID,
-            groupIDs: mutation.affectedGroupIDs, request: mutation.request
-        )
-        let ownsMutation = ownsGroupMutation(id: mutation.id, request: mutation.request)
-        if ownsMutation { groupMutations[mutation.id] = nil }
-        return ownsMutation
     }
 
     public func setGroup(id: Int, groupID: Int) async {

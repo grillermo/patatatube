@@ -32,10 +32,12 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     /// VideoStore's state after the synchronous cache swap but before the
     /// network result lands.
     var beforeVideosReturn: (@Sendable () async -> Void)?
+    var videosHook: (@Sendable (Feed) async throws -> [Video])?
 
     func videos(feed: Feed) async throws -> [Video] {
         loadCount += 1
         lastFeed = feed
+        if let videosHook { return try await videosHook(feed) }
         if let beforeVideosReturn { await beforeVideosReturn() }
         if let videosError { throw videosError }
         if throwOnVideos { throw APIError.badStatus(503) }
@@ -277,6 +279,36 @@ private actor GroupMoveGate {
 
     func release(_ id: Int) {
         releaseWaiters.removeValue(forKey: id)?.resume()
+    }
+}
+
+private actor StaleVideoFetch {
+    private let stale: [Video]
+    private var used = false
+    private var arrived = false
+    private var arrivalWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    init(_ stale: [Video]) { self.stale = stale }
+
+    func fetch() async -> [Video] {
+        guard !used else { return [] }
+        used = true
+        arrived = true
+        arrivalWaiter?.resume()
+        arrivalWaiter = nil
+        await withCheckedContinuation { releaseWaiter = $0 }
+        return stale
+    }
+
+    func waitForArrival() async {
+        guard !arrived else { return }
+        await withCheckedContinuation { arrivalWaiter = $0 }
+    }
+
+    func release() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
     }
 }
 
@@ -782,6 +814,35 @@ private actor GroupMoveGate {
     #expect(cache.load(feed: .all)?.first?.groupID == 2)
 }
 
+@MainActor @Test func olderSuccessSettlesWhileNewerFailureCacheWriteIsInFlight() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, groupID: 1)]
+    let gate = GroupMoveGate()
+    api.setGroupHook = { _, groupID in
+        await gate.arrive(groupID)
+        return groupID == 2
+    }
+    let cache = DelayedVideoListCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.load()
+
+    async let older: Void = store.setGroup(id: 1, groupID: 2)
+    await gate.waitForArrival(2)
+    async let newer: Void = store.setGroup(id: 1, groupID: 3)
+    await gate.waitForArrival(3)
+    cache.delayNextSave(feed: .all)
+    await gate.release(3)
+    await cache.waitForDelayedSave()
+
+    await gate.release(2)
+    await older
+    cache.releaseDelayedSave()
+    await newer
+
+    #expect(store.videos.first?.groupID == 2)
+    #expect(cache.load(feed: .all)?.first?.groupID == 2)
+}
+
 @MainActor @Test func twoFailedMovesRollBackToTheLastConfirmedGroup() async {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1, groupID: 1)]
@@ -856,6 +917,26 @@ private actor GroupMoveGate {
     #expect(cache.load(feed: .all)?.isEmpty == true)
     #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
     #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
+}
+
+@MainActor @Test func staleLoadCannotRewriteCacheAfterDelete() async {
+    let video = makeVideo(id: 1, groupID: 1)
+    let api = FakeAPI()
+    api.videosToReturn = [video]
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.load()
+    let fetch = StaleVideoFetch([video])
+    api.videosHook = { _ in await fetch.fetch() }
+
+    async let staleLoad: Void = store.load()
+    await fetch.waitForArrival()
+    await store.delete(id: 1)
+    await fetch.release()
+    await staleLoad
+
+    #expect(store.videos.isEmpty)
+    #expect(cache.load(feed: .all)?.isEmpty == true)
 }
 
 @MainActor @Test func staleSourceCacheEvictionDoesNotOverwriteNewerSameVideoMove() async {
