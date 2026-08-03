@@ -22,6 +22,12 @@ def client(monkeypatch, tmp_path):
     with TestClient(main.app) as c:
         yield c
 
+
+@pytest.fixture()
+def auth_headers():
+    return {"Authorization": "Bearer test-secret"}
+
+
 def test_upload_missing_token(client):
     resp = client.post("/upload", json={"url": "https://twitter.com/x/status/1"})
     assert resp.status_code == 401
@@ -756,20 +762,65 @@ def test_api_videos_ignores_unknown_classification(client):
     assert any(v["id"] == vid for v in resp.json())
 
 
-def test_api_classifications_lists_all(client):
-    import db
-
-    resp = client.get("/api/classifications")
+def test_get_groups_lists_the_defaults(client):
+    resp = client.get("/api/groups")
     assert resp.status_code == 200
-    assert resp.json() == {"classifications": db.CLASSIFICATIONS}
+    groups = resp.json()["groups"]
+    assert [g["name"] for g in groups] == ["children", "adults", "anabel", "asmr"]
+    assert set(groups[0]) == {"id", "name", "label", "emoji", "position"}
 
 
-def test_api_classifications_includes_asmr(client):
-    resp = client.get("/api/classifications")
+def test_create_group_requires_a_token(client):
+    resp = client.post("/api/groups", json={"name": "cooking", "label": "Cooking"})
+    assert resp.status_code == 401
+
+
+def test_create_group_appends_it(client, auth_headers):
+    resp = client.post(
+        "/api/groups", json={"name": "cooking", "label": "Cooking", "emoji": "🍳"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["name"] == "cooking"
+    assert resp.json()["position"] == 4
+    assert [g["name"] for g in client.get("/api/groups").json()["groups"]][-1] == "cooking"
+
+
+def test_create_group_rejects_a_duplicate_or_plex_name(client, auth_headers):
+    assert client.post(
+        "/api/groups", json={"name": "asmr", "label": "x"}, headers=auth_headers
+    ).status_code == 400
+    assert client.post(
+        "/api/groups", json={"name": "tv", "label": "x"}, headers=auth_headers
+    ).status_code == 400
+    assert client.post(
+        "/api/groups", json={"name": "  ", "label": "x"}, headers=auth_headers
+    ).status_code == 400
+
+
+def test_patch_group_sets_the_emoji(client, auth_headers):
+    gid = client.get("/api/groups").json()["groups"][0]["id"]
+    resp = client.patch(f"/api/groups/{gid}", json={"emoji": "🧒"}, headers=auth_headers)
     assert resp.status_code == 200
-    assert resp.json()["classifications"] == [
-        "children", "adults", "anabel", "asmr", "tv", "movies"
-    ]
+    assert resp.json()["emoji"] == "🧒"
+
+
+def test_patch_group_clears_the_emoji_with_null(client, auth_headers):
+    gid = client.get("/api/groups").json()["groups"][0]["id"]
+    client.patch(f"/api/groups/{gid}", json={"emoji": "🧒"}, headers=auth_headers)
+    resp = client.patch(f"/api/groups/{gid}", json={"emoji": None}, headers=auth_headers)
+    assert resp.json()["emoji"] is None
+
+
+def test_patch_unknown_group_is_404(client, auth_headers):
+    assert client.patch(
+        "/api/groups/9999", json={"label": "x"}, headers=auth_headers
+    ).status_code == 404
+
+
+def test_old_classification_and_cover_endpoints_are_gone(client):
+    assert client.get("/api/classifications").status_code == 404
+    assert client.get("/api/group-covers").status_code == 404
 
 
 def test_api_classify_accepts_asmr(client):
@@ -1918,63 +1969,3 @@ def test_video_list_includes_resume_secs(client, monkeypatch):
     assert resp.status_code == 200
     row = next(v for v in resp.json() if v["id"] == video_id)
     assert row["resume_secs"] == 42.0
-
-
-def test_group_covers_start_empty(client):
-    resp = client.get("/api/group-covers")
-    assert resp.status_code == 200
-    assert resp.json() == {"covers": {}}
-
-
-def test_set_group_cover_requires_token(client):
-    resp = client.post("/api/group-covers/children", json={"emoji": "🐸"})
-    assert resp.status_code == 401
-
-
-def test_set_and_read_group_cover(client):
-    resp = client.post(
-        "/api/group-covers/children",
-        json={"emoji": "🐸"},
-        headers={"Authorization": "Bearer test-secret"},
-    )
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "emoji": "🐸"}
-    assert client.get("/api/group-covers").json() == {"covers": {"children": "🐸"}}
-
-
-def test_set_group_cover_overwrites(client):
-    headers = {"Authorization": "Bearer test-secret"}
-    client.post("/api/group-covers/adults", json={"emoji": "🐸"}, headers=headers)
-    client.post("/api/group-covers/adults", json={"emoji": "🎈"}, headers=headers)
-    assert client.get("/api/group-covers").json()["covers"]["adults"] == "🎈"
-
-
-def test_empty_or_null_emoji_clears_the_cover(client):
-    headers = {"Authorization": "Bearer test-secret"}
-    client.post("/api/group-covers/asmr", json={"emoji": "🐸"}, headers=headers)
-    resp = client.post("/api/group-covers/asmr", json={"emoji": ""}, headers=headers)
-    assert resp.json() == {"ok": True, "emoji": None}
-    assert client.get("/api/group-covers").json() == {"covers": {}}
-
-    client.post("/api/group-covers/asmr", json={"emoji": "🐸"}, headers=headers)
-    client.post("/api/group-covers/asmr", json={}, headers=headers)
-    assert client.get("/api/group-covers").json() == {"covers": {}}
-
-
-def test_group_cover_rejects_non_group_classifications(client):
-    resp = client.post(
-        "/api/group-covers/tv",
-        json={"emoji": "🐸"},
-        headers={"Authorization": "Bearer test-secret"},
-    )
-    assert resp.status_code == 400
-
-
-def test_group_cover_rejects_overlong_text(client):
-    resp = client.post(
-        "/api/group-covers/children",
-        json={"emoji": "x" * 33},
-        headers={"Authorization": "Bearer test-secret"},
-    )
-    assert resp.status_code == 400
-    assert client.get("/api/group-covers").json() == {"covers": {}}

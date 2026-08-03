@@ -4,6 +4,7 @@ import math
 import os
 import re
 import secrets
+import sqlite3
 import subprocess
 import tempfile
 from collections.abc import AsyncIterator
@@ -24,7 +25,6 @@ import library
 import plex
 import promote
 import services
-from db import CLASSIFICATIONS, VIDEO_GROUPS
 from downloader import download_video, process_uploaded_video
 from views.serializers import serialize_video
 from views.render import build_videos_page
@@ -45,10 +45,9 @@ PREVIEW_CACHE_SUFFIX = f"r{PREVIEW_MAX_EDGE}"
 PREVIEW_FRAME_OFFSET = 3.0
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 VIDEO_CHUNK_SIZE = 1024 * 1024
-# A group cover is one emoji, but "one emoji" can be many code points — a ZWJ
-# family with skin tones runs ~11. Cap generously; the client is what enforces
-# the single-grapheme rule.
-MAX_GROUP_COVER_CHARS = 32
+# A group emoji is one emoji, but "one emoji" can be many code points — a ZWJ
+# family or a flag is several scalars. Cap on characters, not on scalar count.
+MAX_GROUP_EMOJI_CHARS = 16
 DEFAULT_VIDEO_STREAM_LIMIT = 16
 VIDEO_CACHE_CONTROL = "public, max-age=31536000, immutable"
 SPLASH_DIR = Path("assets/splash")
@@ -165,11 +164,16 @@ class PositionRequest(BaseModel):
         return value
 
 
-class GroupCoverRequest(BaseModel):
-    # None or "" clears the cover; the client sends the emoji it already
-    # normalized to one grapheme cluster. A ZWJ family plus skin tones is
-    # comfortably under the cap, an accidental pasted sentence is not.
+class GroupCreateRequest(BaseModel):
+    name: str
+    label: str
     emoji: str | None = None
+
+
+class GroupUpdateRequest(BaseModel):
+    label: str | None = None
+    emoji: str | None = None
+    position: int | None = None
 
 
 class PrepareRequest(BaseModel):
@@ -827,9 +831,63 @@ async def choose_video_version_endpoint(video_id: int, version_id: int = Form(..
     return RedirectResponse(url=redirect_url, status_code=303)
 
 
-@router.get("/api/classifications")
-async def api_classifications():
-    return {"classifications": CLASSIFICATIONS}
+def serialize_group(group: dict) -> dict:
+    return {
+        "id": group["id"],
+        "name": group["name"],
+        "label": group["label"],
+        "emoji": group["emoji"],
+        "position": group["position"],
+    }
+
+
+@router.get("/api/groups")
+async def api_groups():
+    """Every video group, in display order. The iOS Videos tab mirrors this
+    into UserDefaults so its cards still render offline."""
+    return {"groups": [serialize_group(g) for g in db.list_groups()]}
+
+
+@router.post("/api/groups", status_code=201)
+async def api_create_group(body: GroupCreateRequest, request: Request):
+    _check_token(request)
+    name = body.name.strip()
+    label = body.label.strip()
+    if not name or not label:
+        raise HTTPException(status_code=400, detail="Name and label are required")
+    if name in db.PLEX_KINDS:
+        raise HTTPException(status_code=400, detail="tv and movies are Plex kinds, not groups")
+    emoji = _validated_emoji(body.emoji)
+    try:
+        group = db.create_group(name, label, emoji)
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="That group name is taken") from None
+    return serialize_group(group)
+
+
+@router.patch("/api/groups/{group_id}")
+async def api_update_group(group_id: int, body: GroupUpdateRequest, request: Request):
+    _check_token(request)
+    fields = body.model_dump(exclude_unset=True)
+    emoji = _validated_emoji(body.emoji) if "emoji" in fields else None
+    group = db.update_group(
+        group_id,
+        label=body.label.strip() if body.label else None,
+        emoji=emoji,
+        # An explicit `"emoji": null` clears it; an omitted key leaves it alone.
+        clear_emoji="emoji" in fields and not emoji,
+        position=body.position,
+    )
+    if group is None:
+        raise HTTPException(status_code=404, detail="No such group")
+    return serialize_group(group)
+
+
+def _validated_emoji(raw: str | None) -> str | None:
+    emoji = (raw or "").strip()
+    if len(emoji) > MAX_GROUP_EMOJI_CHARS:
+        raise HTTPException(status_code=400, detail="Cover must be a single emoji")
+    return emoji or None
 
 
 @router.get("/api/videos")
@@ -838,25 +896,6 @@ async def api_videos(classification: str | None = None):
         classification = None
     videos = db.get_all_videos(classification)
     return [serialize_video(v) for v in videos]
-
-
-@router.get("/api/group-covers")
-async def api_group_covers():
-    """Every group's emoji cover. Shared across devices — the iOS group cards
-    mirror this into UserDefaults so they still render offline."""
-    return {"covers": db.get_group_covers()}
-
-
-@router.post("/api/group-covers/{name}")
-async def api_set_group_cover(name: str, body: GroupCoverRequest, request: Request):
-    _check_token(request)
-    if name not in VIDEO_GROUPS:
-        raise HTTPException(status_code=400, detail="Invalid group")
-    emoji = (body.emoji or "").strip()
-    if len(emoji) > MAX_GROUP_COVER_CHARS:
-        raise HTTPException(status_code=400, detail="Cover must be a single emoji")
-    db.set_group_cover(name, emoji)
-    return {"ok": True, "emoji": emoji or None}
 
 
 @router.post("/api/videos/{video_id}/classify")
