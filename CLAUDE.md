@@ -149,34 +149,32 @@ down on 2026-07-31; see `docs/superpowers/specs/2026-07-31-ffmpeg-job-queue-desi
 ### Layering — the SSR page and the JSON API share logic, don't duplicate it
 
 - `db.py` — the only SQLite layer. Single `videos` table. `init_db()` is an **idempotent migration runner**: it does `CREATE TABLE IF NOT EXISTS`, then additive `ALTER TABLE` guards for each newer column, then backfills (`_backfill_positions`, `_backfill_youtube_preview_urls`) and cleanup. Schema changes go here as new idempotent guards, not a migrations framework.
-- `services.py` — mutation logic (`apply_classification`) called by **both** the HTML form endpoints and the JSON API endpoints in `main.py`. Put shared write logic here.
+- `services.py` — mutation logic (`set_group`, `promote`) called by **both** the HTML form endpoints and the JSON API endpoints in `main.py`. Put shared write logic here.
 - `views/serializers.py` — `serialize_video` is the canonical video-to-dict presenter for the JSON API. Keep the API shape here.
 - `views/render.py` + `views/templates/*.html` — the server-rendered HTML page + PWA splash images.
 
-`CLASSIFICATIONS` (in `db.py`: children/adults/anabel/asmr/tv/movies) is the source of truth for video categories, imported everywhere that validates a classification. The first four are also the iOS Videos tab's groups (`MediaTab.videoGroups`), which hardcodes them and must be kept in sync.
+The `groups` table is the source of truth for video groups. `db.PLEX_KINDS` covers the separate Plex axis. The iOS Videos tab renders `GET /api/groups` and no longer hardcodes anything, so there is no list to keep in sync.
+
+Adding a group is `POST /api/groups`; there is deliberately no UI for it, and no delete endpoint.
 
 ### Auth
 
-Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` compared with `secrets.compare_digest`. If `UPLOAD_TOKEN` is unset the server returns 503 (upload disabled). The SSR form endpoint (`/videos/{id}/classify`) is **not** token-gated; the `/api/*` equivalent is.
+Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` compared with `secrets.compare_digest`. If `UPLOAD_TOKEN` is unset the server returns 503 (upload disabled). The SSR endpoints are `/videos/{id}/group` and `/videos/{id}/promote`; the group endpoint is **not** token-gated, matching the old behavior.
 
 ### iOS
 
 - `ios/PatataTubeKit/` — a local SwiftPM package holding all logic (`APIClient`, `CacheManager`, `VideoStore`, `Video`, `CredentialStore`). This is the testable core; build/isolate bugs here with `swift build`.
-- `ios/PatataTube/` — the SwiftUI app shell (`Sources/*.swift`), an XcodeGen target. `Video` decodes the server's snake_case JSON; `CacheManager` downloads MP4s for offline playback; `VideoStore` does optimistic classify/upload against `APIClient`.
+- `ios/PatataTube/` — the SwiftUI app shell (`Sources/*.swift`), an XcodeGen target. `Video` decodes the server's snake_case JSON; `CacheManager` downloads MP4s for offline playback; `VideoStore` does optimistic group/upload against `APIClient`.
 - **Navigation is a `TabView` over `MediaTab` (videos/tv/movies).** `RootTabView`
   builds one `VideoGridView` per tab, each with its own `NavigationStack`;
-  `VideoStore.filter` is still the single source of what's loaded, and tab
-  selection calls `switchFilter` the way the old toolbar picker did. The Videos
-  tab's root is `GroupsView` — four classification cards (children, adults,
-  anabel, asmr) that fetch nothing; their art comes from `GroupPosterStore`, a
-  UserDefaults record of each group's newest `preview_url` written by
-  `VideoStore.load()`. Tapping a card pushes `Route.group(name:)`, and the
-  `path` change is what sets the filter, so a hand tap and a restored path take
-  the same code path. Each card's `⋯` menu can override that art with an emoji
-  cover; those live **on the server** (`group_covers` table,
-  `GET/POST /api/group-covers`) so they follow the user across devices, with
-  `GroupCoverStore` mirroring them into UserDefaults so the offline-first group
-  screen still renders them before any fetch.
+  `VideoStore.feed` is the single source of what's loaded, and tab selection
+  calls `switchFeed`. `Feed` distinguishes all videos, a group ID, and a Plex
+  kind for both API queries and persisted per-feed state. The Videos tab's root
+  is `GroupsView`, which renders the server-owned group list. Its `GroupStore`
+  is the single UserDefaults mirror of that list, covering both groups and
+  their emoji so the offline-first screen renders before any fetch. Tapping a
+  card pushes `Route.group(id:)`, and the `path` change selects that group feed,
+  so a hand tap and a restored path take the same code path.
 - **Download-all is bounded on the client too.** `withBoundedTaskGroup`
   (PatataTubeKit) runs at most `CacheManager.maxConcurrentDownloads` operations
   at once. This is not the same bound as `DownloadConcurrencyGate`, which covers
@@ -202,7 +200,7 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
   pause/background/dismiss/advance via `PlaybackPositionReporter`, mirroring
   each write into `UserDefaults` (`ResumePositionStore`) so offline playback
   still resumes and failed writes flush later. The Resume/Play-from-start
-  alert only appears for `tv`/`movies` rows past 60s (`ResumeDecision`);
+  alert only appears for Plex items (`plex_kind` non-null) past 60s (`ResumeDecision`);
   reaching the last 30s stores 0, and auto-advance inside the player always
   starts the next item at 0.
 
@@ -216,11 +214,11 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
 
 ### Promoting downloads into Plex
 
-- Classifying a **download** row as `tv` or `movies` hands the file to Plex: `promote.py` copies `videos/{id}.mp4` to `<LIBRARY_TV_DIR|LIBRARY_MOVIES_DIR>/<sanitized title>.mp4` (flat, no folders), unlinks the source, invalidates HLS, **hard-deletes the row**, and best-effort triggers a Plex section rescan. The video reappears later as a library row via `scan_library`.
+- `POST /api/videos/{id}/promote` hands a **download** row to Plex: `promote.py` copies `videos/{id}.mp4` to `<LIBRARY_TV_DIR|LIBRARY_MOVIES_DIR>/<sanitized title>.mp4` (flat, no folders), unlinks the source, invalidates HLS, **hard-deletes the row**, and best-effort triggers a Plex section rescan. The video reappears later as a library row via `scan_library`. Setting a group never promotes it.
 - The copy is deliberate: `videos/` and `/Volumes/Media` are different filesystems, so `os.rename` raises `EXDEV`. It copies to a hidden `.name.part` inside the destination, then `os.replace`s it — same-volume and atomic, so Plex never scans a partial file.
-- Any failure (volume unmounted, collision, permissions) raises `promote.PromotionError` → **409**, and nothing changes: no move, no classification write, no delete.
-- **Library** rows never move. Their `tv`/`movies` classification comes from the Plex section they live in (`plex.py`), so reclassifying one only rewrites the column until the next scan.
-- `/upload/file` rejects `tv`/`movies` with 400 — a queued upload has no file to move yet.
+- Any failure (volume unmounted, collision, permissions) raises `promote.PromotionError` → **409**, and nothing changes: no move, no delete.
+- **Library** rows never move. Their `plex_kind` comes from the Plex section they live in (`plex.py`), and is refreshed by the next scan.
+- `/upload/file` takes a `group_id`; its former `tv`/`movies` rejection is gone because that case is structurally impossible.
 
 ## Conventions
 
