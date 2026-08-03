@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.2.1",
+          "buildVersion": "121",
+          "date": "2026-08-03T15:58:17Z",
+          "localizedDescription": "Pick an emoji cover for each video group\n\n• Each group card has a ⋯ menu with Choose cover — type one emoji and it becomes the card's art\n• Covers are saved on the server, so the same emoji shows up on every device\n• Remove cover puts the automatic poster art back",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.1/PatataTube-1.2.1.ipa",
+          "size": 4095067,
+          "sha256": "fd39101a89b392ef48b11e42af537b8323426972570d35f12c878c983aecf01e",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.1.64",
           "buildVersion": "120",
           "date": "2026-08-03T14:11:01Z",
@@ -1134,11 +1144,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.1.64",
-      "versionDate": "2026-08-03T14:11:01Z",
-      "versionDescription": "Fixes group card artwork\n\n• Group card posters stay inside their tile instead of spilling across the grid",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.1.64/PatataTube-1.1.64.ipa",
-      "size": 4077142
+      "version": "1.2.1",
+      "versionDate": "2026-08-03T15:58:17Z",
+      "versionDescription": "Pick an emoji cover for each video group\n\n• Each group card has a ⋯ menu with Choose cover — type one emoji and it becomes the card's art\n• Covers are saved on the server, so the same emoji shows up on every device\n• Remove cover puts the automatic poster art back",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.1/PatataTube-1.2.1.ipa",
+      "size": 4095067
     }
   ],
   "news": []
