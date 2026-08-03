@@ -2,8 +2,8 @@
 import SwiftUI
 import PatataTubeKit
 
-/// Root of the Videos tab: one poster card per group, laid out exactly like
-/// `ShowsView`'s show cards. Tapping pushes that group's grid.
+/// Root of the Videos tab: one poster card per group, sized like `ShowsView`'s
+/// show cards (2:3, adaptive 160pt columns). Tapping pushes that group's grid.
 ///
 /// Issues no requests: art comes from `GroupPosterStore` (written whenever a
 /// group's list was fetched anyway) plus the preview disk cache, so a group
@@ -19,11 +19,19 @@ struct GroupsView: View {
             ForEach(MediaTab.videoGroups, id: \.self) { group in
                 NavigationLink(value: Route.group(name: group)) {
                     VStack(alignment: .leading, spacing: 6) {
-                        artwork(for: group)
+                        // A group's art is a 16:9 video preview, not a 2:3 Plex
+                        // poster, so scaledToFill's covering size is far wider
+                        // than this tile. Sizing the frame from the clear
+                        // rectangle keeps the overflow out of layout (an overlay
+                        // never sizes its parent) and clipping to the rounded
+                        // rect keeps it out of the neighbouring cell. Doing it
+                        // ShowsView's way — aspectRatio on the image itself —
+                        // is what let the art bleed across the grid.
+                        Rectangle().fill(.clear)
                             .aspectRatio(2.0/3.0, contentMode: .fit)
+                            .overlay { artwork(for: group) }
                             .background(.secondary.opacity(0.2))
-                            .cornerRadius(8)
-                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                         Text(MediaTab.label(forGroup: group))
                             .font(.subheadline).lineLimit(1)
                     }
