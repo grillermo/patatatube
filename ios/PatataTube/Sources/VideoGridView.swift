@@ -192,6 +192,7 @@ struct VideoGridView: View {
     /// classification is showing), for scroll restoration.
     @State private var gridTracker = VisibleItemsTracker()
     @State private var gridAnchorDebounceTask: Task<Void, Never>?
+    @State private var restoredGroupAnchor: String?
 
     // Search: text updates immediately for the field, but filtering only
     // applies 0.5s after the user stops typing (debounce), to avoid
@@ -478,7 +479,7 @@ struct VideoGridView: View {
             Button {
                 presentDownloadAll()
             } label: { Label("Download all", systemImage: "arrow.down.circle") }
-            .disabled(downloadingAll)
+            .disabled(downloadingAll || !showsVideoGrid)
 
             Button {
                 path.append(.downloads)
@@ -514,11 +515,20 @@ struct VideoGridView: View {
     private func destination(for route: Route) -> some View {
         switch route {
         case .group:
-            ScrollView {
-                if store.isLoading && filteredVideos.isEmpty {
-                    SkeletonGrid(columns: columns, aspectRatio: 16.0/9.0)
-                } else {
-                    defaultGrid
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if store.isLoading && filteredVideos.isEmpty {
+                        SkeletonGrid(columns: columns, aspectRatio: 16.0/9.0)
+                    } else {
+                        defaultGrid
+                    }
+                }
+                .task(id: restoredGroupAnchor) {
+                    guard let anchor = restoredGroupAnchor else { return }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    guard !Task.isCancelled else { return }
+                    proxy.scrollTo(anchor, anchor: .top)
+                    restoredGroupAnchor = nil
                 }
             }
             .searchable(text: $searchText, prompt: "Search videos")
@@ -632,10 +642,14 @@ struct VideoGridView: View {
 
         gridTracker.setOrder(currentGridOrder)
         if let anchor = restored.scrollAnchors[RestorationState.gridKey(filter: store.filter)] {
-            // LazyVGrid/List need a render pass after the data lands before
-            // an off-screen id resolves to a position.
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            scrollProxy.scrollTo(anchor, anchor: .top)
+            if tab == .videos, restoredGroup != nil {
+                restoredGroupAnchor = anchor
+            } else {
+                // LazyVGrid/List need a render pass after the data lands before
+                // an off-screen id resolves to a position.
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                scrollProxy.scrollTo(anchor, anchor: .top)
+            }
         }
 
         // Footprint after the list lands: correlates library size + in-flight
@@ -662,6 +676,12 @@ struct VideoGridView: View {
             return ShowGroup.group(filteredVideos).map { $0.id }
         }
         return filteredVideos.map { String($0.id) }
+    }
+
+    private var showsVideoGrid: Bool {
+        guard tab == .videos else { return true }
+        if case .group? = path.first { return true }
+        return false
     }
 
     private func gridItemAppeared(_ id: String) {
@@ -825,6 +845,7 @@ struct VideoGridView: View {
     /// renders the search-filtered list, and a dialog announcing a count has to
     /// match what the user is looking at.
     private func presentDownloadAll() {
+        guard showsVideoGrid else { return }
         let targets = filteredVideos.filter {
             model.cache.state(for: $0.id, versionId: $0.chosenVersionId) == .notCached
         }
