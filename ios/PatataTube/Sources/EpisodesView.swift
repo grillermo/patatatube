@@ -91,7 +91,9 @@ struct EpisodesView: View {
         .navigationTitle(show.title)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                AutoplayToggle(isOn: $model.autoplay)
+                // Episodes only ever exist under the tv tab, so that's the
+                // scope this toggle writes.
+                AutoplayToggle(isOn: model.autoplayBinding(for: "tv"))
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {

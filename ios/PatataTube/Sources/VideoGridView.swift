@@ -201,8 +201,9 @@ struct VideoGridView: View {
     @State private var activeSearch = ""
     @State private var searchDebounceTask: Task<Void, Never>?
 
-    // Grid cell size, adjustable via +/- buttons. Persisted across launches.
-    @AppStorage("gridCellSize") private var cellSize: Double = 220
+    // Grid cell size, adjustable via +/- buttons. Persisted across launches and
+    // scoped per classification, so sizing one group leaves the others alone.
+    private var cellSize: Double { model.cellSize(for: store.filter) }
     private let minCellSize: Double = 120
     private let maxCellSize: Double = 420
     private let cellSizeStep: Double = 50
@@ -283,18 +284,7 @@ struct VideoGridView: View {
                 currentGridOrder: currentGridOrder,
                 activateGroup: { name in Task { await loadGroup(name) } }
             )
-            .toolbar {
-                // Pin the search field ahead of the menu so the ellipsis sits
-                // to its right. Without this the system appends search last
-                // and the menu ends up on the far side of the bar.
-                // iOS 26+ only; older systems keep the default ordering.
-                if #available(iOS 26.0, *) {
-                    DefaultToolbarItem(kind: .search, placement: .topBarTrailing)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    optionsMenu
-                }
-            }
+            .toolbar { optionsToolbar }
             .onChange(of: path) { _, newPath in
                 guard tab == .videos else { return }
                 guard case .group(let name)? = newPath.first else {
@@ -411,7 +401,8 @@ struct VideoGridView: View {
                                sleepMode: request.sleepMode,
                                randomize: model.randomize(for: store.filter),
                                startSecs: request.startSecs,
-                               startPaused: request.startPaused)
+                               startPaused: request.startPaused,
+                               autoplayScope: store.filter)
     }
 
     /// Split out of `body` alongside `defaultGrid` — inlined, the combined
@@ -466,13 +457,30 @@ struct VideoGridView: View {
         .padding()
     }
 
+    /// The same trailing bar for the tab root and for a pushed group, so the
+    /// ellipsis sits on the row that carries the Back button instead of
+    /// vanishing the moment a group opens.
+    @ToolbarContentBuilder
+    private var optionsToolbar: some ToolbarContent {
+        // Pin the search field ahead of the menu so the ellipsis sits
+        // to its right. Without this the system appends search last
+        // and the menu ends up on the far side of the bar.
+        // iOS 26+ only; older systems keep the default ordering.
+        if #available(iOS 26.0, *) {
+            DefaultToolbarItem(kind: .search, placement: .topBarTrailing)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            optionsMenu
+        }
+    }
+
     private var optionsMenu: some View {
         Menu {
             Button {
                 showUpload = true
             } label: { Label("New video", systemImage: "plus") }
 
-            Toggle(isOn: $model.autoplay) {
+            Toggle(isOn: model.autoplayBinding(for: store.filter)) {
                 Label("Autoplay", systemImage: "play.circle")
             }
 
@@ -494,12 +502,12 @@ struct VideoGridView: View {
             }
 
             Button {
-                cellSize = max(cellSize - cellSizeStep, minCellSize)
+                model.setCellSize(max(cellSize - cellSizeStep, minCellSize), for: store.filter)
             } label: { Label("Smaller cells", systemImage: "minus.magnifyingglass") }
             .disabled(cellSize <= minCellSize)
 
             Button {
-                cellSize = min(cellSize + cellSizeStep, maxCellSize)
+                model.setCellSize(min(cellSize + cellSizeStep, maxCellSize), for: store.filter)
             } label: { Label("Bigger cells", systemImage: "plus.magnifyingglass") }
             .disabled(cellSize >= maxCellSize)
 
@@ -539,6 +547,7 @@ struct VideoGridView: View {
             }
             .searchable(text: $searchText, prompt: "Search videos")
             .refreshable { await store.refreshLibrary() }
+            .toolbar { optionsToolbar }
         case .show(let title):
             if let show = ShowGroup.group(filteredVideos).first(where: { $0.id == title }) {
                 EpisodesView(show: show,
@@ -691,6 +700,12 @@ struct VideoGridView: View {
             return ShowGroup.group(filteredVideos).map { $0.id }
         }
         return filteredVideos.map { String($0.id) }
+    }
+
+    /// The group whose grid is on screen, or nil on the tv/movies tabs.
+    private var currentGroupName: String? {
+        guard tab == .videos, case .group(let name)? = path.first else { return nil }
+        return name
     }
 
     private var showsVideoGrid: Bool {
@@ -867,8 +882,14 @@ struct VideoGridView: View {
     /// match what the user is looking at.
     private func presentDownloadAll() {
         guard showsVideoGrid else { return }
+        // Scoped to the open group, not just to whatever the shared store last
+        // loaded: the menu now also exists on the pushed group screen, and a
+        // switchFilter still in flight would otherwise let the previous group's
+        // rows into the batch.
+        let group = currentGroupName
         let targets = filteredVideos.filter {
-            model.cache.state(for: $0.id, versionId: $0.chosenVersionId) == .notCached
+            if let group, $0.classification != group { return false }
+            return model.cache.state(for: $0.id, versionId: $0.chosenVersionId) == .notCached
         }
         guard !targets.isEmpty else { return }
         pendingDownloadAll = DownloadAllRequest(

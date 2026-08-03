@@ -19,6 +19,9 @@ struct VideoPlayerView: View {
     /// Restoration only: seek to `startSecs`, then wait for a tap instead of
     /// playing. Applies to the first item only — auto-advance always plays.
     let startPaused: Bool
+    /// Classification this queue came from — autoplay is a per-group setting,
+    /// so the player has to know which group's answer to read.
+    let autoplayScope: String?
     @State private var currentIndex: Int
     /// Random-mode only: cursor state over a shuffled permutation of
     /// `videos.indices`, grown with a fresh shuffle whenever it's exhausted
@@ -29,13 +32,15 @@ struct VideoPlayerView: View {
     @StateObject private var orientationControlVisibility = OrientationControlVisibility()
 
     init(videos: [Video], startIndex: Int, sleepMode: Bool = false,
-         randomize: Bool = false, startSecs: Double = 0, startPaused: Bool = false) {
+         randomize: Bool = false, startSecs: Double = 0, startPaused: Bool = false,
+         autoplayScope: String? = nil) {
         self.videos = videos
         self.startIndex = startIndex
         self.sleepMode = sleepMode
         self.randomize = randomize
         self.startSecs = startSecs
         self.startPaused = startPaused
+        self.autoplayScope = autoplayScope
         _currentIndex = State(initialValue: startIndex)
         _sleepAfterCurrent = State(initialValue: sleepMode)
         _suppressAutoplayOnce = State(initialValue: startPaused)
@@ -548,7 +553,7 @@ struct VideoPlayerView: View {
             Task { @MainActor in
                 reportPosition()
                 switch playbackEndAction(
-                    autoplay: model.autoplay,
+                    autoplay: model.autoplay(for: autoplayScope),
                     isForeground: UIApplication.shared.applicationState == .active,
                     sleepMode: sleepAfterCurrent
                 ) {

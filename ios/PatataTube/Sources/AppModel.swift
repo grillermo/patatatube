@@ -34,15 +34,35 @@ final class AppModel: ObservableObject {
     @Published var downloadStreamCount: Int
     @Published var downloadConcurrency: Int
 
-    /// When on, a finished video rolls into the next one in the queue. Session-only
-    /// by design — it resets to off on relaunch, so a long queue can never keep
-    /// playing across launches unnoticed.
-    @Published var autoplay: Bool = false
+    /// When on, a finished video rolls into the next one in the queue. Keyed by
+    /// classification (`store.filter`, `"all"` for the unfiltered tab) so each
+    /// group carries its own answer. Session-only by design — it resets to off
+    /// on relaunch, so a long queue can never keep playing across launches
+    /// unnoticed.
+    @Published var autoplayByClassification: [String: Bool] = [:]
 
-    /// Keyed by classification (`store.filter`, `"all"` for the unfiltered
-    /// tab). Session-only, same lifetime as `autoplay` — not persisted
-    /// across relaunch.
+    /// Keyed by classification the same way, same session-only lifetime.
     @Published var randomizeByClassification: [String: Bool] = [:]
+
+    /// Grid cell size per classification, persisted (unlike the two above — a
+    /// chosen cell size is a layout preference, not a playback mode). Seeded
+    /// from the old global `gridCellSize` so existing installs keep their size.
+    @Published var cellSizeByClassification: [String: Double] = [:]
+
+    static let defaultCellSize: Double = 220
+    private static let cellSizeDefaultsKey = "gridCellSizes"
+    private static let legacyCellSizeKey = "gridCellSize"
+
+    func autoplay(for classification: String?) -> Bool {
+        autoplayByClassification[classification ?? "all"] ?? false
+    }
+
+    func autoplayBinding(for classification: String?) -> Binding<Bool> {
+        Binding(
+            get: { self.autoplay(for: classification) },
+            set: { self.autoplayByClassification[classification ?? "all"] = $0 }
+        )
+    }
 
     /// Bumped by the "Open Web" quick action. A counter, not a Bool, so a
     /// second shortcut tap re-opens the bridge even if the flag never got
@@ -58,6 +78,25 @@ final class AppModel: ObservableObject {
             get: { self.randomize(for: classification) },
             set: { self.randomizeByClassification[classification ?? "all"] = $0 }
         )
+    }
+
+    func cellSize(for classification: String?) -> Double {
+        cellSizeByClassification[classification ?? "all"] ?? legacyCellSize
+    }
+
+    func setCellSize(_ value: Double, for classification: String?) {
+        cellSizeByClassification[classification ?? "all"] = value
+        UserDefaults.standard.set(cellSizeByClassification, forKey: Self.cellSizeDefaultsKey)
+    }
+
+    private var legacyCellSize: Double {
+        let stored = UserDefaults.standard.double(forKey: Self.legacyCellSizeKey)
+        return stored > 0 ? stored : Self.defaultCellSize
+    }
+
+    private func loadCellSizes() {
+        cellSizeByClassification = UserDefaults.standard
+            .dictionary(forKey: Self.cellSizeDefaultsKey) as? [String: Double] ?? [:]
     }
 
     init(
@@ -96,6 +135,7 @@ final class AppModel: ObservableObject {
         self.baseURLText = credentials.baseURL?.absoluteString ?? ""
         self.tokenText = credentials.token ?? ""
         cache.setMaxConcurrentDownloads(self.downloadConcurrency)
+        loadCellSizes()
         // On a real device the backend is DevLog's only sink, so nothing is
         // recorded until it knows where to post. No-op without DEVLOG.
         DevLog.connect(baseURL: credentials.baseURL, token: credentials.token)
