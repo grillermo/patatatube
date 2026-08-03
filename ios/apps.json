@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.2.3",
+          "buildVersion": "123",
+          "date": "2026-08-03T16:27:19Z",
+          "localizedDescription": "Group screens get their own menu and their own settings\n\n• The ⋯ menu now sits next to Back inside a video group, instead of disappearing when you open one\n• Download all only queues the group you are looking at\n• Autoplay, Randomize and cell size are remembered per group",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.3/PatataTube-1.2.3.ipa",
+          "size": 4098032,
+          "sha256": "1b11d639189419659dad96a5bcf775c516ee70432b0914cb0123c6c971942ab2",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.2.2",
           "buildVersion": "122",
           "date": "2026-08-03T16:07:47Z",
@@ -1154,11 +1164,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.2.2",
-      "versionDate": "2026-08-03T16:07:47Z",
-      "versionDescription": "Easier to hit the group card menu\n\n• The ⋯ button on each group card is bigger and easier to tap\n• Taps near the button no longer open the group by mistake",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.2/PatataTube-1.2.2.ipa",
-      "size": 4095574
+      "version": "1.2.3",
+      "versionDate": "2026-08-03T16:27:19Z",
+      "versionDescription": "Group screens get their own menu and their own settings\n\n• The ⋯ menu now sits next to Back inside a video group, instead of disappearing when you open one\n• Download all only queues the group you are looking at\n• Autoplay, Randomize and cell size are remembered per group",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.3/PatataTube-1.2.3.ipa",
+      "size": 4098032
     }
   ],
   "news": []
