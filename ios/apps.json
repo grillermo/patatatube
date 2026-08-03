@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.2.2",
+          "buildVersion": "122",
+          "date": "2026-08-03T16:07:47Z",
+          "localizedDescription": "Easier to hit the group card menu\n\n• The ⋯ button on each group card is bigger and easier to tap\n• Taps near the button no longer open the group by mistake",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.2/PatataTube-1.2.2.ipa",
+          "size": 4095574,
+          "sha256": "85dc3e8f53317ea86ff97057efed33a5101b76228b6c8755b1ffa807d0aeff20",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.2.1",
           "buildVersion": "121",
           "date": "2026-08-03T15:58:17Z",
@@ -1144,11 +1154,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.2.1",
-      "versionDate": "2026-08-03T15:58:17Z",
-      "versionDescription": "Pick an emoji cover for each video group\n\n• Each group card has a ⋯ menu with Choose cover — type one emoji and it becomes the card's art\n• Covers are saved on the server, so the same emoji shows up on every device\n• Remove cover puts the automatic poster art back",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.1/PatataTube-1.2.1.ipa",
-      "size": 4095067
+      "version": "1.2.2",
+      "versionDate": "2026-08-03T16:07:47Z",
+      "versionDescription": "Easier to hit the group card menu\n\n• The ⋯ button on each group card is bigger and easier to tap\n• Taps near the button no longer open the group by mistake",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.2/PatataTube-1.2.2.ipa",
+      "size": 4095574
     }
   ],
   "news": []
