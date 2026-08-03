@@ -4,7 +4,7 @@ import XCTest
 final class PlaybackQueueTests: XCTestCase {
     private func video(id: Int, title: String? = nil) -> Video {
         Video(id: id, url: "https://example.com/\(id)", title: title, platform: nil,
-              sourceKey: nil, previewUrl: nil, classification: "children",
+              sourceKey: nil, previewUrl: nil, groupID: 1, plexKind: nil,
               position: nil, status: "done", errorMsg: nil, streamPath: "/videos/\(id)/stream")
     }
 
@@ -62,7 +62,7 @@ final class PlaybackQueueTests: XCTestCase {
 
     func testStartPausedDefaultsToFalseAndRoundTrips() {
         let video = Video(id: 1, url: "/x", title: "A", platform: nil, sourceKey: nil,
-                          previewUrl: nil, classification: "movies", position: 1,
+                          previewUrl: nil, groupID: nil, plexKind: .movies, position: 1,
                           status: "done", errorMsg: nil, streamPath: "/videos/1/stream",
                           source: "library", showTitle: nil, season: nil, episode: nil,
                           summary: nil, showPreviewUrl: nil)

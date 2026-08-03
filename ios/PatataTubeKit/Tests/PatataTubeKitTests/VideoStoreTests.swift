@@ -5,40 +5,61 @@ import Foundation
 private func makeVideo(id: Int, classification: String = "children", status: String = "completed",
                        errorMsg: String? = nil, previewUrl: String? = nil, chosenVersionId: Int? = nil,
                        versions: [VideoVersion] = [], resumeSecs: Double = 0) -> Video {
-    Video(id: id, url: "u\(id)", title: "t\(id)", platform: nil, sourceKey: nil,
-          previewUrl: previewUrl, classification: classification, position: id,
+    let plexKind = PlexKind(rawValue: classification)
+    let groupID: Int? = switch classification {
+    case "children": 1
+    case "adults": 2
+    case "anabel": 3
+    case "asmr": 4
+    default: nil
+    }
+    return Video(id: id, url: "u\(id)", title: "t\(id)", platform: nil, sourceKey: nil,
+          previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: id,
           status: status, errorMsg: errorMsg, streamPath: "/videos/\(id)/stream",
           chosenVersionId: chosenVersionId, versions: versions, resumeSecs: resumeSecs)
 }
 
+private func makeDefaults() -> UserDefaults {
+    let suite = "video-store.tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    return defaults
+}
+
 private final class FakeAPI: VideoAPI, @unchecked Sendable {
     var videosToReturn: [Video] = []
-    var classifyResult = ClassifyResult(ok: true)
+    var setGroupResult = true
     var uploadId = 100
-    var throwOnClassify = false
+    var throwOnSetGroup = false
     var throwOnVideos = false
     var videosError: Error?
     private(set) var loadCount = 0
+    private(set) var lastFeed: Feed?
     /// Fires inside videos(...) before it returns, so a test can observe
     /// VideoStore's state after the synchronous cache swap but before the
     /// network result lands.
     var beforeVideosReturn: (@Sendable () async -> Void)?
 
-    func videos(classification: String?) async throws -> [Video] {
+    func videos(feed: Feed) async throws -> [Video] {
         loadCount += 1
+        lastFeed = feed
         if let beforeVideosReturn { await beforeVideosReturn() }
         if let videosError { throw videosError }
         if throwOnVideos { throw APIError.badStatus(503) }
-        if let c = classification { return videosToReturn.filter { $0.classification == c } }
-        return videosToReturn
+        switch feed {
+        case .all: return videosToReturn
+        case .group(let id): return videosToReturn.filter { $0.groupID == id }
+        case .plex(let kind): return videosToReturn.filter { $0.plexKind == kind }
+        }
     }
-    func classifications() async throws -> [String] { ["children", "adults"] }
     /// Thrown by every mutating endpoint, so one hook covers them all.
     var mutationError: Error?
-    func classify(id: Int, classification: String) async throws -> ClassifyResult {
+    private(set) var setGroupRequests: [(id: Int, groupID: Int)] = []
+    func setGroup(id: Int, groupID: Int) async throws -> Bool {
         if let mutationError { throw mutationError }
-        if throwOnClassify { throw APIError.badStatus(500) }
-        return classifyResult
+        if throwOnSetGroup { throw APIError.badStatus(500) }
+        setGroupRequests.append((id, groupID))
+        return setGroupResult
     }
     func upload(url: String) async throws -> Int {
         if let mutationError { throw mutationError }
@@ -92,13 +113,32 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     func imageData(path: String) async throws -> Data { Data() }
 }
 
+@MainActor @Test func defaultsToAllWithNoPersistedFeed() {
+    let store = VideoStore(api: FakeAPI(), defaults: makeDefaults())
+    #expect(store.feed == .all)
+}
+
+@MainActor @Test func persistsAndRestoresTheFeed() async {
+    let defaults = makeDefaults()
+    let store = VideoStore(api: FakeAPI(), defaults: defaults)
+    await store.switchFeed(to: .group(id: 7))
+    #expect(VideoStore(api: FakeAPI(), defaults: defaults).feed == .group(id: 7))
+}
+
+@MainActor @Test func switchFeedRequestsTheNewFeed() async {
+    let api = FakeAPI()
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.switchFeed(to: .plex(.movies))
+    #expect(api.lastFeed == .plex(.movies))
+}
+
 private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     private let lock = NSLock()
     private let releaseGate = DispatchSemaphore(value: 0)
     private var saveStarted = false
     private var startedWaiter: CheckedContinuation<Void, Never>?
 
-    func save(_ videos: [Video], classification: String?) {
+    func save(_ videos: [Video], feed: Feed) {
         let waiter = lock.withLock { () -> CheckedContinuation<Void, Never>? in
             saveStarted = true
             defer { startedWaiter = nil }
@@ -121,7 +161,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     }
 
     func releaseSave() { releaseGate.signal() }
-    func load(classification: String?) -> [Video]? { nil }
+    func load(feed: Feed) -> [Video]? { nil }
     func clear() {}
 }
 
@@ -129,7 +169,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     let api = FakeAPI()
     let stale = makeVideo(id: 7, classification: "movies", resumeSecs: 10)
     let cache = tempCache()
-    cache.save([stale], classification: "children")
+    cache.save([stale], feed: .all)
     let defaults = try #require(UserDefaults(suiteName: "position-grid-\(UUID().uuidString)"))
     let positions = ResumePositionStore(defaults: defaults, serverURL: URL(string: "https://srv.test"))
     let reporter = PlaybackPositionReporter(api: api, store: positions)
@@ -140,7 +180,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     #expect(positions.pending().isEmpty)
     #expect(ResumeDecision.decide(
         resumeSecs: positions.resolved(server: stale.resumeSecs, for: stale.id),
-        classification: stale.classification
+        plexKind: stale.plexKind
     ) == .ask(secs: 120))
 
     api.videosError = URLError(.notConnectedToInternet)
@@ -149,7 +189,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     let cached = try #require(videoStore.videos.first)
     #expect(ResumeDecision.decide(
         resumeSecs: positions.resolved(server: cached.resumeSecs, for: cached.id),
-        classification: cached.classification
+        plexKind: cached.plexKind
     ) == .ask(secs: 120))
 }
 
@@ -261,31 +301,30 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     #expect(store.errorText == nil)
 }
 
-@MainActor @Test func classifyOptimisticallyUpdatesThenKeepsOnSuccess() async {
+@MainActor @Test func setGroupSendsTheRequestedGroup() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
-    api.classifyResult = ClassifyResult(ok: true)
     let store = VideoStore(api: api)
     await store.load()
-    await store.classify(id: 1, to: "adults")
-    #expect(store.videos[0].classification == "adults")
+    await store.setGroup(id: 1, groupID: 2)
+    #expect(api.setGroupRequests.map(\.id) == [1])
+    #expect(api.setGroupRequests.map(\.groupID) == [2])
 }
 
-@MainActor @Test func classifyRevertsWhenServerReturnsNotOk() async {
+@MainActor @Test func setGroupDoesNotReportServerNotOk() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
-    api.classifyResult = ClassifyResult(ok: false)
+    api.setGroupResult = false
     let store = VideoStore(api: api)
     await store.load()
-    await store.classify(id: 1, to: "adults")
-    #expect(store.videos[0].classification == "children")
+    await store.setGroup(id: 1, groupID: 2)
+    #expect(store.errorText == nil)
 }
 
-@MainActor @Test func classifyRevertsAndSetsErrorOnThrow() async {
+@MainActor @Test func setGroupSetsErrorOnThrow() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
-    api.throwOnClassify = true
+    api.throwOnSetGroup = true
     let store = VideoStore(api: api)
     await store.load()
-    await store.classify(id: 1, to: "adults")
-    #expect(store.videos[0].classification == "children")
+    await store.setGroup(id: 1, groupID: 2)
     #expect(store.errorText != nil)
 }
 
@@ -378,12 +417,12 @@ private func tempCache() -> VideoListCache {
     let cache = tempCache()
     let store = VideoStore(api: api, cache: cache)
     await store.load()
-    #expect(cache.load(classification: nil)?.count == 2)
+    #expect(cache.load(feed: .all)?.count == 2)
 }
 
 @MainActor @Test func loadFallsBackToCacheAndSetsErrorWhenNetworkFails() async {
     let cache = tempCache()
-    cache.save([makeVideo(id: 9)], classification: nil)
+    cache.save([makeVideo(id: 9)], feed: .all)
     let api = FakeAPI(); api.throwOnVideos = true
     let store = VideoStore(api: api, cache: cache)
     await store.load()
@@ -444,9 +483,9 @@ private func tempCache() -> VideoListCache {
     let store = VideoStore(api: api, cache: tempCache())
     await store.load()
     api.mutationError = URLError(.cancelled)
-    await store.classify(id: 1, to: "adults")
+    await store.setGroup(id: 1, groupID: 2)
     #expect(store.errorText == nil)
-    #expect(store.videos.first?.classification == "children")
+    #expect(store.videos.first?.groupID == 1)
 }
 
 @MainActor @Test func chooseVersionIgnoresCancellation() async {
@@ -503,7 +542,7 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func bootLoadShowsCacheThenRefreshes() async {
     let cache = tempCache()
-    cache.save([makeVideo(id: 9)], classification: nil)
+    cache.save([makeVideo(id: 9)], feed: .all)
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
     let store = VideoStore(api: api, cache: cache)
     await store.bootLoad()
@@ -513,7 +552,7 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func bootLoadServesCacheAndSetsErrorOffline() async {
     let cache = tempCache()
-    cache.save([makeVideo(id: 9)], classification: nil)
+    cache.save([makeVideo(id: 9)], feed: .all)
     let api = FakeAPI(); api.throwOnVideos = true
     let store = VideoStore(api: api, cache: cache)
     await store.bootLoad()
@@ -626,17 +665,17 @@ private func tempCache() -> VideoListCache {
     let store = VideoStore(api: api, cache: cache)
     await store.load()
     #expect(!store.videos.isEmpty)
-    #expect(cache.load(classification: nil) != nil)
+    #expect(cache.load(feed: .all) != nil)
 
     store.clearListCache()
 
     #expect(store.videos.isEmpty)
-    #expect(cache.load(classification: nil) == nil)
+    #expect(cache.load(feed: .all) == nil)
 }
 
-@MainActor @Test func switchFilterShowsCachedListBeforeNetworkReturns() async {
+@MainActor @Test func switchFeedShowsCachedListBeforeNetworkReturns() async {
     let cache = tempCache()
-    cache.save([makeVideo(id: 9, classification: "adults")], classification: "adults")
+    cache.save([makeVideo(id: 9, classification: "adults")], feed: .group(id: 2))
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1, classification: "adults"),
                           makeVideo(id: 2, classification: "adults")]
@@ -644,19 +683,19 @@ private func tempCache() -> VideoListCache {
 
     api.beforeVideosReturn = { @MainActor in
         // Cache swap already happened; network result not yet applied.
-        #expect(store.filter == "adults")
+        #expect(store.feed == .group(id: 2))
         #expect(store.videos.map(\.id) == [9])
         #expect(store.isLoading == true)
     }
-    await store.switchFilter(to: "adults")
+    await store.switchFeed(to: .group(id: 2))
 
     // After the network returns, the API result replaces the cached list.
     #expect(store.videos.map(\.id) == [1, 2])
     #expect(store.isLoading == false)
-    #expect(cache.load(classification: "adults")?.map(\.id) == [1, 2])
+    #expect(cache.load(feed: .group(id: 2))?.map(\.id) == [1, 2])
 }
 
-@MainActor @Test func switchFilterShowsEmptyThenFillsWhenNoCache() async {
+@MainActor @Test func switchFeedShowsEmptyThenFillsWhenNoCache() async {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 5, classification: "children")]
     let store = VideoStore(api: api, cache: tempCache())
@@ -666,13 +705,13 @@ private func tempCache() -> VideoListCache {
         #expect(store.videos.isEmpty)
         #expect(store.isLoading == true)
     }
-    await store.switchFilter(to: "children")
+    await store.switchFeed(to: .group(id: 1))
 
     #expect(store.videos.map(\.id) == [5])
-    #expect(store.filter == "children")
+    #expect(store.feed == .group(id: 1))
 }
 
-@MainActor @Test func switchFilterNeverShowsPreviousFiltersVideos() async {
+@MainActor @Test func switchFeedNeverShowsPreviousFeedsVideos() async {
     let cache = tempCache()
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1, classification: "adults"),
@@ -680,22 +719,22 @@ private func tempCache() -> VideoListCache {
     let store = VideoStore(api: api, cache: cache)
 
     // Land on "adults" first (populates videos with id 1 and caches it).
-    await store.switchFilter(to: "adults")
+    await store.switchFeed(to: .group(id: 2))
     #expect(store.videos.map(\.id) == [1])
 
     // Switch to "children" (no cache): must not keep showing adults' [1].
     api.beforeVideosReturn = { @MainActor in
         #expect(store.videos.isEmpty)
     }
-    await store.switchFilter(to: "children")
+    await store.switchFeed(to: .group(id: 1))
     #expect(store.videos.map(\.id) == [7])
 }
 
-// Two rapid taps -> two overlapping switchFilter() tasks with no cancellation
+// Two rapid taps -> two overlapping switchFeed() tasks with no cancellation
 // between them. The first (slower) fetch must not clobber the second (faster,
 // later) one's result once it finally resolves -- the generation guard should
 // discard the stale "adults" result in favor of the current "children" tab.
-@MainActor @Test func switchFilterRapidDoubleSwitchResolvesToLastTab() async {
+@MainActor @Test func switchFeedRapidDoubleSwitchResolvesToLastFeed() async {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1, classification: "adults", previewUrl: "/videos/1/preview", resumeSecs: 10),
                           makeVideo(id: 2, classification: "children", previewUrl: "/videos/2/preview")]
@@ -710,17 +749,17 @@ private func tempCache() -> VideoListCache {
     // Delay only the "adults" fetch, so it's still in flight when the
     // "children" switch lands and finishes first.
     api.beforeVideosReturn = { @MainActor in
-        if store.filter == "adults" {
+        if store.feed == .group(id: 2) {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
 
-    async let first: Void = store.switchFilter(to: "adults")
+    async let first: Void = store.switchFeed(to: .group(id: 2))
     try? await Task.sleep(nanoseconds: 5_000_000)
-    async let second: Void = store.switchFilter(to: "children")
+    async let second: Void = store.switchFeed(to: .group(id: 1))
     _ = await (first, second)
 
-    #expect(store.filter == "children")
+    #expect(store.feed == .group(id: 1))
     #expect(store.videos.map(\.id) == [2])
     #expect(store.isLoading == false)
     // The discarded adults response must not clear the local value while its

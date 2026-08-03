@@ -7,7 +7,7 @@ import Foundation
 ///
 /// There is deliberately no expiry — a relaunch a week later still restores.
 public final class RestorationStore: @unchecked Sendable {
-    public static let storageKey = "restorationState"
+    public static let storageKey = "restorationStateV2"
 
     private let defaults: UserDefaults
     private let lock = NSLock()

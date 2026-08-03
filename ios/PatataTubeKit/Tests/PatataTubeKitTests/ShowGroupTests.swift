@@ -4,7 +4,7 @@ import XCTest
 final class ShowGroupTests: XCTestCase {
     private func episode(_ id: Int, show: String, season: Int, ep: Int) -> Video {
         Video(id: id, url: "/x", title: "E\(ep)", platform: nil, sourceKey: nil,
-              previewUrl: nil, classification: "tv", position: id, status: "unconverted",
+              previewUrl: nil, groupID: nil, plexKind: .tv, position: id, status: "unconverted",
               errorMsg: nil, streamPath: "/videos/\(id)/stream", source: "library",
               showTitle: show, season: season, episode: ep,
               summary: nil, showPreviewUrl: "/videos/\(id)/preview?kind=show")
@@ -35,7 +35,7 @@ final class ShowGroupTests: XCTestCase {
 
     func testIgnoresVideosWithoutShowTitle() {
         let movie = Video(id: 9, url: "/m", title: "Akira", platform: nil, sourceKey: nil,
-                          previewUrl: nil, classification: "movies", position: 9,
+                          previewUrl: nil, groupID: nil, plexKind: .movies, position: 9,
                           status: "done", errorMsg: nil, streamPath: "/videos/9/stream",
                           source: "library")
         XCTAssertTrue(ShowGroup.group([movie]).isEmpty)

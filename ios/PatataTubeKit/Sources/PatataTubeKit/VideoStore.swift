@@ -14,8 +14,8 @@ public protocol MediaCaching: Sendable {
 @MainActor
 public final class VideoStore: ObservableObject {
     @Published public private(set) var videos: [Video] = []
-    @Published public var filter: String? {
-        didSet { defaults.set(filter, forKey: Self.filterKey) }
+    @Published public var feed: Feed {
+        didSet { defaults.set(feed.storageKey, forKey: Self.feedKey) }
     }
     @Published public private(set) var isLoading = false
     @Published public var errorText: String?
@@ -25,9 +25,12 @@ public final class VideoStore: ObservableObject {
     private let mediaCache: MediaCaching?
     private let positionStore: ResumePositionStore?
     private let defaults: UserDefaults
-    private static let filterKey = "selectedClassification"
+    // New key spelling on purpose: the old "selectedClassification" holds a
+    // group *name*, which means nothing now. Orphaning it is cheaper and safer
+    // than translating it, and costs one launch on the Videos tab root.
+    private static let feedKey = "selectedFeed"
 
-    /// Bumped by every switchFilter()/load() invocation so a stale, still-in-flight
+    /// Bumped by every switchFeed()/load() invocation so a stale, still-in-flight
     /// call can tell it's been superseded and must not clobber `videos`/`isLoading`
     /// with results that no longer match the current tab/request.
     private var loadGeneration = 0
@@ -41,7 +44,7 @@ public final class VideoStore: ObservableObject {
         self.mediaCache = mediaCache
         self.positionStore = positionStore
         self.defaults = defaults
-        self.filter = defaults.string(forKey: Self.filterKey) ?? "children"
+        self.feed = defaults.string(forKey: Self.feedKey).flatMap(Feed.init(storageKey:)) ?? .all
     }
 
     /// Reads + JSON-decodes the persisted list off the main actor. Done inline it
@@ -49,9 +52,9 @@ public final class VideoStore: ObservableObject {
     /// detector (PATATATUBE-3, NSFileHandle.read during first render).
     private func loadCache() async -> [Video]? {
         guard let cache else { return nil }
-        let classification = filter
+        let feed = self.feed
         return await Task.detached(priority: .utility) {
-            cache.load(classification: classification)
+            cache.load(feed: feed)
         }.value
     }
 
@@ -64,25 +67,25 @@ public final class VideoStore: ObservableObject {
         await load()
     }
 
-    /// Tab-switch path: swap to the new classification's cached list instantly
+    /// Tab-switch path: swap to the new feed's cached list instantly
     /// (or an empty list, which the grid renders as skeletons), then refresh
     /// from the network. Mirrors bootLoad()'s cache-first behavior so switching
-    /// tabs never lingers on the previous classification's videos.
+    /// tabs never lingers on the previous feed's videos.
     ///
-    /// `filter`, `videos`, and `isLoading` are all updated synchronously, in that
+    /// `feed`, `videos`, and `isLoading` are all updated synchronously, in that
     /// order, before the first `await`. This closes the MainActor-visible window
-    /// where `filter` already reflects the new tab but `videos`/`isLoading` still
+    /// where `feed` already reflects the new tab but `videos`/`isLoading` still
     /// reflect the old one -- `loadCache()` hops to a background thread internally,
     /// so any state left stale going into that suspension could otherwise render.
     ///
     /// `loadGeneration` guards against a second, faster tab switch landing while
     /// this one is still awaiting its cache read or network fetch: each call
     /// captures its own generation and only applies what it fetches if no newer
-    /// switchFilter()/load() call has started in the meantime.
-    public func switchFilter(to value: String?) async {
+    /// switchFeed()/load() call has started in the meantime.
+    public func switchFeed(to value: Feed) async {
         loadGeneration += 1
         let generation = loadGeneration
-        filter = value
+        feed = value
         videos = []
         isLoading = true
         let cached = await loadCache()
@@ -99,19 +102,19 @@ public final class VideoStore: ObservableObject {
         errorText = nil
         defer { if generation == loadGeneration { isLoading = false } }
         do {
-            let fetched = try await api.videos(classification: filter)
+            let fetched = try await api.videos(feed: feed)
             // Encode + atomic disk write off the main actor: doing it inline here
             // (this method is @MainActor) blocked the main thread long enough to
             // trip Sentry's app-hang detector (PATATATUBE-2, NSFileHandle.write).
             if let cache {
                 let toSave = fetched
-                let classification = filter
+                let feed = self.feed
                 // await the detached task's value: the main actor suspends (freeing
                 // the main thread to render) while the encode + write runs on a
                 // background thread, then resumes. Not fire-and-forget, so callers
                 // still observe the save as complete once load() returns.
                 await Task.detached(priority: .utility) {
-                    cache.save(toSave, classification: classification)
+                    cache.save(toSave, feed: feed)
                 }.value
             }
             // Only apply this fetch if nothing newer has started since -- a stale,
@@ -155,22 +158,28 @@ public final class VideoStore: ObservableObject {
         errorText = String(describing: error)
     }
 
-    /// Optimistically re-buckets the video. A `promoted` response means the
-    /// server moved the file into Plex and deleted the row, so the video is
-    /// dropped from the list and its download purged instead.
-    public func classify(id: Int, to classification: String) async {
+    public func setGroup(id: Int, groupID: Int) async {
         guard videos.contains(where: { $0.id == id }) else { return }
         do {
-            let result = try await api.classify(id: id, classification: classification)
-            if result.promoted {
-                videos.removeAll { $0.id == id }
-                mediaCache?.removeAllCached(id: id)
-                // Server hard-deletes the row on promotion, so re-fetch + re-persist
-                // the list now -- otherwise the on-disk cache still contains this
-                // video and a future bootLoad() renders it as a ghost card whose
-                // stream 404s and whose local file was just purged above.
-                await load()
-            }
+            _ = try await api.setGroup(id: id, groupID: groupID)
+        } catch {
+            report(error)
+        }
+    }
+
+    /// Promoting moves the file into Plex and deletes the row, so drop it from
+    /// the list and purge its download before refreshing the persisted list.
+    public func promote(id: Int, kind: PlexKind) async {
+        guard videos.contains(where: { $0.id == id }) else { return }
+        do {
+            guard try await api.promote(id: id, kind: kind) else { return }
+            videos.removeAll { $0.id == id }
+            mediaCache?.removeAllCached(id: id)
+            // Server hard-deletes the row on promotion, so re-fetch + re-persist
+            // the list now -- otherwise the on-disk cache still contains this
+            // video and a future bootLoad() renders it as a ghost card whose
+            // stream 404s and whose local file was just purged above.
+            await load()
         } catch {
             report(error)
         }

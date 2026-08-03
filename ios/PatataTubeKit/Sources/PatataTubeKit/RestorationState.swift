@@ -7,7 +7,7 @@ import Foundation
 /// longer resolves (deleted video, renamed show) can be dropped instead of
 /// decoding into a phantom screen. It also keeps the persisted blob small.
 public enum Route: Codable, Hashable, Sendable {
-    case group(name: String)  // classification value
+    case group(id: Int)  // VideoGroup.id
     case show(title: String)   // ShowGroup.id
     case movie(id: Int)        // Video.id
     case downloads
@@ -31,9 +31,9 @@ public struct PlayerState: Codable, Equatable, Sendable {
 /// Everything needed to put the user back where they left off.
 public struct RestorationState: Codable, Equatable, Sendable {
     /// Recorded for a self-describing blob and to scope scroll anchors. **Not**
-    /// applied at boot: `VideoStore` already persists the selected
-    /// classification itself under `selectedClassification`.
-    public var filter: String?
+    /// applied at boot: `VideoStore` already persists the selected feed itself
+    /// under `selectedFeed`.
+    public var feed: Feed?
     /// Which tab was on screen. Optional so blobs written before the tab bar
     /// existed still decode; `nil` is read as `.videos` by callers.
     public var tab: MediaTab?
@@ -46,13 +46,13 @@ public struct RestorationState: Codable, Equatable, Sendable {
     public var player: PlayerState?
 
     public static let empty = RestorationState(
-        filter: nil, path: [], search: "", scrollAnchors: [:], player: nil, tab: nil
+        feed: nil, path: [], search: "", scrollAnchors: [:], player: nil, tab: nil
     )
 
-    public init(filter: String?, path: [Route], search: String,
+    public init(feed: Feed?, path: [Route], search: String,
                 scrollAnchors: [String: String], player: PlayerState?,
                 tab: MediaTab? = nil) {
-        self.filter = filter
+        self.feed = feed
         self.path = path
         self.search = search
         self.scrollAnchors = scrollAnchors
@@ -60,9 +60,9 @@ public struct RestorationState: Codable, Equatable, Sendable {
         self.tab = tab
     }
 
-    /// Scroll-anchor key for the root grid on one classification tab.
-    public static func gridKey(filter: String?) -> String {
-        "grid:\(filter ?? "")"
+    /// Scroll-anchor key for the root grid on one feed.
+    public static func gridKey(feed: Feed) -> String {
+        "grid:\(feed.storageKey)"
     }
 
     /// Scroll-anchor key for one show's episode list.

@@ -9,17 +9,16 @@ private final class SpyMediaCache: MediaCaching, @unchecked Sendable {
 
 private final class PromoteAPI: VideoAPI, @unchecked Sendable {
     var videosToReturn: [Video] = []
-    var classifyResult = ClassifyResult(ok: true, promoted: true)
+    var promoteResult = true
 
-    func videos(classification: String?) async throws -> [Video] { videosToReturn }
-    func classifications() async throws -> [String] { ["children", "movies"] }
-    func classify(id: Int, classification: String) async throws -> ClassifyResult {
+    func videos(feed: Feed) async throws -> [Video] { videosToReturn }
+    func promote(id: Int, kind: PlexKind) async throws -> Bool {
         // Mirror the real server: a promotion hard-deletes the row, so it's gone
         // from any subsequent videos() fetch (e.g. VideoStore's post-promote reload).
-        if classifyResult.promoted {
+        if promoteResult {
             videosToReturn.removeAll { $0.id == id }
         }
-        return classifyResult
+        return promoteResult
     }
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
     func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
@@ -34,45 +33,45 @@ private final class PromoteAPI: VideoAPI, @unchecked Sendable {
 
 private func video(_ id: Int) -> Video {
     Video(id: id, url: "u\(id)", title: "t\(id)", platform: nil, sourceKey: nil,
-          previewUrl: nil, classification: "children", position: id,
+          previewUrl: nil, groupID: 1, plexKind: nil, position: id,
           status: "completed", errorMsg: nil, streamPath: "/videos/\(id)/stream",
           chosenVersionId: nil, versions: [])
 }
 
-@MainActor @Test func classifyRemovesAPromotedVideoFromTheList() async {
+@MainActor @Test func promoteRemovesAPromotedVideoFromTheList() async {
     let api = PromoteAPI(); api.videosToReturn = [video(1), video(2)]
-    api.classifyResult = ClassifyResult(ok: true, promoted: true)
+    api.promoteResult = true
     let store = VideoStore(api: api)
     await store.load()
 
-    await store.classify(id: 1, to: "movies")
+    await store.promote(id: 1, kind: .movies)
 
     #expect(store.videos.map(\.id) == [2])
     #expect(store.errorText == nil)
 }
 
-@MainActor @Test func classifyPurgesTheCachedFileOfAPromotedVideo() async {
+@MainActor @Test func promotePurgesTheCachedFileOfAPromotedVideo() async {
     let api = PromoteAPI(); api.videosToReturn = [video(1)]
-    api.classifyResult = ClassifyResult(ok: true, promoted: true)
+    api.promoteResult = true
     let spy = SpyMediaCache()
     let store = VideoStore(api: api, mediaCache: spy)
     await store.load()
 
-    await store.classify(id: 1, to: "movies")
+    await store.promote(id: 1, kind: .movies)
 
     #expect(spy.purged == [1])
 }
 
-@MainActor @Test func classifyKeepsTheVideoWhenNotPromoted() async {
+@MainActor @Test func promoteKeepsTheVideoWhenNotPromoted() async {
     let api = PromoteAPI(); api.videosToReturn = [video(1)]
-    api.classifyResult = ClassifyResult(ok: true, promoted: false)
+    api.promoteResult = false
     let spy = SpyMediaCache()
     let store = VideoStore(api: api, mediaCache: spy)
     await store.load()
 
-    await store.classify(id: 1, to: "adults")
+    await store.promote(id: 1, kind: .movies)
 
     #expect(store.videos.map(\.id) == [1])
-    #expect(store.videos[0].classification == "adults")
+    #expect(store.videos[0].groupID == 1)
     #expect(spy.purged.isEmpty)
 }

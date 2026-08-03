@@ -17,9 +17,7 @@ private final class SpyAPI: VideoAPI, @unchecked Sendable {
         }
     }
 
-    func videos(classification: String?) async throws -> [Video] { [] }
-    func classifications() async throws -> [String] { [] }
-    func classify(id: Int, classification: String) async throws -> ClassifyResult { ClassifyResult(ok: true) }
+    func videos(feed: Feed) async throws -> [Video] { [] }
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
     func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
     func upload(url: String) async throws -> Int { 0 }
@@ -96,9 +94,7 @@ private final class ControlledSpyAPI: VideoAPI, @unchecked Sendable {
         lock.withLock { saved.append((id, secs)) }
     }
 
-    func videos(classification: String?) async throws -> [Video] { [] }
-    func classifications() async throws -> [String] { [] }
-    func classify(id: Int, classification: String) async throws -> ClassifyResult { ClassifyResult(ok: true) }
+    func videos(feed: Feed) async throws -> [Video] { [] }
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
     func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
     func upload(url: String) async throws -> Int { 0 }
@@ -172,9 +168,7 @@ private final class DestinationControlledAPI: VideoAPI, @unchecked Sendable {
         }
     }
 
-    func videos(classification: String?) async throws -> [Video] { [] }
-    func classifications() async throws -> [String] { [] }
-    func classify(id: Int, classification: String) async throws -> ClassifyResult { ClassifyResult(ok: true) }
+    func videos(feed: Feed) async throws -> [Video] { [] }
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
     func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
     func upload(url: String) async throws -> Int { 0 }

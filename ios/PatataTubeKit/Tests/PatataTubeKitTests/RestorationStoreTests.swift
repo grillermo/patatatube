@@ -17,11 +17,11 @@ final class RestorationStoreTests: XCTestCase {
     func testRoundTripsEveryField() {
         let defaults = makeDefaults()
         var state = RestorationState.empty
-        state.filter = "tv"
+        state.feed = .plex(.tv)
         state.path = [.show(title: "The Bear"), .movie(id: 42), .downloads]
         state.search = "bear"
         state.scrollAnchors = [
-            RestorationState.gridKey(filter: "tv"): "show:The Bear",
+            RestorationState.gridKey(feed: .plex(.tv)): "show:The Bear",
             RestorationState.showKey(title: "The Bear"): "12",
         ]
         state.player = PlayerState(videoID: 42, versionID: 7, sleepMode: true)
@@ -58,19 +58,19 @@ final class RestorationStoreTests: XCTestCase {
     }
 
     func testScreenKeysAreDistinct() {
-        XCTAssertNotEqual(RestorationState.gridKey(filter: "tv"),
-                          RestorationState.gridKey(filter: "movies"))
-        XCTAssertNotEqual(RestorationState.gridKey(filter: nil),
-                          RestorationState.gridKey(filter: "tv"))
+        XCTAssertNotEqual(RestorationState.gridKey(feed: .plex(.tv)),
+                          RestorationState.gridKey(feed: .plex(.movies)))
+        XCTAssertNotEqual(RestorationState.gridKey(feed: .all),
+                          RestorationState.gridKey(feed: .plex(.tv)))
         XCTAssertNotEqual(RestorationState.showKey(title: "The Bear"),
-                          RestorationState.gridKey(filter: "The Bear"))
+                          RestorationState.gridKey(feed: .group(id: 4)))
     }
 
     func testRoundTripsSelectedTab() {
         let defaults = makeDefaults()
         var state = RestorationState.empty
         state.tab = .movies
-        state.path = [.group(name: "anabel")]
+        state.path = [.group(id: 3)]
         RestorationStore(defaults: defaults).save(state)
         XCTAssertEqual(RestorationStore(defaults: defaults).load(), state)
     }
@@ -79,11 +79,11 @@ final class RestorationStoreTests: XCTestCase {
         let defaults = makeDefaults()
         // A blob written by a build that predates MediaTab: no "tab" key.
         let legacy = """
-        {"filter":"children","path":[],"search":"","scrollAnchors":{}}
+        {"path":[],"search":"","scrollAnchors":{}}
         """.data(using: .utf8)!
         defaults.set(legacy, forKey: RestorationStore.storageKey)
         let loaded = RestorationStore(defaults: defaults).load()
         XCTAssertNil(loaded.tab)
-        XCTAssertEqual(loaded.filter, "children")
+        XCTAssertNil(loaded.feed)
     }
 }

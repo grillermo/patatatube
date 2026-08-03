@@ -2,9 +2,18 @@ import XCTest
 @testable import PatataTubeKit
 
 final class RestorationResolverTests: XCTestCase {
+    func testGroupRouteRoundTripsByID() throws {
+        let state = RestorationState(
+            feed: .group(id: 4), path: [.group(id: 4)], search: "",
+            scrollAnchors: [:], player: nil, tab: .videos
+        )
+        let data = try JSONEncoder().encode(state)
+        XCTAssertEqual(try JSONDecoder().decode(RestorationState.self, from: data), state)
+    }
+
     private func episode(_ id: Int, show: String, season: Int, ep: Int) -> Video {
         Video(id: id, url: "/x", title: "E\(ep)", platform: nil, sourceKey: nil,
-              previewUrl: nil, classification: "tv", position: id, status: "done",
+              previewUrl: nil, groupID: nil, plexKind: .tv, position: id, status: "done",
               errorMsg: nil, streamPath: "/videos/\(id)/stream", source: "library",
               showTitle: show, season: season, episode: ep,
               summary: nil, showPreviewUrl: nil)
@@ -12,7 +21,7 @@ final class RestorationResolverTests: XCTestCase {
 
     private func movie(_ id: Int) -> Video {
         Video(id: id, url: "/x", title: "M\(id)", platform: nil, sourceKey: nil,
-              previewUrl: nil, classification: "movies", position: id, status: "done",
+              previewUrl: nil, groupID: nil, plexKind: .movies, position: id, status: "done",
               errorMsg: nil, streamPath: "/videos/\(id)/stream", source: "library",
               showTitle: nil, season: nil, episode: nil,
               summary: nil, showPreviewUrl: nil)
@@ -20,7 +29,7 @@ final class RestorationResolverTests: XCTestCase {
 
     private func state(path: [Route], player: PlayerState? = nil,
                        search: String = "") -> RestorationState {
-        RestorationState(filter: "tv", path: path, search: search,
+        RestorationState(feed: .plex(.tv), path: path, search: search,
                          scrollAnchors: [:], player: player)
     }
 
