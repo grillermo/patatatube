@@ -34,6 +34,7 @@ public final class VideoStore: ObservableObject {
     /// call can tell it's been superseded and must not clobber `videos`/`isLoading`
     /// with results that no longer match the current tab/request.
     private var loadGeneration = 0
+    private var mutationGeneration = 0
 
     public init(api: VideoAPI, cache: VideoListCaching? = nil,
                 mediaCache: MediaCaching? = nil,
@@ -83,6 +84,7 @@ public final class VideoStore: ObservableObject {
     /// captures its own generation and only applies what it fetches if no newer
     /// switchFeed()/load() call has started in the meantime.
     public func switchFeed(to value: Feed) async {
+        mutationGeneration += 1
         loadGeneration += 1
         let generation = loadGeneration
         feed = value
@@ -95,6 +97,7 @@ public final class VideoStore: ObservableObject {
     }
 
     public func load() async {
+        mutationGeneration += 1
         loadGeneration += 1
         let generation = loadGeneration
         let positionSnapshot = positionStore?.freshServerReconciliationSnapshot()
@@ -160,22 +163,32 @@ public final class VideoStore: ObservableObject {
 
     public func setGroup(id: Int, groupID: Int) async {
         guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
+        mutationGeneration += 1
+        let generation = mutationGeneration
         let previous = videos[index]
         videos[index] = previous.withGroupID(groupID)
         let updatedVideos = videos
         let requestedFeed = feed
         do {
             guard try await api.setGroup(id: id, groupID: groupID) else {
-                if videos.indices.contains(index), videos[index].id == id { videos[index] = previous }
+                if generation == mutationGeneration,
+                   videos.indices.contains(index), videos[index].id == id,
+                   videos[index].groupID == groupID {
+                    videos[index] = previous
+                }
                 return
             }
-            if let cache {
+            if generation == mutationGeneration, let cache {
                 await Task.detached(priority: .utility) {
                     cache.save(updatedVideos, feed: requestedFeed)
                 }.value
             }
         } catch {
-            if videos.indices.contains(index), videos[index].id == id { videos[index] = previous }
+            if generation == mutationGeneration,
+               videos.indices.contains(index), videos[index].id == id,
+               videos[index].groupID == groupID {
+                videos[index] = previous
+            }
             report(error)
         }
     }

@@ -54,11 +54,13 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     }
     /// Thrown by every mutating endpoint, so one hook covers them all.
     var mutationError: Error?
+    var setGroupHook: (@Sendable (Int, Int) async throws -> Bool)?
     private(set) var setGroupRequests: [(id: Int, groupID: Int)] = []
     func setGroup(id: Int, groupID: Int) async throws -> Bool {
         if let mutationError { throw mutationError }
         if throwOnSetGroup { throw APIError.badStatus(500) }
         setGroupRequests.append((id, groupID))
+        if let setGroupHook { return try await setGroupHook(id, groupID) }
         return setGroupResult
     }
     func upload(url: String) async throws -> Int {
@@ -331,6 +333,27 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     await store.setGroup(id: 1, groupID: 2)
     #expect(store.errorText != nil)
     #expect(store.videos[0].groupID == 1)
+}
+
+@MainActor @Test func olderSetGroupFailureDoesNotRevertANewerGroup() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, classification: "children")]
+    api.setGroupHook = { _, groupID in
+        if groupID == 2 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            throw APIError.badStatus(500)
+        }
+        return true
+    }
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.load()
+
+    async let first: Void = store.setGroup(id: 1, groupID: 2)
+    try? await Task.sleep(nanoseconds: 5_000_000)
+    async let second: Void = store.setGroup(id: 1, groupID: 3)
+    _ = await (first, second)
+
+    #expect(store.videos[0].groupID == 3)
 }
 
 @MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async throws {
