@@ -1,6 +1,6 @@
 ---
 name: deploy-ios
-description: Deploy, ship, or release the PatataTube iOS app. Commits all pending git changes, pushes to the remote, then runs ./deploy to bump the version, build the .ipa, cut a GitHub Release and update the AltStore source. Use when asked to deploy iOS, ship the app, release a new version, or publish to AltStore.
+description: Deploy, ship, or release the PatataTube iOS app. Commits all pending git changes, pushes to the remote, then runs ./deploy to bump the version, build the .ipa, cut a GitHub Release and update the AltStore source with per-build release notes. Use when asked to deploy iOS, ship the app, release a new version, or publish to AltStore.
 model: sonnet
 ---
 
@@ -31,6 +31,15 @@ One command does everything — commit pending changes, push, deploy:
 .claude/skills/deploy-ios/deploy-ios.sh -m "Fix download button" minor
 ```
 
+Always pass release notes (see below):
+
+```bash
+.claude/skills/deploy-ios/deploy-ios.sh minor \
+  --summary "Playback survives backgrounding" \
+  --note "Player restores the session once per launch, not per task restart" \
+  --note "Controls reveal themselves on a restored session"
+```
+
 **Preview first without touching anything** — runs all preflight checks and
 prints the plan, commits/pushes/deploys nothing:
 
@@ -45,6 +54,36 @@ The driver:
 4. `exec ./deploy [bump]` — which bumps the version, builds the `.ipa`, makes its own commit of `project.yml`/`apps.json`, pushes, and creates the GitHub Release.
 
 The AltStore source URL is printed at the end by `./deploy`.
+
+## Release notes — always write them
+
+AltStore and SideStore render each version's `localizedDescription` from
+`ios/apps.json` as **"What's New"** on the iPad. A bare `Release 1.1.63` there
+is useless, so `./deploy` builds a real description:
+
+    What's new in 1.1.63:
+
+    • Player restores the session once per launch, not per task restart
+    • Controls reveal themselves on a restored session
+
+- `--summary "..."` — the headline line. Without it: `What's new in X.Y.Z:`.
+- `--note "..."` — one bullet, **repeatable**. A value with newlines (or leading
+  `-`/`*`/`•`) splits into several bullets.
+- Both flags go through the wrapper unchanged, in any order, and land in the
+  version entry of `ios/apps.json` *and* the GitHub Release body.
+
+**Fallback:** with no `--note`/`--summary`, `./deploy` derives bullets from the
+commit subjects since the last `v*` tag (max 8, merges and `Release iOS v…` /
+`Commit pending changes` noise filtered). That keeps a description from ever
+degrading to the version alone — but raw commit subjects read like commit
+subjects, so write the notes yourself.
+
+**How to write them as the agent:** before deploying, read what actually
+changed (`git log --oneline $(git describe --tags --abbrev=0 --match 'v*')..HEAD`
+plus any uncommitted diff) and turn it into 2–5 bullets phrased from the
+iPad user's side — what they will notice, not which file moved. Skip backend-only
+and tooling commits; they are invisible on the device. `./deploy` prints the
+final text before building, so it is visible in the run output.
 
 ## Instrumented builds (`--instrumented`)
 

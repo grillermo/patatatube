@@ -27,6 +27,17 @@
 #   ./deploy --instrumented  # ^ any of the above, but with DEVLOG compiled in
 #   ./deploy --instrumented --yes   # skip the confirmation prompt
 #
+# Release notes (the "What's New" AltStore/SideStore shows on the iPad):
+#
+#   ./deploy minor --summary "Faster offline downloads" \
+#            --note "Download-all now queues behind interactive taps" \
+#            --note "Fixed playback stalling after backgrounding"
+#
+# --summary is a one-line headline, --note is repeatable and becomes a bullet.
+# With neither, the notes are derived from the commit subjects since the last
+# release tag, so a version's description is never just "Release X.Y.Z". The
+# same text becomes the GitHub Release body.
+#
 # --instrumented builds the .ipa with the DEVLOG condition, so the app records
 # what it is doing at runtime and posts it to the backend (POST /api/devlog ->
 # log/ios.jsonl). Use it to reproduce a bug on the real iPad. It is a normal
@@ -58,6 +69,34 @@ ICON_REL     = "apple-touch-icon.png"
 ASSUME_YES   = !ARGV.delete("--yes").nil?
 INSTRUMENTED = !(ARGV.delete("--instrumented") || ARGV.delete("--devlog")).nil? ||
                ENV["PATATATUBE_DEVLOG"] == "1"
+
+# Repeatable "--flag value" / "--flag=value" options, pulled out of ARGV the
+# same way, so the version argument stays positional wherever it sits.
+def take_option(argv, *names)
+  values = []
+  i = 0
+  while i < argv.length
+    arg = argv[i]
+    if names.include?(arg)
+      value = argv[i + 1]
+      B.die("#{arg} needs a value") if value.nil? || value.start_with?("--")
+      values << value
+      argv.slice!(i, 2)
+    elsif (eq = arg.match(/\A(--[a-z-]+)=(.*)\z/m)) && names.include?(eq[1])
+      values << eq[2]
+      argv.slice!(i, 1)
+    else
+      i += 1
+    end
+  end
+  values
+end
+
+SUMMARY = take_option(ARGV, "--summary", "-s").last
+NOTES   = take_option(ARGV, "--note", "--notes", "-n")
+          .flat_map { |n| n.split("\n") }
+          .map { |n| n.strip.sub(/\A[-*•]\s*/, "") }
+          .reject(&:empty?)
 
 # --- repo / remote -----------------------------------------------------------
 
@@ -104,6 +143,38 @@ if `git tag -l #{tag}`.strip == tag || !`gh release view #{tag} 2>/dev/null`.emp
   B.die("release #{tag} already exists — bump to a new version")
 end
 
+# --- release notes -----------------------------------------------------------
+# AltStore/SideStore render localizedDescription as the version's "What's New",
+# so a bare "Release X.Y.Z" tells the person on the iPad nothing. Bullets come
+# from --note, and failing that from the commit subjects since the last release
+# tag (the wrapper commits pending work before we run, so they are all in).
+
+# Merge/release/chore noise that says nothing about what changed on the iPad.
+NOTE_NOISE = /\A(Release iOS v|Merge |Commit pending changes|Bump |wip\b)/i
+
+def notes_from_git
+  last = `git describe --tags --abbrev=0 --match 'v*' 2>/dev/null`.strip
+  range = last.empty? ? "HEAD -n 20" : "#{last}..HEAD"
+  subjects = `git log --no-merges --pretty=%s #{range}`.lines.map(&:strip)
+  subjects.reject { |s| s.empty? || s =~ NOTE_NOISE }.uniq.first(8)
+end
+
+def release_notes(version, instrumented)
+  bullets = NOTES.empty? ? notes_from_git : NOTES
+  headline = SUMMARY || (bullets.empty? ? "Release #{version}." : "What's new in #{version}:")
+  headline = "[DEVLOG] #{headline}" if instrumented
+  lines = [headline]
+  lines << "" unless bullets.empty?
+  lines.concat(bullets.map { |b| "• #{b}" })
+  if instrumented
+    lines << ""
+    lines << "Instrumented build — posts runtime logs to the PatataTube backend."
+  end
+  lines.join("\n")
+end
+
+DESCRIPTION = release_notes(version, INSTRUMENTED)
+
 yml   = File.read(PROJECT_YML)
 build = (yml[/^\s*CURRENT_PROJECT_VERSION:\s*"?(\d+)"?/, 1] || "0").to_i + 1
 yml   = yml.sub(/^(\s*MARKETING_VERSION:\s*)"?[\d.]+"?/, "\\1\"#{version}\"")
@@ -111,6 +182,8 @@ yml   = yml.sub(/^(\s*CURRENT_PROJECT_VERSION:\s*)"?\d+"?/, "\\1\"#{build}\"")
 File.write(PROJECT_YML, yml)
 
 puts B.bold("\n==> Releasing #{APP_NAME} #{current} -> #{version} (build #{build}) to #{REPO}")
+puts B.bold("\n    What's New (AltStore + GitHub release):")
+DESCRIPTION.each_line { |l| puts "      #{l.chomp}" }
 
 # An instrumented build is a public GitHub Release like any other, and AltStore
 # will push it to the iPad automatically. Make that impossible to do by accident.
@@ -152,9 +225,10 @@ new_version = {
   "version"              => version,
   "buildVersion"         => build.to_s,
   "date"                 => Time.now.utc.iso8601,
-  # Marked in the manifest so an instrumented build is identifiable on the iPad
-  # and in the source history, not just in whoever-ran-it's memory.
-  "localizedDescription" => INSTRUMENTED ? "[DEVLOG] Instrumented build #{version}." : "Release #{version}.",
+  # The "What's New" AltStore shows for this version. Instrumented builds are
+  # marked so they are identifiable on the iPad and in the source history, not
+  # just in whoever-ran-it's memory.
+  "localizedDescription" => DESCRIPTION,
   "downloadURL"          => download,
   "size"                 => size,
   "sha256"               => sha256,
@@ -200,9 +274,12 @@ B.run("git commit -m 'Release iOS #{tag}'", chdir: __dir__)
 B.run("git push github #{DEFAULT_BRANCH}", chdir: __dir__)
 
 B.step "Creating GitHub release #{tag} + uploading .ipa"
+# Via a file, not --notes: the body is multi-line and would need shell escaping.
+notes_file = File.join(work, "notes.md")
+File.write(notes_file, "PatataTube iOS #{version}\n\n#{DESCRIPTION}\n")
 B.run(
   "gh release create #{tag} #{released.inspect} " \
-  "--title #{tag.inspect} --notes 'PatataTube iOS #{version}'",
+  "--title #{tag.inspect} --notes-file #{notes_file.inspect}",
   chdir: __dir__
 )
 

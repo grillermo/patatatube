@@ -15,6 +15,11 @@
 #   deploy-ios.sh --dry-run [args]        # run preflight checks only; commit nothing
 #   deploy-ios.sh --instrumented [args]   # build with DEVLOG runtime logging
 #   deploy-ios.sh --instrumented --yes    # ^ without ./deploy's confirmation prompt
+#   deploy-ios.sh --summary "Faster downloads" --note "Fixed X" --note "Added Y"
+#
+# --summary / --note are the release notes AltStore and SideStore show as
+# "What's New" for the version (--note repeatable, one bullet each). Pass them:
+# without them ./deploy falls back to the commit subjects since the last tag.
 #
 # --instrumented compiles DevLog into the .ipa so the app records what it does
 # at runtime and posts it to the backend (POST /api/devlog -> log/ios.jsonl).
@@ -29,17 +34,22 @@ dry_run=0
 instrumented=0
 assume_yes=0
 bump=""
+# Release-notes flags, forwarded verbatim to ./deploy (which turns them into
+# the version's "What's New" in ios/apps.json and the GitHub release body).
+notes_args=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -m) msg="$2"; shift 2 ;;
+    --summary|-s|--note|--notes|-n) notes_args+=("$1" "$2"); shift 2 ;;
+    --summary=*|--note=*|--notes=*) notes_args+=("$1"); shift ;;
     --dry-run) dry_run=1; shift ;;
     --instrumented|--devlog) instrumented=1; shift ;;
     # ./deploy asks for interactive confirmation before publishing an
     # instrumented build. Needed when running non-interactively, where there is
     # no stdin to answer it.
     --yes) assume_yes=1; shift ;;
-    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) bump="$1"; shift ;;
   esac
 done
@@ -129,10 +139,18 @@ fi
 bump="$candidate"
 ok "target version v$bump (from v$current_version)"
 
-deploy_args="$bump"
+deploy_cmd=(./deploy "$bump")
 if [ "$instrumented" -eq 1 ]; then
-  deploy_args="$deploy_args --instrumented"
-  [ "$assume_yes" -eq 1 ] && deploy_args="$deploy_args --yes"
+  deploy_cmd+=(--instrumented)
+  [ "$assume_yes" -eq 1 ] && deploy_cmd+=(--yes)
+fi
+[ ${#notes_args[@]} -gt 0 ] && deploy_cmd+=("${notes_args[@]}")
+
+if [ ${#notes_args[@]} -eq 0 ]; then
+  echo "no --summary/--note given — ./deploy will derive What's New from commit subjects"
+fi
+
+if [ "$instrumented" -eq 1 ]; then
   printf '\033[31m⚠  INSTRUMENTED build (DEVLOG): the app will post runtime logs to the backend.\033[0m\n'
   printf '\033[31m   This is still a public release — ship a clean build over it when done.\033[0m\n'
 fi
@@ -142,7 +160,7 @@ git status --short
 echo "--- plan ---"
 echo "  1. git add -A && git commit -m \"$msg\"   (skipped if nothing pending)"
 echo "  2. git push $remote $branch"
-echo "  3. ./deploy $deploy_args"
+echo "  3. ${deploy_cmd[*]}"
 
 if [ "$dry_run" -eq 1 ]; then
   ok "dry run — nothing committed, pushed, or deployed"
@@ -162,10 +180,4 @@ git push "$remote" "$branch"
 ok "pushed to $remote/$branch"
 
 # --- hand off to the release script -----------------------------------------
-if [ "$instrumented" -eq 1 ]; then
-  if [ "$assume_yes" -eq 1 ]; then
-    exec ./deploy ${bump:+"$bump"} --instrumented --yes
-  fi
-  exec ./deploy ${bump:+"$bump"} --instrumented
-fi
-exec ./deploy ${bump:+"$bump"}
+exec "${deploy_cmd[@]}"
