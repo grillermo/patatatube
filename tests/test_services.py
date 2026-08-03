@@ -7,88 +7,89 @@ import pytest
 def fresh_db(monkeypatch, tmp_path):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
     import db
+
     importlib.reload(db)
     db.init_db()
+    return db
+
+
+def test_set_group_writes_the_column(fresh_db, monkeypatch):
     import services
+
     importlib.reload(services)
-    return db, services
+    gid = fresh_db.get_group_by_name("adults")["id"]
+    vid = fresh_db.add_video("https://example.com/x", platform="twitter")
+    assert services.set_group(vid, gid) is True
+    assert fresh_db.get_video(vid)["group_id"] == gid
 
 
-def test_apply_classification_accepts_valid(fresh_db):
-    db, services = fresh_db
-    vid = db.add_video("https://twitter.com/x/status/1")
-    result = services.apply_classification(vid, "adults")
-    assert (result.ok, result.promoted) == (True, False)
-    assert db.get_video(vid)["classification"] == "adults"
+def test_set_group_rejects_an_unknown_group(fresh_db):
+    import services
+
+    importlib.reload(services)
+    vid = fresh_db.add_video("https://example.com/y", platform="twitter")
+    assert services.set_group(vid, 9999) is False
+    assert fresh_db.get_video(vid)["group_id"] is None
 
 
-def test_apply_classification_rejects_invalid(fresh_db):
-    db, services = fresh_db
-    vid = db.add_video("https://twitter.com/x/status/1")
-    db.set_video_classification(vid, "children")
-    result = services.apply_classification(vid, "bogus")
-    assert (result.ok, result.promoted) == (False, False)
-    assert db.get_video(vid)["classification"] == "children"
+def test_promote_rejects_an_unknown_kind(fresh_db):
+    import services
+
+    importlib.reload(services)
+    vid = fresh_db.add_video("https://example.com/z", platform="twitter")
+    assert services.promote(vid, "podcasts") is False
 
 
-def test_apply_classification_promotes_a_download_to_movies(fresh_db, monkeypatch):
-    db, services = fresh_db
+def test_promote_hands_a_download_to_plex(fresh_db, monkeypatch):
     import promote
-    moved = []
+    import services
+
+    importlib.reload(services)
+    calls = []
+    monkeypatch.setattr(promote, "promote_to_plex", lambda v, k: calls.append((v["id"], k)))
+    vid = fresh_db.add_video("https://example.com/w", platform="twitter")
+    assert services.promote(vid, "tv") is True
+    assert calls == [(vid, "tv")]
+
+
+def test_promote_skips_library_rows(fresh_db, monkeypatch):
+    import promote
+    import services
+
+    importlib.reload(services)
     monkeypatch.setattr(
-        promote, "promote_to_plex",
-        lambda video, classification: moved.append((video["id"], classification)),
+        promote, "promote_to_plex", lambda v, k: pytest.fail("library rows never move")
     )
-    vid = db.add_video("https://youtu.be/abc")
-    db.update_video(vid, "done", filename=f"{vid}.mp4")
-
-    result = services.apply_classification(vid, "movies")
-
-    assert (result.ok, result.promoted) == (True, True)
-    assert moved == [(vid, "movies")]
+    vid = fresh_db.add_video("https://example.com/l", platform="upload")
+    fresh_db.update_video(vid, source="library")
+    assert services.promote(vid, "movies") is False
 
 
-def test_apply_classification_leaves_library_rows_alone(fresh_db, monkeypatch):
-    db, services = fresh_db
-    import promote
+def test_promote_propagates_a_promotion_failure(fresh_db, monkeypatch):
+    import promote as plex_promote
+    import services
+
+    importlib.reload(services)
+
+    def fail_move(video, kind):
+        raise plex_promote.PromotionError("unavailable")
+
     monkeypatch.setattr(
-        promote, "promote_to_plex",
-        lambda video, classification: pytest.fail("library rows must not move"),
+        plex_promote,
+        "promote_to_plex",
+        fail_move,
     )
-    video_id, _ = db.upsert_library_video({
-        "source_path": "/media/movies/x.mkv",
-        "title": "X",
-        "classification": "movies",
-        "versions": [{"source_path": "/media/movies/x.mkv", "label": "1080p"}],
-    })
+    vid = fresh_db.add_video("https://example.com/f", platform="twitter")
 
-    result = services.apply_classification(video_id, "tv")
-
-    assert (result.ok, result.promoted) == (True, False)
-    assert db.get_video(video_id)["classification"] == "tv"
-
-
-def test_apply_classification_propagates_a_promotion_failure(fresh_db, monkeypatch):
-    db, services = fresh_db
-    import promote
-
-    def boom(video, classification):
-        raise promote.PromotionError("library directory is unavailable")
-
-    monkeypatch.setattr(promote, "promote_to_plex", boom)
-    vid = db.add_video("https://youtu.be/abc")
-    db.update_video(vid, "done", filename=f"{vid}.mp4")
-    db.set_video_classification(vid, "children")
-
-    with pytest.raises(promote.PromotionError):
-        services.apply_classification(vid, "movies")
-
-    assert db.get_video(vid)["classification"] == "children"
+    with pytest.raises(plex_promote.PromotionError, match="unavailable"):
+        services.promote(vid, "movies")
 
 
 def test_choose_version_invalidates_existing_hls_package(fresh_db, monkeypatch):
-    db, services = fresh_db
-    video_id, _ = db.upsert_library_video(
+    import services
+
+    importlib.reload(services)
+    video_id, _ = fresh_db.upsert_library_video(
         {
             "source_path": "/media/movie-1080p.mkv",
             "title": "Movie",
@@ -99,7 +100,7 @@ def test_choose_version_invalidates_existing_hls_package(fresh_db, monkeypatch):
             ],
         }
     )
-    selected_version = db.get_video_versions(video_id)[1]
+    selected_version = fresh_db.get_video_versions(video_id)[1]
     invalidated = []
     import hls
 

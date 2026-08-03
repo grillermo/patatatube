@@ -1,35 +1,39 @@
 """Mutation logic shared by the SSR form endpoints and the JSON API."""
 
-from dataclasses import dataclass
-
 import db
 import hls
-import promote
-from db import CLASSIFICATIONS
+# Aliased: this module defines a function called `promote`, which would
+# otherwise shadow the import and break every `promote.…` reference below.
+import promote as plex_promote
 
 
-@dataclass(frozen=True)
-class ClassificationResult:
-    """`promoted` means the file moved into Plex and the row is gone."""
+def set_group(video_id: int, group_id: int) -> bool:
+    """Put a video in a group. False when the group does not exist.
 
-    ok: bool
-    promoted: bool = False
-
-
-def apply_classification(video_id: int, classification: str) -> ClassificationResult:
-    """Set a classification, or hand a download over to Plex when it is tv/movies.
-
-    Raises promote.PromotionError when the move fails; nothing is written then.
+    This is a pure column write. Handing a download to Plex is `promote()` —
+    a different verb with different consequences (the file moves, the row is
+    deleted), and it used to be spelled as a value of this same call.
     """
-    if classification not in CLASSIFICATIONS:
-        return ClassificationResult(ok=False)
-    if classification in promote.PROMOTED_CLASSIFICATIONS:
-        video = db.get_video(video_id)
-        if video and video.get("source") != "library":
-            promote.promote_to_plex(video, classification)
-            return ClassificationResult(ok=True, promoted=True)
-    db.set_video_classification(video_id, classification)
-    return ClassificationResult(ok=True)
+    if db.get_group(group_id) is None:
+        return False
+    db.set_video_group(video_id, group_id)
+    return True
+
+
+def promote(video_id: int, kind: str) -> bool:
+    """Move a downloaded file into Plex. The row is deleted on success.
+
+    False for an unknown kind, a missing video, or a library row (those already
+    live in Plex and never move). Raises promote.PromotionError when the move
+    itself fails — nothing is written then.
+    """
+    if kind not in plex_promote.PLEX_KINDS:
+        return False
+    video = db.get_video(video_id)
+    if not video or video.get("source") == "library":
+        return False
+    plex_promote.promote_to_plex(video, kind)
+    return True
 
 
 def choose_version(video_id: int, version_id: int) -> bool:

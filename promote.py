@@ -25,7 +25,7 @@ _DEST_ENV = {
     "tv": ("LIBRARY_TV_DIR", "/Volumes/Media/media/tv"),
 }
 
-PROMOTED_CLASSIFICATIONS = frozenset(_DEST_ENV)
+PLEX_KINDS = frozenset(_DEST_ENV)
 
 # Path separators, Windows/SMB-reserved characters, and control characters.
 _UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -35,12 +35,12 @@ class PromotionError(RuntimeError):
     """Raised when a video cannot be moved into the Plex library."""
 
 
-def dest_dir(classification: str) -> Path:
-    """Plex directory for a classification, read per-call so env changes apply."""
+def dest_dir(kind: str) -> Path:
+    """Plex directory for a kind, read per-call so env changes apply."""
     try:
-        env_name, default = _DEST_ENV[classification]
+        env_name, default = _DEST_ENV[kind]
     except KeyError:
-        raise PromotionError(f"not a library classification: {classification}") from None
+        raise PromotionError(f"not a Plex kind: {kind}") from None
     return Path(os.getenv(env_name, default))
 
 
@@ -64,21 +64,21 @@ def unique_target(directory: Path, stem: str) -> Path:
     raise PromotionError(f"no free filename for {stem!r} in {directory}")
 
 
-def _refresh_plex(classification: str) -> None:
+def _refresh_plex(kind: str) -> None:
     """Best-effort rescan: the file is already in place, so a failure is not fatal."""
     if not os.getenv("PLEX_TOKEN"):
         return
     try:
-        plex.refresh_sections("movie" if classification == "movies" else "show")
+        plex.refresh_sections("movie" if kind == "movies" else "show")
     except Exception as exc:  # noqa: BLE001 - never fail an already-completed move
-        logger.warning("Plex refresh after promoting to %s failed: %s", classification, exc)
+        logger.warning("Plex refresh after promoting to %s failed: %s", kind, exc)
 
 
-def promote_to_plex(video: dict, classification: str) -> Path:
+def promote_to_plex(video: dict, kind: str) -> Path:
     """Move a finished download into its Plex directory and drop its row.
 
     Returns the new path. On any failure nothing changes: the source file stays
-    in videos/, the row stays, and no classification is written.
+    in videos/, the row stays, and no group is written.
     """
     if video.get("source") == "library":
         raise PromotionError("library videos are managed by Plex already")
@@ -91,7 +91,7 @@ def promote_to_plex(video: dict, classification: str) -> Path:
     if not source.exists():
         raise PromotionError(f"file missing: {source}")
 
-    directory = dest_dir(classification)
+    directory = dest_dir(kind)
     if not directory.is_dir():
         raise PromotionError(f"library directory is unavailable: {directory}")
 
@@ -111,5 +111,5 @@ def promote_to_plex(video: dict, classification: str) -> Path:
     source.unlink(missing_ok=True)
     hls.invalidate(video["id"])
     db.delete_video(video["id"])
-    _refresh_plex(classification)
+    _refresh_plex(kind)
     return target

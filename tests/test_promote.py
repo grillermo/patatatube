@@ -24,8 +24,8 @@ def test_dest_dir_rejects_a_non_library_classification():
         promote.dest_dir("children")
 
 
-def test_promoted_classifications_are_tv_and_movies():
-    assert promote.PROMOTED_CLASSIFICATIONS == frozenset({"tv", "movies"})
+def test_plex_kinds():
+    assert promote.PLEX_KINDS == frozenset({"tv", "movies"})
 
 
 def test_sanitize_title_strips_path_and_reserved_characters():
