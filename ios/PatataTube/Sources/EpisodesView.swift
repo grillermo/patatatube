@@ -8,10 +8,9 @@ import PatataTubeKit
 final class EpisodesDownloadAllState {
     private(set) var canDownloadAll = false
     private(set) var isDownloading = false
-    /// Confirmation in flight, and whether Downloads has been pushed. Held here
-    /// rather than in `@State` so the whole Download-all flow has one owner.
+    /// Confirmation in flight. Held here rather than in `@State` so the whole
+    /// Download-all flow has one owner.
     var pendingDownloadAll: DownloadAllRequest?
-    var showDownloads = false
 
     func setEligibility(_ value: Bool) {
         canDownloadAll = value
@@ -28,29 +27,59 @@ struct EpisodesView: View {
     let onPlay: (Video, [Video]) -> Void
     let onDownload: @MainActor @Sendable (Video) async -> Bool
     private let cacheStateOverride: (@MainActor @Sendable (Video) -> CacheState)?
+    /// Pushing Downloads belongs to the stack's owner — this view no longer
+    /// declares destinations.
+    var showDownloads: () -> Void = {}
 
     @EnvironmentObject var model: AppModel
     @Environment(\.continuousClock) private var clock
+    @Environment(\.scenePhase) private var scenePhase
     @State private var downloadState = EpisodesDownloadAllState()
+    @State private var visibleTracker = VisibleItemsTracker()
+    @State private var anchorDebounceTask: Task<Void, Never>?
+
+    private var anchorKey: String { RestorationState.showKey(title: show.title) }
 
     init(
         show: ShowGroup,
         onPlay: @escaping (Video, [Video]) -> Void,
         onDownload: @escaping @MainActor @Sendable (Video) async -> Bool,
-        currentCacheState: (@MainActor @Sendable (Video) -> CacheState)? = nil
+        currentCacheState: (@MainActor @Sendable (Video) -> CacheState)? = nil,
+        showDownloads: @escaping () -> Void = {}
     ) {
         self.show = show
         self.onPlay = onPlay
         self.onDownload = onDownload
         self.cacheStateOverride = currentCacheState
+        self.showDownloads = showDownloads
     }
 
     var body: some View {
-        List {
-            ForEach(show.seasons(), id: \.number) { season in
-                Section("Season \(season.number)") {
-                    ForEach(season.episodes) { episode in
-                        row(for: episode)
+        ScrollViewReader { proxy in
+            List {
+                ForEach(show.seasons(), id: \.number) { season in
+                    Section("Season \(season.number)") {
+                        ForEach(season.episodes) { episode in
+                            row(for: episode)
+                                .id(String(episode.id))
+                                .onAppear {
+                                    visibleTracker.appeared(String(episode.id))
+                                    scheduleAnchorSave()
+                                }
+                                .onDisappear {
+                                    visibleTracker.disappeared(String(episode.id))
+                                    scheduleAnchorSave()
+                                }
+                        }
+                    }
+                }
+            }
+            .onAppear {
+                visibleTracker.setOrder(show.episodes.map { String($0.id) })
+                if let anchor = model.restorationStore.load().scrollAnchors[anchorKey] {
+                    Task {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        proxy.scrollTo(anchor, anchor: .top)
                     }
                 }
             }
@@ -87,32 +116,33 @@ struct EpisodesView: View {
                 let targets = request.targets
                 downloadState.pendingDownloadAll = nil
                 // Push Downloads so the confirm lands on the progress list.
-                downloadState.showDownloads = true
+                showDownloads()
                 Task { @MainActor in await downloadAll(targets) }
             }
         } message: { request in
             Text(VideoGridView.downloadAllMessage(count: request.targets.count, freeBytes: request.freeBytes))
         }
-        // Pushed onto the enclosing stack — the same Downloads list the grid
-        // shows, scoped to this show's episodes for title lookup.
-        .navigationDestination(isPresented: Binding(
-            get: { downloadState.showDownloads },
-            set: { downloadState.showDownloads = $0 }
-        )) {
-            DownloadsView(
-                active: { model.cache.activeDownloads() },
-                recent: { model.cache.recentDownloads() },
-                video: { id, versionID in
-                    VideoGridView.downloadVideo(id: id, versionID: versionID, videos: show.episodes)
-                },
-                onCancel: { activity in
-                    model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
-                },
-                onPlay: { video in onPlay(video, show.episodes) }
-            )
-        }
         .task {
             await observeDownloadAllEligibility()
+        }
+        .onChange(of: scenePhase) { _, newValue in
+            guard newValue != .active else { return }
+            anchorDebounceTask?.cancel()
+            if let topmost = visibleTracker.topmost {
+                let key = anchorKey
+                model.restorationStore.mutate { $0.scrollAnchors[key] = topmost }
+            }
+        }
+    }
+
+    private func scheduleAnchorSave() {
+        let key = anchorKey
+        anchorDebounceTask?.cancel()
+        anchorDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            guard let topmost = visibleTracker.topmost else { return }
+            model.restorationStore.mutate { $0.scrollAnchors[key] = topmost }
         }
     }
 

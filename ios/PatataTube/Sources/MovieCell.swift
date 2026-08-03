@@ -12,7 +12,7 @@ struct MovieCell: View {
     var cachedPreviewURL: URL? = nil
 
     var body: some View {
-        NavigationLink(value: video) {
+        NavigationLink(value: Route.movie(id: video.id)) {
             ZStack {
                 Rectangle().fill(.black)
                 Text(video.title ?? video.url)

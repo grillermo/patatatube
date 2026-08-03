@@ -19,15 +19,86 @@ struct PendingResume: Identifiable {
     let secs: Double
 }
 
+/// The six restoration save-triggers, pulled out of `VideoGridView.body` as a
+/// separate `ViewModifier`: inlined as `.onChange` calls directly in the
+/// modifier chain, they pushed the type checker past its time budget.
+private struct RestorationTracking: ViewModifier {
+    let path: [Route]
+    let filter: String?
+    let activeSearch: String
+    let playing: PlaybackQueue?
+    let scenePhase: ScenePhase
+    let model: AppModel
+    let gridTracker: VisibleItemsTracker
+    @Binding var gridAnchorDebounceTask: Task<Void, Never>?
+    let currentGridOrder: [String]
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: activeSearch) { _, newValue in
+                model.restorationStore.mutate { $0.search = newValue }
+            }
+            .onChange(of: path) { _, newValue in
+                model.restorationStore.mutate { $0.path = newValue }
+            }
+            .onChange(of: filter) { _, newValue in
+                model.restorationStore.mutate { $0.filter = newValue }
+            }
+            .onChange(of: currentGridOrder) { _, newValue in
+                gridTracker.setOrder(newValue)
+            }
+            .onChange(of: playing) { _, newValue in
+                model.restorationStore.mutate { state in
+                    state.player = newValue.map { queue in
+                        let video = queue.videos[queue.startIndex]
+                        return PlayerState(videoID: video.id, versionID: video.chosenVersionId, sleepMode: queue.sleepMode)
+                    }
+                }
+            }
+            .onChange(of: scenePhase) { _, newValue in
+                guard newValue != .active else { return }
+                // Flush the debounced anchor write immediately — the app can
+                // be suspended before the 0.5s debounce fires.
+                gridAnchorDebounceTask?.cancel()
+                if let topmost = gridTracker.topmost {
+                    let key = RestorationState.gridKey(filter: filter)
+                    model.restorationStore.mutate { $0.scrollAnchors[key] = topmost }
+                }
+            }
+    }
+}
+
+private extension View {
+    func restorationTracking(
+        path: [Route], filter: String?, activeSearch: String,
+        playing: PlaybackQueue?, scenePhase: ScenePhase,
+        model: AppModel, gridTracker: VisibleItemsTracker,
+        gridAnchorDebounceTask: Binding<Task<Void, Never>?>,
+        currentGridOrder: [String]
+    ) -> some View {
+        modifier(RestorationTracking(
+            path: path, filter: filter, activeSearch: activeSearch,
+            playing: playing, scenePhase: scenePhase,
+            model: model, gridTracker: gridTracker,
+            gridAnchorDebounceTask: gridAnchorDebounceTask,
+            currentGridOrder: currentGridOrder
+        ))
+    }
+}
+
 struct VideoGridView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var classifications: [String] = ["children", "adults", "education", "tv", "movies"]
     @State private var showSettings = false
     @State private var showUpload = false
-    @State private var showDownloads = false
     @State private var showWebBridge = false
+    /// Explicit navigation path. Required for restoration — an implicit stack
+    /// cannot be replayed — and the reason `.downloads` is a route rather than
+    /// an `isPresented` destination: SwiftUI desyncs a stack that mixes the two.
+    @State private var path: [Route] = []
     /// Queue snapshot + start index, built at tap time. A single cover item —
     /// presenting from separate state raced the boot load and could hand the
     /// player an empty queue on the first cold-launch tap (index crash).
@@ -39,6 +110,11 @@ struct VideoGridView: View {
     @State private var downloadingAll = false
     @State private var pendingDownloadAll: DownloadAllRequest?
     @State private var errorBannerOffset: CGFloat = 0
+
+    /// Tracks the topmost on-screen item of the root grid (whichever
+    /// classification is showing), for scroll restoration.
+    @State private var gridTracker = VisibleItemsTracker()
+    @State private var gridAnchorDebounceTask: Task<Void, Never>?
 
     // Search: text updates immediately for the field, but filtering only
     // applies 0.5s after the user stops typing (debounce), to avoid
@@ -100,77 +176,36 @@ struct VideoGridView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                if store.isLoading && filteredVideos.isEmpty {
-                    if store.filter == "tv" || store.filter == "movies" {
-                        SkeletonGrid(columns: columns, aspectRatio: 2.0/3.0,
-                                     showsTextBars: store.filter == "tv")
+        NavigationStack(path: $path) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if store.isLoading && filteredVideos.isEmpty {
+                        if store.filter == "tv" || store.filter == "movies" {
+                            SkeletonGrid(columns: columns, aspectRatio: 2.0/3.0,
+                                         showsTextBars: store.filter == "tv")
+                        } else {
+                            SkeletonGrid(columns: columns, aspectRatio: 16.0/9.0)
+                        }
+                    } else if store.filter == "tv" {
+                        ShowsView(
+                            videos: filteredVideos,
+                            onPlay: { video, queue in
+                                play(video, queueSnapshot: queue)
+                            },
+                            onDownload: { await download($0) },
+                            onItemAppear: { gridItemAppeared($0) },
+                            onItemDisappear: { gridItemDisappeared($0) }
+                        )
+                    } else if store.filter == "movies" {
+                        moviesGrid
                     } else {
-                        SkeletonGrid(columns: columns, aspectRatio: 16.0/9.0)
+                        defaultGrid
                     }
-                } else if store.filter == "tv" {
-                    ShowsView(
-                        videos: filteredVideos,
-                        onPlay: { video, queue in
-                            play(video, queueSnapshot: queue)
-                        },
-                        onDownload: { await download($0) }
-                    )
-                } else if store.filter == "movies" {
-                    LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(filteredVideos) { video in
-                            MovieCell(
-                                video: video,
-                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl)
-                            )
-                        }
-                    }
-                    .padding()
-                } else {
-                    LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(filteredVideos) { video in
-                            let cache = model.cache
-                            let videoId = video.id
-                            let versionId = video.chosenVersionId
-                            VideoCell(
-                                video: video,
-                                cacheState: cache.state(for: videoId, versionId: versionId),
-                                currentCacheState: { cache.state(for: videoId, versionId: versionId) },
-                                cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl),
-                                localFileURL: cache.localURL(for: videoId, versionId: versionId),
-                                classifications: classifications,
-                                onPlay: { play(video) },
-                                onPlaySleep: { play(video, sleepMode: true) },
-                                onDownload: { await download(video) },
-                                onCancel: { cache.cancel(id: videoId, versionId: versionId) },
-                                onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
-                                onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
-                                onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
-                                onDelete: { Task { await store.delete(id: video.id) } }
-                            )
-                        }
-                    }
-                    .padding()
                 }
+                .task { await initialLoad(scrollProxy: proxy) }
             }
-            .navigationDestination(for: Video.self) { pushed in
-                MovieDetailView(video: pushed,
-                                onPlay: { play($0) },
-                                onDownload: { await download($0) })
-            }
-            .navigationDestination(isPresented: $showDownloads) {
-                DownloadsView(
-                    active: { model.cache.activeDownloads() },
-                    recent: { model.cache.recentDownloads() },
-                    video: { id, versionID in
-                        Self.downloadVideo(id: id, versionID: versionID, videos: store.videos)
-                    },
-                    onCancel: { activity in
-                        model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
-                    },
-                    onPlay: { video in play(video) }
-                )
+            .navigationDestination(for: Route.self) { route in
+                destination(for: route)
             }
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "Search videos")
@@ -182,6 +217,13 @@ struct VideoGridView: View {
                     activeSearch = newValue
                 }
             }
+            .restorationTracking(
+                path: path, filter: store.filter, activeSearch: activeSearch,
+                playing: playing, scenePhase: scenePhase,
+                model: model, gridTracker: gridTracker,
+                gridAnchorDebounceTask: $gridAnchorDebounceTask,
+                currentGridOrder: currentGridOrder
+            )
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     filterTabs
@@ -215,7 +257,7 @@ struct VideoGridView: View {
                     let targets = request.targets
                     pendingDownloadAll = nil
                     // Push Downloads so the confirm lands on the progress list.
-                    showDownloads = true
+                    path.append(.downloads)
                     Task { await runDownloadAll(targets) }
                 }
             } message: { request in
@@ -247,12 +289,59 @@ struct VideoGridView: View {
                 VideoPlayerView(videos: request.videos, startIndex: request.startIndex,
                                 sleepMode: request.sleepMode,
                                 randomize: model.randomize(for: store.filter),
-                                startSecs: request.startSecs)
+                                startSecs: request.startSecs,
+                                startPaused: request.startPaused)
             }
-            .task { await initialLoad() }
             .overlay { if let error = store.errorText { errorBanner(error) } }
         }
         .environment(preparationTracker)
+    }
+
+    /// Split out of `body` alongside `defaultGrid` — inlined, the combined
+    /// expression pushed the type checker past its time budget.
+    private var moviesGrid: some View {
+        LazyVGrid(columns: columns, spacing: 16) {
+            ForEach(filteredVideos) { video in
+                MovieCell(
+                    video: video,
+                    cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl)
+                )
+                .id(String(video.id))
+                .onAppear { gridItemAppeared(String(video.id)) }
+                .onDisappear { gridItemDisappeared(String(video.id)) }
+            }
+        }
+        .padding()
+    }
+
+    private var defaultGrid: some View {
+        LazyVGrid(columns: columns, spacing: 16) {
+            ForEach(filteredVideos) { video in
+                let cache = model.cache
+                let videoId = video.id
+                let versionId = video.chosenVersionId
+                VideoCell(
+                    video: video,
+                    cacheState: cache.state(for: videoId, versionId: versionId),
+                    currentCacheState: { cache.state(for: videoId, versionId: versionId) },
+                    cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl),
+                    localFileURL: cache.localURL(for: videoId, versionId: versionId),
+                    classifications: classifications,
+                    onPlay: { play(video) },
+                    onPlaySleep: { play(video, sleepMode: true) },
+                    onDownload: { await download(video) },
+                    onCancel: { cache.cancel(id: videoId, versionId: versionId) },
+                    onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
+                    onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
+                    onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
+                    onDelete: { Task { await store.delete(id: video.id) } }
+                )
+                .id(String(videoId))
+                .onAppear { gridItemAppeared(String(videoId)) }
+                .onDisappear { gridItemDisappeared(String(videoId)) }
+            }
+        }
+        .padding()
     }
 
     /// Segmented control over the classifications. `""` stands in for a nil
@@ -301,7 +390,7 @@ struct VideoGridView: View {
             .disabled(downloadingAll)
 
             Button {
-                showDownloads = true
+                path.append(.downloads)
             } label: {
                 Label("Downloads", systemImage: "arrow.down.circle")
             }
@@ -326,16 +415,116 @@ struct VideoGridView: View {
         }
     }
 
-    private func initialLoad() async {
+    /// Resolved late, against the list actually on screen: a route holds only
+    /// an id, so a renamed or deleted show resolves to nothing instead of a
+    /// phantom screen. Split out of `body` — inlined as one giant switch it
+    /// pushed the type checker past its time budget.
+    @ViewBuilder
+    private func destination(for route: Route) -> some View {
+        switch route {
+        case .show(let title):
+            if let show = ShowGroup.group(filteredVideos).first(where: { $0.id == title }) {
+                EpisodesView(show: show,
+                             onPlay: { video, queue in play(video, queueSnapshot: queue) },
+                             onDownload: { await download($0) },
+                             showDownloads: { path.append(.downloads) })
+            }
+        case .movie(let id):
+            if let video = store.videos.first(where: { $0.id == id }) {
+                MovieDetailView(video: video,
+                                onPlay: { play($0) },
+                                onDownload: { await download($0) })
+            }
+        case .downloads:
+            DownloadsView(
+                active: { model.cache.activeDownloads() },
+                recent: { model.cache.recentDownloads() },
+                video: { id, versionID in
+                    Self.downloadVideo(id: id, versionID: versionID, videos: store.videos)
+                },
+                onCancel: { activity in
+                    model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
+                },
+                onPlay: { video in play(video) }
+            )
+        }
+    }
+
+    /// Order is load-bearing: the restored path and player resolve against
+    /// `store.videos`, which only exists after `bootLoad()` returns, and the
+    /// search text has to be applied before `filteredVideos` (which both
+    /// depend on) is read.
+    private func initialLoad(scrollProxy: ScrollViewProxy) async {
         let api = APIClient(store: model.credentials)
         if let list = try? await api.classifications() { classifications = list }
+
+        let restored = model.restorationStore.load()
         await store.bootLoad()
+
+        searchText = restored.search
+        activeSearch = restored.search
+
+        // An explicit launch intent (home-screen quick action) must not be
+        // overridden by whatever was playing last session.
+        let resolved = RestorationResolver.resolve(
+            state: restored,
+            videos: store.videos,
+            hasPendingQuickAction: QuickActionRouter.shared.pending != nil
+        )
+        path = resolved.path
+        if let player = resolved.player {
+            let startSecs = model.resumeStore.resolved(server: player.video.resumeSecs, for: player.video.id)
+            playing = PlaybackQueue(
+                video: player.video,
+                queueSnapshot: player.queue,
+                sleepMode: player.sleepMode,
+                startSecs: startSecs,
+                startPaused: true
+            )
+        }
+
+        gridTracker.setOrder(currentGridOrder)
+        if let anchor = restored.scrollAnchors[RestorationState.gridKey(filter: store.filter)] {
+            // LazyVGrid/List need a render pass after the data lands before
+            // an off-screen id resolves to a position.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            scrollProxy.scrollTo(anchor, anchor: .top)
+        }
+
         // Footprint after the list lands: correlates library size + in-flight
         // downloads with the OOM watchdog kills (PATATATUBE-6, -2).
         MemoryProbe.snapshot("grid-loaded", extra: [
             "video_count": store.videos.count,
             "active_downloads": model.cache.activeDownloads().count,
         ])
+    }
+
+    private var currentGridOrder: [String] {
+        if store.filter == "tv" {
+            return ShowGroup.group(filteredVideos).map { $0.id }
+        }
+        return filteredVideos.map { String($0.id) }
+    }
+
+    private func gridItemAppeared(_ id: String) {
+        gridTracker.appeared(id)
+        scheduleGridAnchorSave()
+    }
+
+    private func gridItemDisappeared(_ id: String) {
+        gridTracker.disappeared(id)
+        scheduleGridAnchorSave()
+    }
+
+    private func scheduleGridAnchorSave() {
+        let key = RestorationState.gridKey(filter: store.filter)
+        gridAnchorDebounceTask?.cancel()
+        gridAnchorDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            guard let topmost = gridTracker.topmost else { return }
+            model.restorationStore.mutate { $0.scrollAnchors[key] = topmost }
+        }
     }
 
     private func play(_ video: Video, sleepMode: Bool = false) {

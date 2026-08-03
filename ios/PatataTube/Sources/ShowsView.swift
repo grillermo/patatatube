@@ -7,6 +7,10 @@ struct ShowsView: View {
     let videos: [Video]
     let onPlay: (Video, [Video]) -> Void
     let onDownload: @MainActor @Sendable (Video) async -> Bool
+    /// Feeds the grid's shared scroll-position tracker; this screen shares the
+    /// root grid's `"grid:<filter>"` anchor rather than owning one itself.
+    var onItemAppear: (String) -> Void = { _ in }
+    var onItemDisappear: (String) -> Void = { _ in }
     @EnvironmentObject var model: AppModel
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
@@ -14,7 +18,7 @@ struct ShowsView: View {
     var body: some View {
         LazyVGrid(columns: columns, spacing: 16) {
             ForEach(ShowGroup.group(videos)) { show in
-                NavigationLink(value: show) {
+                NavigationLink(value: Route.show(title: show.title)) {
                     VStack(alignment: .leading, spacing: 6) {
                         AuthedImage(path: show.posterPath,
                                     localFileURL: cachedPosterURL(for: show),
@@ -28,12 +32,12 @@ struct ShowsView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .id(show.id)
+                .onAppear { onItemAppear(show.id) }
+                .onDisappear { onItemDisappear(show.id) }
             }
         }
         .padding()
-        .navigationDestination(for: ShowGroup.self) { show in
-            EpisodesView(show: show, onPlay: onPlay, onDownload: onDownload)
-        }
     }
 
     private func cachedPosterURL(for show: ShowGroup) -> URL? {

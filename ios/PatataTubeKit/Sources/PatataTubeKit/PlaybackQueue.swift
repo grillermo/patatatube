@@ -15,6 +15,9 @@ public struct PlaybackQueue: Identifiable, Equatable, Sendable {
     /// Only ever non-zero when the user picked "Resume" — auto-advance inside
     /// the player always starts the next item at 0.
     public let startSecs: Double
+    /// Restoration only: mount seeked to `startSecs` but do not start playing.
+    /// A relaunch must never produce surprise audio.
+    public let startPaused: Bool
 
     /// `video` may be a fresher copy than its row in `queueSnapshot`
     /// (e.g. updated by ensureReady), so it replaces that row. A video absent
@@ -23,10 +26,12 @@ public struct PlaybackQueue: Identifiable, Equatable, Sendable {
         video: Video,
         queueSnapshot: [Video],
         sleepMode: Bool = false,
-        startSecs: Double = 0
+        startSecs: Double = 0,
+        startPaused: Bool = false
     ) {
         self.sleepMode = sleepMode
         self.startSecs = startSecs
+        self.startPaused = startPaused
         self.id = video.id
         if let index = queueSnapshot.firstIndex(where: { $0.id == video.id }) {
             var queue = queueSnapshot

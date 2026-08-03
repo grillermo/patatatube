@@ -16,6 +16,9 @@ struct VideoPlayerView: View {
     /// user chose "Resume" in the grid's prompt — every later item in the queue
     /// starts at 0.
     let startSecs: Double
+    /// Restoration only: seek to `startSecs`, then wait for a tap instead of
+    /// playing. Applies to the first item only — auto-advance always plays.
+    let startPaused: Bool
     @State private var currentIndex: Int
     /// Random-mode only: cursor state over a shuffled permutation of
     /// `videos.indices`, grown with a fresh shuffle whenever it's exhausted
@@ -26,14 +29,16 @@ struct VideoPlayerView: View {
     @StateObject private var orientationControlVisibility = OrientationControlVisibility()
 
     init(videos: [Video], startIndex: Int, sleepMode: Bool = false,
-         randomize: Bool = false, startSecs: Double = 0) {
+         randomize: Bool = false, startSecs: Double = 0, startPaused: Bool = false) {
         self.videos = videos
         self.startIndex = startIndex
         self.sleepMode = sleepMode
         self.randomize = randomize
         self.startSecs = startSecs
+        self.startPaused = startPaused
         _currentIndex = State(initialValue: startIndex)
         _sleepAfterCurrent = State(initialValue: sleepMode)
+        _suppressAutoplayOnce = State(initialValue: startPaused)
         _orientationLock = StateObject(wrappedValue: OrientationLockCoordinator())
     }
 
@@ -49,6 +54,9 @@ struct VideoPlayerView: View {
     @State private var readyObserver: NSKeyValueObservation?
     /// Fallback: mount + play even if buffering never reports ready (dead network).
     @State private var readyTimeoutTask: Task<Void, Never>?
+    /// Cleared after the first item mounts, so only the restored item starts
+    /// paused; every later item in the queue plays as usual.
+    @State private var suppressAutoplayOnce: Bool = false
     @State private var nowPlaying = NowPlayingManager()
     @State private var playToEndObserver: NSObjectProtocol?
     /// Periodic time observer that feeds the resume reporter. Removed on dismiss.
@@ -344,8 +352,14 @@ struct VideoPlayerView: View {
             self.itemReady = true
             DevLog.event(.play, "mounted and playing", [
                 "video_id": "\(self.video.id)", "trigger": trigger,
+                "paused": "\(self.suppressAutoplayOnce)",
             ])
-            player.play()
+            if self.suppressAutoplayOnce {
+                // Restored session: mounted and seeked, waiting for a tap.
+                self.suppressAutoplayOnce = false
+            } else {
+                player.play()
+            }
             self.readyObserver?.invalidate()
             self.readyObserver = nil
             self.readyTimeoutTask?.cancel()
