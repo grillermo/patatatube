@@ -305,7 +305,8 @@ async def upload(body: UploadRequest, request: Request, background_tasks: Backgr
     if source["platform"] == "youtube":
         existing = db.get_completed_video_by_source("youtube", source["source_key"])
         if existing:
-            services.set_group(existing["id"], group_id)
+            if not services.set_group(existing["id"], group_id):
+                raise HTTPException(status_code=409, detail="Existing video cannot be moved to this group")
             return {"id": existing["id"], "status": "queued"}
 
     video_id = db.add_video(

@@ -162,6 +162,27 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     func clear() {}
 }
 
+private actor GroupMoveGate {
+    private var arrived: Set<Int> = []
+    private var arrivalWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var releaseWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    func arrive(_ id: Int) async {
+        arrived.insert(id)
+        arrivalWaiters.removeValue(forKey: id)?.resume()
+        await withCheckedContinuation { releaseWaiters[id] = $0 }
+    }
+
+    func waitForArrival(_ id: Int) async {
+        guard !arrived.contains(id) else { return }
+        await withCheckedContinuation { arrivalWaiters[id] = $0 }
+    }
+
+    func release(_ id: Int) {
+        releaseWaiters.removeValue(forKey: id)?.resume()
+    }
+}
+
 @MainActor @Test func successfulPositionSaveWinsOverStaleRowAndOfflineCacheUntilFreshList() async throws {
     let api = FakeAPI()
     let stale = makeVideo(id: 7, groupID: nil, plexKind: .movies, resumeSecs: 10)
@@ -397,6 +418,33 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     _ = await (first, second)
 
     #expect(store.videos.isEmpty)
+}
+
+@MainActor @Test func concurrentGroupMoveFailurePersistsTheSettledSourceFeed() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
+    let gate = GroupMoveGate()
+    api.setGroupHook = { id, _ in
+        await gate.arrive(id)
+        return id == 1
+    }
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.switchFeed(to: .group(id: 1))
+
+    async let first: Void = store.setGroup(id: 1, groupID: 2)
+    await gate.waitForArrival(1)
+    async let second: Void = store.setGroup(id: 2, groupID: 2)
+    await gate.waitForArrival(2)
+    await gate.release(1)
+    await first
+    await gate.release(2)
+    await second
+
+    #expect(store.videos.map(\.id) == [2])
+    #expect(store.videos[0].groupID == 1)
+    #expect(cache.load(feed: .group(id: 1))?.map(\.id) == [2])
+    #expect(cache.load(feed: .group(id: 1))?[0].groupID == 1)
 }
 
 @MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async throws {

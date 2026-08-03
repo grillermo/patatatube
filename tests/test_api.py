@@ -245,6 +245,30 @@ def test_upload_reuses_completed_youtube_video(client, monkeypatch):
     assert resp.json() == {"id": existing_id, "status": "queued"}
     assert queued == []
 
+
+def test_upload_reused_legacy_plex_youtube_video_returns_conflict(client, monkeypatch):
+    queued = []
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: queued.append((a, kw)))
+
+    import db
+
+    existing_id = db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+    )
+    db.update_video(existing_id, status="done", filename="existing.mp4")
+    db.set_video_plex_kind(existing_id, "movies")
+
+    resp = client.post(
+        "/upload",
+        json={"url": "https://youtu.be/dQw4w9WgXcQ"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.status_code == 409
+    assert queued == []
+
 def test_stream_not_found(client):
     resp = client.get("/videos/999/stream", headers=AUTH)
     assert resp.status_code == 404
