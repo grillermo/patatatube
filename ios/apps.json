@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.1.64",
+          "buildVersion": "120",
+          "date": "2026-08-03T14:11:01Z",
+          "localizedDescription": "Fixes group card artwork\n\n• Group card posters stay inside their tile instead of spilling across the grid",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.1.64/PatataTube-1.1.64.ipa",
+          "size": 4077142,
+          "sha256": "fd6afcece2c62fddcde0fd95513073e8bff0ad82ed2e4cfe3d2cc20e317b7214",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.1.63",
           "buildVersion": "119",
           "date": "2026-08-03T14:02:29Z",
@@ -1124,11 +1134,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.1.63",
-      "versionDate": "2026-08-03T14:02:29Z",
-      "versionDescription": "Videos, TV and Movies are now tabs\n\n• A tab bar replaces the old segmented category picker\n• The Videos tab opens on four group cards - Children, Adults, Anabel and ASMR - each with its own grid\n• New ASMR category\n• Group cards show the newest video's poster and keep showing it offline\n• Each tab keeps its own scroll position and reopens where you left off after a force-quit",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.1.63/PatataTube-1.1.63.ipa",
-      "size": 4077133
+      "version": "1.1.64",
+      "versionDate": "2026-08-03T14:11:01Z",
+      "versionDescription": "Fixes group card artwork\n\n• Group card posters stay inside their tile instead of spilling across the grid",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.1.64/PatataTube-1.1.64.ipa",
+      "size": 4077142
     }
   ],
   "news": []
