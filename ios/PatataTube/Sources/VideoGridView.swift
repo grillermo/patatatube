@@ -27,7 +27,7 @@ private struct RestorationTracking: ViewModifier {
     let tab: MediaTab
     let selectedTab: MediaTab
     let activation: MediaTab?
-    let filter: String?
+    let feed: Feed?
     let activeSearch: String
     let playing: PlaybackQueue?
     let scenePhase: ScenePhase
@@ -36,7 +36,7 @@ private struct RestorationTracking: ViewModifier {
     @Binding var gridAnchorDebounceTask: Task<Void, Never>?
     @Binding var searchDebounceTask: Task<Void, Never>?
     let currentGridOrder: [String]
-    let activateGroup: (String) -> Void
+    let activateGroup: (Int) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -55,25 +55,25 @@ private struct RestorationTracking: ViewModifier {
                     $0.path = newValue
                 }
             }
-            .onChange(of: filter) { _, newValue in
+            .onChange(of: feed) { _, newValue in
                 guard selectedTab == tab else { return }
-                model.restorationStore.mutate { $0.filter = newValue }
+                model.restorationStore.mutate { $0.feed = newValue }
             }
             .onChange(of: activation) { _, selectedTab in
                 guard selectedTab == tab else { return }
-                let selectedFilter: String?
-                if tab == .videos, case .group(let name)? = path.first {
-                    selectedFilter = name
+                let selectedFeed: Feed?
+                if tab == .videos, case .group(let id)? = path.first {
+                    selectedFeed = .group(id: id)
                 } else {
-                    selectedFilter = tab.filter
+                    selectedFeed = tab.feed
                 }
                 model.restorationStore.mutate {
                     $0.tab = tab
-                    $0.filter = selectedFilter
+                    $0.feed = selectedFeed
                     $0.path = path
-                    $0.search = selectedFilter == nil ? "" : activeSearch
+                    $0.search = selectedFeed == nil ? "" : activeSearch
                 }
-                if tab == .videos, let selectedFilter { activateGroup(selectedFilter) }
+                if tab == .videos, case .group(let id)? = selectedFeed { activateGroup(id) }
             }
             .onChange(of: selectedTab) { _, newValue in
                 guard newValue != tab else { return }
@@ -102,8 +102,8 @@ private struct RestorationTracking: ViewModifier {
                 // Flush the debounced anchor write immediately — the app can
                 // be suspended before the 0.5s debounce fires.
                 gridAnchorDebounceTask?.cancel()
-                if let topmost = gridTracker.topmost {
-                    let key = RestorationState.gridKey(filter: filter)
+                if let topmost = gridTracker.topmost, let feed {
+                    let key = RestorationState.gridKey(feed: feed)
                     model.restorationStore.mutate { $0.scrollAnchors[key] = topmost }
                 }
             }
@@ -112,7 +112,7 @@ private struct RestorationTracking: ViewModifier {
     static func describe(_ path: [Route]) -> String {
         path.map { route in
             switch route {
-            case .group(let name): return "group(\(name))"
+            case .group(let id): return "group(\(id))"
             case .show(let title): return "show(\(title))"
             case .movie(let id): return "movie(\(id))"
             case .downloads: return "downloads"
@@ -125,17 +125,17 @@ private extension View {
     func restorationTracking(
         path: [Route], tab: MediaTab, selectedTab: MediaTab,
         activation: MediaTab?,
-        filter: String?, activeSearch: String,
+        feed: Feed?, activeSearch: String,
         playing: PlaybackQueue?, scenePhase: ScenePhase,
         model: AppModel, gridTracker: VisibleItemsTracker,
         gridAnchorDebounceTask: Binding<Task<Void, Never>?>,
         searchDebounceTask: Binding<Task<Void, Never>?>,
-        currentGridOrder: [String], activateGroup: @escaping (String) -> Void
+        currentGridOrder: [String], activateGroup: @escaping (Int) -> Void
     ) -> some View {
         modifier(RestorationTracking(
             path: path, tab: tab, selectedTab: selectedTab,
             activation: activation,
-            filter: filter, activeSearch: activeSearch,
+            feed: feed, activeSearch: activeSearch,
             playing: playing, scenePhase: scenePhase,
             model: model, gridTracker: gridTracker,
             gridAnchorDebounceTask: gridAnchorDebounceTask,
@@ -156,8 +156,9 @@ struct VideoGridView: View {
     /// inactive stacks.
     let selectedTab: MediaTab
 
-    init(tab: MediaTab, selectedTab: MediaTab? = nil, activation: MediaTab? = nil) {
+    init(tab: MediaTab, groups: GroupStore, selectedTab: MediaTab? = nil, activation: MediaTab? = nil) {
         self.tab = tab
+        _groups = ObservedObject(wrappedValue: groups)
         self.selectedTab = selectedTab ?? tab
         self.activation = activation
     }
@@ -165,10 +166,9 @@ struct VideoGridView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject var groups: GroupStore
 
-    @State private var classifications: [String] = ["children", "adults", "anabel", "asmr", "tv", "movies"]
-    @State private var classificationsLoaded = false
-    @State private var loadedGroup: String?
+    @State private var loadedGroup: Int?
     @State private var showSettings = false
     @State private var showUpload = false
     @State private var showWebBridge = false
@@ -189,7 +189,7 @@ struct VideoGridView: View {
     @State private var errorBannerOffset: CGFloat = 0
 
     /// Tracks the topmost on-screen item of the root grid (whichever
-    /// classification is showing), for scroll restoration.
+    /// feed is showing), for scroll restoration.
     @State private var gridTracker = VisibleItemsTracker()
     @State private var gridAnchorDebounceTask: Task<Void, Never>?
     @State private var restoredGroupAnchor: String?
@@ -202,8 +202,8 @@ struct VideoGridView: View {
     @State private var searchDebounceTask: Task<Void, Never>?
 
     // Grid cell size, adjustable via +/- buttons. Persisted across launches and
-    // scoped per classification, so sizing one group leaves the others alone.
-    private var cellSize: Double { model.cellSize(for: store.filter) }
+    // scoped per feed, so sizing one group leaves the others alone.
+    private var cellSize: Double { model.cellSize(for: store.feed) }
     private let minCellSize: Double = 120
     private let maxCellSize: Double = 420
     private let cellSizeStep: Double = 50
@@ -259,7 +259,11 @@ struct VideoGridView: View {
             ScrollViewReader { proxy in
                 tabRoot
                 .task { await initialLoad(scrollProxy: proxy) }
-                .task { await loadClassifications() }
+                .task {
+                    if let remote = try? await model.api.groups() {
+                        groups.apply(remote)
+                    }
+                }
             }
             .navigationDestination(for: Route.self) { route in
                 destination(for: route)
@@ -276,24 +280,24 @@ struct VideoGridView: View {
             .restorationTracking(
                 path: path, tab: tab, selectedTab: selectedTab,
                 activation: activation,
-                filter: store.filter, activeSearch: activeSearch,
+                feed: store.feed, activeSearch: activeSearch,
                 playing: playing, scenePhase: scenePhase,
                 model: model, gridTracker: gridTracker,
                 gridAnchorDebounceTask: $gridAnchorDebounceTask,
                 searchDebounceTask: $searchDebounceTask,
                 currentGridOrder: currentGridOrder,
-                activateGroup: { name in Task { await loadGroup(name) } }
+                activateGroup: { id in Task { await loadGroup(id) } }
             )
             .toolbar { optionsToolbar }
             .onChange(of: path) { _, newPath in
                 guard tab == .videos else { return }
-                guard case .group(let name)? = newPath.first else {
+                guard case .group(let id)? = newPath.first else {
                     searchDebounceTask?.cancel()
                     searchText = ""
                     activeSearch = ""
                     return
                 }
-                Task { await loadGroup(name) }
+                Task { await loadGroup(id) }
             }
             .onChange(of: model.webBridgeRequests) { _, _ in showWebBridge = true }
             .sheet(isPresented: $showSettings) { SettingsView() }
@@ -369,7 +373,7 @@ struct VideoGridView: View {
             } else {
                 switch tab {
                 case .videos:
-                    GroupsView(covers: model.groupCovers)
+                    GroupsView(groups: groups)
                 case .tv:
                     ShowsView(
                         videos: filteredVideos,
@@ -439,13 +443,14 @@ struct VideoGridView: View {
                         cache.storePreview(data, for: videoId, path: path)
                     },
                     localFileURL: cache.localURL(for: videoId, versionId: versionId),
-                    classifications: classifications,
+                    groups: groups.groups,
                     onPlay: { play(video, caller: "grid-cell") },
                     onPlaySleep: { play(video, sleepMode: true, caller: "grid-cell-sleep") },
                     onDownload: { await download(video) },
                     onCancel: { cache.cancel(id: videoId, versionId: versionId) },
                     onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
-                    onClassify: { c in Task { await store.classify(id: video.id, to: c) } },
+                    onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
+                    onPromote: { kind in Task { await store.promote(id: video.id, kind: kind) } },
                     onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
                     onDelete: { Task { await store.delete(id: video.id) } }
                 )
@@ -480,11 +485,11 @@ struct VideoGridView: View {
                 showUpload = true
             } label: { Label("New video", systemImage: "plus") }
 
-            Toggle(isOn: model.autoplayBinding(for: store.filter)) {
+            Toggle(isOn: model.autoplayBinding(for: store.feed)) {
                 Label("Autoplay", systemImage: "play.circle")
             }
 
-            Toggle(isOn: model.randomizeBinding(for: store.filter)) {
+            Toggle(isOn: model.randomizeBinding(for: store.feed)) {
                 Label("Randomize", systemImage: "shuffle")
             }
 
@@ -502,12 +507,12 @@ struct VideoGridView: View {
             }
 
             Button {
-                model.setCellSize(max(cellSize - cellSizeStep, minCellSize), for: store.filter)
+                model.setCellSize(max(cellSize - cellSizeStep, minCellSize), for: store.feed)
             } label: { Label("Smaller cells", systemImage: "minus.magnifyingglass") }
             .disabled(cellSize <= minCellSize)
 
             Button {
-                model.setCellSize(min(cellSize + cellSizeStep, maxCellSize), for: store.filter)
+                model.setCellSize(min(cellSize + cellSizeStep, maxCellSize), for: store.feed)
             } label: { Label("Bigger cells", systemImage: "plus.magnifyingglass") }
             .disabled(cellSize >= maxCellSize)
 
@@ -604,9 +609,9 @@ struct VideoGridView: View {
         }
 
         let restored = model.restorationStore.load()
-        // Videos tab restored at its root has no classification to fetch.
-        let restoredGroup: String? = {
-            if case .group(let name)? = restored.path.first { return name }
+        // Videos tab restored at its root has no feed to fetch.
+        let restoredGroup: Int? = {
+            if case .group(let id)? = restored.path.first { return id }
             return nil
         }()
         if tab == .videos {
@@ -614,8 +619,8 @@ struct VideoGridView: View {
                 await loadGroup(restoredGroup)
             }
         } else {
-            if store.filter != tab.filter {
-                await store.switchFilter(to: tab.filter)
+            if let feed = tab.feed, store.feed != feed {
+                await store.switchFeed(to: feed)
             } else {
                 await store.bootLoad()
             }
@@ -656,7 +661,7 @@ struct VideoGridView: View {
         }
 
         gridTracker.setOrder(currentGridOrder)
-        if let anchor = restored.scrollAnchors[RestorationState.gridKey(filter: store.filter)] {
+        if let anchor = restored.scrollAnchors[RestorationState.gridKey(feed: store.feed)] {
             if tab == .videos, restoredGroup != nil {
                 restoredGroupAnchor = anchor
             } else {
@@ -675,28 +680,16 @@ struct VideoGridView: View {
         ])
     }
 
-    private func loadGroup(_ name: String) async {
-        if loadedGroup != name || store.filter != name {
-            loadedGroup = name
-            await store.switchFilter(to: name)
+    private func loadGroup(_ id: Int) async {
+        let feed = Feed.group(id: id)
+        if loadedGroup != id || store.feed != feed {
+            loadedGroup = id
+            await store.switchFeed(to: feed)
         }
     }
 
-    /// The server owns the classification list; the hardcoded default is only a
-    /// first paint. Every tab needs it — the reclassify menu lives on cells in
-    /// all three — so this is deliberately not tied to opening a group. Only a
-    /// successful fetch latches, so a cancelled `.task` (tab switch mid-flight)
-    /// retries on the next appearance.
-    private func loadClassifications() async {
-        guard !classificationsLoaded else { return }
-        let api = APIClient(store: model.credentials)
-        guard let list = try? await api.classifications() else { return }
-        classifications = list
-        classificationsLoaded = true
-    }
-
     private var currentGridOrder: [String] {
-        if store.filter == "tv" {
+        if store.feed == .plex(.tv) {
             return ShowGroup.group(filteredVideos).map { $0.id }
         }
         return filteredVideos.map { String($0.id) }
@@ -704,18 +697,18 @@ struct VideoGridView: View {
 
     /// The group whose grid is on screen, or nil on the tv/movies tabs.
     /// Bucket the playback settings (autoplay, randomize) are read from: the
-    /// open show when one is pushed, otherwise the tab/group filter. Read at
+    /// open show when one is pushed, otherwise the tab/group feed. Read at
     /// presentation time — the path cannot change under a full-screen player.
     private var playbackScope: String? {
         for route in path.reversed() {
             if case .show(let title) = route { return AppModel.showScope(title) }
         }
-        return store.filter
+        return store.feed.storageKey
     }
 
-    private var currentGroupName: String? {
-        guard tab == .videos, case .group(let name)? = path.first else { return nil }
-        return name
+    private var currentGroupID: Int? {
+        guard tab == .videos, case .group(let id)? = path.first else { return nil }
+        return id
     }
 
     private var showsVideoGrid: Bool {
@@ -741,7 +734,7 @@ struct VideoGridView: View {
         // topmost id lands under the incoming tab's key and clobbers its
         // anchor. Same scoping every other restoration write uses.
         guard selectedTab == tab else { return }
-        let key = RestorationState.gridKey(filter: store.filter)
+        let key = RestorationState.gridKey(feed: store.feed)
         gridAnchorDebounceTask?.cancel()
         gridAnchorDebounceTask = Task {
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -796,7 +789,7 @@ struct VideoGridView: View {
     /// tv/movies rows with real progress stop here and ask first.
     private func startPlayback(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false, caller: String = "?") {
         let secs = model.resumeStore.resolved(server: video.resumeSecs, for: video.id)
-        switch ResumeDecision.decide(resumeSecs: secs, classification: video.classification) {
+        switch ResumeDecision.decide(resumeSecs: secs, plexKind: video.plexKind) {
         case .ask(let secs):
             pendingResume = PendingResume(
                 id: video.id,
@@ -894,11 +887,11 @@ struct VideoGridView: View {
         guard showsVideoGrid else { return }
         // Scoped to the open group, not just to whatever the shared store last
         // loaded: the menu now also exists on the pushed group screen, and a
-        // switchFilter still in flight would otherwise let the previous group's
+        // switchFeed still in flight would otherwise let the previous group's
         // rows into the batch.
-        let group = currentGroupName
+        let groupID = currentGroupID
         let targets = filteredVideos.filter {
-            if let group, $0.classification != group { return false }
+            if let groupID, $0.groupID != groupID { return false }
             return model.cache.state(for: $0.id, versionId: $0.chosenVersionId) == .notCached
         }
         guard !targets.isEmpty else { return }

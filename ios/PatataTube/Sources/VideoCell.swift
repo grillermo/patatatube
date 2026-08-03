@@ -14,7 +14,7 @@ struct VideoCell: View {
     var onPreviewLoaded: ((Data) -> Void)? = nil
     /// Local file URL of the cached MP4 (may not exist on disk yet).
     var localFileURL: URL? = nil
-    let classifications: [String]
+    let groups: [VideoGroup]
     let onPlay: () -> Void
     /// Children-only corner button: play this one video, then sleep-lock.
     let onPlaySleep: () -> Void
@@ -22,7 +22,8 @@ struct VideoCell: View {
     let onDownload: () async -> Bool
     let onCancel: () -> Void
     let onDeleteCache: () -> Void
-    let onClassify: (String) -> Void
+    let onSetGroup: (Int) -> Void
+    let onPromote: (PlexKind) -> Void
     let onChooseVersion: (Int) -> Void
     let onDelete: () -> Void
 
@@ -31,12 +32,12 @@ struct VideoCell: View {
 
     /// tv/movies previews are tall Plex posters; letterbox them instead of cropping.
     private var isPoster: Bool {
-        video.classification == "tv" || video.classification == "movies"
+        video.isPlexItem
     }
 
     /// Play-and-sleep only makes sense on playable children's videos.
-    private var showsSleepButton: Bool {
-        video.classification == "children" && video.status == "done"
+    private var isChildrenVideo: Bool {
+        groups.first { $0.id == video.groupID }?.name == "children" && video.status == "done"
     }
 
     var body: some View {
@@ -77,7 +78,7 @@ struct VideoCell: View {
             .buttonStyle(.plain)
             .logTap("play", ["video_id": "\(video.id)", "status": video.status])
             .overlay(alignment: .bottomTrailing) {
-                if showsSleepButton {
+                if isChildrenVideo {
                     Button(action: onPlaySleep) {
                         ZStack(alignment: .bottomTrailing) {
                             BottomRightTriangle().fill(.black.opacity(0.55))
@@ -125,8 +126,13 @@ struct VideoCell: View {
                 }
                 Menu {
                     Button("Info", systemImage: "info.circle") { showingInfo = true }
-                    ForEach(classifications, id: \.self) { c in
-                        Button(c) { onClassify(c) }
+                    ForEach(groups) { group in
+                        Button(group.label) { onSetGroup(group.id) }
+                    }
+                    Section("Move to Plex") {
+                        ForEach(PlexKind.allCases, id: \.self) { kind in
+                            Button(kind == .tv ? "TV" : "Movies") { onPromote(kind) }
+                        }
                     }
                     Divider()
                     Button("Delete video", role: .destructive) { confirmingDelete = true }
@@ -146,7 +152,7 @@ struct VideoCell: View {
             Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $showingInfo) {
-            VideoInfoView(video: video, cacheState: cacheState,
+            VideoInfoView(video: video, groups: groups, cacheState: cacheState,
                           cachedPreviewURL: cachedPreviewURL, localFileURL: localFileURL)
         }
     }
@@ -157,6 +163,7 @@ struct VideoCell: View {
 /// cache state (path + size). Read-only inspector reached from the "Info" menu.
 struct VideoInfoView: View {
     let video: Video
+    let groups: [VideoGroup]
     let cacheState: CacheState
     let cachedPreviewURL: URL?
     let localFileURL: URL?
@@ -174,7 +181,7 @@ struct VideoInfoView: View {
                     row("Source", video.source)
                     row("Source key", video.sourceKey)
                     row("Source filename", video.sourceFilename)
-                    row("Classification", video.classification)
+                    row("Group", groups.first { $0.id == video.groupID }?.label ?? "Unsorted")
                     row("Position", video.position.map { "\($0)" })
                     row("Status", video.status)
                     row("Error", video.errorMsg)

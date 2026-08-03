@@ -59,10 +59,23 @@ final class AppModel: ObservableObject {
 
     func autoplay(for feed: Feed) -> Bool { autoplayByFeed[feed.storageKey] ?? false }
 
+    /// Episode queues keep their existing per-show scope; feeds use the typed
+    /// overload above.
+    func autoplay(for scope: String?) -> Bool {
+        scope.flatMap { autoplayByFeed[$0] } ?? false
+    }
+
     func autoplayBinding(for feed: Feed) -> Binding<Bool> {
         Binding(
             get: { self.autoplay(for: feed) },
             set: { self.autoplayByFeed[feed.storageKey] = $0 }
+        )
+    }
+
+    func autoplayBinding(for scope: String) -> Binding<Bool> {
+        Binding(
+            get: { self.autoplayByFeed[scope] ?? false },
+            set: { self.autoplayByFeed[scope] = $0 }
         )
     }
 
@@ -73,10 +86,21 @@ final class AppModel: ObservableObject {
 
     func randomize(for feed: Feed) -> Bool { randomizeByFeed[feed.storageKey] ?? false }
 
+    func randomize(for scope: String?) -> Bool {
+        scope.flatMap { randomizeByFeed[$0] } ?? false
+    }
+
     func randomizeBinding(for feed: Feed) -> Binding<Bool> {
         Binding(
             get: { self.randomize(for: feed) },
             set: { self.randomizeByFeed[feed.storageKey] = $0 }
+        )
+    }
+
+    func randomizeBinding(for scope: String) -> Binding<Bool> {
+        Binding(
+            get: { self.randomizeByFeed[scope] ?? false },
+            set: { self.randomizeByFeed[scope] = $0 }
         )
     }
 
