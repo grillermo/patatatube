@@ -24,7 +24,7 @@ final class AppModel: ObservableObject {
     /// in the view, so exactly one run per launch can apply saved state.
     let restorationGate = RestorationGate()
     let videoListCache: VideoListCache
-    let groupCovers = GroupCoverStore()
+    let groups = GroupStore()
     private let downloadSettings: DownloadStreamSettings
     private let simultaneousSettings: SimultaneousDownloadSettings
 
@@ -33,20 +33,21 @@ final class AppModel: ObservableObject {
     @Published var downloadStreamCount: Int
     @Published var downloadConcurrency: Int
 
-    /// When on, a finished video rolls into the next one in the queue. Keyed by
-    /// classification (`store.filter`, `"all"` for the unfiltered tab) so each
-    /// group carries its own answer. Session-only by design — it resets to off
-    /// on relaunch, so a long queue can never keep playing across launches
-    /// unnoticed.
-    @Published var autoplayByClassification: [String: Bool] = [:]
+    /// Keyed by `Feed.storageKey` ("all" / "group:3" / "plex:tv"), so a
+    /// preference set on one group leaves the others alone. New key names on
+    /// purpose: the old dictionaries were keyed by classification name and
+    /// their entries mean nothing now.
+    ///
+    /// The three dictionaries keep whatever storage mechanism they have today
+    /// (read the file — only their names and key strings change here).
+    @Published var autoplayByFeed: [String: Bool] = [:]
 
-    /// Keyed by classification the same way, same session-only lifetime.
-    @Published var randomizeByClassification: [String: Bool] = [:]
+    @Published var randomizeByFeed: [String: Bool] = [:]
 
-    /// Grid cell size per classification, persisted (unlike the two above — a
-    /// chosen cell size is a layout preference, not a playback mode). Seeded
-    /// from the old global `gridCellSize` so existing installs keep their size.
-    @Published var cellSizeByClassification: [String: Double] = [:]
+    /// Grid cell size per feed, persisted (unlike the two above — a chosen
+    /// cell size is a layout preference, not a playback mode). Seeded from the
+    /// old global `gridCellSize` so existing installs keep their size.
+    @Published var cellSizeByFeed: [String: Double] = [:]
 
     static let defaultCellSize: Double = 220
     private static let cellSizeDefaultsKey = "gridCellSizes"
@@ -56,14 +57,12 @@ final class AppModel: ObservableObject {
     /// "movies" can never share a bucket with the movies tab.
     static func showScope(_ title: String) -> String { "show:\(title)" }
 
-    func autoplay(for classification: String?) -> Bool {
-        autoplayByClassification[classification ?? "all"] ?? false
-    }
+    func autoplay(for feed: Feed) -> Bool { autoplayByFeed[feed.storageKey] ?? false }
 
-    func autoplayBinding(for classification: String?) -> Binding<Bool> {
+    func autoplayBinding(for feed: Feed) -> Binding<Bool> {
         Binding(
-            get: { self.autoplay(for: classification) },
-            set: { self.autoplayByClassification[classification ?? "all"] = $0 }
+            get: { self.autoplay(for: feed) },
+            set: { self.autoplayByFeed[feed.storageKey] = $0 }
         )
     }
 
@@ -72,24 +71,20 @@ final class AppModel: ObservableObject {
     /// cleared — the grid only reacts to changes.
     @Published var webBridgeRequests: Int = 0
 
-    func randomize(for classification: String?) -> Bool {
-        randomizeByClassification[classification ?? "all"] ?? false
-    }
+    func randomize(for feed: Feed) -> Bool { randomizeByFeed[feed.storageKey] ?? false }
 
-    func randomizeBinding(for classification: String?) -> Binding<Bool> {
+    func randomizeBinding(for feed: Feed) -> Binding<Bool> {
         Binding(
-            get: { self.randomize(for: classification) },
-            set: { self.randomizeByClassification[classification ?? "all"] = $0 }
+            get: { self.randomize(for: feed) },
+            set: { self.randomizeByFeed[feed.storageKey] = $0 }
         )
     }
 
-    func cellSize(for classification: String?) -> Double {
-        cellSizeByClassification[classification ?? "all"] ?? legacyCellSize
-    }
+    func cellSize(for feed: Feed) -> Double { cellSizeByFeed[feed.storageKey] ?? legacyCellSize }
 
-    func setCellSize(_ value: Double, for classification: String?) {
-        cellSizeByClassification[classification ?? "all"] = value
-        UserDefaults.standard.set(cellSizeByClassification, forKey: Self.cellSizeDefaultsKey)
+    func setCellSize(_ value: Double, for feed: Feed) {
+        cellSizeByFeed[feed.storageKey] = value
+        UserDefaults.standard.set(cellSizeByFeed, forKey: Self.cellSizeDefaultsKey)
     }
 
     private var legacyCellSize: Double {
@@ -98,7 +93,7 @@ final class AppModel: ObservableObject {
     }
 
     private func loadCellSizes() {
-        cellSizeByClassification = UserDefaults.standard
+        cellSizeByFeed = UserDefaults.standard
             .dictionary(forKey: Self.cellSizeDefaultsKey) as? [String: Double] ?? [:]
     }
 
