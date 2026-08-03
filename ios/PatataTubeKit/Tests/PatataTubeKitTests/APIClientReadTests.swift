@@ -25,28 +25,44 @@ struct APIClientTests {
                 """.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)
             }
-            let videos = try await makeClient().videos(classification: nil)
+            let videos = try await makeClient().videos(feed: .all)
             #expect(videos.count == 1)
             #expect(videos[0].previewUrl == "p")
         }
 
-        @Test func fetchesVideosWithClassificationQuery() async throws {
+        @Test func videosSendsTheGroupIDQuery() async throws {
             MockURLProtocol.handler = { req in
-                #expect(req.url?.query == "classification=adults")
+                #expect(req.url?.query == "group_id=3")
                 return (jsonResponse(req.url!), "[]".data(using: .utf8)!)
             }
-            let videos = try await makeClient().videos(classification: "adults")
+            let videos = try await makeClient().videos(feed: .group(id: 3))
             #expect(videos.isEmpty)
         }
 
-        @Test func fetchesClassifications() async throws {
+        @Test func videosSendsThePlexKindQuery() async throws {
             MockURLProtocol.handler = { req in
-                #expect(req.url?.path == "/api/classifications")
-                let body = #"{"classifications":["children","adults"]}"#.data(using: .utf8)!
+                #expect(req.url?.query == "plex_kind=movies")
+                return (jsonResponse(req.url!), "[]".data(using: .utf8)!)
+            }
+            _ = try await makeClient().videos(feed: .plex(.movies))
+        }
+
+        @Test func videosSendsNoQueryForAll() async throws {
+            MockURLProtocol.handler = { req in
+                #expect(req.url?.query == nil)
+                return (jsonResponse(req.url!), "[]".data(using: .utf8)!)
+            }
+            _ = try await makeClient().videos(feed: .all)
+        }
+
+        @Test func groupsDecodesAndSortsByPosition() async throws {
+            MockURLProtocol.handler = { req in
+                let body = #"{"groups":[{"id":2,"name":"adults","label":"Adults","emoji":null,"position":1},{"id":1,"name":"children","label":"Children","emoji":"🧒","position":0}]}"#.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)
             }
-            let list = try await makeClient().classifications()
-            #expect(list == ["children", "adults"])
+            let groups = try await makeClient().groups()
+            #expect(groups.map(\.name) == ["children", "adults"])
+            #expect(groups[0].emoji == "🧒")
         }
 
         @Test func decodesHlsAndSubtitleMetadata() async throws {
@@ -60,7 +76,7 @@ struct APIClientTests {
                 """.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)
             }
-            let videos = try await makeClient().videos(classification: nil)
+            let videos = try await makeClient().videos(feed: .all)
             #expect(videos[0].hlsPath == "/videos/1/hls/master.m3u8")
             #expect(videos[0].subtitleTracks.count == 1)
             #expect(videos[0].subtitleTracks[0].language == "en")
@@ -77,7 +93,7 @@ struct APIClientTests {
                 """.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)
             }
-            let videos = try await makeClient().videos(classification: nil)
+            let videos = try await makeClient().videos(feed: .all)
             #expect(videos[0].hlsPath == nil)
             #expect(videos[0].subtitleTracks.isEmpty)
         }
@@ -85,25 +101,15 @@ struct APIClientTests {
         @Test func throwsOnBadStatus() async {
             MockURLProtocol.handler = { req in (jsonResponse(req.url!, status: 500), Data()) }
             await #expect(throws: APIError.badStatus(500)) {
-                _ = try await makeClient().videos(classification: nil)
+                _ = try await makeClient().videos(feed: .all)
             }
-        }
-
-        @Test func fetchesGroupCovers() async throws {
-            MockURLProtocol.handler = { req in
-                #expect(req.url?.path == "/api/group-covers")
-                let body = #"{"covers":{"children":"🐸","asmr":"🎧"}}"#.data(using: .utf8)!
-                return (jsonResponse(req.url!), body)
-            }
-            let covers = try await makeClient().groupCovers()
-            #expect(covers == ["children": "🐸", "asmr": "🎧"])
         }
 
         @Test func throwsWhenBaseURLMissing() async {
             let store = InMemoryCredentialStore(baseURL: nil, token: "t")
             let client = APIClient(store: store, session: mockSession())
             await #expect(throws: APIError.notConfigured) {
-                _ = try await client.videos(classification: nil)
+                _ = try await client.videos(feed: .all)
             }
         }
     }
@@ -111,31 +117,24 @@ struct APIClientTests {
     // MARK: - Write tests
 
     struct WriteTests {
-        @Test func classifySendsBody() async throws {
+        @Test func updateGroupSendsAnExplicitNullToClearTheEmoji() async throws {
             MockURLProtocol.handler = { req in
-                #expect(req.url?.path == "/api/videos/3/classify")
+                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: Any]
+                #expect(json.keys.contains("emoji"))
+                #expect(json["emoji"] is NSNull)
+                return (jsonResponse(req.url!), #"{"id":1,"name":"children","label":"Children","emoji":null,"position":0}"#.data(using: .utf8)!)
+            }
+            _ = try await makeClient().updateGroup(id: 1, label: nil, emoji: nil)
+        }
+
+        @Test func promotePostsTheKind() async throws {
+            MockURLProtocol.handler = { req in
+                #expect(req.url?.path == "/api/videos/5/promote")
                 let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: String]
-                #expect(json["classification"] == "education")
-                return (jsonResponse(req.url!), #"{"ok":false,"promoted":false}"#.data(using: .utf8)!)
+                #expect(json["kind"] == "tv")
+                return (jsonResponse(req.url!), #"{"ok":true,"promoted":true}"#.data(using: .utf8)!)
             }
-            let result = try await makeClient().classify(id: 3, classification: "education")
-            #expect(result == ClassifyResult(ok: false, promoted: false))
-        }
-
-        @Test func classifyDefaultsPromotedToFalseWhenAbsent() async throws {
-            MockURLProtocol.handler = { req in
-                (jsonResponse(req.url!), #"{"ok":true}"#.data(using: .utf8)!)
-            }
-            let result = try await makeClient().classify(id: 3, classification: "children")
-            #expect(result == ClassifyResult(ok: true, promoted: false))
-        }
-
-        @Test func classifyReportsAPromotion() async throws {
-            MockURLProtocol.handler = { req in
-                (jsonResponse(req.url!), #"{"ok":true,"promoted":true}"#.data(using: .utf8)!)
-            }
-            let result = try await makeClient().classify(id: 3, classification: "movies")
-            #expect(result == ClassifyResult(ok: true, promoted: true))
+            #expect(try await makeClient().promote(id: 5, kind: .tv))
         }
 
         @Test func chooseAudioSendsLanguage() async throws {
@@ -159,28 +158,9 @@ struct APIClientTests {
             #expect(id == 42)
         }
 
-        @Test func setGroupCoverSendsEmoji() async throws {
-            MockURLProtocol.handler = { req in
-                #expect(req.url?.path == "/api/group-covers/children")
-                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: String]
-                #expect(json["emoji"] == "🐸")
-                return (jsonResponse(req.url!), #"{"ok":true,"emoji":"🐸"}"#.data(using: .utf8)!)
-            }
-            #expect(try await makeClient().setGroupCover("🐸", for: "children"))
-        }
-
-        @Test func setGroupCoverSendsEmptyStringToClear() async throws {
-            MockURLProtocol.handler = { req in
-                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: String]
-                #expect(json["emoji"] == "")
-                return (jsonResponse(req.url!), #"{"ok":true,"emoji":null}"#.data(using: .utf8)!)
-            }
-            #expect(try await makeClient().setGroupCover(nil, for: "children"))
-        }
-
         @Test func writeThrowsWithoutToken() async {
             await #expect(throws: APIError.notConfigured) {
-                _ = try await makeClient(token: nil).classify(id: 1, classification: "children")
+                _ = try await makeClient(token: nil).promote(id: 1, kind: .tv)
             }
         }
     }

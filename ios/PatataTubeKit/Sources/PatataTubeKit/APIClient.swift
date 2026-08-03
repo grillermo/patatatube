@@ -17,30 +17,13 @@ public struct ScanResult: Decodable, Equatable, Sendable {
     }
 }
 
-/// Result of a classify call. `promoted` means the server moved the file into
-/// the Plex library and deleted the row — the video no longer exists here.
-public struct ClassifyResult: Decodable, Equatable, Sendable {
-    public let ok: Bool
-    public let promoted: Bool
-
-    public init(ok: Bool, promoted: Bool = false) {
-        self.ok = ok
-        self.promoted = promoted
-    }
-
-    private enum CodingKeys: String, CodingKey { case ok, promoted }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        ok = try c.decode(Bool.self, forKey: .ok)
-        promoted = try c.decodeIfPresent(Bool.self, forKey: .promoted) ?? false
-    }
-}
-
 public protocol VideoAPI: Sendable {
-    func videos(classification: String?) async throws -> [Video]
-    func classifications() async throws -> [String]
-    func classify(id: Int, classification: String) async throws -> ClassifyResult
+    func videos(feed: Feed) async throws -> [Video]
+    func groups() async throws -> [VideoGroup]
+    func createGroup(name: String, label: String, emoji: String?) async throws -> VideoGroup
+    func updateGroup(id: Int, label: String?, emoji: String?) async throws -> VideoGroup
+    func setGroup(id: Int, groupID: Int) async throws -> Bool
+    func promote(id: Int, kind: PlexKind) async throws -> Bool
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool
     func chooseAudio(id: Int, lang: String) async throws -> Bool
     func savePosition(id: Int, secs: Double) async throws
@@ -53,16 +36,21 @@ public protocol VideoAPI: Sendable {
     func prepare(id: Int, bulk: Bool) async throws -> String
     func video(id: Int) async throws -> Video
     func imageData(path: String) async throws -> Data
-    func groupCovers() async throws -> [String: String]
-    func setGroupCover(_ emoji: String?, for group: String) async throws -> Bool
 }
 
 public extension VideoAPI {
     // Defaulted so the many test doubles conforming to this protocol don't all
     // have to implement a feature they don't exercise. The real client
-    // overrides both.
-    func groupCovers() async throws -> [String: String] { [:] }
-    func setGroupCover(_ emoji: String?, for group: String) async throws -> Bool { false }
+    // overrides them.
+    func groups() async throws -> [VideoGroup] { [] }
+    func createGroup(name: String, label: String, emoji: String?) async throws -> VideoGroup {
+        throw APIError.notConfigured
+    }
+    func updateGroup(id: Int, label: String?, emoji: String?) async throws -> VideoGroup {
+        throw APIError.notConfigured
+    }
+    func setGroup(id: Int, groupID: Int) async throws -> Bool { false }
+    func promote(id: Int, kind: PlexKind) async throws -> Bool { false }
 
     func savePosition(
         id: Int, secs: Double, destinationServerIdentity: String
@@ -104,12 +92,11 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         }
     }
 
-    public func videos(classification: String? = nil) async throws -> [Video] {
+    public func videos(feed: Feed = .all) async throws -> [Video] {
         let endpoint = try base().appendingPathComponent("api/videos")
         var comps = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
-        if let c = classification {
-            comps.queryItems = [URLQueryItem(name: "classification", value: c)]
-        }
+        let items = feed.queryItems
+        comps.queryItems = items.isEmpty ? nil : items
         let (data, response) = try await session.data(from: comps.url!)
         try Self.check(response)
         do {
@@ -119,41 +106,39 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         }
     }
 
-    public func classifications() async throws -> [String] {
-        let url = try base().appendingPathComponent("api/classifications")
-        let (data, response) = try await session.data(from: url)
-        try Self.check(response)
-        struct Envelope: Decodable { let classifications: [String] }
+    public func groups() async throws -> [VideoGroup] {
+        let data = try await authedGet("api/groups")
+        struct Envelope: Decodable { let groups: [VideoGroup] }
         do {
-            return try JSONDecoder().decode(Envelope.self, from: data).classifications
+            return try Self.makeDecoder().decode(Envelope.self, from: data)
+                .groups.sorted { $0.position < $1.position }
         } catch {
             throw APIError.decoding(String(describing: error))
         }
     }
 
-    /// The emoji cover chosen for each Videos group. Server-owned so the choice
-    /// follows the user across devices; unauthenticated like `videos`.
-    public func groupCovers() async throws -> [String: String] {
-        let url = try base().appendingPathComponent("api/group-covers")
-        let (data, response) = try await session.data(from: url)
-        try Self.check(response)
-        struct Envelope: Decodable { let covers: [String: String] }
-        do {
-            return try JSONDecoder().decode(Envelope.self, from: data).covers
-        } catch {
-            throw APIError.decoding(String(describing: error))
-        }
-    }
-
-    /// `nil` or "" clears the group's cover.
-    public func setGroupCover(_ emoji: String?, for group: String) async throws -> Bool {
-        try await postOK("api/group-covers/\(group)", body: ["emoji": emoji ?? ""])
-    }
-
-    public func classify(id: Int, classification: String) async throws -> ClassifyResult {
-        let data = try await authedPost("api/videos/\(id)/classify", body: ["classification": classification])
-        do { return try JSONDecoder().decode(ClassifyResult.self, from: data) }
+    public func createGroup(name: String, label: String, emoji: String?) async throws -> VideoGroup {
+        let data = try await authedPost(
+            "api/groups", body: ["name": name, "label": label, "emoji": emoji ?? NSNull()]
+        )
+        do { return try Self.makeDecoder().decode(VideoGroup.self, from: data) }
         catch { throw APIError.decoding(String(describing: error)) }
+    }
+
+    public func updateGroup(id: Int, label: String?, emoji: String?) async throws -> VideoGroup {
+        var body: [String: Any] = ["emoji": emoji ?? NSNull()]
+        if let label { body["label"] = label }
+        let data = try await authedRequest("api/groups/\(id)", method: "PATCH", body: body)
+        do { return try Self.makeDecoder().decode(VideoGroup.self, from: data) }
+        catch { throw APIError.decoding(String(describing: error)) }
+    }
+
+    public func setGroup(id: Int, groupID: Int) async throws -> Bool {
+        try await postOK("api/videos/\(id)/group", body: ["group_id": groupID])
+    }
+
+    public func promote(id: Int, kind: PlexKind) async throws -> Bool {
+        try await postOK("api/videos/\(id)/promote", body: ["kind": kind.rawValue])
     }
 
     public func chooseVersion(id: Int, versionId: Int) async throws -> Bool {
@@ -244,21 +229,24 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
     }
 
     private func authedGet(_ path: String) async throws -> Data {
-        guard let token = store.token, !token.isEmpty else { throw APIError.notConfigured }
-        // appendingPathComponent would percent-encode "?", so build from the full string.
-        guard let url = URL(string: path, relativeTo: try base().appendingPathComponent("/")) else {
-            throw APIError.notConfigured
-        }
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await session.data(for: request)
-        try Self.check(response)
-        return data
+        try await authedRequest(path, method: "GET")
     }
 
     private func authedPost(
         _ path: String,
         body: [String: Any],
+        destinationServerIdentity: String? = nil
+    ) async throws -> Data {
+        try await authedRequest(
+            path, method: "POST", body: body,
+            destinationServerIdentity: destinationServerIdentity
+        )
+    }
+
+    private func authedRequest(
+        _ path: String,
+        method: String,
+        body: [String: Any]? = nil,
         destinationServerIdentity: String? = nil
     ) async throws -> Data {
         guard let token = store.token, !token.isEmpty else { throw APIError.notConfigured }
@@ -267,11 +255,16 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
            ResumePositionStore.normalizedServerIdentity(baseURL) != destinationServerIdentity {
             throw APIError.serverChanged
         }
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        guard let url = URL(string: path, relativeTo: baseURL.appendingPathComponent("/")) else {
+            throw APIError.notConfigured
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
         let (data, response) = try await session.data(for: request)
         try Self.check(response)
         return data
