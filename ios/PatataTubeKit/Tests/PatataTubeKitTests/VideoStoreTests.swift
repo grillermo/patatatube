@@ -709,14 +709,16 @@ private func tempCache() -> VideoListCache {
 // discard the stale "adults" result in favor of the current "children" tab.
 @MainActor @Test func switchFilterRapidDoubleSwitchResolvesToLastTab() async {
     let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1, classification: "adults", resumeSecs: 10),
-                          makeVideo(id: 2, classification: "children")]
+    api.videosToReturn = [makeVideo(id: 1, classification: "adults", previewUrl: "/videos/1/preview", resumeSecs: 10),
+                          makeVideo(id: 2, classification: "children", previewUrl: "/videos/2/preview")]
     let defaults = UserDefaults(suiteName: "rapid-filter-\(UUID().uuidString)")!
     let positions = ResumePositionStore(defaults: defaults)
+    let posters = GroupPosterStore(defaults: defaults)
     positions.setLocal(120, for: 1)
     positions.markSynced(id: 1)
     let store = VideoStore(
-        api: api, cache: tempCache(), positionStore: positions, defaults: defaults
+        api: api, cache: tempCache(), positionStore: positions, defaults: defaults,
+        groupPosters: posters
     )
 
     // Delay only the "adults" fetch, so it's still in flight when the
@@ -735,6 +737,7 @@ private func tempCache() -> VideoListCache {
     #expect(store.filter == "children")
     #expect(store.videos.map(\.id) == [2])
     #expect(store.isLoading == false)
+    #expect(posters.poster(for: "children") == GroupPoster(videoID: 2, path: "/videos/2/preview"))
     // The discarded adults response must not clear the local value while its
     // row is absent from the list that actually reached the grid.
     #expect(positions.resolved(server: 10, for: 1) == 120)
