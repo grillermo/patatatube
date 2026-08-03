@@ -162,6 +162,52 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     func clear() {}
 }
 
+private final class BlockingLoadCache: VideoListCaching, @unchecked Sendable {
+    private let lock = NSLock()
+    private let releaseGate = DispatchSemaphore(value: 0)
+    private var videos: [Feed: [Video]]
+    private var groupLoadStarted = false
+    private var groupLoadWaiter: CheckedContinuation<Void, Never>?
+
+    init(videos: [Feed: [Video]]) {
+        self.videos = videos
+    }
+
+    func save(_ videos: [Video], feed: Feed) {
+        lock.withLock { self.videos[feed] = videos }
+    }
+
+    func load(feed: Feed) -> [Video]? {
+        if feed == .group(id: 1) {
+            let waiter = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                guard !groupLoadStarted else { return nil }
+                groupLoadStarted = true
+                defer { groupLoadWaiter = nil }
+                return groupLoadWaiter
+            }
+            waiter?.resume()
+            releaseGate.wait()
+        }
+        return lock.withLock { videos[feed] }
+    }
+
+    func waitForGroupLoad() async {
+        if lock.withLock({ groupLoadStarted }) { return }
+        await withCheckedContinuation { continuation in
+            let alreadyStarted = lock.withLock { () -> Bool in
+                if groupLoadStarted { return true }
+                groupLoadWaiter = continuation
+                return false
+            }
+            if alreadyStarted { continuation.resume() }
+        }
+    }
+
+    func releaseGroupLoad() { releaseGate.signal() }
+    func cached(feed: Feed) -> [Video]? { lock.withLock { videos[feed] } }
+    func clear() { lock.withLock { videos = [:] } }
+}
+
 private actor GroupMoveGate {
     private var arrived: Set<Int> = []
     private var arrivalWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
@@ -556,6 +602,53 @@ private actor GroupMoveGate {
 
     await gate.release(2)
     await older
+}
+
+@MainActor @Test func owningMovePersistsWhileAnotherVideoIsPending() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
+    let gate = GroupMoveGate()
+    api.setGroupHook = { id, _ in
+        if id == 2 { await gate.arrive(id) }
+        return true
+    }
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.load()
+
+    async let pending: Void = store.setGroup(id: 2, groupID: 2)
+    await gate.waitForArrival(2)
+    await store.setGroup(id: 1, groupID: 3)
+
+    #expect(cache.load(feed: .all)?.first(where: { $0.id == 1 })?.groupID == 3)
+
+    await gate.release(2)
+    await pending
+}
+
+@MainActor @Test func staleSourceCacheEvictionDoesNotOverwriteNewerSameVideoMove() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, groupID: 1)]
+    let gate = GroupMoveGate()
+    api.setGroupHook = { _, groupID in
+        if groupID == 1 { await gate.arrive(groupID) }
+        return true
+    }
+    let cache = BlockingLoadCache(videos: [.group(id: 1): [makeVideo(id: 1, groupID: 1)]])
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.load()
+
+    async let older: Void = store.setGroup(id: 1, groupID: 2)
+    await cache.waitForGroupLoad()
+    async let newer: Void = store.setGroup(id: 1, groupID: 1)
+    await gate.waitForArrival(1)
+    cache.releaseGroupLoad()
+    await older
+
+    #expect(cache.cached(feed: .group(id: 1))?.map(\.id) == [1])
+
+    await gate.release(1)
+    await newer
 }
 
 @MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async throws {

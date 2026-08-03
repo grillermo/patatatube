@@ -172,7 +172,7 @@ public final class VideoStore: ObservableObject {
         await saveTask.value
     }
 
-    private func evictFromSourceGroupCache(id: Int, groupID: Int) async {
+    private func evictFromSourceGroupCache(id: Int, groupID: Int, request: UUID) async {
         guard let cache else { return }
         let sourceFeed = Feed.group(id: groupID)
         let snapshot: [Video]?
@@ -183,7 +183,8 @@ public final class VideoStore: ObservableObject {
                 cache.load(feed: sourceFeed)?.filter { $0.id != id }
             }.value
         }
-        if let snapshot { await saveCache(snapshot, feed: sourceFeed) }
+        guard groupMutationRequests[id] == request, let snapshot else { return }
+        await saveCache(snapshot, feed: sourceFeed)
     }
 
     private func finishGroupMutation(id: Int, request: UUID, feed requestedFeed: Feed) async {
@@ -196,12 +197,9 @@ public final class VideoStore: ObservableObject {
             if pending[id]?.isEmpty == true { pending[id] = nil }
             pendingGroupMutationRequests[requestedFeed] = pending.isEmpty ? nil : pending
         }
-        let hasPendingOtherVideos = pendingGroupMutationRequests[requestedFeed]?
-            .keys.contains { $0 != id } ?? false
-        guard ownsVideo, feed == requestedFeed, !hasPendingOtherVideos else { return }
+        guard ownsVideo, feed == requestedFeed else { return }
 
-        // Older requests for this video no longer own it; only an unrelated
-        // optimistic move can still change this feed snapshot.
+        // Later owners serialize their newer snapshot after this one.
         await saveCache(videos, feed: requestedFeed)
     }
 
@@ -234,7 +232,7 @@ public final class VideoStore: ObservableObject {
                     videos.removeAll { $0.id == id }
                 }
                 if requestedFeed != sourceFeed {
-                    await evictFromSourceGroupCache(id: id, groupID: sourceGroupID)
+                    await evictFromSourceGroupCache(id: id, groupID: sourceGroupID, request: request)
                 }
             }
             await finishGroupMutation(id: id, request: request, feed: requestedFeed)
