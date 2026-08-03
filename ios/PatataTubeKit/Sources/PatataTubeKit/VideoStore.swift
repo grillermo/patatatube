@@ -13,6 +13,13 @@ public protocol MediaCaching: Sendable {
 
 @MainActor
 public final class VideoStore: ObservableObject {
+    private struct GroupMutation {
+        let request: UUID
+        let previous: Video
+        let updated: Video
+        let affectedGroupIDs: Set<Int>
+    }
+
     @Published public private(set) var videos: [Video] = []
     @Published public var feed: Feed {
         didSet { defaults.set(feed.storageKey, forKey: Self.feedKey) }
@@ -34,9 +41,8 @@ public final class VideoStore: ObservableObject {
     /// call can tell it's been superseded and must not clobber `videos`/`isLoading`
     /// with results that no longer match the current tab/request.
     private var loadGeneration = 0
-    private var groupMutationRequests: [Int: UUID] = [:]
-    private var pendingGroupMutationRequests: [Feed: [Int: Set<UUID>]] = [:]
-    private var cacheSaveTask: Task<Void, Never>?
+    private var groupMutations: [Int: GroupMutation] = [:]
+    private var groupCacheWriteTask: Task<Void, Never>?
 
     public init(api: VideoAPI, cache: VideoListCaching? = nil,
                 mediaCache: MediaCaching? = nil,
@@ -161,93 +167,99 @@ public final class VideoStore: ObservableObject {
         errorText = String(describing: error)
     }
 
-    private func saveCache(_ snapshot: [Video], feed: Feed) async {
-        guard let cache else { return }
-        let previousSave = cacheSaveTask
-        let saveTask = Task.detached(priority: .utility) {
-            if let previousSave { await previousSave.value }
-            cache.save(snapshot, feed: feed)
-        }
-        cacheSaveTask = saveTask
-        await saveTask.value
+    private func ownsGroupMutation(id: Int, request: UUID) -> Bool {
+        groupMutations[id]?.request == request
     }
 
-    private func evictFromSourceGroupCache(id: Int, groupID: Int, request: UUID) async {
+    private func reconcileGroupMutationCache(
+        _ video: Video, groupIDs: Set<Int>, request: UUID
+    ) async {
         guard let cache else { return }
-        let sourceFeed = Feed.group(id: groupID)
-        let snapshot: [Video]?
-        if feed == sourceFeed {
-            snapshot = videos
-        } else {
-            snapshot = await Task.detached(priority: .utility) {
-                cache.load(feed: sourceFeed)?.filter { $0.id != id }
-            }.value
+        let feeds = [Feed.all] + groupIDs.sorted().map { Feed.group(id: $0) }
+        let previousWrite = groupCacheWriteTask
+        let writeTask = Task.detached(priority: .utility) {
+            if let previousWrite { await previousWrite.value }
+            for feed in feeds {
+                guard await self.ownsGroupMutation(id: video.id, request: request) else { return }
+                guard var videos = cache.load(feed: feed) else { continue }
+                guard await self.ownsGroupMutation(id: video.id, request: request) else { return }
+                switch feed {
+                case .all:
+                    if let index = videos.firstIndex(where: { $0.id == video.id }) {
+                        videos[index] = video
+                    } else {
+                        videos.append(video)
+                    }
+                case .group(let groupID):
+                    if video.groupID == groupID {
+                        if let index = videos.firstIndex(where: { $0.id == video.id }) {
+                            videos[index] = video
+                        } else {
+                            videos.append(video)
+                        }
+                    } else {
+                        videos.removeAll { $0.id == video.id }
+                    }
+                case .plex:
+                    break
+                }
+                cache.save(videos, feed: feed)
+            }
         }
-        guard groupMutationRequests[id] == request, let snapshot else { return }
-        await saveCache(snapshot, feed: sourceFeed)
+        groupCacheWriteTask = writeTask
+        await writeTask.value
     }
 
-    private func finishGroupMutation(id: Int, request: UUID, feed requestedFeed: Feed) async {
-        let ownsVideo = groupMutationRequests[id] == request
-        if ownsVideo {
-            groupMutationRequests[id] = nil
+    private func finishGroupMutation(_ mutation: GroupMutation, succeeded: Bool) async -> Bool {
+        guard ownsGroupMutation(id: mutation.previous.id, request: mutation.request) else {
+            return false
         }
-        if var pending = pendingGroupMutationRequests[requestedFeed] {
-            pending[id]?.remove(request)
-            if pending[id]?.isEmpty == true { pending[id] = nil }
-            pendingGroupMutationRequests[requestedFeed] = pending.isEmpty ? nil : pending
-        }
-        guard ownsVideo, feed == requestedFeed else { return }
+        let settled = succeeded ? mutation.updated : mutation.previous
 
-        // Later owners serialize their newer snapshot after this one.
-        await saveCache(videos, feed: requestedFeed)
+        switch feed {
+        case .all:
+            if let index = videos.firstIndex(where: { $0.id == settled.id }) {
+                videos[index] = settled
+            }
+        case .group(let groupID):
+            if settled.groupID == groupID {
+                if let index = videos.firstIndex(where: { $0.id == settled.id }) {
+                    videos[index] = settled
+                }
+            } else {
+                videos.removeAll { $0.id == settled.id }
+            }
+        case .plex:
+            break
+        }
+        await reconcileGroupMutationCache(
+            settled, groupIDs: mutation.affectedGroupIDs, request: mutation.request
+        )
+        let ownsMutation = ownsGroupMutation(id: settled.id, request: mutation.request)
+        if ownsMutation { groupMutations[settled.id] = nil }
+        return ownsMutation
     }
 
     public func setGroup(id: Int, groupID: Int) async {
         guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
         let previous = videos[index]
         guard !previous.isPlexItem else { return }
-        let requestedFeed = feed
-        let request = UUID()
-        groupMutationRequests[id] = request
-        pendingGroupMutationRequests[requestedFeed, default: [:]][id, default: []].insert(request)
-        videos[index] = previous.withGroupID(groupID)
+        let updated = previous.withGroupID(groupID)
+        var affectedGroupIDs = groupMutations[id]?.affectedGroupIDs ?? []
+        if let previousGroupID = previous.groupID { affectedGroupIDs.insert(previousGroupID) }
+        affectedGroupIDs.insert(groupID)
+        let mutation = GroupMutation(
+            request: UUID(), previous: previous, updated: updated,
+            affectedGroupIDs: affectedGroupIDs
+        )
+        groupMutations[id] = mutation
+        videos[index] = updated
         do {
-            guard try await api.setGroup(id: id, groupID: groupID) else {
-                if groupMutationRequests[id] == request, feed == requestedFeed,
-                   let current = videos.firstIndex(where: { $0.id == id }),
-                   videos[current].groupID == groupID {
-                    videos[current] = previous
-                }
-                await finishGroupMutation(id: id, request: request, feed: requestedFeed)
-                return
-            }
-            guard groupMutationRequests[id] == request else {
-                await finishGroupMutation(id: id, request: request, feed: requestedFeed)
-                return
-            }
-            if let sourceGroupID = previous.groupID, sourceGroupID != groupID {
-                let sourceFeed = Feed.group(id: sourceGroupID)
-                if feed == sourceFeed {
-                    videos.removeAll { $0.id == id }
-                }
-                if requestedFeed != sourceFeed {
-                    await evictFromSourceGroupCache(id: id, groupID: sourceGroupID, request: request)
-                }
-            }
-            await finishGroupMutation(id: id, request: request, feed: requestedFeed)
+            _ = await finishGroupMutation(
+                mutation, succeeded: try await api.setGroup(id: id, groupID: groupID)
+            )
         } catch {
-            guard groupMutationRequests[id] == request else {
-                await finishGroupMutation(id: id, request: request, feed: requestedFeed)
-                return
-            }
-            if feed == requestedFeed,
-               let current = videos.firstIndex(where: { $0.id == id }),
-               videos[current].groupID == groupID {
-                videos[current] = previous
-            }
-            await finishGroupMutation(id: id, request: request, feed: requestedFeed)
-            report(error)
+            if await finishGroupMutation(mutation, succeeded: false) { report(error) }
         }
     }
 

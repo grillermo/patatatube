@@ -179,14 +179,16 @@ private final class BlockingLoadCache: VideoListCaching, @unchecked Sendable {
 
     func load(feed: Feed) -> [Video]? {
         if feed == .group(id: 1) {
-            let waiter = lock.withLock { () -> CheckedContinuation<Void, Never>? in
-                guard !groupLoadStarted else { return nil }
+            let firstLoad = lock.withLock { () -> (Bool, CheckedContinuation<Void, Never>?) in
+                guard !groupLoadStarted else { return (false, nil) }
                 groupLoadStarted = true
                 defer { groupLoadWaiter = nil }
-                return groupLoadWaiter
+                return (true, groupLoadWaiter)
             }
-            waiter?.resume()
-            releaseGate.wait()
+            if firstLoad.0 {
+                firstLoad.1?.resume()
+                releaseGate.wait()
+            }
         }
         return lock.withLock { videos[feed] }
     }
@@ -394,7 +396,7 @@ private actor GroupMoveGate {
 @MainActor @Test func setGroupDoesNotReportServerNotOk() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
     api.setGroupResult = false
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.load()
     await store.setGroup(id: 1, groupID: 2)
     #expect(store.errorText == nil)
@@ -417,7 +419,7 @@ private actor GroupMoveGate {
 @MainActor @Test func setGroupSetsErrorOnThrow() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
     api.throwOnSetGroup = true
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.load()
     await store.setGroup(id: 1, groupID: 2)
     #expect(store.errorText != nil)
@@ -520,7 +522,7 @@ private actor GroupMoveGate {
     #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
 }
 
-@MainActor @Test func olderGroupMoveInAnotherFeedDoesNotEvictTheNewerSameVideo() async {
+@MainActor @Test func newerCrossFeedMoveWinsAndReconcilesEveryAffectedCache() async {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1, groupID: 1)]
     let gate = GroupMoveGate()
@@ -529,6 +531,8 @@ private actor GroupMoveGate {
         return true
     }
     let cache = tempCache()
+    cache.save([], feed: .group(id: 2))
+    cache.save([], feed: .group(id: 3))
     let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
     await store.switchFeed(to: .group(id: 1))
 
@@ -537,16 +541,23 @@ private actor GroupMoveGate {
     await store.switchFeed(to: .all)
     async let newer: Void = store.setGroup(id: 1, groupID: 3)
     await gate.waitForArrival(3)
-    await store.switchFeed(to: .group(id: 1))
+    await store.switchFeed(to: .group(id: 99))
+
+    await gate.release(3)
+    await newer
+
+    #expect(store.videos.isEmpty)
+    #expect(cache.load(feed: .all)?.first?.groupID == 3)
+    #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
+    #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
+    #expect(cache.load(feed: .group(id: 3))?.map(\.id) == [1])
 
     await gate.release(2)
     await older
 
-    #expect(store.videos.map(\.id) == [1])
-    #expect(cache.load(feed: .group(id: 1))?.map(\.id) == [1])
-
-    await gate.release(3)
-    await newer
+    #expect(cache.load(feed: .all)?.first?.groupID == 3)
+    #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
+    #expect(cache.load(feed: .group(id: 3))?.first?.groupID == 3)
 }
 
 @MainActor @Test func newerSameVideoMovePersistsBeforeOlderRequestCompletes() async {
@@ -558,6 +569,9 @@ private actor GroupMoveGate {
         return true
     }
     let cache = tempCache()
+    cache.save([makeVideo(id: 1, groupID: 1)], feed: .group(id: 1))
+    cache.save([], feed: .group(id: 2))
+    cache.save([], feed: .group(id: 3))
     let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
     await store.load()
 
@@ -569,10 +583,15 @@ private actor GroupMoveGate {
     await newer
 
     #expect(cache.load(feed: .all)?.first?.groupID == 3)
+    #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
+    #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
+    #expect(cache.load(feed: .group(id: 3))?.map(\.id) == [1])
 
     await gate.release(2)
     await older
     #expect(cache.load(feed: .all)?.first?.groupID == 3)
+    #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
+    #expect(cache.load(feed: .group(id: 3))?.first?.groupID == 3)
 }
 
 @MainActor @Test func newerAllFeedMoveEvictsItsSourceGroupWhileOlderMoveIsPending() async {
@@ -604,7 +623,7 @@ private actor GroupMoveGate {
     await older
 }
 
-@MainActor @Test func owningMovePersistsWhileAnotherVideoIsPending() async {
+@MainActor @Test func settledMoveDoesNotPersistAnotherVideosOptimisticGroup() async {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
     let gate = GroupMoveGate()
@@ -621,9 +640,40 @@ private actor GroupMoveGate {
     await store.setGroup(id: 1, groupID: 3)
 
     #expect(cache.load(feed: .all)?.first(where: { $0.id == 1 })?.groupID == 3)
+    #expect(cache.load(feed: .all)?.first(where: { $0.id == 2 })?.groupID == 1)
 
     await gate.release(2)
     await pending
+}
+
+@MainActor @Test func newerFailureKeepsPriorSuccessfulSourceEviction() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, groupID: 1)]
+    let gate = GroupMoveGate()
+    api.setGroupHook = { _, groupID in
+        await gate.arrive(groupID)
+        return groupID == 2
+    }
+    let cache = tempCache()
+    cache.save([makeVideo(id: 1, groupID: 1)], feed: .group(id: 1))
+    cache.save([], feed: .group(id: 2))
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.load()
+
+    async let older: Void = store.setGroup(id: 1, groupID: 2)
+    await gate.waitForArrival(2)
+    async let newer: Void = store.setGroup(id: 1, groupID: 1)
+    await gate.waitForArrival(1)
+
+    await gate.release(2)
+    await older
+    await gate.release(1)
+    await newer
+
+    #expect(store.videos.first?.groupID == 2)
+    #expect(cache.load(feed: .all)?.first?.groupID == 2)
+    #expect(cache.load(feed: .group(id: 1))?.isEmpty == true)
+    #expect(cache.load(feed: .group(id: 2))?.map(\.id) == [1])
 }
 
 @MainActor @Test func staleSourceCacheEvictionDoesNotOverwriteNewerSameVideoMove() async {
@@ -649,6 +699,9 @@ private actor GroupMoveGate {
 
     await gate.release(1)
     await newer
+
+    #expect(cache.cached(feed: .all)?.first?.groupID == 1)
+    #expect(cache.cached(feed: .group(id: 1))?.map(\.id) == [1])
 }
 
 @MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async throws {
@@ -803,7 +856,7 @@ private func tempCache() -> VideoListCache {
 // optimistic edit back (the server never confirmed it), but must not banner.
 @MainActor @Test func setGroupIgnoresCancellation() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     await store.load()
     api.mutationError = URLError(.cancelled)
     await store.setGroup(id: 1, groupID: 2)
