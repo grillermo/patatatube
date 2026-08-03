@@ -37,10 +37,11 @@ struct GroupsView: View {
 
     @ViewBuilder
     private func artwork(for group: String) -> some View {
-        if let poster = posters.poster(for: group) {
+        if let poster = posters.poster(for: group),
+           let localFileURL = model.cache.cachedPreviewURL(for: poster.videoID, path: poster.path) {
             AuthedImage(
                 path: poster.path,
-                localFileURL: model.cache.cachedPreviewURL(for: poster.videoID, path: poster.path)
+                localFileURL: localFileURL
             )
         } else {
             // No spinner: nothing is loading, there is simply nothing recorded yet.
