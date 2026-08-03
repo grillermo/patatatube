@@ -3,10 +3,10 @@ import Foundation
 @testable import PatataTubeKit
 
 private func makeVideo(id: Int, classification: String = "children", status: String = "completed",
-                       errorMsg: String? = nil, chosenVersionId: Int? = nil,
+                       errorMsg: String? = nil, previewUrl: String? = nil, chosenVersionId: Int? = nil,
                        versions: [VideoVersion] = [], resumeSecs: Double = 0) -> Video {
     Video(id: id, url: "u\(id)", title: "t\(id)", platform: nil, sourceKey: nil,
-          previewUrl: nil, classification: classification, position: id,
+          previewUrl: previewUrl, classification: classification, position: id,
           status: status, errorMsg: errorMsg, streamPath: "/videos/\(id)/stream",
           chosenVersionId: chosenVersionId, versions: versions, resumeSecs: resumeSecs)
 }
@@ -259,6 +259,18 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     #expect(store.videos.count == 2)
     #expect(store.isLoading == false)
     #expect(store.errorText == nil)
+}
+
+@MainActor @Test func loadRecordsTheGroupPoster() async {
+    let defaults = UserDefaults(suiteName: "videostore.poster.\(UUID().uuidString)")!
+    let posters = GroupPosterStore(defaults: defaults)
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 7, previewUrl: "/videos/7/preview")]
+    let store = VideoStore(api: api, defaults: defaults, groupPosters: posters)
+
+    await store.load()
+
+    #expect(posters.poster(for: "children") == GroupPoster(videoID: 7, path: "/videos/7/preview"))
 }
 
 @MainActor @Test func classifyOptimisticallyUpdatesThenKeepsOnSuccess() async {
