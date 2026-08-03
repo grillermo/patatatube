@@ -474,6 +474,35 @@ private actor GroupMoveGate {
     #expect(cache.load(feed: .group(id: 2))?.isEmpty == true)
 }
 
+@MainActor @Test func olderGroupMoveInAnotherFeedDoesNotEvictTheNewerSameVideo() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, groupID: 1)]
+    let gate = GroupMoveGate()
+    api.setGroupHook = { _, groupID in
+        await gate.arrive(groupID)
+        return true
+    }
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+    await store.switchFeed(to: .group(id: 1))
+
+    async let older: Void = store.setGroup(id: 1, groupID: 2)
+    await gate.waitForArrival(2)
+    await store.switchFeed(to: .all)
+    async let newer: Void = store.setGroup(id: 1, groupID: 3)
+    await gate.waitForArrival(3)
+    await store.switchFeed(to: .group(id: 1))
+
+    await gate.release(2)
+    await older
+
+    #expect(store.videos.map(\.id) == [1])
+    #expect(cache.load(feed: .group(id: 1))?.map(\.id) == [1])
+
+    await gate.release(3)
+    await newer
+}
+
 @MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async throws {
     let versions = [
         VideoVersion(id: 10, label: "1080p", status: "done", isChosen: true),
