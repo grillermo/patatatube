@@ -61,7 +61,8 @@ def test_promote_skips_library_rows(fresh_db, monkeypatch):
         promote, "promote_to_plex", lambda v, k: pytest.fail("library rows never move")
     )
     vid = fresh_db.add_video("https://example.com/l", platform="upload")
-    fresh_db.update_video(vid, source="library")
+    with fresh_db._conn() as conn:
+        conn.execute("UPDATE videos SET source = 'library' WHERE id = ?", (vid,))
     assert services.promote(vid, "movies") is False
 
 
@@ -83,6 +84,8 @@ def test_promote_propagates_a_promotion_failure(fresh_db, monkeypatch):
 
     with pytest.raises(plex_promote.PromotionError, match="unavailable"):
         services.promote(vid, "movies")
+
+    assert fresh_db.get_video(vid)["group_id"] is None
 
 
 def test_choose_version_invalidates_existing_hls_package(fresh_db, monkeypatch):
