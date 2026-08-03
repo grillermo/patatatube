@@ -94,7 +94,15 @@ struct GroupsView: View {
             }
             .buttonStyle(.plain)
             .overlay(alignment: .topTrailing) {
-                menu(for: group)
+                // The corner belongs to the menu alone. Color.clear with a
+                // content shape is hit-testable, so it swallows the taps that
+                // land near the button but miss its circle — without it those
+                // fall through to the link underneath and open the group,
+                // which is exactly the misfire this guards against.
+                Color.clear
+                    .frame(width: 64, height: 64)
+                    .contentShape(Rectangle())
+                    .overlay(alignment: .topTrailing) { menu(for: group) }
             }
             Text(MediaTab.label(forGroup: group))
                 .font(.subheadline).lineLimit(1)
@@ -108,15 +116,19 @@ struct GroupsView: View {
                 Button("Remove cover", role: .destructive) { save(nil, for: group) }
             }
         } label: {
+            // 44pt circle: Apple's minimum touch target, and the whole circle
+            // is the hit shape — the old version was a headline glyph with 6pt
+            // of padding, roughly half that.
             Image(systemName: "ellipsis")
-                .font(.headline)
+                .font(.title3.weight(.bold))
                 .foregroundStyle(.white)
-                .padding(6)
-                .background(.black.opacity(0.45), in: Circle())
+                .frame(width: 44, height: 44)
+                .background(.black.opacity(0.5), in: Circle())
+                .contentShape(Circle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .padding(8)
+        .padding(6)
     }
 
     @ViewBuilder
