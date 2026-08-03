@@ -89,6 +89,16 @@ struct APIClientTests {
             }
         }
 
+        @Test func fetchesGroupCovers() async throws {
+            MockURLProtocol.handler = { req in
+                #expect(req.url?.path == "/api/group-covers")
+                let body = #"{"covers":{"children":"🐸","asmr":"🎧"}}"#.data(using: .utf8)!
+                return (jsonResponse(req.url!), body)
+            }
+            let covers = try await makeClient().groupCovers()
+            #expect(covers == ["children": "🐸", "asmr": "🎧"])
+        }
+
         @Test func throwsWhenBaseURLMissing() async {
             let store = InMemoryCredentialStore(baseURL: nil, token: "t")
             let client = APIClient(store: store, session: mockSession())
@@ -147,6 +157,25 @@ struct APIClientTests {
             }
             let id = try await makeClient().upload(url: "https://youtu.be/xyz")
             #expect(id == 42)
+        }
+
+        @Test func setGroupCoverSendsEmoji() async throws {
+            MockURLProtocol.handler = { req in
+                #expect(req.url?.path == "/api/group-covers/children")
+                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: String]
+                #expect(json["emoji"] == "🐸")
+                return (jsonResponse(req.url!), #"{"ok":true,"emoji":"🐸"}"#.data(using: .utf8)!)
+            }
+            #expect(try await makeClient().setGroupCover("🐸", for: "children"))
+        }
+
+        @Test func setGroupCoverSendsEmptyStringToClear() async throws {
+            MockURLProtocol.handler = { req in
+                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: String]
+                #expect(json["emoji"] == "")
+                return (jsonResponse(req.url!), #"{"ok":true,"emoji":null}"#.data(using: .utf8)!)
+            }
+            #expect(try await makeClient().setGroupCover(nil, for: "children"))
         }
 
         @Test func writeThrowsWithoutToken() async {

@@ -172,7 +172,11 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
   UserDefaults record of each group's newest `preview_url` written by
   `VideoStore.load()`. Tapping a card pushes `Route.group(name:)`, and the
   `path` change is what sets the filter, so a hand tap and a restored path take
-  the same code path.
+  the same code path. Each card's `⋯` menu can override that art with an emoji
+  cover; those live **on the server** (`group_covers` table,
+  `GET/POST /api/group-covers`) so they follow the user across devices, with
+  `GroupCoverStore` mirroring them into UserDefaults so the offline-first group
+  screen still renders them before any fetch.
 - **Download-all is bounded on the client too.** `withBoundedTaskGroup`
   (PatataTubeKit) runs at most `CacheManager.maxConcurrentDownloads` operations
   at once. This is not the same bound as `DownloadConcurrencyGate`, which covers

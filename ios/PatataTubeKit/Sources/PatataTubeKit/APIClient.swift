@@ -53,9 +53,17 @@ public protocol VideoAPI: Sendable {
     func prepare(id: Int, bulk: Bool) async throws -> String
     func video(id: Int) async throws -> Video
     func imageData(path: String) async throws -> Data
+    func groupCovers() async throws -> [String: String]
+    func setGroupCover(_ emoji: String?, for group: String) async throws -> Bool
 }
 
 public extension VideoAPI {
+    // Defaulted so the many test doubles conforming to this protocol don't all
+    // have to implement a feature they don't exercise. The real client
+    // overrides both.
+    func groupCovers() async throws -> [String: String] { [:] }
+    func setGroupCover(_ emoji: String?, for group: String) async throws -> Bool { false }
+
     func savePosition(
         id: Int, secs: Double, destinationServerIdentity: String
     ) async throws {
@@ -121,6 +129,25 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         } catch {
             throw APIError.decoding(String(describing: error))
         }
+    }
+
+    /// The emoji cover chosen for each Videos group. Server-owned so the choice
+    /// follows the user across devices; unauthenticated like `videos`.
+    public func groupCovers() async throws -> [String: String] {
+        let url = try base().appendingPathComponent("api/group-covers")
+        let (data, response) = try await session.data(from: url)
+        try Self.check(response)
+        struct Envelope: Decodable { let covers: [String: String] }
+        do {
+            return try JSONDecoder().decode(Envelope.self, from: data).covers
+        } catch {
+            throw APIError.decoding(String(describing: error))
+        }
+    }
+
+    /// `nil` or "" clears the group's cover.
+    public func setGroupCover(_ emoji: String?, for group: String) async throws -> Bool {
+        try await postOK("api/group-covers/\(group)", body: ["emoji": emoji ?? ""])
     }
 
     public func classify(id: Int, classification: String) async throws -> ClassifyResult {

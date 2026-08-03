@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CLASSIFICATIONS = ["children", "adults", "anabel", "asmr", "tv", "movies"]
+# The classifications the iOS Videos tab shows as groups (`MediaTab.videoGroups`),
+# and the only ones that can carry an emoji cover.
+VIDEO_GROUPS = CLASSIFICATIONS[:4]
 
 JOB_KINDS = ("convert", "hls", "normalize")
 PRIORITY_INTERACTIVE = 0
@@ -190,6 +193,15 @@ def init_db():
                 WHERE status IN ('queued', 'running');
 
             CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs (status, priority, id);
+            """
+        )
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS group_covers (
+                name TEXT PRIMARY KEY,
+                emoji TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
         version_columns = {
@@ -540,6 +552,27 @@ def set_version_audio_langs(version_id: int, audio_langs_json: str) -> None:
             "UPDATE video_versions SET audio_langs = ? WHERE id = ?",
             (audio_langs_json, version_id),
         )
+
+
+def get_group_covers() -> dict[str, str]:
+    """Every group's chosen emoji cover, keyed by classification name."""
+    with _conn() as conn:
+        rows = conn.execute("SELECT name, emoji FROM group_covers").fetchall()
+        return {row["name"]: row["emoji"] for row in rows}
+
+
+def set_group_cover(name: str, emoji: str | None) -> None:
+    """Store (or, with `emoji` falsy, clear) one group's cover."""
+    with _conn() as conn:
+        if emoji:
+            conn.execute(
+                "INSERT INTO group_covers (name, emoji, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)"
+                " ON CONFLICT(name) DO UPDATE SET emoji = excluded.emoji,"
+                " updated_at = CURRENT_TIMESTAMP",
+                (name, emoji),
+            )
+        else:
+            conn.execute("DELETE FROM group_covers WHERE name = ?", (name,))
 
 
 def get_video(video_id: int) -> dict | None:

@@ -24,7 +24,7 @@ import library
 import plex
 import promote
 import services
-from db import CLASSIFICATIONS
+from db import CLASSIFICATIONS, VIDEO_GROUPS
 from downloader import download_video, process_uploaded_video
 from views.serializers import serialize_video
 from views.render import build_videos_page
@@ -45,6 +45,10 @@ PREVIEW_CACHE_SUFFIX = f"r{PREVIEW_MAX_EDGE}"
 PREVIEW_FRAME_OFFSET = 3.0
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 VIDEO_CHUNK_SIZE = 1024 * 1024
+# A group cover is one emoji, but "one emoji" can be many code points — a ZWJ
+# family with skin tones runs ~11. Cap generously; the client is what enforces
+# the single-grapheme rule.
+MAX_GROUP_COVER_CHARS = 32
 DEFAULT_VIDEO_STREAM_LIMIT = 16
 VIDEO_CACHE_CONTROL = "public, max-age=31536000, immutable"
 SPLASH_DIR = Path("assets/splash")
@@ -159,6 +163,13 @@ class PositionRequest(BaseModel):
         if isinstance(value, float) and not math.isfinite(value):
             return str(value)
         return value
+
+
+class GroupCoverRequest(BaseModel):
+    # None or "" clears the cover; the client sends the emoji it already
+    # normalized to one grapheme cluster. A ZWJ family plus skin tones is
+    # comfortably under the cap, an accidental pasted sentence is not.
+    emoji: str | None = None
 
 
 class PrepareRequest(BaseModel):
@@ -827,6 +838,25 @@ async def api_videos(classification: str | None = None):
         classification = None
     videos = db.get_all_videos(classification)
     return [serialize_video(v) for v in videos]
+
+
+@router.get("/api/group-covers")
+async def api_group_covers():
+    """Every group's emoji cover. Shared across devices — the iOS group cards
+    mirror this into UserDefaults so they still render offline."""
+    return {"covers": db.get_group_covers()}
+
+
+@router.post("/api/group-covers/{name}")
+async def api_set_group_cover(name: str, body: GroupCoverRequest, request: Request):
+    _check_token(request)
+    if name not in VIDEO_GROUPS:
+        raise HTTPException(status_code=400, detail="Invalid group")
+    emoji = (body.emoji or "").strip()
+    if len(emoji) > MAX_GROUP_COVER_CHARS:
+        raise HTTPException(status_code=400, detail="Cover must be a single emoji")
+    db.set_group_cover(name, emoji)
+    return {"ok": True, "emoji": emoji or None}
 
 
 @router.post("/api/videos/{video_id}/classify")

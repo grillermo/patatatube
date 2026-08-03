@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
     let restorationGate = RestorationGate()
     let videoListCache: VideoListCache
     let groupPosters = GroupPosterStore()
+    let groupCovers = GroupCoverStore()
     private let downloadSettings: DownloadStreamSettings
     private let simultaneousSettings: SimultaneousDownloadSettings
 

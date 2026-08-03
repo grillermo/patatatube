@@ -379,7 +379,7 @@ struct VideoGridView: View {
             } else {
                 switch tab {
                 case .videos:
-                    GroupsView(posters: model.groupPosters)
+                    GroupsView(posters: model.groupPosters, covers: model.groupCovers)
                 case .tv:
                     ShowsView(
                         videos: filteredVideos,

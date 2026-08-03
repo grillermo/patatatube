@@ -1918,3 +1918,63 @@ def test_video_list_includes_resume_secs(client, monkeypatch):
     assert resp.status_code == 200
     row = next(v for v in resp.json() if v["id"] == video_id)
     assert row["resume_secs"] == 42.0
+
+
+def test_group_covers_start_empty(client):
+    resp = client.get("/api/group-covers")
+    assert resp.status_code == 200
+    assert resp.json() == {"covers": {}}
+
+
+def test_set_group_cover_requires_token(client):
+    resp = client.post("/api/group-covers/children", json={"emoji": "🐸"})
+    assert resp.status_code == 401
+
+
+def test_set_and_read_group_cover(client):
+    resp = client.post(
+        "/api/group-covers/children",
+        json={"emoji": "🐸"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "emoji": "🐸"}
+    assert client.get("/api/group-covers").json() == {"covers": {"children": "🐸"}}
+
+
+def test_set_group_cover_overwrites(client):
+    headers = {"Authorization": "Bearer test-secret"}
+    client.post("/api/group-covers/adults", json={"emoji": "🐸"}, headers=headers)
+    client.post("/api/group-covers/adults", json={"emoji": "🎈"}, headers=headers)
+    assert client.get("/api/group-covers").json()["covers"]["adults"] == "🎈"
+
+
+def test_empty_or_null_emoji_clears_the_cover(client):
+    headers = {"Authorization": "Bearer test-secret"}
+    client.post("/api/group-covers/asmr", json={"emoji": "🐸"}, headers=headers)
+    resp = client.post("/api/group-covers/asmr", json={"emoji": ""}, headers=headers)
+    assert resp.json() == {"ok": True, "emoji": None}
+    assert client.get("/api/group-covers").json() == {"covers": {}}
+
+    client.post("/api/group-covers/asmr", json={"emoji": "🐸"}, headers=headers)
+    client.post("/api/group-covers/asmr", json={}, headers=headers)
+    assert client.get("/api/group-covers").json() == {"covers": {}}
+
+
+def test_group_cover_rejects_non_group_classifications(client):
+    resp = client.post(
+        "/api/group-covers/tv",
+        json={"emoji": "🐸"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 400
+
+
+def test_group_cover_rejects_overlong_text(client):
+    resp = client.post(
+        "/api/group-covers/children",
+        json={"emoji": "x" * 33},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 400
+    assert client.get("/api/group-covers").json() == {"covers": {}}
