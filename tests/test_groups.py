@@ -70,3 +70,41 @@ def test_update_group_returns_none_for_an_unknown_id(fresh_db):
 def test_plex_kinds_are_not_groups(fresh_db):
     assert fresh_db.PLEX_KINDS == ("tv", "movies")
     assert not {g["name"] for g in fresh_db.list_groups()} & set(fresh_db.PLEX_KINDS)
+
+
+def test_video_columns_exist(fresh_db):
+    with fresh_db._conn() as conn:
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
+    assert {"group_id", "plex_kind"} <= columns
+
+
+def test_set_video_group_and_filtered_read(fresh_db):
+    kids = fresh_db.get_group_by_name("children")["id"]
+    adults = fresh_db.get_group_by_name("adults")["id"]
+    a = fresh_db.add_video("https://example.com/a", platform="twitter")
+    b = fresh_db.add_video("https://example.com/b", platform="twitter")
+    fresh_db.set_video_group(a, kids)
+    fresh_db.set_video_group(b, adults)
+
+    assert [v["id"] for v in fresh_db.get_all_videos(group_id=kids)] == [a]
+    assert {v["id"] for v in fresh_db.get_all_videos()} == {a, b}
+
+
+def test_set_video_group_to_none_unsorts_it(fresh_db):
+    kids = fresh_db.get_group_by_name("children")["id"]
+    vid = fresh_db.add_video("https://example.com/c", platform="twitter")
+    fresh_db.set_video_group(vid, kids)
+    fresh_db.set_video_group(vid, None)
+    assert fresh_db.get_video(vid)["group_id"] is None
+    assert fresh_db.get_all_videos(group_id=kids) == []
+
+
+def test_plex_kind_filter_is_separate_from_groups(fresh_db):
+    kids = fresh_db.get_group_by_name("children")["id"]
+    show = fresh_db.add_video("https://example.com/s", platform="upload")
+    kid = fresh_db.add_video("https://example.com/k", platform="upload")
+    fresh_db.set_video_plex_kind(show, "tv")
+    fresh_db.set_video_group(kid, kids)
+
+    assert [v["id"] for v in fresh_db.get_all_videos(plex_kind="tv")] == [show]
+    assert [v["id"] for v in fresh_db.get_all_videos(group_id=kids)] == [kid]

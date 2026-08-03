@@ -223,6 +223,13 @@ def init_db():
             """
         )
         _seed_default_groups(conn)
+        # A video is either in a group or is a Plex item — never both, never
+        # neither-but-meaningful. Nullability is the discriminator; there is no
+        # `kind` column.
+        if "group_id" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN group_id INTEGER REFERENCES groups(id)")
+        if "plex_kind" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN plex_kind TEXT")
         version_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(video_versions)").fetchall()
         }
@@ -671,19 +678,23 @@ def delete_video(video_id: int):
         conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
 
 
-def get_all_videos(classification: str | None = None) -> list[dict]:
+def get_all_videos(
+    group_id: int | None = None, plex_kind: str | None = None
+) -> list[dict]:
+    clauses = ["deleted_at IS NULL"]
+    params: list = []
+    if group_id is not None:
+        clauses.append("group_id = ?")
+        params.append(group_id)
+    if plex_kind is not None:
+        clauses.append("plex_kind = ?")
+        params.append(plex_kind)
+    sql = (
+        f"SELECT * FROM videos WHERE {' AND '.join(clauses)}"
+        " ORDER BY position DESC, created_at DESC"
+    )
     with _conn() as conn:
-        if classification:
-            rows = conn.execute(
-                "SELECT * FROM videos WHERE deleted_at IS NULL AND classification = ?"
-                " ORDER BY position DESC, created_at DESC",
-                (classification,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM videos WHERE deleted_at IS NULL ORDER BY position DESC, created_at DESC"
-            ).fetchall()
-        videos = [dict(r) for r in rows]
+        videos = [dict(r) for r in conn.execute(sql, params).fetchall()]
         _attach_versions(conn, videos)
     return videos
 
@@ -723,9 +734,19 @@ def _attach_versions(conn: sqlite3.Connection, videos: list[dict]) -> None:
             video["versions"] = versions_by_video[video["id"]]
 
 
-def set_video_classification(video_id: int, classification: str) -> None:
+def set_video_group(video_id: int, group_id: int | None) -> None:
+    """Put a video in a group, or (with None) leave it unsorted.
+
+    Never touches plex_kind: promoting into Plex deletes the row entirely
+    (see promote.py), so a row cannot end up carrying both.
+    """
     with _conn() as conn:
-        conn.execute("UPDATE videos SET classification = ? WHERE id = ?", (classification, video_id))
+        conn.execute("UPDATE videos SET group_id = ? WHERE id = ?", (group_id, video_id))
+
+
+def set_video_plex_kind(video_id: int, kind: str | None) -> None:
+    with _conn() as conn:
+        conn.execute("UPDATE videos SET plex_kind = ? WHERE id = ?", (kind, video_id))
 
 
 def set_hls_status(video_id: int, status: str) -> None:
