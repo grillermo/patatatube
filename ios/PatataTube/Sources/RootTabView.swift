@@ -17,13 +17,13 @@ struct RootTabView: View {
 
     var body: some View {
         TabView(selection: selectionBinding) {
-            VideoGridView(tab: .videos, activation: activation)
+            VideoGridView(tab: .videos, selectedTab: selection, activation: activation)
                 .tabItem { Label("Videos", systemImage: "play.rectangle.on.rectangle") }
                 .tag(MediaTab.videos)
-            VideoGridView(tab: .tv, activation: activation)
+            VideoGridView(tab: .tv, selectedTab: selection, activation: activation)
                 .tabItem { Label("TV", systemImage: "tv") }
                 .tag(MediaTab.tv)
-            VideoGridView(tab: .movies, activation: activation)
+            VideoGridView(tab: .movies, selectedTab: selection, activation: activation)
                 .tabItem { Label("Movies", systemImage: "film") }
                 .tag(MediaTab.movies)
         }

@@ -25,6 +25,7 @@ struct PendingResume: Identifiable {
 private struct RestorationTracking: ViewModifier {
     let path: [Route]
     let tab: MediaTab
+    let selectedTab: MediaTab
     let activation: MediaTab?
     let filter: String?
     let activeSearch: String
@@ -33,12 +34,14 @@ private struct RestorationTracking: ViewModifier {
     let model: AppModel
     let gridTracker: VisibleItemsTracker
     @Binding var gridAnchorDebounceTask: Task<Void, Never>?
+    @Binding var searchDebounceTask: Task<Void, Never>?
     let currentGridOrder: [String]
     let activateGroup: (String) -> Void
 
     func body(content: Content) -> some View {
         content
             .onChange(of: activeSearch) { _, newValue in
+                guard selectedTab == tab else { return }
                 model.restorationStore.mutate { $0.search = newValue }
             }
             .onChange(of: path) { oldValue, newValue in
@@ -46,12 +49,14 @@ private struct RestorationTracking: ViewModifier {
                     "from": RestorationTracking.describe(oldValue),
                     "to": RestorationTracking.describe(newValue),
                 ])
+                guard selectedTab == tab else { return }
                 model.restorationStore.mutate {
                     $0.tab = tab
                     $0.path = newValue
                 }
             }
             .onChange(of: filter) { _, newValue in
+                guard selectedTab == tab else { return }
                 model.restorationStore.mutate { $0.filter = newValue }
             }
             .onChange(of: activation) { _, selectedTab in
@@ -70,10 +75,16 @@ private struct RestorationTracking: ViewModifier {
                 }
                 if tab == .videos, let selectedFilter { activateGroup(selectedFilter) }
             }
+            .onChange(of: selectedTab) { _, newValue in
+                guard newValue != tab else { return }
+                searchDebounceTask?.cancel()
+                gridAnchorDebounceTask?.cancel()
+            }
             .onChange(of: currentGridOrder) { _, newValue in
                 gridTracker.setOrder(newValue)
             }
             .onChange(of: playing) { oldValue, newValue in
+                guard selectedTab == tab else { return }
                 DevLog.event(.nav, "grid playing changed", [
                     "from": oldValue.map { "\($0.videos[$0.startIndex].id)" } ?? "nil",
                     "to": newValue.map { "\($0.videos[$0.startIndex].id)" } ?? "nil",
@@ -86,6 +97,7 @@ private struct RestorationTracking: ViewModifier {
                 }
             }
             .onChange(of: scenePhase) { _, newValue in
+                guard selectedTab == tab else { return }
                 guard newValue != .active else { return }
                 // Flush the debounced anchor write immediately — the app can
                 // be suspended before the 0.5s debounce fires.
@@ -111,19 +123,23 @@ private struct RestorationTracking: ViewModifier {
 
 private extension View {
     func restorationTracking(
-        path: [Route], tab: MediaTab, activation: MediaTab?,
+        path: [Route], tab: MediaTab, selectedTab: MediaTab,
+        activation: MediaTab?,
         filter: String?, activeSearch: String,
         playing: PlaybackQueue?, scenePhase: ScenePhase,
         model: AppModel, gridTracker: VisibleItemsTracker,
         gridAnchorDebounceTask: Binding<Task<Void, Never>?>,
+        searchDebounceTask: Binding<Task<Void, Never>?>,
         currentGridOrder: [String], activateGroup: @escaping (String) -> Void
     ) -> some View {
         modifier(RestorationTracking(
-            path: path, tab: tab, activation: activation,
+            path: path, tab: tab, selectedTab: selectedTab,
+            activation: activation,
             filter: filter, activeSearch: activeSearch,
             playing: playing, scenePhase: scenePhase,
             model: model, gridTracker: gridTracker,
             gridAnchorDebounceTask: gridAnchorDebounceTask,
+            searchDebounceTask: searchDebounceTask,
             currentGridOrder: currentGridOrder, activateGroup: activateGroup
         ))
     }
@@ -136,9 +152,13 @@ struct VideoGridView: View {
     /// Set only for a user-initiated tab selection. Launch restoration changes
     /// `RootTabView.selection` directly so an empty stack cannot overwrite it.
     let activation: MediaTab?
+    /// Current tab-bar selection, used to reject delayed writes from retained
+    /// inactive stacks.
+    let selectedTab: MediaTab
 
-    init(tab: MediaTab, activation: MediaTab? = nil) {
+    init(tab: MediaTab, selectedTab: MediaTab? = nil, activation: MediaTab? = nil) {
         self.tab = tab
+        self.selectedTab = selectedTab ?? tab
         self.activation = activation
     }
 
@@ -251,11 +271,13 @@ struct VideoGridView: View {
                 }
             }
             .restorationTracking(
-                path: path, tab: tab, activation: activation,
+                path: path, tab: tab, selectedTab: selectedTab,
+                activation: activation,
                 filter: store.filter, activeSearch: activeSearch,
                 playing: playing, scenePhase: scenePhase,
                 model: model, gridTracker: gridTracker,
                 gridAnchorDebounceTask: $gridAnchorDebounceTask,
+                searchDebounceTask: $searchDebounceTask,
                 currentGridOrder: currentGridOrder,
                 activateGroup: { name in Task { await loadGroup(name) } }
             )
