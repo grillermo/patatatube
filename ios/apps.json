@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.2.5",
+          "buildVersion": "125",
+          "date": "2026-08-03T17:20:14Z",
+          "localizedDescription": "Group covers stop flashing a video frame\n\n• Group cards no longer flash the last video's preview before the emoji cover appears\n• A group without a cover shows a plain placeholder instead of borrowing art from a video",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.5/PatataTube-1.2.5.ipa",
+          "size": 4097104,
+          "sha256": "63ff2ae8e22778c540ad898b96d282d72371079347a64a726caea575588665f3",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.2.4",
           "buildVersion": "124",
           "date": "2026-08-03T16:41:50Z",
@@ -1174,11 +1184,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.2.4",
-      "versionDate": "2026-08-03T16:41:50Z",
-      "versionDescription": "Episode lists get the same menu as groups\n\n• One ⋯ menu in a TV show replaces the separate autoplay and download buttons\n• Autoplay and Randomize now apply to the show you are watching, not to every show at once\n• Download all in a show still queues only that show's episodes",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.4/PatataTube-1.2.4.ipa",
-      "size": 4101223
+      "version": "1.2.5",
+      "versionDate": "2026-08-03T17:20:14Z",
+      "versionDescription": "Group covers stop flashing a video frame\n\n• Group cards no longer flash the last video's preview before the emoji cover appears\n• A group without a cover shows a plain placeholder instead of borrowing art from a video",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.5/PatataTube-1.2.5.ipa",
+      "size": 4097104
     }
   ],
   "news": []
