@@ -275,3 +275,8 @@ Run the app from Xcode, tap the live-page button in the grid
 7. Repeat in play-and-sleep playback; after the black completion overlay appears, confirm the orientation button cannot be revealed or tapped.
 8. Enable Control Center Rotation Lock and confirm PatataTube's button reports only its own state; unlocking PatataTube does not disable the system setting.
 9. Confirm scrubbing, native playback controls, pull-down dismissal, subtitles/audio selection, and AirPlay still work.
+
+- **Player dismissal does not resurrect the player.** Open a show, play an
+  episode, pull down to dismiss. The player must stay dismissed, and a single
+  tap on the nav-bar back button must return to the shows list. (Regression
+  test for the restoration task re-entry loop, 2026-08-02.)
