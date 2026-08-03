@@ -301,13 +301,16 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     #expect(store.errorText == nil)
 }
 
-@MainActor @Test func setGroupSendsTheRequestedGroup() async {
+@MainActor @Test func setGroupUpdatesTheListAndCacheOnSuccess() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1, classification: "children")]
-    let store = VideoStore(api: api)
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
     await store.load()
     await store.setGroup(id: 1, groupID: 2)
     #expect(api.setGroupRequests.map(\.id) == [1])
     #expect(api.setGroupRequests.map(\.groupID) == [2])
+    #expect(store.videos[0].groupID == 2)
+    #expect(cache.load(feed: .all)?[0].groupID == 2)
 }
 
 @MainActor @Test func setGroupDoesNotReportServerNotOk() async {
@@ -317,6 +320,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     await store.load()
     await store.setGroup(id: 1, groupID: 2)
     #expect(store.errorText == nil)
+    #expect(store.videos[0].groupID == 1)
 }
 
 @MainActor @Test func setGroupSetsErrorOnThrow() async {
@@ -326,6 +330,7 @@ private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
     await store.load()
     await store.setGroup(id: 1, groupID: 2)
     #expect(store.errorText != nil)
+    #expect(store.videos[0].groupID == 1)
 }
 
 @MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async throws {
@@ -765,4 +770,28 @@ private func tempCache() -> VideoListCache {
     // The discarded adults response must not clear the local value while its
     // row is absent from the list that actually reached the grid.
     #expect(positions.resolved(server: 10, for: 1) == 120)
+}
+
+@MainActor @Test func staleFeedResponseCannotOverwriteTheNewFeedsCache() async {
+    let api = FakeAPI()
+    api.videosToReturn = [
+        makeVideo(id: 1, classification: "children"),
+        makeVideo(id: 2, classification: "adults"),
+    ]
+    let cache = tempCache()
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
+
+    api.beforeVideosReturn = { @MainActor in
+        if api.lastFeed == .group(id: 1) {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    async let first: Void = store.switchFeed(to: .group(id: 1))
+    try? await Task.sleep(nanoseconds: 5_000_000)
+    async let second: Void = store.switchFeed(to: .group(id: 2))
+    _ = await (first, second)
+
+    #expect(cache.load(feed: .group(id: 1))?.map(\.id) == [1])
+    #expect(cache.load(feed: .group(id: 2))?.map(\.id) == [2])
 }

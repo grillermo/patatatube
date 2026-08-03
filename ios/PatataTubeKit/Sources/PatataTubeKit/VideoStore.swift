@@ -102,19 +102,19 @@ public final class VideoStore: ObservableObject {
         errorText = nil
         defer { if generation == loadGeneration { isLoading = false } }
         do {
-            let fetched = try await api.videos(feed: feed)
+            let requestedFeed = feed
+            let fetched = try await api.videos(feed: requestedFeed)
             // Encode + atomic disk write off the main actor: doing it inline here
             // (this method is @MainActor) blocked the main thread long enough to
             // trip Sentry's app-hang detector (PATATATUBE-2, NSFileHandle.write).
             if let cache {
                 let toSave = fetched
-                let feed = self.feed
                 // await the detached task's value: the main actor suspends (freeing
                 // the main thread to render) while the encode + write runs on a
                 // background thread, then resumes. Not fire-and-forget, so callers
                 // still observe the save as complete once load() returns.
                 await Task.detached(priority: .utility) {
-                    cache.save(toSave, feed: feed)
+                    cache.save(toSave, feed: requestedFeed)
                 }.value
             }
             // Only apply this fetch if nothing newer has started since -- a stale,
@@ -159,10 +159,23 @@ public final class VideoStore: ObservableObject {
     }
 
     public func setGroup(id: Int, groupID: Int) async {
-        guard videos.contains(where: { $0.id == id }) else { return }
+        guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
+        let previous = videos[index]
+        videos[index] = previous.withGroupID(groupID)
+        let updatedVideos = videos
+        let requestedFeed = feed
         do {
-            _ = try await api.setGroup(id: id, groupID: groupID)
+            guard try await api.setGroup(id: id, groupID: groupID) else {
+                if videos.indices.contains(index), videos[index].id == id { videos[index] = previous }
+                return
+            }
+            if let cache {
+                await Task.detached(priority: .utility) {
+                    cache.save(updatedVideos, feed: requestedFeed)
+                }.value
+            }
         } catch {
+            if videos.indices.contains(index), videos[index].id == id { videos[index] = previous }
             report(error)
         }
     }
