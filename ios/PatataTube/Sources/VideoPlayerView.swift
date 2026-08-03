@@ -57,6 +57,10 @@ struct VideoPlayerView: View {
     /// Cleared after the first item mounts, so only the restored item starts
     /// paused; every later item in the queue plays as usual.
     @State private var suppressAutoplayOnce: Bool = false
+    /// Bumped when the transport controls must be forced visible without a tap
+    /// — a restored session mounts paused, and AVKit otherwise leaves the bar
+    /// hidden, so nothing on screen says "tap to resume".
+    @State private var revealControlsToken = 0
     @State private var nowPlaying = NowPlayingManager()
     @State private var playToEndObserver: NSObjectProtocol?
     /// Periodic time observer that feeds the resume reporter. Removed on dismiss.
@@ -95,6 +99,7 @@ struct VideoPlayerView: View {
                     player: player,
                     attached: attached,
                     resumeAfterDetaching: resumeAfterDetaching,
+                    revealControlsToken: revealControlsToken,
                     onPlayerTap: { orientationControlVisibility.reveal() },
                     onSceneAvailable: { orientationLock.beginPlayerSession(in: $0) }
                 )
@@ -372,7 +377,11 @@ struct VideoPlayerView: View {
             ])
             if self.suppressAutoplayOnce {
                 // Restored session: mounted and seeked, waiting for a tap.
+                // Surface the controls right away so the paused frame is
+                // obviously resumable.
                 self.suppressAutoplayOnce = false
+                self.revealControlsToken += 1
+                self.orientationControlVisibility.reveal()
             } else {
                 player.play()
             }
