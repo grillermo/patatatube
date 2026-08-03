@@ -17,6 +17,7 @@ final class AppModel: ObservableObject {
     /// time and the player can report against the same store.
     let resumeStore: ResumePositionStore
     lazy var positions = PlaybackPositionReporter(api: api, store: resumeStore)
+    let restorationStore = RestorationStore()
     let videoListCache: VideoListCache
     private let downloadSettings: DownloadStreamSettings
     private let simultaneousSettings: SimultaneousDownloadSettings

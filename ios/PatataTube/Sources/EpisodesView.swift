@@ -33,7 +33,12 @@ struct EpisodesView: View {
 
     @EnvironmentObject var model: AppModel
     @Environment(\.continuousClock) private var clock
+    @Environment(\.scenePhase) private var scenePhase
     @State private var downloadState = EpisodesDownloadAllState()
+    @State private var visibleTracker = VisibleItemsTracker()
+    @State private var anchorDebounceTask: Task<Void, Never>?
+
+    private var anchorKey: String { RestorationState.showKey(title: show.title) }
 
     init(
         show: ShowGroup,
@@ -50,11 +55,31 @@ struct EpisodesView: View {
     }
 
     var body: some View {
-        List {
-            ForEach(show.seasons(), id: \.number) { season in
-                Section("Season \(season.number)") {
-                    ForEach(season.episodes) { episode in
-                        row(for: episode)
+        ScrollViewReader { proxy in
+            List {
+                ForEach(show.seasons(), id: \.number) { season in
+                    Section("Season \(season.number)") {
+                        ForEach(season.episodes) { episode in
+                            row(for: episode)
+                                .id(String(episode.id))
+                                .onAppear {
+                                    visibleTracker.appeared(String(episode.id))
+                                    scheduleAnchorSave()
+                                }
+                                .onDisappear {
+                                    visibleTracker.disappeared(String(episode.id))
+                                    scheduleAnchorSave()
+                                }
+                        }
+                    }
+                }
+            }
+            .onAppear {
+                visibleTracker.setOrder(show.episodes.map { String($0.id) })
+                if let anchor = model.restorationStore.load().scrollAnchors[anchorKey] {
+                    Task {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        proxy.scrollTo(anchor, anchor: .top)
                     }
                 }
             }
@@ -99,6 +124,25 @@ struct EpisodesView: View {
         }
         .task {
             await observeDownloadAllEligibility()
+        }
+        .onChange(of: scenePhase) { _, newValue in
+            guard newValue != .active else { return }
+            anchorDebounceTask?.cancel()
+            if let topmost = visibleTracker.topmost {
+                let key = anchorKey
+                model.restorationStore.mutate { $0.scrollAnchors[key] = topmost }
+            }
+        }
+    }
+
+    private func scheduleAnchorSave() {
+        let key = anchorKey
+        anchorDebounceTask?.cancel()
+        anchorDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            guard let topmost = visibleTracker.topmost else { return }
+            model.restorationStore.mutate { $0.scrollAnchors[key] = topmost }
         }
     }
 
