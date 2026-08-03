@@ -18,6 +18,11 @@ final class AppModel: ObservableObject {
     let resumeStore: ResumePositionStore
     lazy var positions = PlaybackPositionReporter(api: api, store: resumeStore)
     let restorationStore = RestorationStore()
+    /// Restoration is a launch concern, and `VideoGridView`'s restore lives in
+    /// a `.task` that SwiftUI restarts whenever the grid re-enters the
+    /// hierarchy (every `fullScreenCover` dismissal). The gate lives here, not
+    /// in the view, so exactly one run per launch can apply saved state.
+    let restorationGate = RestorationGate()
     let videoListCache: VideoListCache
     private let downloadSettings: DownloadStreamSettings
     private let simultaneousSettings: SimultaneousDownloadSettings
@@ -128,6 +133,7 @@ final class AppModel: ObservableObject {
     /// launch, so a bad restored state can't be replayed forever.
     func clearRestoration() {
         restorationStore.clear()
+        restorationGate.reset()
         DevLog.event(.state, "restoration cleared")
     }
 

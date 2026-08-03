@@ -491,7 +491,20 @@ struct VideoGridView: View {
     /// `store.videos`, which only exists after `bootLoad()` returns, and the
     /// search text has to be applied before `filteredVideos` (which both
     /// depend on) is read.
+    ///
+    /// Claims `model.restorationGate` first. SwiftUI restarts a `.task` every
+    /// time its view re-enters the hierarchy, and dismissing the player's
+    /// `fullScreenCover` does exactly that — ungated, each dismissal re-ran
+    /// this function against a snapshot read before its `await`s and
+    /// re-presented the player it had just dismissed, or cleared `path` and
+    /// popped `EpisodesView` under the user's tap
+    /// (`docs/restoration-buggy.md`).
     private func initialLoad(scrollProxy: ScrollViewProxy) async {
+        guard model.restorationGate.claim() else {
+            DevLog.event(.nav, "initial load skipped", ["reason": "already restored"])
+            return
+        }
+
         let api = APIClient(store: model.credentials)
         if let list = try? await api.classifications() { classifications = list }
 
@@ -508,12 +521,20 @@ struct VideoGridView: View {
             videos: store.videos,
             hasPendingQuickAction: QuickActionRouter.shared.pending != nil
         )
+        let applyPath = RestorationApplyDecision.shouldApplyPath(
+            restoredIsEmpty: resolved.path.isEmpty, liveIsEmpty: path.isEmpty
+        )
+        let applyPlayer = RestorationApplyDecision.shouldApplyPlayer(
+            hasRestoredPlayer: resolved.player != nil, hasLivePlayer: playing != nil
+        )
         DevLog.event(.nav, "initial load applying", [
             "path": RestorationTracking.describe(resolved.path),
             "player": resolved.player.map { "\($0.video.id)" } ?? "nil",
+            "apply_path": "\(applyPath)",
+            "apply_player": "\(applyPlayer)",
         ])
-        path = resolved.path
-        if let player = resolved.player {
+        if applyPath { path = resolved.path }
+        if applyPlayer, let player = resolved.player {
             let startSecs = model.resumeStore.resolved(server: player.video.resumeSecs, for: player.video.id)
             playing = PlaybackQueue(
                 video: player.video,
