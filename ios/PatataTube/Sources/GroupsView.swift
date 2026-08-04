@@ -16,6 +16,7 @@ struct GroupsView: View {
 
     @State private var saveError: String?
     @State private var editing: EditingGroup?
+    @State private var renaming: EditingGroup?
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
 
@@ -39,6 +40,12 @@ struct GroupsView: View {
                 editing = nil
             }
         }
+        .sheet(item: $renaming) { item in
+            RenameGroupView(group: item.group) { label in
+                rename(label, for: item.group)
+                renaming = nil
+            }
+        }
         .alert("Couldn't save cover", isPresented: .constant(saveError != nil)) {
             Button("OK") { saveError = nil }
         } message: {
@@ -60,6 +67,30 @@ struct GroupsView: View {
         Task {
             do {
                 _ = try await model.api.updateGroup(id: group.id, label: nil, emoji: emoji)
+            } catch {
+                groups.apply(previous)
+                saveError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Optimistic like `save`: label changes on screen first, write follows,
+    /// a failed write reverts.
+    private func rename(_ label: String, for group: VideoGroup) {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != group.label else { return }
+        let previous = groups.groups
+        groups.apply(groups.groups.map {
+            $0.id == group.id
+                ? VideoGroup(id: $0.id, name: $0.name, label: trimmed, emoji: $0.emoji, position: $0.position)
+                : $0
+        })
+        Task {
+            do {
+                // `emoji: nil` always serializes to a clearing `null` in the
+                // request body (see APIClient.updateGroup) — pass the current
+                // value back so renaming doesn't wipe the cover.
+                _ = try await model.api.updateGroup(id: group.id, label: trimmed, emoji: group.emoji)
             } catch {
                 groups.apply(previous)
                 saveError = error.localizedDescription
@@ -107,6 +138,7 @@ struct GroupsView: View {
 
     private func menu(for group: VideoGroup) -> some View {
         Menu {
+            Button("Rename") { renaming = EditingGroup(group: group) }
             Button("Choose cover") { editing = EditingGroup(group: group) }
             if group.emoji != nil {
                 Button("Remove cover", role: .destructive) { save(nil, for: group) }
@@ -195,6 +227,45 @@ private struct CoverPickerView: View {
             text = current ?? ""
             focused = true
         }
+    }
+}
+
+/// Rename sheet, mirrors `CoverPickerView`'s shape.
+private struct RenameGroupView: View {
+    let group: VideoGroup
+    let onSave: (String) -> Void
+
+    @State private var text: String = ""
+    @FocusState private var focused: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Name", text: $text)
+                    .focused($focused)
+                    .onSubmit(save)
+            }
+            .navigationTitle("Rename Group")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", action: save)
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .onAppear {
+            text = group.label
+            focused = true
+        }
+    }
+
+    private func save() {
+        onSave(text)
     }
 }
 
