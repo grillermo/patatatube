@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.4.2",
+          "buildVersion": "130",
+          "date": "2026-08-04T12:38:28Z",
+          "localizedDescription": "Grid size menu no longer has a dead step\n\n• Shrinking/growing grid cells in the ⋯ menu no longer has a click that visibly does nothing right before switching to list view",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.4.2/PatataTube-1.4.2.ipa",
+          "size": 4159064,
+          "sha256": "18d843759935123a04c757aca479e13af50abfd28148716e89c2f0e7d8f05e6c",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.4.1",
           "buildVersion": "129",
           "date": "2026-08-04T06:00:52Z",
@@ -1214,11 +1224,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.4.1",
-      "versionDate": "2026-08-04T06:00:52Z",
-      "versionDescription": "What's new in 1.4.1:\n\n• feat(ios): row-shaped loading skeleton in list mode\n• feat(ios): render movies as rows in list mode\n• feat(ios): render videos as rows in list mode\n• feat(ios): drive grid columns and size menu from GridDisplayMode\n• feat(ios): add GridDisplayMode size/mode state machine\n• feat(ios): add rename group to ellipsis menu\n• fix: close the gaps left by the video-groups plan\n• fix: clear loading after group move",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.4.1/PatataTube-1.4.1.ipa",
-      "size": 4159135
+      "version": "1.4.2",
+      "versionDate": "2026-08-04T12:38:28Z",
+      "versionDescription": "Grid size menu no longer has a dead step\n\n• Shrinking/growing grid cells in the ⋯ menu no longer has a click that visibly does nothing right before switching to list view",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.4.2/PatataTube-1.4.2.ipa",
+      "size": 4159064
     }
   ],
   "news": []
