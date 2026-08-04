@@ -204,9 +204,8 @@ struct VideoGridView: View {
     // Grid cell size, adjustable via +/- buttons. Persisted across launches and
     // scoped per feed, so sizing one group leaves the others alone.
     private var cellSize: Double { model.cellSize(for: store.feed) }
-    private let minCellSize: Double = 120
-    private let maxCellSize: Double = 420
-    private let cellSizeStep: Double = 50
+    /// List or grid, derived from the one persisted per-feed size.
+    private var displayMode: GridDisplayMode { GridDisplayMode.forCellSize(cellSize) }
 
     static func shouldDismissErrorBanner(translation: CGSize) -> Bool {
         abs(translation.width) >= 100 && abs(translation.width) > abs(translation.height)
@@ -234,7 +233,12 @@ struct VideoGridView: View {
     }
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: cellSize), spacing: 16)]
+        switch displayMode {
+        case .list:
+            return [GridItem(.flexible(), spacing: 0)]
+        case .grid(let size):
+            return [GridItem(.adaptive(minimum: size), spacing: 16)]
+        }
     }
 
     private func normalized(_ text: String) -> String {
@@ -508,15 +512,23 @@ struct VideoGridView: View {
                 Label("Downloads", systemImage: "arrow.down.circle")
             }
 
+            let smallerStep = GridDisplayMode.smaller(from: cellSize)
             Button {
-                model.setCellSize(max(cellSize - cellSizeStep, minCellSize), for: store.feed)
-            } label: { Label("Smaller cells", systemImage: "minus.magnifyingglass") }
-            .disabled(cellSize <= minCellSize)
+                if let smallerStep { model.setCellSize(smallerStep.target, for: store.feed) }
+            } label: {
+                Label(smallerStep?.title ?? "Smaller cells",
+                      systemImage: smallerStep?.systemImage ?? "minus.magnifyingglass")
+            }
+            .disabled(smallerStep == nil)
 
+            let biggerStep = GridDisplayMode.bigger(from: cellSize)
             Button {
-                model.setCellSize(min(cellSize + cellSizeStep, maxCellSize), for: store.feed)
-            } label: { Label("Bigger cells", systemImage: "plus.magnifyingglass") }
-            .disabled(cellSize >= maxCellSize)
+                if let biggerStep { model.setCellSize(biggerStep.target, for: store.feed) }
+            } label: {
+                Label(biggerStep?.title ?? "Bigger cells",
+                      systemImage: biggerStep?.systemImage ?? "plus.magnifyingglass")
+            }
+            .disabled(biggerStep == nil)
 
             Divider()
 
