@@ -206,6 +206,11 @@ struct VideoGridView: View {
     private var cellSize: Double { model.cellSize(for: store.feed) }
     /// List or grid, derived from the one persisted per-feed size.
     private var displayMode: GridDisplayMode { GridDisplayMode.forCellSize(cellSize) }
+    /// Rows carry their own divider and sit flush; cards keep the 16pt gutter.
+    private var gridSpacing: CGFloat {
+        if case .list = displayMode { return 0 }
+        return 16
+    }
 
     static func shouldDismissErrorBanner(translation: CGSize) -> Bool {
         abs(translation.width) >= 100 && abs(translation.width) > abs(translation.height)
@@ -433,33 +438,60 @@ struct VideoGridView: View {
     }
 
     private var defaultGrid: some View {
-        LazyVGrid(columns: columns, spacing: 16) {
+        LazyVGrid(columns: columns, spacing: gridSpacing) {
             ForEach(filteredVideos) { video in
                 let cache = model.cache
                 let videoId = video.id
                 let versionId = video.chosenVersionId
-                VideoCell(
-                    video: video,
-                    cacheState: cache.state(for: videoId, versionId: versionId),
-                    currentCacheState: { cache.state(for: videoId, versionId: versionId) },
-                    cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl),
-                    onPreviewLoaded: { data in
-                        guard let path = video.previewUrl,
-                              cache.cachedPreviewURL(for: videoId, path: path) == nil else { return }
-                        cache.storePreview(data, for: videoId, path: path)
-                    },
-                    localFileURL: cache.localURL(for: videoId, versionId: versionId),
-                    groups: groups.groups,
-                    onPlay: { play(video, caller: "grid-cell") },
-                    onPlaySleep: { play(video, sleepMode: true, caller: "grid-cell-sleep") },
-                    onDownload: { await download(video) },
-                    onCancel: { cache.cancel(id: videoId, versionId: versionId) },
-                    onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
-                    onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
-                    onPromote: { kind in Task { await store.promote(id: video.id, kind: kind) } },
-                    onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
-                    onDelete: { Task { await store.delete(id: video.id) } }
-                )
+                Group {
+                    if case .list = displayMode {
+                        VideoRow(
+                            video: video,
+                            cacheState: cache.state(for: videoId, versionId: versionId),
+                            currentCacheState: { cache.state(for: videoId, versionId: versionId) },
+                            cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl),
+                            onPreviewLoaded: { data in
+                                guard let path = video.previewUrl,
+                                      cache.cachedPreviewURL(for: videoId, path: path) == nil else { return }
+                                cache.storePreview(data, for: videoId, path: path)
+                            },
+                            localFileURL: cache.localURL(for: videoId, versionId: versionId),
+                            groups: groups.groups,
+                            onPlay: { play(video, caller: "grid-row") },
+                            onPlaySleep: { play(video, sleepMode: true, caller: "grid-row-sleep") },
+                            onDownload: { await download(video) },
+                            onCancel: { cache.cancel(id: videoId, versionId: versionId) },
+                            onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
+                            onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
+                            onPromote: { kind in Task { await store.promote(id: video.id, kind: kind) } },
+                            onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
+                            onDelete: { Task { await store.delete(id: video.id) } }
+                        )
+                    } else {
+                        VideoCell(
+                            video: video,
+                            cacheState: cache.state(for: videoId, versionId: versionId),
+                            currentCacheState: { cache.state(for: videoId, versionId: versionId) },
+                            cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl),
+                            onPreviewLoaded: { data in
+                                guard let path = video.previewUrl,
+                                      cache.cachedPreviewURL(for: videoId, path: path) == nil else { return }
+                                cache.storePreview(data, for: videoId, path: path)
+                            },
+                            localFileURL: cache.localURL(for: videoId, versionId: versionId),
+                            groups: groups.groups,
+                            onPlay: { play(video, caller: "grid-cell") },
+                            onPlaySleep: { play(video, sleepMode: true, caller: "grid-cell-sleep") },
+                            onDownload: { await download(video) },
+                            onCancel: { cache.cancel(id: videoId, versionId: versionId) },
+                            onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
+                            onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
+                            onPromote: { kind in Task { await store.promote(id: video.id, kind: kind) } },
+                            onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
+                            onDelete: { Task { await store.delete(id: video.id) } }
+                        )
+                    }
+                }
                 .id(String(videoId))
                 .onAppear { gridItemAppeared(String(videoId)) }
                 .onDisappear { gridItemDisappeared(String(videoId)) }
