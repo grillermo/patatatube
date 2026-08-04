@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.3.0",
+          "buildVersion": "126",
+          "date": "2026-08-04T02:09:38Z",
+          "localizedDescription": "Video groups now live on the server\n\n• Add a group on the server and it appears on the iPad — the list is no longer baked into the app\n• Group covers came along: each group keeps its emoji, editable from the card's ⋯ menu\n• TV and Movies are a separate axis from groups, with their own tabs\n• A video's ⋯ menu lists the groups, plus its own Move to Plex section\n• Switching tabs while a group move is in flight no longer leaves cards duplicated or missing",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.3.0/PatataTube-1.3.0.ipa",
+          "size": 4122343,
+          "sha256": "3a9214f9092d4c9dd42e0e9e80103b81ee17740341019fa5159dc9a5b840650e",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.2.5",
           "buildVersion": "125",
           "date": "2026-08-03T17:20:14Z",
@@ -1184,11 +1194,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.2.5",
-      "versionDate": "2026-08-03T17:20:14Z",
-      "versionDescription": "Group covers stop flashing a video frame\n\n• Group cards no longer flash the last video's preview before the emoji cover appears\n• A group without a cover shows a plain placeholder instead of borrowing art from a video",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.2.5/PatataTube-1.2.5.ipa",
-      "size": 4097104
+      "version": "1.3.0",
+      "versionDate": "2026-08-04T02:09:38Z",
+      "versionDescription": "Video groups now live on the server\n\n• Add a group on the server and it appears on the iPad — the list is no longer baked into the app\n• Group covers came along: each group keeps its emoji, editable from the card's ⋯ menu\n• TV and Movies are a separate axis from groups, with their own tabs\n• A video's ⋯ menu lists the groups, plus its own Move to Plex section\n• Switching tabs while a group move is in flight no longer leaves cards duplicated or missing",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.3.0/PatataTube-1.3.0.ipa",
+      "size": 4122343
     }
   ],
   "news": []
