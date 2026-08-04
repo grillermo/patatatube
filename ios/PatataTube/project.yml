@@ -2,7 +2,7 @@ name: PatataTube
 options:
   bundleIdPrefix: com.patatatube
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "18.0"
 # Project-level build settings. These reach the SwiftPM package targets
 # (PatataTubeKit) as well as the app target, which a target-level setting would
 # not — and most of the instrumented code lives in the package.
@@ -36,7 +36,7 @@ targets:
   PatataTube:
     type: application
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "18.0"
     sources:
       - Sources
     info:
@@ -103,7 +103,7 @@ targets:
   PatataTubeTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "18.0"
     sources:
       - Tests
     dependencies:

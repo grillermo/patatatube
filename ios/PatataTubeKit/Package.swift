@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "PatataTubeKit",
-    platforms: [.iOS(.v17), .macOS(.v14)],
+    platforms: [.iOS(.v18), .macOS(.v14)],
     products: [
         .library(name: "PatataTubeKit", targets: ["PatataTubeKit"]),
     ],
