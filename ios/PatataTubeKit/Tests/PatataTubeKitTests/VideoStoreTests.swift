@@ -443,7 +443,7 @@ private actor StaleVideoFetch {
 
 @MainActor @Test func loadPopulatesVideos() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.load()
     #expect(store.videos.count == 2)
     #expect(store.isLoading == false)
@@ -1063,7 +1063,7 @@ private actor StaleVideoFetch {
 @MainActor @Test func chooseAudioOptimisticallyUpdatesThenReloads() async {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.load()
 
     await store.chooseAudio(id: 1, lang: "es")
@@ -1077,7 +1077,7 @@ private actor StaleVideoFetch {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1)]
     api.chooseAudioResult = false
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.load()
 
     await store.chooseAudio(id: 1, lang: "es")
@@ -1095,7 +1095,7 @@ private func tempCache() -> VideoListCache {
 @MainActor @Test func loadSavesResponseToCache() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
     let cache = tempCache()
-    let store = VideoStore(api: api, cache: cache)
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
     await store.load()
     #expect(cache.load(feed: .all)?.count == 2)
 }
@@ -1104,7 +1104,7 @@ private func tempCache() -> VideoListCache {
     let cache = tempCache()
     cache.save([makeVideo(id: 9)], feed: .all)
     let api = FakeAPI(); api.throwOnVideos = true
-    let store = VideoStore(api: api, cache: cache)
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
     await store.load()
     #expect(store.videos.map(\.id) == [9])
     #expect(store.errorText?.contains("503") == true)
@@ -1112,7 +1112,7 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func loadSetsErrorWhenNetworkFailsAndNoCache() async {
     let api = FakeAPI(); api.throwOnVideos = true
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     await store.load()
     #expect(store.videos.isEmpty)
     #expect(store.errorText != nil)
@@ -1124,7 +1124,7 @@ private func tempCache() -> VideoListCache {
 @MainActor @Test func loadIgnoresURLCancellation() async {
     let api = FakeAPI()
     api.videosError = URLError(.cancelled)
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     await store.load()
     #expect(store.errorText == nil)
 }
@@ -1132,7 +1132,7 @@ private func tempCache() -> VideoListCache {
 @MainActor @Test func loadIgnoresNSURLCancellation() async {
     let api = FakeAPI()
     api.videosError = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     await store.load()
     #expect(store.errorText == nil)
 }
@@ -1140,7 +1140,7 @@ private func tempCache() -> VideoListCache {
 @MainActor @Test func loadIgnoresTaskCancellation() async {
     let api = FakeAPI()
     api.videosError = CancellationError()
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     await store.load()
     #expect(store.errorText == nil)
 }
@@ -1148,7 +1148,7 @@ private func tempCache() -> VideoListCache {
 // A cancelled refresh must not wipe out what is already on screen.
 @MainActor @Test func loadKeepsExistingVideosOnCancellation() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     await store.load()
     api.videosError = URLError(.cancelled)
     await store.load()
@@ -1170,7 +1170,7 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func chooseVersionIgnoresCancellation() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     await store.load()
     api.mutationError = CancellationError()
     await store.chooseVersion(id: 1, versionId: 7)
@@ -1179,7 +1179,7 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func chooseAudioIgnoresCancellation() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     await store.load()
     api.mutationError = URLError(.cancelled)
     await store.chooseAudio(id: 1, lang: "spa")
@@ -1188,7 +1188,7 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func deleteIgnoresCancellation() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     api.mutationError = URLError(.cancelled)
     await store.delete(id: 1)
     #expect(store.errorText == nil)
@@ -1196,7 +1196,7 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func uploadIgnoresCancellation() async {
     let api = FakeAPI()
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     api.mutationError = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
     await store.upload(url: "https://example.com/v")
     #expect(store.errorText == nil)
@@ -1218,7 +1218,7 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func refreshLibraryIgnoresScanCancellation() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     api.scanError = URLError(.cancelled)
     await store.refreshLibrary()
     #expect(store.errorText == nil)
@@ -1229,7 +1229,7 @@ private func tempCache() -> VideoListCache {
 // narrow, not a blanket silencer.
 @MainActor @Test func refreshLibraryStillReportsRealScanFailure() async {
     let api = FakeAPI(); api.throwOnScan = true
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
     await store.refreshLibrary()
     #expect(store.errorText?.contains("500") == true)
 }
@@ -1238,7 +1238,7 @@ private func tempCache() -> VideoListCache {
     let cache = tempCache()
     cache.save([makeVideo(id: 9)], feed: .all)
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
-    let store = VideoStore(api: api, cache: cache)
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
     await store.bootLoad()
     #expect(api.loadCount == 1)               // did hit network to refresh
     #expect(store.videos.map(\.id) == [1, 2]) // ended on fresh data
@@ -1248,7 +1248,7 @@ private func tempCache() -> VideoListCache {
     let cache = tempCache()
     cache.save([makeVideo(id: 9)], feed: .all)
     let api = FakeAPI(); api.throwOnVideos = true
-    let store = VideoStore(api: api, cache: cache)
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
     await store.bootLoad()
     #expect(store.videos.map(\.id) == [9])
     #expect(store.errorText?.contains("503") == true)
@@ -1256,7 +1256,7 @@ private func tempCache() -> VideoListCache {
 
 @MainActor @Test func deleteCallsApiThenRefetches() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.load()          // loadCount == 1
     await store.delete(id: 1)   // delete -> reload
     #expect(api.deletedIds == [1])
@@ -1267,7 +1267,7 @@ private func tempCache() -> VideoListCache {
     let api = FakeAPI()
     api.scanResult = ScanResult(added: 2, updated: 0, skipped: 1)
     api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.refreshLibrary()
     #expect(api.scanCalls == 1)
     #expect(store.videos.map(\.id) == [1])
@@ -1279,7 +1279,7 @@ private func tempCache() -> VideoListCache {
     let api = FakeAPI()
     api.throwOnScan = true
     api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.refreshLibrary()
     #expect(api.scanCalls == 1)
     #expect(api.loadCount == 1)
@@ -1293,7 +1293,7 @@ private func tempCache() -> VideoListCache {
     let api = FakeAPI()
     api.throwOnScan = true
     api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.refreshLibrary()
     #expect(store.videos.map(\.id) == [1])
     #expect(store.errorText != nil)
@@ -1306,7 +1306,7 @@ private func tempCache() -> VideoListCache {
     let api = FakeAPI()
     api.throwOnScan = false
     api.throwOnVideos = true
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.refreshLibrary()
     #expect(store.errorText != nil)
     #expect(store.errorText?.contains("503") == true)
@@ -1320,7 +1320,7 @@ private func tempCache() -> VideoListCache {
         makeVideo(id: 7, status: "converting"),
         makeVideo(id: 7, status: "done"),
     ]
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     let ready = try await store.ensureReady(id: 7, pollIntervalSeconds: 0.01)
     #expect(ready.status == "done")
     #expect(api.videoCalls == 3)
@@ -1330,7 +1330,7 @@ private func tempCache() -> VideoListCache {
     let api = FakeAPI()
     api.prepareResult = "done"
     api.videoResults = [makeVideo(id: 7, status: "done")]
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     let ready = try await store.ensureReady(id: 7, pollIntervalSeconds: 0.01)
     #expect(ready.status == "done")
     #expect(api.videoCalls == 1)
@@ -1342,7 +1342,7 @@ private func tempCache() -> VideoListCache {
     api.videoResults = [
         makeVideo(id: 7, status: "unconverted", errorMsg: "ffmpeg exploded"),
     ]
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     do {
         _ = try await store.ensureReady(id: 7, pollIntervalSeconds: 0.01)
         Issue.record("expected throw")
@@ -1356,7 +1356,7 @@ private func tempCache() -> VideoListCache {
 @MainActor @Test func clearListCacheEmptiesVideosAndDiskCache() async {
     let cache = tempCache()
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1), makeVideo(id: 2)]
-    let store = VideoStore(api: api, cache: cache)
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
     await store.load()
     #expect(!store.videos.isEmpty)
     #expect(cache.load(feed: .all) != nil)
@@ -1373,7 +1373,7 @@ private func tempCache() -> VideoListCache {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1, groupID: 2),
                           makeVideo(id: 2, groupID: 2)]
-    let store = VideoStore(api: api, cache: cache)
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
 
     api.beforeVideosReturn = { @MainActor in
         // Cache swap already happened; network result not yet applied.
@@ -1392,7 +1392,7 @@ private func tempCache() -> VideoListCache {
 @MainActor @Test func switchFeedShowsEmptyThenFillsWhenNoCache() async {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 5)]
-    let store = VideoStore(api: api, cache: tempCache())
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
 
     api.beforeVideosReturn = { @MainActor in
         // No cache for "children" -> grid empty (skeletons) while loading.
@@ -1410,7 +1410,7 @@ private func tempCache() -> VideoListCache {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1, groupID: 2),
                           makeVideo(id: 7)]
-    let store = VideoStore(api: api, cache: cache)
+    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
 
     // Land on "adults" first (populates videos with id 1 and caches it).
     await store.switchFeed(to: .group(id: 2))

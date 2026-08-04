@@ -2,6 +2,13 @@ import Testing
 import Foundation
 @testable import PatataTubeKit
 
+private func makeDefaults() -> UserDefaults {
+    let suite = "video-store-promote.tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    return defaults
+}
+
 private final class SpyMediaCache: MediaCaching, @unchecked Sendable {
     private(set) var purged: [Int] = []
     func removeAllCached(id: Int) { purged.append(id) }
@@ -41,7 +48,7 @@ private func video(_ id: Int) -> Video {
 @MainActor @Test func promoteRemovesAPromotedVideoFromTheList() async {
     let api = PromoteAPI(); api.videosToReturn = [video(1), video(2)]
     api.promoteResult = true
-    let store = VideoStore(api: api)
+    let store = VideoStore(api: api, defaults: makeDefaults())
     await store.load()
 
     await store.promote(id: 1, kind: .movies)
@@ -54,7 +61,7 @@ private func video(_ id: Int) -> Video {
     let api = PromoteAPI(); api.videosToReturn = [video(1)]
     api.promoteResult = true
     let spy = SpyMediaCache()
-    let store = VideoStore(api: api, mediaCache: spy)
+    let store = VideoStore(api: api, mediaCache: spy, defaults: makeDefaults())
     await store.load()
 
     await store.promote(id: 1, kind: .movies)
@@ -66,7 +73,7 @@ private func video(_ id: Int) -> Video {
     let api = PromoteAPI(); api.videosToReturn = [video(1)]
     api.promoteResult = false
     let spy = SpyMediaCache()
-    let store = VideoStore(api: api, mediaCache: spy)
+    let store = VideoStore(api: api, mediaCache: spy, defaults: makeDefaults())
     await store.load()
 
     await store.promote(id: 1, kind: .movies)

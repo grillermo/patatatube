@@ -1861,8 +1861,12 @@ def test_ssr_promote_returns_409_when_the_move_fails(client, monkeypatch, tmp_pa
     assert db.get_video(video_id) is not None
 
 
-def test_upload_file_no_longer_rejects_plex_kinds(client, auth_headers):
+def test_upload_file_no_longer_rejects_plex_kinds(client, auth_headers, monkeypatch):
     import db
+
+    # Without this the BackgroundTask polls converter.py forever: normalization
+    # is a job now and no runner exists under the test client.
+    monkeypatch.setattr("router.process_uploaded_video", lambda *a, **kw: None, raising=False)
     gid = db.get_group_by_name("children")["id"]
     resp = client.post(
         "/upload/file",

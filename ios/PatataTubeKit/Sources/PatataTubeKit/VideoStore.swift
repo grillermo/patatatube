@@ -47,6 +47,13 @@ public final class VideoStore: ObservableObject {
     /// call can tell it's been superseded and must not clobber `videos`/`isLoading`
     /// with results that no longer match the current tab/request.
     private var loadGeneration = 0
+    /// Bumped only by local mutations that make an in-flight fetch's *contents*
+    /// stale -- a group move or a removed row read before the change landed.
+    /// Separate from `loadGeneration`, which a mere tab switch also bumps:
+    /// a superseded load still holds a correct list
+    /// for the feed it asked about, and its cache write is keyed by that feed, so
+    /// dropping it on a tab switch just leaves that feed's cache empty.
+    private var contentInvalidation = 0
     private var groupMutationSequence = 0
     private var groupMutations: [Int: GroupMutation] = [:]
     private var confirmedGroups: [Int: ConfirmedGroup] = [:]
@@ -114,6 +121,7 @@ public final class VideoStore: ObservableObject {
     public func load() async {
         loadGeneration += 1
         let generation = loadGeneration
+        let invalidation = contentInvalidation
         let positionSnapshot = positionStore?.freshServerReconciliationSnapshot()
         isLoading = true
         errorText = nil
@@ -124,12 +132,12 @@ public final class VideoStore: ObservableObject {
             // Encode + atomic disk write off the main actor: doing it inline here
             // (this method is @MainActor) blocked the main thread long enough to
             // trip Sentry's app-hang detector (PATATATUBE-2, NSFileHandle.write).
-            if let cache, generation == loadGeneration {
+            if let cache, invalidation == contentInvalidation {
                 let toSave = fetched
                 let previousWrite = cacheWriteTask
                 let writeTask = Task.detached(priority: .utility) {
                     if let previousWrite { await previousWrite.value }
-                    guard await self.loadGeneration == generation else { return }
+                    guard await self.contentInvalidation == invalidation else { return }
                     cache.save(toSave, feed: requestedFeed)
                 }
                 cacheWriteTask = writeTask
@@ -223,6 +231,7 @@ public final class VideoStore: ObservableObject {
         if let groupID = confirmedGroups[id]?.groupID { groupIDs.insert(groupID) }
         groupMutations[id] = nil
         confirmedGroups[id] = nil
+        contentInvalidation += 1
         videos.removeAll { $0.id == id }
 
         guard let cache else { return }
@@ -293,6 +302,7 @@ public final class VideoStore: ObservableObject {
         let previous = videos[index]
         guard !previous.isPlexItem else { return }
         loadGeneration += 1
+        contentInvalidation += 1
         isLoading = false
         let updated = previous.withGroupID(groupID)
         let activeMutation = groupMutations[id]
