@@ -26,7 +26,7 @@ public enum GridDisplayMode: Equatable, Sendable {
 
     public static let minCellSize: Double = 170
     public static let maxCellSize: Double = 420
-    public static let step: Double = 50
+    public static let step: Double = 125
     /// One step below `minCellSize`. Any value under the floor reads as list.
     public static let listCellSize: Double = 70
 

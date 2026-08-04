@@ -26,14 +26,14 @@ final class GridDisplayModeTests: XCTestCase {
     }
 
     func testSmallerAboveTheFloorStepsDown() {
-        XCTAssertEqual(GridDisplayMode.smaller(from: 220),
+        XCTAssertEqual(GridDisplayMode.smaller(from: 295),
                        GridSizeStep(title: "Smaller cells",
                                     systemImage: "minus.magnifyingglass",
                                     target: 170))
     }
 
     func testSmallerClampsToTheFloor() {
-        XCTAssertEqual(GridDisplayMode.smaller(from: 200)?.target, 170)
+        XCTAssertEqual(GridDisplayMode.smaller(from: 250)?.target, 170)
     }
 
     func testSmallerIsDisabledInList() {
@@ -51,7 +51,7 @@ final class GridDisplayModeTests: XCTestCase {
         XCTAssertEqual(GridDisplayMode.bigger(from: 170),
                        GridSizeStep(title: "Bigger cells",
                                     systemImage: "plus.magnifyingglass",
-                                    target: 220))
+                                    target: 295))
     }
 
     func testBiggerClampsToTheCeiling() {
