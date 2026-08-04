@@ -30,6 +30,27 @@ public enum GridDisplayMode: Equatable, Sendable {
     /// One step below `minCellSize`. Any value under the floor reads as list.
     public static let listCellSize: Double = 70
 
+    /// The 4 sizes a pinch gesture (or repeated menu taps) can land on:
+    /// list, then the 3 grid stops `minCellSize`, `minCellSize + step`,
+    /// `maxCellSize`. Ascending — `nearestCanonicalSize` relies on the order.
+    public static let canonicalSizes: [Double] = [
+        listCellSize, minCellSize, minCellSize + step, maxCellSize,
+    ]
+
+    /// Constrains a raw size (e.g. `baseSize * pinchScale`) to the range
+    /// live rendering is allowed to show — never below list, never above the
+    /// biggest grid stop.
+    public static func clampedCellSize(_ raw: Double) -> Double {
+        min(max(raw, listCellSize), maxCellSize)
+    }
+
+    /// Whichever `canonicalSizes` entry is closest to `raw`. Ties resolve to
+    /// the smaller neighbor (scans ascending, keeps the first value that
+    /// isn't strictly beaten).
+    public static func nearestCanonicalSize(to raw: Double) -> Double {
+        canonicalSizes.min(by: { abs($0 - raw) < abs($1 - raw) }) ?? raw
+    }
+
     public static func forCellSize(_ size: Double) -> GridDisplayMode {
         size < minCellSize ? .list : .grid(cellSize: size)
     }

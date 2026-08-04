@@ -61,4 +61,40 @@ final class GridDisplayModeTests: XCTestCase {
     func testBiggerIsDisabledAtTheCeiling() {
         XCTAssertNil(GridDisplayMode.bigger(from: 420))
     }
+
+    func testCanonicalSizesAreListAndTheThreeGridStops() {
+        XCTAssertEqual(GridDisplayMode.canonicalSizes, [70, 170, 295, 420])
+    }
+
+    func testClampedCellSizeClampsBelowList() {
+        XCTAssertEqual(GridDisplayMode.clampedCellSize(10), 70)
+    }
+
+    func testClampedCellSizeClampsAboveCeiling() {
+        XCTAssertEqual(GridDisplayMode.clampedCellSize(999), 420)
+    }
+
+    func testClampedCellSizePassesThroughMidRange() {
+        XCTAssertEqual(GridDisplayMode.clampedCellSize(250), 250)
+    }
+
+    func testNearestCanonicalSizeSnapsToExactStops() {
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 70), 70)
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 170), 170)
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 295), 295)
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 420), 420)
+    }
+
+    func testNearestCanonicalSizeRoundsToCloserNeighbor() {
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 100), 70)
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 150), 170)
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 250), 295)
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 400), 420)
+    }
+
+    func testNearestCanonicalSizeTiesRoundDown() {
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 120), 70)
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 232.5), 170)
+        XCTAssertEqual(GridDisplayMode.nearestCanonicalSize(to: 357.5), 295)
+    }
 }
