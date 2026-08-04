@@ -380,7 +380,8 @@ struct VideoGridView: View {
         ScrollView {
             if store.isLoading && filteredVideos.isEmpty && tab != .videos {
                 SkeletonGrid(columns: columns, aspectRatio: 2.0/3.0,
-                             showsTextBars: tab == .tv)
+                             showsTextBars: tab == .tv,
+                             isList: displayMode == .list)
             } else {
                 switch tab {
                 case .videos:
@@ -592,7 +593,8 @@ struct VideoGridView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     if store.isLoading && filteredVideos.isEmpty {
-                        SkeletonGrid(columns: columns, aspectRatio: 16.0/9.0)
+                        SkeletonGrid(columns: columns, aspectRatio: 16.0/9.0,
+                                     isList: displayMode == .list)
                     } else {
                         defaultGrid
                     }
