@@ -959,6 +959,27 @@ private actor StaleVideoFetch {
     #expect(cache.load(feed: .all)?.first?.groupID == 2)
 }
 
+@MainActor @Test func movingTheLastGroupItemClearsAnInvalidatedLoad() async {
+    let video = makeVideo(id: 1, groupID: 1)
+    let api = FakeAPI()
+    api.videosToReturn = [video]
+    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
+    await store.switchFeed(to: .group(id: 1))
+    let fetch = StaleVideoFetch([video])
+    api.videosHook = { _ in await fetch.fetch() }
+
+    async let staleLoad: Void = store.load()
+    await fetch.waitForArrival()
+    #expect(store.isLoading)
+    await store.setGroup(id: 1, groupID: 2)
+
+    #expect(store.videos.isEmpty)
+    #expect(!store.isLoading)
+    await fetch.release()
+    await staleLoad
+    #expect(!store.isLoading)
+}
+
 @MainActor @Test func staleSourceCacheEvictionDoesNotOverwriteNewerSameVideoMove() async {
     let api = FakeAPI()
     api.videosToReturn = [makeVideo(id: 1, groupID: 1)]

@@ -293,6 +293,7 @@ public final class VideoStore: ObservableObject {
         let previous = videos[index]
         guard !previous.isPlexItem else { return }
         loadGeneration += 1
+        isLoading = false
         let updated = previous.withGroupID(groupID)
         let activeMutation = groupMutations[id]
         groupMutationSequence += 1
