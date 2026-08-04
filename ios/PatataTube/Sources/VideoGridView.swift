@@ -203,9 +203,38 @@ struct VideoGridView: View {
 
     // Grid cell size, adjustable via +/- buttons. Persisted across launches and
     // scoped per feed, so sizing one group leaves the others alone.
-    private var cellSize: Double { model.cellSize(for: store.feed) }
-    /// List or grid, derived from the one persisted per-feed size.
+    /// Set only while a pinch is tracking; overrides the persisted size for
+    /// rendering so the grid reflows live. `nil` the rest of the time.
+    @State private var pinchLiveSize: Double?
+    /// The size a pinch gesture started from — captured on first touch so
+    /// `pinchLiveSize` scales from the persisted value, not from whatever
+    /// `pinchLiveSize` last was.
+    @State private var pinchStartSize: Double?
+
+    private var cellSize: Double {
+        pinchLiveSize ?? model.cellSize(for: store.feed)
+    }
+    /// List or grid, derived from the live-or-persisted size.
     private var displayMode: GridDisplayMode { GridDisplayMode.forCellSize(cellSize) }
+
+    /// Pinch-to-resize: live-tracks scale against the size the gesture
+    /// started from, then snaps to the nearest canonical stop and persists
+    /// it exactly like the ellipsis menu's size buttons do.
+    private var pinchGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { scale in
+                let base = pinchStartSize ?? model.cellSize(for: store.feed)
+                if pinchStartSize == nil { pinchStartSize = base }
+                pinchLiveSize = GridDisplayMode.clampedCellSize(base * scale)
+            }
+            .onEnded { scale in
+                let base = pinchStartSize ?? model.cellSize(for: store.feed)
+                let raw = GridDisplayMode.clampedCellSize(base * scale)
+                model.setCellSize(GridDisplayMode.nearestCanonicalSize(to: raw), for: store.feed)
+                pinchStartSize = nil
+                pinchLiveSize = nil
+            }
+    }
     /// Rows carry their own divider and sit flush; cards keep the 16pt gutter.
     private var gridSpacing: CGFloat {
         if case .list = displayMode { return 0 }
@@ -401,6 +430,7 @@ struct VideoGridView: View {
                 }
             }
         }
+        .gesture(pinchGesture)
     }
 
     /// The cover's content, as a plain function rather than inline in the
@@ -599,6 +629,7 @@ struct VideoGridView: View {
                         defaultGrid
                     }
                 }
+                .gesture(pinchGesture)
                 .task(id: restoredGroupAnchor) {
                     guard let anchor = restoredGroupAnchor else { return }
                     try? await Task.sleep(nanoseconds: 100_000_000)
