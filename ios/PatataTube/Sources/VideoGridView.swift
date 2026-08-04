@@ -225,6 +225,12 @@ struct VideoGridView: View {
     private var pinchGesture: GridPinchGesture {
         GridPinchGesture(
             onChanged: { scale in
+                // GridPinchGesture guarantees scale == 1.0 exactly on the
+                // gesture's `.began` call — treat that as "fresh gesture"
+                // and force a rebase, so a stale pinchStartSize left behind
+                // by an interrupted prior gesture (e.g. a view rebuild
+                // before onEnded fired) can never leak into this one.
+                if scale == 1 { pinchStartSize = nil }
                 let base = pinchStartSize ?? model.cellSize(for: store.feed)
                 if pinchStartSize == nil { pinchStartSize = base }
                 pinchLiveSize = GridDisplayMode.clampedCellSize(base * scale)
