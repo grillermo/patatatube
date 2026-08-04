@@ -584,7 +584,7 @@ struct VideoGridView: View {
                 Label("Downloads", systemImage: "arrow.down.circle")
             }
 
-            let smallerStep = GridDisplayMode.smaller(from: cellSize)
+            let smallerStep = GridDisplayMode.smaller(from: model.cellSize(for: store.feed))
             Button {
                 if let smallerStep { model.setCellSize(smallerStep.target, for: store.feed) }
             } label: {
@@ -593,7 +593,7 @@ struct VideoGridView: View {
             }
             .disabled(smallerStep == nil)
 
-            let biggerStep = GridDisplayMode.bigger(from: cellSize)
+            let biggerStep = GridDisplayMode.bigger(from: model.cellSize(for: store.feed))
             Button {
                 if let biggerStep { model.setCellSize(biggerStep.target, for: store.feed) }
             } label: {
