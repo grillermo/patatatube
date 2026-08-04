@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.5.0",
+          "buildVersion": "132",
+          "date": "2026-08-04T13:33:54Z",
+          "localizedDescription": "Resize the grid with a pinch\n\n• Pinch anywhere over a group or the Movies tab to live-resize the grid\n• Release snaps to the nearest size, same stops as the size menu\n• Pinch small enough and it switches into list view",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.5.0/PatataTube-1.5.0.ipa",
+          "size": 4163092,
+          "sha256": "987d03a6acc16dfecdeffbb351b64edf8a343657effd16c5b1efd130dd1109bc",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.4.3",
           "buildVersion": "131",
           "date": "2026-08-04T12:54:42Z",
@@ -1234,11 +1244,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.4.3",
-      "versionDate": "2026-08-04T12:54:42Z",
-      "versionDescription": "Grid size steps are bigger, fewer, and actually visible\n\n• Shrink/grow-cells in the ⋯ menu now jumps between 3 sizes that look different on iPhone, instead of 6 steps where several looked identical",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.4.3/PatataTube-1.4.3.ipa",
-      "size": 4159280
+      "version": "1.5.0",
+      "versionDate": "2026-08-04T13:33:54Z",
+      "versionDescription": "Resize the grid with a pinch\n\n• Pinch anywhere over a group or the Movies tab to live-resize the grid\n• Release snaps to the nearest size, same stops as the size menu\n• Pinch small enough and it switches into list view",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.5.0/PatataTube-1.5.0.ipa",
+      "size": 4163092
     }
   ],
   "news": []
