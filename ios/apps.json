@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.3.1",
+          "buildVersion": "127",
+          "date": "2026-08-04T02:25:31Z",
+          "localizedDescription": "Groups can now be renamed\n\n• Ellipsis menu on a group card gets a Rename option",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.3.1/PatataTube-1.3.1.ipa",
+          "size": 4128863,
+          "sha256": "26e6921e0cc72de69fa6480b291d251d512565ffc04727266076961cc345ddfb",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.3.0",
           "buildVersion": "126",
           "date": "2026-08-04T02:09:38Z",
@@ -1194,11 +1204,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.3.0",
-      "versionDate": "2026-08-04T02:09:38Z",
-      "versionDescription": "Video groups now live on the server\n\n• Add a group on the server and it appears on the iPad — the list is no longer baked into the app\n• Group covers came along: each group keeps its emoji, editable from the card's ⋯ menu\n• TV and Movies are a separate axis from groups, with their own tabs\n• A video's ⋯ menu lists the groups, plus its own Move to Plex section\n• Switching tabs while a group move is in flight no longer leaves cards duplicated or missing",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.3.0/PatataTube-1.3.0.ipa",
-      "size": 4122343
+      "version": "1.3.1",
+      "versionDate": "2026-08-04T02:25:31Z",
+      "versionDescription": "Groups can now be renamed\n\n• Ellipsis menu on a group card gets a Rename option",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.3.1/PatataTube-1.3.1.ipa",
+      "size": 4128863
     }
   ],
   "news": []
