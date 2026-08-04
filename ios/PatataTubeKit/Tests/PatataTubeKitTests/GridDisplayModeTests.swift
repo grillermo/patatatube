@@ -7,11 +7,11 @@ final class GridDisplayModeTests: XCTestCase {
     }
 
     func testAnythingBelowTheFloorIsList() {
-        XCTAssertEqual(GridDisplayMode.forCellSize(119), .list)
+        XCTAssertEqual(GridDisplayMode.forCellSize(169), .list)
     }
 
     func testTheFloorIsStillAGrid() {
-        XCTAssertEqual(GridDisplayMode.forCellSize(120), .grid(cellSize: 120))
+        XCTAssertEqual(GridDisplayMode.forCellSize(170), .grid(cellSize: 170))
     }
 
     func testCeilingIsAGrid() {
@@ -19,21 +19,21 @@ final class GridDisplayModeTests: XCTestCase {
     }
 
     func testSmallerFromTheFloorOffersListView() {
-        XCTAssertEqual(GridDisplayMode.smaller(from: 120),
+        XCTAssertEqual(GridDisplayMode.smaller(from: 170),
                        GridSizeStep(title: "List view",
                                     systemImage: "list.bullet",
                                     target: 70))
     }
 
     func testSmallerAboveTheFloorStepsDown() {
-        XCTAssertEqual(GridDisplayMode.smaller(from: 170),
+        XCTAssertEqual(GridDisplayMode.smaller(from: 220),
                        GridSizeStep(title: "Smaller cells",
                                     systemImage: "minus.magnifyingglass",
-                                    target: 120))
+                                    target: 170))
     }
 
     func testSmallerClampsToTheFloor() {
-        XCTAssertEqual(GridDisplayMode.smaller(from: 150)?.target, 120)
+        XCTAssertEqual(GridDisplayMode.smaller(from: 200)?.target, 170)
     }
 
     func testSmallerIsDisabledInList() {
@@ -44,14 +44,14 @@ final class GridDisplayModeTests: XCTestCase {
         XCTAssertEqual(GridDisplayMode.bigger(from: 70),
                        GridSizeStep(title: "Grid view",
                                     systemImage: "square.grid.2x2",
-                                    target: 120))
+                                    target: 170))
     }
 
     func testBiggerStepsUp() {
-        XCTAssertEqual(GridDisplayMode.bigger(from: 120),
+        XCTAssertEqual(GridDisplayMode.bigger(from: 170),
                        GridSizeStep(title: "Bigger cells",
                                     systemImage: "plus.magnifyingglass",
-                                    target: 170))
+                                    target: 220))
     }
 
     func testBiggerClampsToTheCeiling() {
