@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.4.3",
+          "buildVersion": "131",
+          "date": "2026-08-04T12:54:42Z",
+          "localizedDescription": "Grid size steps are bigger, fewer, and actually visible\n\n• Shrink/grow-cells in the ⋯ menu now jumps between 3 sizes that look different on iPhone, instead of 6 steps where several looked identical",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.4.3/PatataTube-1.4.3.ipa",
+          "size": 4159280,
+          "sha256": "405897f4c66207839b538f0dce874369fc4285b2376db91f70c9aa99c02b4ab0",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.4.2",
           "buildVersion": "130",
           "date": "2026-08-04T12:38:28Z",
@@ -1224,11 +1234,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.4.2",
-      "versionDate": "2026-08-04T12:38:28Z",
-      "versionDescription": "Grid size menu no longer has a dead step\n\n• Shrinking/growing grid cells in the ⋯ menu no longer has a click that visibly does nothing right before switching to list view",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.4.2/PatataTube-1.4.2.ipa",
-      "size": 4159064
+      "version": "1.4.3",
+      "versionDate": "2026-08-04T12:54:42Z",
+      "versionDescription": "Grid size steps are bigger, fewer, and actually visible\n\n• Shrink/grow-cells in the ⋯ menu now jumps between 3 sizes that look different on iPhone, instead of 6 steps where several looked identical",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.4.3/PatataTube-1.4.3.ipa",
+      "size": 4159280
     }
   ],
   "news": []
