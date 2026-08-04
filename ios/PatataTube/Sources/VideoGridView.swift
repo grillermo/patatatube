@@ -423,12 +423,21 @@ struct VideoGridView: View {
     /// Split out of `body` alongside `defaultGrid` — inlined, the combined
     /// expression pushed the type checker past its time budget.
     private var moviesGrid: some View {
-        LazyVGrid(columns: columns, spacing: 16) {
+        LazyVGrid(columns: columns, spacing: gridSpacing) {
             ForEach(filteredVideos) { video in
-                MovieCell(
-                    video: video,
-                    cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl)
-                )
+                Group {
+                    if case .list = displayMode {
+                        MovieRow(
+                            video: video,
+                            cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl)
+                        )
+                    } else {
+                        MovieCell(
+                            video: video,
+                            cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl)
+                        )
+                    }
+                }
                 .id(String(video.id))
                 .onAppear { gridItemAppeared(String(video.id)) }
                 .onDisappear { gridItemDisappeared(String(video.id)) }
