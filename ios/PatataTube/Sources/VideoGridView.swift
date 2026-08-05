@@ -601,6 +601,7 @@ struct VideoGridView: View {
                       systemImage: smallerStep?.systemImage ?? "minus.magnifyingglass")
             }
             .disabled(smallerStep == nil)
+            .menuActionDismissBehavior(.disabled)
 
             let biggerStep = GridDisplayMode.bigger(from: model.cellSize(for: store.feed))
             Button {
@@ -610,6 +611,7 @@ struct VideoGridView: View {
                       systemImage: biggerStep?.systemImage ?? "plus.magnifyingglass")
             }
             .disabled(biggerStep == nil)
+            .menuActionDismissBehavior(.disabled)
 
             Divider()
 
