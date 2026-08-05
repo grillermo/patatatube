@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.6.2",
+          "buildVersion": "135",
+          "date": "2026-08-05T05:55:46Z",
+          "localizedDescription": "Download all knows when it's done\n\n• Download all in the grid menu greys out once every video on screen is already downloaded",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.2/PatataTube-1.6.2.ipa",
+          "size": 4151356,
+          "sha256": "575a755337dc017304d2a82814424cd3484d3fa2d932115696a07d6edc981a0f",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.6.1",
           "buildVersion": "134",
           "date": "2026-08-05T05:48:09Z",
@@ -1264,11 +1274,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.6.1",
-      "versionDate": "2026-08-05T05:48:09Z",
-      "versionDescription": "Grid size menu stays open while resizing\n\n• Tapping bigger/smaller cells no longer closes the menu, so repeated taps work in one go",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.1/PatataTube-1.6.1.ipa",
-      "size": 4151172
+      "version": "1.6.2",
+      "versionDate": "2026-08-05T05:55:46Z",
+      "versionDescription": "Download all knows when it's done\n\n• Download all in the grid menu greys out once every video on screen is already downloaded",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.2/PatataTube-1.6.2.ipa",
+      "size": 4151356
     }
   ],
   "news": []
