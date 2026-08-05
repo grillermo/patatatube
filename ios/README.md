@@ -79,7 +79,7 @@ open PatataTube.xcodeproj
 
 ## 3. Run on simulator
 
-Select scheme `PatataTube`, pick any iPhone simulator (17.0+ deployment target), hit Run (⌘R).
+Select scheme `PatataTube`, pick any iPhone simulator (18.0+ deployment target), hit Run (⌘R).
 
 Sim → localhost networking: if server runs on your Mac, `http://localhost:3050` or `http://127.0.0.1:3050` reaches host machine directly from simulator (no extra config needed, unlike real device).
 

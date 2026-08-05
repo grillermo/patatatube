@@ -219,21 +219,30 @@ struct VideoGridView: View {
 
     /// Pinch-to-resize: live-tracks scale against the size the gesture
     /// started from, then snaps to the nearest canonical stop and persists
-    /// it exactly like the ellipsis menu's size buttons do.
-    private var pinchGesture: some Gesture {
-        MagnificationGesture()
-            .onChanged { scale in
+    /// it exactly like the ellipsis menu's size buttons do. UIKit-backed
+    /// (`GridPinchGesture`) so two fingers freeze scrolling instead of the
+    /// scroll pan swallowing the pinch.
+    private var pinchGesture: GridPinchGesture {
+        GridPinchGesture(
+            onChanged: { scale in
+                // GridPinchGesture guarantees scale == 1.0 exactly on the
+                // gesture's `.began` call — treat that as "fresh gesture"
+                // and force a rebase, so a stale pinchStartSize left behind
+                // by an interrupted prior gesture (e.g. a view rebuild
+                // before onEnded fired) can never leak into this one.
+                if scale == 1 { pinchStartSize = nil }
                 let base = pinchStartSize ?? model.cellSize(for: store.feed)
                 if pinchStartSize == nil { pinchStartSize = base }
                 pinchLiveSize = GridDisplayMode.clampedCellSize(base * scale)
-            }
-            .onEnded { scale in
+            },
+            onEnded: { scale in
                 let base = pinchStartSize ?? model.cellSize(for: store.feed)
                 let raw = GridDisplayMode.clampedCellSize(base * scale)
                 model.setCellSize(GridDisplayMode.nearestCanonicalSize(to: raw), for: store.feed)
                 pinchStartSize = nil
                 pinchLiveSize = nil
             }
+        )
     }
     /// Rows carry their own divider and sit flush; cards keep the 16pt gutter.
     private var gridSpacing: CGFloat {
