@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.6.1",
+          "buildVersion": "134",
+          "date": "2026-08-05T05:48:09Z",
+          "localizedDescription": "Grid size menu stays open while resizing\n\n• Tapping bigger/smaller cells no longer closes the menu, so repeated taps work in one go",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.1/PatataTube-1.6.1.ipa",
+          "size": 4151172,
+          "sha256": "b4047dd41ba9c76282b20ca1b7187434a76e4e06d5fc59a019840bcf56b47ee2",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.6.0",
           "buildVersion": "133",
           "date": "2026-08-05T03:26:20Z",
@@ -1254,11 +1264,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.6.0",
-      "versionDate": "2026-08-05T03:26:20Z",
-      "versionDescription": "Grid pinch-to-resize now feels like Photos\n\n• Two fingers down stops scrolling instantly and resizes the grid live\n• Release snaps to the nearest grid size and remembers it next time you open the app",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.0/PatataTube-1.6.0.ipa",
-      "size": 4150150
+      "version": "1.6.1",
+      "versionDate": "2026-08-05T05:48:09Z",
+      "versionDescription": "Grid size menu stays open while resizing\n\n• Tapping bigger/smaller cells no longer closes the menu, so repeated taps work in one go",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.1/PatataTube-1.6.1.ipa",
+      "size": 4151172
     }
   ],
   "news": []
