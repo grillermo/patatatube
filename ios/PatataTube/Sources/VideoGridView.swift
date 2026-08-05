@@ -585,7 +585,7 @@ struct VideoGridView: View {
             Button {
                 presentDownloadAll()
             } label: { Label("Download all", systemImage: "arrow.down.circle") }
-            .disabled(downloadingAll || !showsVideoGrid)
+            .disabled(downloadingAll || !showsVideoGrid || !hasDownloadableVideos)
 
             Button {
                 path.append(.downloads)
@@ -814,6 +814,16 @@ struct VideoGridView: View {
         guard tab == .videos else { return true }
         if case .group? = path.first { return true }
         return false
+    }
+
+    /// Mirrors the filter in `presentDownloadAll` so the menu item can be
+    /// disabled once every video in scope is already cached.
+    private var hasDownloadableVideos: Bool {
+        let groupID = currentGroupID
+        return filteredVideos.contains {
+            if let groupID, $0.groupID != groupID { return false }
+            return model.cache.state(for: $0.id, versionId: $0.chosenVersionId) == .notCached
+        }
     }
 
     private func gridItemAppeared(_ id: String) {
