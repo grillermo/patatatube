@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.6.0",
+          "buildVersion": "133",
+          "date": "2026-08-05T03:26:20Z",
+          "localizedDescription": "Grid pinch-to-resize now feels like Photos\n\n• Two fingers down stops scrolling instantly and resizes the grid live\n• Release snaps to the nearest grid size and remembers it next time you open the app",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.0/PatataTube-1.6.0.ipa",
+          "size": 4150150,
+          "sha256": "c02bb1cd0cea73ffea5458c0e8ded3dee0697a1003533e527b86454eb8ef15e0",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.5.0",
           "buildVersion": "132",
           "date": "2026-08-04T13:33:54Z",
@@ -1244,11 +1254,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.5.0",
-      "versionDate": "2026-08-04T13:33:54Z",
-      "versionDescription": "Resize the grid with a pinch\n\n• Pinch anywhere over a group or the Movies tab to live-resize the grid\n• Release snaps to the nearest size, same stops as the size menu\n• Pinch small enough and it switches into list view",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.5.0/PatataTube-1.5.0.ipa",
-      "size": 4163092
+      "version": "1.6.0",
+      "versionDate": "2026-08-05T03:26:20Z",
+      "versionDescription": "Grid pinch-to-resize now feels like Photos\n\n• Two fingers down stops scrolling instantly and resizes the grid live\n• Release snaps to the nearest grid size and remembers it next time you open the app",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.0/PatataTube-1.6.0.ipa",
+      "size": 4150150
     }
   ],
   "news": []
