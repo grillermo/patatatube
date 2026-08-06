@@ -3,7 +3,6 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from setproctitle import setproctitle
 
 import db
 from middleware import setup_middleware
@@ -15,8 +14,17 @@ PROCESS_NAME = "[PatataTube]"
 
 
 def _set_process_name(name: str = PROCESS_NAME) -> None:
+    # Deliberately NOT setproctitle(): on macOS it renames the process through a
+    # synchronous LaunchServices XPC round-trip, which is illegal on the child
+    # side of a fork from a multi-threaded parent. lifespan runs in every forked
+    # gunicorn worker, so that call raced the kernel's Mach-port guard and took
+    # workers out with EXC_GUARD/SIGKILL (~1 in 6 per ./serve, reported by the
+    # arbiter as the misleading "was sent SIGKILL! Perhaps out of memory?").
+    # This assignment is pure Python and touches no ports, so it is fork-safe.
+    # The ps/Activity Monitor name is still set -- but once, in the arbiter,
+    # before any fork, from gunicorn_conf.py; workers inherit it. See that file
+    # for the full crash analysis.
     multiprocessing.current_process().name = name
-    setproctitle(name)
 
 
 @asynccontextmanager

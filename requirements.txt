@@ -16,6 +16,8 @@ prompt_toolkit==3.0.52
 pytube==15.0.0
 requests==2.34.2
 rich==15.0.0
+# Used ONLY from gunicorn_conf.py, pre-fork, in the arbiter. Never call this
+# from a forked worker on macOS -- see the comment block in gunicorn_conf.py.
 setproctitle==1.3.7
 redis==8.0.1
 pytest==8.3.3

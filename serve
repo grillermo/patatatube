@@ -92,7 +92,11 @@ fi
 # Access and error logs get their own colors via process substitution but share
 # the "web" label; anything workers print directly (stdout/stderr) also gets it.
 exec > >(colorize 34 web) 2>&1
+# gunicorn_conf.py names the process once in the arbiter, before any fork, and
+# disarms gunicorn's own post-fork naming. Dropping --config silently reverts
+# to unnamed processes and re-arms the macOS EXC_GUARD worker kill.
 exec "$PYTHON_BIN" -m gunicorn main:app \
+  --config gunicorn_conf.py \
   --worker-class uvicorn_worker.UvicornWorker \
   --workers "${WEB_CONCURRENCY:-6}" \
   --bind "0.0.0.0:$PORT" \
