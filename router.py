@@ -1171,6 +1171,18 @@ async def api_prepare_video(
     return JSONResponse({"status": "converting"}, status_code=202)
 
 
+# The next 20 queued jobs is plenty for a UI list; the bulk Download-all path
+# can leave 200+ behind it, and this endpoint is polled every 2s.
+JOBS_QUEUED_LIMIT = 20
+
+
+@router.get("/api/jobs")
+async def api_jobs(request: Request):
+    """Active ffmpeg work, for the iOS conversion spinners and Downloads list."""
+    _check_token(request)
+    return db.active_jobs(queued_limit=JOBS_QUEUED_LIMIT)
+
+
 @router.get("/", response_class=HTMLResponse)
 @router.get("/videos", response_class=HTMLResponse)
 async def videos_page(group_id: int | None = None, plex_kind: str | None = None):

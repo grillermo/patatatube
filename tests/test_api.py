@@ -2008,3 +2008,37 @@ def test_video_list_includes_resume_secs(client, monkeypatch):
     assert resp.status_code == 200
     row = next(v for v in resp.json() if v["id"] == video_id)
     assert row["resume_secs"] == 42.0
+
+
+def test_jobs_requires_a_token(client):
+    assert client.get("/api/jobs").status_code == 401
+
+
+def test_jobs_returns_running_and_queued(client, auth_headers):
+    import db
+    running_id = db.enqueue_job("convert", video_id=1, version_id=1)
+    db.claim_job()
+    db.set_job_progress(running_id, 0.6)
+    db.enqueue_job("convert", video_id=2, version_id=2)
+
+    body = client.get("/api/jobs", headers=auth_headers).json()
+    assert [job["id"] for job in body["running"]] == [running_id]
+    assert body["running"][0]["progress"] == 0.6
+    assert body["running"][0]["kind"] == "convert"
+    assert [job["video_id"] for job in body["queued"]] == [2]
+    assert body["queued"][0]["progress"] is None
+    assert body["queued_total"] == 1
+
+
+def test_jobs_caps_the_queued_list_at_twenty(client, auth_headers):
+    import db
+    for video_id in range(1, 26):
+        db.enqueue_job("convert", video_id=video_id, version_id=video_id)
+    body = client.get("/api/jobs", headers=auth_headers).json()
+    assert len(body["queued"]) == 20
+    assert body["queued_total"] == 25
+
+
+def test_jobs_is_empty_when_nothing_is_pending(client, auth_headers):
+    body = client.get("/api/jobs", headers=auth_headers).json()
+    assert body == {"running": [], "queued": [], "queued_total": 0}
