@@ -29,12 +29,37 @@ cd ios/PatataTube && xcodegen generate && open PatataTube.xcodeproj   # project.
 cd ios/PatataTubeKit && swift build                                   # build the logic package standalone
 cd ios/PatataTubeKit && swift test                                    # debug: DEVLOG on
 cd ios/PatataTubeKit && swift test -c release                         # release: DEVLOG off (silence guarantee)
+
+# app target's own tests (SwiftUI/UIKit; swift-testing + ViewInspector)
+cd ios/PatataTube && xcodebuild -project PatataTube.xcodeproj -scheme PatataTube \
+  -destination "platform=iOS Simulator,id=$(xcrun simctl list devices available | grep -m1 -o '[0-9A-F-]\{36\}')" test
 ```
 
-See `ios/README.md` for the full manual test checklist (no automated iOS test target exists yet).
+See `ios/README.md` for the full manual test checklist.
 
 Run **both** `swift test` invocations when touching `DevLog` — the two
 configurations exercise opposite halves of the gating (see below).
+
+**There are two iOS test targets, and only one of them is `swift test`.**
+`ios/PatataTube/Tests/*.swift` (target `PatataTubeTests`, 73 tests) only ever
+builds through `xcodebuild`, so it silently rots: a stale call there breaks the
+*test* build while `xcodebuild ... build` and `./deploy` keep succeeding. It sat
+broken for four days that way (`docs/player-view-controller-tests-broken.md`).
+Run it whenever you touch `ios/PatataTube/Sources/`.
+
+- `build`/`build-for-testing` differ on destinations: `generic/platform=iOS
+  Simulator` is fine for `build`, rejected by anything that runs tests, and
+  named destinations (`name=iPad Pro 13-inch (M4)`) fail on this machine. Use a
+  concrete udid from `xcrun simctl list devices available`.
+- **Run the whole target, not a filtered suite.** `-only-testing:` on
+  `EpisodesDownloadAllViewTests` hangs indefinitely; the same tests pass in ~1s
+  in a full run.
+- ViewInspector reaches an `@EnvironmentObject` by writing sentinel bytes at
+  guessed offsets inside a copy of the view struct. On a big view it guesses
+  into a refcounted field and **segfaults the whole test process** — which no
+  `withKnownIssue` can absorb. That is why
+  `normalAndSleepPlayersBothContainTheOrientationOverlay` is `.disabled`. New
+  tests that inspect a large SwiftUI view are the risk here.
 
 - Pre-existing, unrelated: the full parallel `swift test` run prints a
   `Fatal error: Index out of range` from the swift-testing suites. It reproduces

@@ -151,6 +151,20 @@ private func downloadAllButton<V: View>(
     }
 }
 
+/// The busy spinner lives on the options menu's *label* (`OptionsMenuLabel`),
+/// not inside the Download all button — the button's label is always a
+/// `Label(_:systemImage:)`. Asserting on the button would pass for the wrong
+/// reason (its image) or never pass at all (its progress view).
+@MainActor
+private func optionsMenuShowsSpinner<V: View>(
+    in sut: V,
+    function: String = #function
+) -> Bool {
+    guard let menu = try? sut.inspect(function: function).find(ViewType.Menu.self)
+    else { return false }
+    return (try? menu.labelView().find(ViewType.ProgressView.self)) != nil
+}
+
 /// Download all now opens a confirmation first; the batch only starts when the
 /// alert's Download button is tapped.
 @MainActor
@@ -245,9 +259,9 @@ struct EpisodesDownloadAllViewTests {
             gate.startedIDs == [1]
         }
 
-        var button = try downloadAllButton(in: sut)
+        let button = try downloadAllButton(in: sut)
         #expect(try button.isDisabled())
-        #expect((try? button.find(ViewType.ProgressView.self)) != nil)
+        #expect(optionsMenuShowsSpinner(in: sut))
 
         gate.finish(1, result: false)
         await eventually("Failed episode left the batch button disabled") {
@@ -255,8 +269,7 @@ struct EpisodesDownloadAllViewTests {
             return (try? button.isDisabled()) == false
         }
 
-        button = try downloadAllButton(in: sut)
-        #expect((try? button.find(ViewType.Image.self)) != nil)
+        #expect(!optionsMenuShowsSpinner(in: sut))
     }
 
     @Test func removingEpisodeViewDoesNotCancelStartedBatch() async throws {
