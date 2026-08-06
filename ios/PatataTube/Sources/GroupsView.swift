@@ -236,15 +236,14 @@ private struct RenameGroupView: View {
     let onSave: (String) -> Void
 
     @State private var text: String = ""
-    @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Name", text: $text)
-                    .focused($focused)
-                    .onSubmit(save)
+                // Emoji keyboard first: group names here are mostly emoji plus a
+                // word, and the letters are one keyboard-switch away either way.
+                EmojiTextField(placeholder: "Name", text: $text, onSubmit: save)
             }
             .navigationTitle("Rename Group")
             .navigationBarTitleDisplayMode(.inline)
@@ -258,10 +257,7 @@ private struct RenameGroupView: View {
                 }
             }
         }
-        .onAppear {
-            text = group.label
-            focused = true
-        }
+        .onAppear { text = group.label }
     }
 
     private func save() {
