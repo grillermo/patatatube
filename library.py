@@ -10,6 +10,7 @@ import ffmpeg_progress
 import plex
 import version_namer
 from downloader import _probe_media
+from subtitles import discover_subtitles
 
 # iPad mini 6th gen panel long edge; wider sources get downscaled.
 IPAD_MAX_WIDTH = 2266
@@ -282,6 +283,26 @@ def _probe_missing_audio_langs(video_id: int) -> None:
         db.set_version_audio_langs(version["id"], json.dumps(audio_track_list(probe)))
 
 
+def _probe_missing_subtitle_langs(video_id: int) -> None:
+    """Fill missing per-version subtitle metadata without aborting a library scan."""
+    for version in db.get_video_versions(video_id):
+        if version.get("subtitle_langs") is not None:
+            continue
+        try:
+            tracks = discover_subtitles(Path(version["source_path"]))
+        except Exception:  # noqa: BLE001 - scan must survive a bad file
+            continue
+        db.set_version_subtitle_langs(version["id"], json.dumps([
+            {
+                "language": track.language,
+                "name": track.name,
+                "default": track.default,
+                "forced": track.forced,
+            }
+            for track in tracks
+        ]))
+
+
 def scan_library() -> dict:
     """Upsert every Plex library item into the videos table. Metadata only, no ffmpeg.
 
@@ -334,6 +355,7 @@ def scan_library() -> dict:
             skipped += 1
             continue
         _probe_missing_audio_langs(video_id)
+        _probe_missing_subtitle_langs(video_id)
         _heal_missing_conversions(video_id)
     removed = db.tombstone_missing_library_videos(seen_rating_keys)
     return {"added": added, "updated": updated, "skipped": skipped, "removed": removed}
