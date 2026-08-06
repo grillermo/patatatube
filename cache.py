@@ -10,6 +10,7 @@ import os
 import pickle
 import time
 
+import redis
 from redis import asyncio as aioredis
 
 CACHE_MAX_BYTES = int(os.getenv("CACHE_MAX_BYTES", str(300 * 1024 * 1024)))
@@ -17,6 +18,10 @@ CACHE_MAX_BYTES = int(os.getenv("CACHE_MAX_BYTES", str(300 * 1024 * 1024)))
 # responses (matches CACHE_MAX_BYTES, so one item may occupy the whole cache);
 # it also bounds how much of a response body is buffered in memory.
 CACHE_MAX_ITEM_BYTES = int(os.getenv("CACHE_MAX_ITEM_BYTES", str(300 * 1024 * 1024)))
+# Entries expire on their own so a write nothing flushed (converter.py changes
+# job and version status with no HTTP request in sight) goes stale for minutes,
+# never forever. 0 disables expiry.
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "300"))
 
 _PREFIX = "ptcache"
 _FIFO_KEY = f"{_PREFIX}:fifo"
@@ -25,6 +30,7 @@ _TOTAL_KEY = f"{_PREFIX}:total"
 _RETRY_SECONDS = 30.0
 
 _client: aioredis.Redis | None = None
+_sync_client: "redis.Redis | None" = None
 _down_until = 0.0
 
 
@@ -44,6 +50,25 @@ def get_client() -> aioredis.Redis:
             socket_timeout=1.0,
         )
     return _client
+
+
+def get_sync_client() -> "redis.Redis":
+    """Blocking client for processes with no event loop (converter.py)."""
+    global _sync_client
+    if _sync_client is None:
+        _sync_client = redis.Redis.from_url(
+            os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"),
+            password=os.getenv("REDIS_PASSWORD") or None,
+            socket_connect_timeout=0.5,
+            socket_timeout=1.0,
+        )
+    return _sync_client
+
+
+def set_sync_client(client) -> None:
+    """Override the blocking Redis client (used by tests)."""
+    global _sync_client
+    _sync_client = client
 
 
 def set_client(client: aioredis.Redis | None) -> None:
@@ -87,7 +112,7 @@ async def put(key: str, status_code: int, headers: dict[str, str], body: bytes) 
     try:
         r = get_client()
         # NX keeps FIFO order stable: an already-cached URL is not re-queued.
-        if await r.set(_data_key(key), raw, nx=True):
+        if await r.set(_data_key(key), raw, nx=True, ex=CACHE_TTL_SECONDS or None):
             pipe = r.pipeline()
             pipe.rpush(_FIFO_KEY, key)
             pipe.hset(_SIZES_KEY, key, len(raw))
@@ -124,3 +149,21 @@ async def clear() -> None:
             await r.delete(*keys)
     except Exception:
         _mark_down()
+
+
+def clear_blocking() -> None:
+    """`clear()` for callers with no event loop -- i.e. converter.py.
+
+    The middleware flushes on every mutating HTTP request, but the converter
+    changes job/version status out of band, so without this a cached
+    /api/videos or /api/videos/{id} keeps reporting 'converting' to the iOS
+    app's poll loop until the entry expires. Fails open like everything else
+    here: a Redis outage must never stop a job from finishing.
+    """
+    try:
+        client = get_sync_client()
+        keys = list(client.scan_iter(match=f"{_PREFIX}:*"))
+        if keys:
+            client.delete(*keys)
+    except Exception:
+        pass

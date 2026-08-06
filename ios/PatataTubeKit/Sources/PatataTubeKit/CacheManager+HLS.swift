@@ -224,13 +224,22 @@ extension CacheManager {
         cacheKey: String
     ) async throws -> Data {
         var attempt = 0
+        var packagingPolls = 0
         while true {
             try Task.checkCancellation()
             try throwIfExternalActivityCancelled(key: cacheKey)
             do {
                 return try await performHLSFetch(url, bearerToken: bearerToken)
             } catch {
-                guard isRetryableHLSError(error) else { throw error }
+                if isHLSPackagingConflict(error) {
+                    packagingPolls += 1
+                    guard packagingPolls <= maxHLSPackagingPolls else { throw error }
+                    DevLog.event(.download, "hls packaging, polling master", [
+                        "url": url.lastPathComponent, "poll": "\(packagingPolls)",
+                    ])
+                } else {
+                    guard isRetryableHLSError(error) else { throw error }
+                }
                 attempt += 1
                 try await hlsRetrySleep(hlsRetryBackoff(attempt: attempt))
             }
@@ -257,6 +266,14 @@ extension CacheManager {
             )
         }
         return data
+    }
+
+    /// A cold `master.m3u8` answers 409 while converter.py packages the video
+    /// (router.py `hls_asset`), which is a "poll me" signal, not a failure. It
+    /// is counted separately from transport retries because it is bounded.
+    func isHLSPackagingConflict(_ error: Error) -> Bool {
+        guard case .badStatus(409)? = error as? APIError else { return false }
+        return true
     }
 
     /// Returns true only for transport errors that may resolve without

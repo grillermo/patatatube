@@ -195,6 +195,22 @@ The `groups` table is the source of truth for video groups. `db.PLEX_KINDS` cove
 
 Adding a group is `POST /api/groups`; there is deliberately no UI for it, and no delete endpoint.
 
+### The response cache invalidates on writes, not on time
+
+`middleware.RedisCacheMiddleware` caches **every** 200 GET (`cache.py`, keyed by
+path + query + token fingerprint). Its only invalidation signals are: a mutating
+HTTP request (which flushes everything), `CACHE_TTL_SECONDS` (300s, safety net),
+and `_NEVER_CACHED_PATHS`.
+
+That means **any process that changes state without an HTTP request must flush
+it itself**, or the iOS poll loops read a frozen snapshot. `converter.py` calls
+`cache.clear_blocking()` after every job — a cached `/api/videos/{id}` reporting
+`converting` is what leaves `VideoStore.ensureReady` polling a video the server
+already finished. `/api/jobs` is in `_NEVER_CACHED_PATHS` because it is polled
+every 2s *for* live job state; caching it froze the download ring and the
+Downloads "Converting" section indefinitely. New out-of-band writers need the
+same flush; new live-state endpoints belong in that set.
+
 ### Auth
 
 Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` compared with `secrets.compare_digest`. If `UPLOAD_TOKEN` is unset the server returns 503 (upload disabled). The SSR endpoints are `/videos/{id}/group` and `/videos/{id}/promote`; the group endpoint is **not** token-gated, matching the old behavior.

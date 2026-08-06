@@ -163,3 +163,51 @@ async def test_redis_keyspace_holds_fingerprint_never_token(client, fake_redis):
     assert f"auth:{fingerprint}:/api/videos" in size_fields
     for name in keys + fifo + size_fields:
         assert token not in name
+
+
+def test_jobs_endpoint_is_never_cached(client):
+    """converter.py flips job status with no HTTP request in sight, so a cached
+    /api/jobs freezes the iOS conversion ring and Downloads list forever."""
+    headers = {"Authorization": "Bearer test-secret"}
+    first = client.get("/api/jobs", headers=headers)
+    assert first.status_code == 200
+    assert "x-cache" not in first.headers
+    second = client.get("/api/jobs", headers=headers)
+    assert "x-cache" not in second.headers
+
+
+@pytest.mark.asyncio
+async def test_entries_expire_so_out_of_band_writes_self_heal(fake_redis, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_TTL_SECONDS", 30)
+    await cache.put("/a", 200, {}, b"1")
+
+    ttl = await fake_redis.ttl(cache._data_key("/a"))
+    assert 0 < ttl <= 30
+
+
+@pytest.mark.asyncio
+async def test_zero_ttl_keeps_entries_forever(fake_redis, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_TTL_SECONDS", 0)
+    await cache.put("/a", 200, {}, b"1")
+
+    assert await fake_redis.ttl(cache._data_key("/a")) == -1
+
+
+@pytest.mark.asyncio
+async def test_clear_blocking_empties_the_cache():
+    """converter.py has no event loop, so it flushes through the sync client."""
+    from fakeredis import FakeRedis, FakeServer
+
+    server = FakeServer()
+    cache.set_client(FakeAsyncRedis(server=server))
+    cache.set_sync_client(FakeRedis(server=server))
+    try:
+        await cache.put("/a", 200, {}, b"1")
+        assert await cache.get("/a") is not None
+
+        cache.clear_blocking()
+
+        assert await cache.get("/a") is None
+    finally:
+        cache.set_client(None)
+        cache.set_sync_client(None)

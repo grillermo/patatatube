@@ -170,6 +170,48 @@ def test_ios_normalization_reencodes_unsupported_streams(monkeypatch, downloader
         output_path.unlink(missing_ok=True)
 
 
+def test_probe_media_ignores_ffprobe_warnings_on_stderr(monkeypatch, downloader_env, tmp_path):
+    """A warning like "Referenced QT chapter track not found" must not corrupt the JSON."""
+    _db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"source")
+
+    seen = {}
+
+    def fake_run(cmd, stdout, stderr, text):
+        seen["stderr"] = stderr
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps({"streams": [{"codec_type": "video", "codec_name": "h264"}]}),
+            stderr="[mov,mp4,m4a,3gp,3g2,mj2 @ 0x1] Referenced QT chapter track not found\n",
+        )
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "FFPROBE_BIN", "ffprobe-test")
+
+    probe = downloader._probe_media(source_file)
+
+    # Merging stderr into stdout puts the warning ahead of the JSON document.
+    assert seen["stderr"] is not subprocess.STDOUT
+    assert probe["streams"][0]["codec_name"] == "h264"
+
+
+def test_probe_media_failure_reports_ffprobe_stderr(monkeypatch, downloader_env, tmp_path):
+    _db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"source")
+
+    def fake_run(cmd, stdout, stderr, text):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="source.mp4: Invalid data found\n")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "FFPROBE_BIN", "ffprobe-test")
+
+    with pytest.raises(RuntimeError, match="Invalid data found"):
+        downloader._probe_media(source_file)
+
+
 def test_ios_normalization_remuxes_safe_h264_aac(monkeypatch, downloader_env, tmp_path):
     _db, downloader, _videos_dir = downloader_env
     source_file = tmp_path / "source.mp4"

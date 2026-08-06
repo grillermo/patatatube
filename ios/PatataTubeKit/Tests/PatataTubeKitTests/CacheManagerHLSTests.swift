@@ -403,6 +403,65 @@ final class CacheManagerHLSTests: XCTestCase {
         XCTAssertEqual(cache.state(for: 5), .cached)
     }
 
+    /// The server answers a cold master with 409 while converter.py packages
+    /// the video, and expects the client to poll that URL until it turns 200.
+    func testDownloadHLSPollsThroughPackagingConflict() async throws {
+        cache.hlsRetrySleep = { _ in }
+        stubPackage(segmentFailures: 0)
+        nonisolated(unsafe) var attempts = 0
+        MockURLProtocol.registerCounting(
+            path: "/videos/5/hls/master.m3u8"
+        ) { [master] request in
+            attempts += 1
+            if attempts < 3 {
+                return (
+                    HTTPURLResponse(
+                        url: request.url!, statusCode: 409,
+                        httpVersion: nil, headerFields: nil
+                    )!,
+                    Data(#"{"detail":"HLS preparing"}"#.utf8)
+                )
+            }
+            return (
+                HTTPURLResponse(
+                    url: request.url!, statusCode: 200,
+                    httpVersion: nil, headerFields: nil
+                )!,
+                Data(master.utf8)
+            )
+        }
+
+        try await downloadPackage()
+
+        XCTAssertEqual(cache.state(for: 5), .cached)
+        XCTAssertEqual(
+            MockURLProtocol.requestCount(path: "/videos/5/hls/master.m3u8"),
+            3
+        )
+    }
+
+    /// Packaging that never finishes must not poll forever: each 409 re-enqueues
+    /// an hls job on the server, so an unbounded loop keeps ffmpeg busy for good.
+    func testDownloadHLSGivesUpAfterPackagingPollLimit() async throws {
+        cache.hlsRetrySleep = { _ in }
+        cache.maxHLSPackagingPolls = 4
+        stubPackage(segmentFailures: 0)
+        MockURLProtocol.stubStatus(path: "/videos/5/hls/master.m3u8", status: 409)
+
+        do {
+            try await downloadPackage()
+            XCTFail("expected the poll limit to surface the 409")
+        } catch APIError.badStatus(409) {
+            // expected
+        }
+
+        XCTAssertEqual(
+            MockURLProtocol.requestCount(path: "/videos/5/hls/master.m3u8"),
+            5
+        )
+        XCTAssertEqual(cache.state(for: 5), .notCached)
+    }
+
     func testDownloadHLSReusesStreamedSegments() async throws {
         let packageHash = SegmentCache.packageHash(
             forPlaylist: Data(media.utf8)

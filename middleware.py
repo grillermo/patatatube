@@ -10,6 +10,11 @@ import cache
 
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _STRIPPED_HEADERS = {"content-length", "date", "server"}
+# Endpoints whose whole point is live server state. converter.py moves jobs
+# between queued/running/done with no HTTP request, so nothing flushes a cached
+# copy: the iOS app polls this every 2s and would keep reading a frozen
+# snapshot, leaving the download button spinning on a job that finished.
+_NEVER_CACHED_PATHS = {"/api/jobs"}
 
 
 class RedisCacheMiddleware(BaseHTTPMiddleware):
@@ -30,6 +35,9 @@ class RedisCacheMiddleware(BaseHTTPMiddleware):
             return response
 
         if "range" in request.headers:
+            return await call_next(request)
+
+        if request.url.path in _NEVER_CACHED_PATHS:
             return await call_next(request)
 
         key = request.url.path

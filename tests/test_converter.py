@@ -514,3 +514,37 @@ def test_legacy_exhausted_job_does_not_override_newer_explicit_version_work(
 
     assert tmp_db.get_job(newer_id)["status"] == "queued"
     assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
+
+
+def test_finished_job_flushes_the_response_cache(tmp_db, monkeypatch):
+    """A job transition changes /api/videos JSON without any HTTP request, so
+    nothing else would evict the cached copy the iOS app polls."""
+    import cache
+    import converter
+
+    flushes = []
+    monkeypatch.setattr(cache, "clear_blocking", lambda: flushes.append(True))
+    monkeypatch.setitem(converter.JOB_HANDLERS, "convert", lambda job, on_progress: None)
+    tmp_db.enqueue_job("convert", video_id=42)
+
+    converter.run_job(tmp_db.claim_job())
+
+    assert flushes, "expected the finished job to flush the response cache"
+
+
+def test_failed_job_also_flushes_the_response_cache(tmp_db, monkeypatch):
+    import cache
+    import converter
+
+    flushes = []
+    monkeypatch.setattr(cache, "clear_blocking", lambda: flushes.append(True))
+
+    def boom(job, on_progress):
+        raise RuntimeError("ffmpeg exploded")
+
+    monkeypatch.setitem(converter.JOB_HANDLERS, "convert", boom)
+    tmp_db.enqueue_job("convert", video_id=42)
+
+    converter.run_job(tmp_db.claim_job())
+
+    assert flushes, "expected the failed job to flush the response cache"

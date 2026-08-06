@@ -171,17 +171,24 @@ def _probe_media(input_path: Path) -> dict:
         str(input_path),
     ]
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        # stderr gets its own pipe: ffprobe still writes warnings there even at
+        # "-v error" (e.g. "Referenced QT chapter track not found"), and merging
+        # them into stdout prepends them to the JSON document.
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except FileNotFoundError as exc:
         raise RuntimeError(f"ffprobe not found at {FFPROBE_BIN!r}; install ffmpeg or set FFPROBE_BIN") from exc
 
     if proc.returncode != 0:
-        raise RuntimeError((proc.stdout or "").strip() or "ffprobe failed while inspecting video")
+        raise RuntimeError(
+            (proc.stderr or "").strip()
+            or (proc.stdout or "").strip()
+            or "ffprobe failed while inspecting video"
+        )
 
     try:
         return json.loads(proc.stdout or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError("ffprobe returned invalid JSON") from exc
+        raise RuntimeError(f"ffprobe returned invalid JSON: {(proc.stdout or '')[:200]!r}") from exc
 
 
 def _first_stream(probe: dict, stream_type: str) -> dict | None:

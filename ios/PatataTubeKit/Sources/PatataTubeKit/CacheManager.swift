@@ -155,6 +155,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     var hlsRetrySleep: @Sendable (Duration) async throws -> Void = {
         try await Task.sleep(for: $0)
     }
+    /// How many 409s a cold `master.m3u8` may answer with before the download
+    /// fails. Unlike a transport error, every 409 re-enqueues an hls job server
+    /// side, so this loop is bounded: 120 polls at the 16s backoff cap is ~30
+    /// minutes, past any packaging run this app queues.
+    var maxHLSPackagingPolls = 120
     private let lock = NSLock()
     private let cancellationFence: any CacheManagerCancellationFencing
     let concurrencyGate: any DownloadConcurrencyGating
