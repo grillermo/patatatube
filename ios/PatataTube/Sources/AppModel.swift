@@ -84,6 +84,45 @@ final class AppModel: ObservableObject {
     /// cleared — the grid only reacts to changes.
     @Published var webBridgeRequests: Int = 0
 
+    /// True while a launch through the "Open Web" quick action is holding
+    /// restoration back. The point of that shortcut is the web bridge, so
+    /// replaying last session's tab/path/player underneath it (and flashing it
+    /// on screen first) is exactly wrong — restoration waits until the bridge
+    /// is dismissed.
+    @Published private(set) var restorationDeferred = false
+
+    /// Bumped when a deferred restoration is released. Views re-run their
+    /// restore on a change; the `RestorationGate` still keeps it to one run.
+    @Published private(set) var restorationReleases = 0
+
+    /// Called by the views that would otherwise restore at launch. Reads the
+    /// router directly because the shortcut can be delivered either before or
+    /// after `handle(_:)` gets a chance to run. Returns whether restoration is
+    /// currently being held back.
+    @discardableResult
+    func deferRestorationIfWebLaunch() -> Bool {
+        if restorationDeferred { return true }
+        guard QuickActionRouter.shared.pending == .openWeb else { return false }
+        deferRestoration()
+        return restorationDeferred
+    }
+
+    /// No-op once restoration has already run — a shortcut tap on an app that
+    /// is already up has nothing to defer.
+    private func deferRestoration() {
+        guard !restorationDeferred, !restorationGate.isClaimed else { return }
+        restorationDeferred = true
+        DevLog.event(.nav, "restoration deferred", ["reason": "openWeb quick action"])
+    }
+
+    /// Web bridge dismissed: let the launch restoration happen now.
+    func releaseRestoration() {
+        guard restorationDeferred else { return }
+        restorationDeferred = false
+        restorationReleases += 1
+        DevLog.event(.nav, "restoration released", ["reason": "web bridge dismissed"])
+    }
+
     func randomize(for feed: Feed) -> Bool { randomizeByFeed[feed.storageKey] ?? false }
 
     func randomize(for scope: String?) -> Bool {
@@ -183,7 +222,9 @@ final class AppModel: ObservableObject {
 
     func handle(_ action: QuickAction) async {
         switch action {
-        case .openWeb: webBridgeRequests += 1
+        case .openWeb:
+            deferRestoration()
+            webBridgeRequests += 1
         case .clearVideos: await clearVideos()
         case .clearCovers: await clearCovers()
         case .clearLists: await clearLists()

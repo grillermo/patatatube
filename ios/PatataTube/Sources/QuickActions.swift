@@ -35,7 +35,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     ) {
         if let item = connectionOptions.shortcutItem,
            let action = QuickAction(shortcutItem: item) {
-            Task { @MainActor in QuickActionRouter.shared.pending = action }
+            // Synchronous on purpose: the launch views read `pending` in their
+            // first `.task`/`onAppear` to decide whether to restore, and a
+            // hop through `Task` can land after that.
+            MainActor.assumeIsolated { QuickActionRouter.shared.pending = action }
         }
     }
 

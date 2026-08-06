@@ -28,6 +28,13 @@ struct RootTabView: View {
                 .tag(MediaTab.movies)
         }
         .onAppear {
+            // Launched into the web bridge: stay on the default tab until the
+            // bridge is dismissed, so the shortcut doesn't drop the user back
+            // into last session's section first.
+            guard !model.deferRestorationIfWebLaunch() else { return }
+            selection = model.restorationStore.load().tab ?? .videos
+        }
+        .onChange(of: model.restorationReleases) { _, _ in
             selection = model.restorationStore.load().tab ?? .videos
         }
         .onChange(of: selection) { _, newValue in

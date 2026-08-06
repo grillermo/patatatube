@@ -24,6 +24,13 @@ public final class RestorationGate: @unchecked Sendable {
         return true
     }
 
+    /// Whether restoration has already run this launch. Read-only probe for
+    /// callers that need to know without consuming the claim.
+    public var isClaimed: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return claimed
+    }
+
     /// Re-arms the gate. Used by the "Clear Restoration" quick action so a
     /// wipe-and-relaunch-free reset behaves like a fresh launch, and by tests.
     public func reset() {
