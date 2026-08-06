@@ -188,8 +188,18 @@ private struct CoverPickerView: View {
     let current: String?
     let onSave: (String?) -> Void
 
-    @State private var text: String = ""
+    @State private var text: String
     @Environment(\.dismiss) private var dismiss
+
+    // The current cover has to be in the field *before* it takes first
+    // responder, or there is nothing for the select-all to highlight. An
+    // `onAppear` assignment lands too late for that.
+    init(group: VideoGroup, current: String?, onSave: @escaping (String?) -> Void) {
+        self.group = group
+        self.current = current
+        self.onSave = onSave
+        _text = State(initialValue: current ?? "")
+    }
 
     var body: some View {
         NavigationStack {
@@ -227,7 +237,6 @@ private struct CoverPickerView: View {
                 }
             }
         }
-        .onAppear { text = current ?? "" }
     }
 }
 

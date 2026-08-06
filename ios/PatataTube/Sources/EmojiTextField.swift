@@ -16,6 +16,10 @@ struct EmojiTextField: UIViewRepresentable {
     /// Takes first responder itself, so callers don't need `@FocusState` — which
     /// does not reach into a representable's `UIView` anyway.
     var focusOnAppear: Bool = true
+    /// Selects the existing text when editing starts, so the first character
+    /// typed replaces it instead of appending. For a one-emoji field appending
+    /// is never what the user meant.
+    var selectAllOnFocus: Bool = true
     var onSubmit: () -> Void = {}
 
     func makeUIView(context: Context) -> UITextField {
@@ -58,6 +62,13 @@ struct EmojiTextField: UIViewRepresentable {
 
         @objc func editingChanged(_ field: UITextField) {
             parent.text = field.text ?? ""
+        }
+
+        func textFieldDidBeginEditing(_ field: UITextField) {
+            guard parent.selectAllOnFocus, field.text?.isEmpty == false else { return }
+            // Deferred: selecting inside the delegate callback is undone by the
+            // caret placement UIKit does right after it.
+            DispatchQueue.main.async { field.selectAll(nil) }
         }
 
         func textFieldShouldReturn(_ field: UITextField) -> Bool {
