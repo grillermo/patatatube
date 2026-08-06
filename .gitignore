@@ -6,7 +6,6 @@ __pycache__/
 .pytest_cache/
 python_env/
 .DS_Store
-docs/
 .tokensave/
 .worktrees/
 watch_later.sqlite
