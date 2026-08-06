@@ -82,6 +82,7 @@ struct APIClientTests {
                   "preview_url":null,"group_id":1,"plex_kind":null,"position":1,
                   "status":"done","error_msg":null,"stream_path":"/videos/1/stream",
                   "hls_path":"/videos/1/hls/master.m3u8",
+                  "subtitle_lang":"en",
                   "subtitle_tracks":[{"language":"en","name":"English","default":true,"forced":false}]}]
                 """.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)
@@ -92,6 +93,7 @@ struct APIClientTests {
             #expect(videos[0].subtitleTracks[0].language == "en")
             #expect(videos[0].subtitleTracks[0].name == "English")
             #expect(videos[0].subtitleTracks[0].default == true)
+            #expect(videos[0].subtitleLang == "en")
         }
 
         @Test func decodesVideoWithoutHlsFields() async throws {

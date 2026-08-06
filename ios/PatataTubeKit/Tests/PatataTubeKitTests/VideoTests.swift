@@ -116,3 +116,67 @@ private let sampleJSON = """
     #expect(video.versions[1].audioTracks == [AudioTrack(lang: "en", title: "English", available: true)])
     #expect(video.withAudioLang("fr").audioLang == "fr")
 }
+
+@Test func decodesSubtitleLang() throws {
+    let json = #"{"id":1,"url":"u","status":"done","group_id":3,"plex_kind":null,"subtitle_lang":"es","subtitle_tracks":[]}"#
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let video = try decoder.decode(Video.self, from: Data(json.utf8))
+    #expect(video.subtitleLang == "es")
+}
+
+@Test func subtitleLangDefaultsToNilWhenAbsent() throws {
+    let json = #"{"id":1,"url":"u","status":"done","subtitle_tracks":[]}"#
+    let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
+    #expect(video.subtitleLang == nil)
+}
+
+// Gap #5: an unchosen video applies nothing — AVKit auto-selects from the
+// playlist's DEFAULT=YES instead. The default track surfaces only through
+// `defaultSubtitleLang`, which the pickers use for display.
+@Test func effectiveSubtitleLangIsNilWhenNeverChosen() {
+    let video = Video(
+        id: 1, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
+        groupID: nil, plexKind: nil, position: nil, status: "done", errorMsg: nil,
+        streamPath: "", subtitleTracks: [
+            SubtitleTrack(language: "en", name: "English", default: true, forced: false),
+            SubtitleTrack(language: "es", name: "Spanish", default: false, forced: false),
+        ]
+    )
+    #expect(video.effectiveSubtitleLang == nil)
+    #expect(video.defaultSubtitleLang == "en")
+}
+
+@Test func defaultSubtitleLangIsNilWithoutAFlaggedTrack() {
+    let video = Video(
+        id: 1, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
+        groupID: nil, plexKind: nil, position: nil, status: "done", errorMsg: nil,
+        streamPath: "", subtitleTracks: [
+            SubtitleTrack(language: "es", name: "Spanish", default: false, forced: false),
+        ]
+    )
+    #expect(video.defaultSubtitleLang == nil)
+}
+
+@Test func effectiveSubtitleLangHonorsExplicitOff() {
+    let video = Video(
+        id: 1, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
+        groupID: nil, plexKind: nil, position: nil, status: "done", errorMsg: nil,
+        streamPath: "", subtitleTracks: [
+            SubtitleTrack(language: "en", name: "English", default: true, forced: false),
+        ], subtitleLang: ""
+    )
+    #expect(video.effectiveSubtitleLang == nil)
+}
+
+@Test func effectiveSubtitleLangHonorsExplicitChoice() {
+    let video = Video(
+        id: 1, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
+        groupID: nil, plexKind: nil, position: nil, status: "done", errorMsg: nil,
+        streamPath: "", subtitleTracks: [
+            SubtitleTrack(language: "en", name: "English", default: true, forced: false),
+            SubtitleTrack(language: "es", name: "Spanish", default: false, forced: false),
+        ], subtitleLang: "es"
+    )
+    #expect(video.effectiveSubtitleLang == "es")
+}
