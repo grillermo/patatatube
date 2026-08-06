@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.0.0",
+          "buildVersion": "140",
+          "date": "2026-08-06T12:48:09Z",
+          "localizedDescription": "Movies and shows can now play with the right subtitles\n\n• Pick a subtitle language per movie from the info screen — it sticks, no re-conversion needed\n• Downloads view now shows what's actively converting, with live percent on the download button\n• Download-all queues behind whatever you tap interactively, so it never hogs the converter",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.0/PatataTube-2.0.0.ipa",
+          "size": 4189483,
+          "sha256": "5cca6b4159f0711f7c4e1f34dc38958b8ad1ccec3b9a58c31e9b2a106f5743cf",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.6.6",
           "buildVersion": "139",
           "date": "2026-08-06T02:47:48Z",
@@ -1314,11 +1324,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.6.6",
-      "versionDate": "2026-08-06T02:47:48Z",
-      "versionDescription": "The cover picker preselects the current emoji\n\n• Opening Choose cover highlights the emoji already set, so the next one you tap replaces it instead of piling on",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.6/PatataTube-1.6.6.ipa",
-      "size": 4158790
+      "version": "2.0.0",
+      "versionDate": "2026-08-06T12:48:09Z",
+      "versionDescription": "Movies and shows can now play with the right subtitles\n\n• Pick a subtitle language per movie from the info screen — it sticks, no re-conversion needed\n• Downloads view now shows what's actively converting, with live percent on the download button\n• Download-all queues behind whatever you tap interactively, so it never hogs the converter",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.0/PatataTube-2.0.0.ipa",
+      "size": 4189483
     }
   ],
   "news": []
