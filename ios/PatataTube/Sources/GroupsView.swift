@@ -189,18 +189,22 @@ private struct CoverPickerView: View {
     let onSave: (String?) -> Void
 
     @State private var text: String = ""
-    @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Emoji", text: $text)
-                        .font(.system(size: 48))
-                        .multilineTextAlignment(.center)
-                        .focused($focused)
-                        .onSubmit { onSave(text) }
+                    // The field only ever wants an emoji, so it opens on the
+                    // emoji keyboard instead of making the user find the globe.
+                    EmojiTextField(
+                        placeholder: "Emoji",
+                        text: $text,
+                        font: .systemFont(ofSize: 48),
+                        alignment: .center,
+                        onSubmit: { onSave(text) }
+                    )
+                    .frame(height: 60)
                 } footer: {
                     Text("One emoji, shown enlarged as this group's cover.")
                 }
@@ -223,10 +227,7 @@ private struct CoverPickerView: View {
                 }
             }
         }
-        .onAppear {
-            text = current ?? ""
-            focused = true
-        }
+        .onAppear { text = current ?? "" }
     }
 }
 
@@ -236,14 +237,15 @@ private struct RenameGroupView: View {
     let onSave: (String) -> Void
 
     @State private var text: String = ""
+    @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
-                // Emoji keyboard first: group names here are mostly emoji plus a
-                // word, and the letters are one keyboard-switch away either way.
-                EmojiTextField(placeholder: "Name", text: $text, onSubmit: save)
+                TextField("Name", text: $text)
+                    .focused($focused)
+                    .onSubmit(save)
             }
             .navigationTitle("Rename Group")
             .navigationBarTitleDisplayMode(.inline)
@@ -257,7 +259,10 @@ private struct RenameGroupView: View {
                 }
             }
         }
-        .onAppear { text = group.label }
+        .onAppear {
+            text = group.label
+            focused = true
+        }
     }
 
     private func save() {
