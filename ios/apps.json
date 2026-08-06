@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.6.4",
+          "buildVersion": "137",
+          "date": "2026-08-06T02:22:57Z",
+          "localizedDescription": "Renaming a group opens the emoji keyboard\n\n• The rename field now comes up on the emoji keyboard, so a cover emoji is one tap away",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.4/PatataTube-1.6.4.ipa",
+          "size": 4158258,
+          "sha256": "be42a58098055f114f745dc7c9c6c2c05306ec7381eda127000a26ad5caea40c",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.6.3",
           "buildVersion": "136",
           "date": "2026-08-06T01:12:50Z",
@@ -1284,11 +1294,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.6.3",
-      "versionDate": "2026-08-06T01:12:50Z",
-      "versionDescription": "Open Web shortcut lands on the web bridge\n\n• The Open Web home-screen shortcut no longer flashes back into last session's tab, list or player\n• That session restores when you tap the back button in the web bridge",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.3/PatataTube-1.6.3.ipa",
-      "size": 4154717
+      "version": "1.6.4",
+      "versionDate": "2026-08-06T02:22:57Z",
+      "versionDescription": "Renaming a group opens the emoji keyboard\n\n• The rename field now comes up on the emoji keyboard, so a cover emoji is one tap away",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.4/PatataTube-1.6.4.ipa",
+      "size": 4158258
     }
   ],
   "news": []
