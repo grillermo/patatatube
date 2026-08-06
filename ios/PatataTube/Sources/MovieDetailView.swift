@@ -129,6 +129,33 @@ struct MovieDetailView: View {
                         }
                         .pickerStyle(.menu)
                     }
+
+                    let subtitleTracks = currentVideo.subtitleTracks
+                    if !subtitleTracks.isEmpty {
+                        Picker("Subtitles", selection: Binding(
+                            // Display-side resolution (gap #5): show the server's
+                            // default track as selected while nothing is stored,
+                            // without that ever reaching the player or the server.
+                            get: {
+                                currentVideo.effectiveSubtitleLang
+                                    ?? (currentVideo.subtitleLang == nil ? currentVideo.defaultSubtitleLang ?? "" : "")
+                            },
+                            set: { lang in
+                                // Compare against the optional, not `?? ""`: with
+                                // nothing stored the displayed value is the default
+                                // track, so picking "Off" ("") is a real change that
+                                // a `?? ""` comparison would swallow.
+                                guard lang != currentVideo.subtitleLang else { return }
+                                Task { await store.chooseSubtitle(id: currentVideo.id, lang: lang) }
+                            }
+                        )) {
+                            Text("Off").tag("")
+                            ForEach(subtitleTracks, id: \.language) { t in
+                                Text(t.name).tag(t.language)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
                     Spacer()
                 }
             }
