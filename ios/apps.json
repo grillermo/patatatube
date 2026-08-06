@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.0.2",
+          "buildVersion": "142",
+          "date": "2026-08-06T16:46:14Z",
+          "localizedDescription": "What's new in 2.0.2:\n\n• perf: raise default FFMPEG_JOB_LIMIT to 2\n• fix(ios): repair the app target's test build and green the suite\n• docs: record the pre-existing PlayerViewControllerTests build break\n• refactor(ios): share one options menu across list and detail views\n• fix: stop macOS EXC_GUARD worker kills from post-fork setproctitle\n• docs: track docs/ directory in git\n• fix: document post-deploy scan requirement and clear stale subtitle_lang on version switch\n• fix: address final review findings (doc accuracy, a11y label, dedup duration helper, deterministic Popen cleanup)",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.2/PatataTube-2.0.2.ipa",
+          "size": 4197315,
+          "sha256": "d42184c6f76864c532c316e0392d22bba944516a3bc395f66e2b8950c414c9c5",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.0.1",
           "buildVersion": "141",
           "date": "2026-08-06T16:22:32Z",
@@ -1334,11 +1344,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.0.1",
-      "versionDate": "2026-08-06T16:22:32Z",
-      "versionDescription": "Movie pages get the full options menu\n\n• Movie detail now carries the same menu as the lists: New video, Autoplay, Randomize, Downloads, Delete cached and Settings\n• Two videos convert at once, so downloads finish sooner",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.1/PatataTube-2.0.1.ipa",
-      "size": 4196579
+      "version": "2.0.2",
+      "versionDate": "2026-08-06T16:46:14Z",
+      "versionDescription": "What's new in 2.0.2:\n\n• perf: raise default FFMPEG_JOB_LIMIT to 2\n• fix(ios): repair the app target's test build and green the suite\n• docs: record the pre-existing PlayerViewControllerTests build break\n• refactor(ios): share one options menu across list and detail views\n• fix: stop macOS EXC_GUARD worker kills from post-fork setproctitle\n• docs: track docs/ directory in git\n• fix: document post-deploy scan requirement and clear stale subtitle_lang on version switch\n• fix: address final review findings (doc accuracy, a11y label, dedup duration helper, deterministic Popen cleanup)",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.2/PatataTube-2.0.2.ipa",
+      "size": 4197315
     }
   ],
   "news": []
