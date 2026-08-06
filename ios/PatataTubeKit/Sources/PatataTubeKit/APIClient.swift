@@ -36,6 +36,7 @@ public protocol VideoAPI: Sendable {
     func prepare(id: Int, bulk: Bool) async throws -> String
     func video(id: Int) async throws -> Video
     func imageData(path: String) async throws -> Data
+    func jobs() async throws -> JobsSnapshot
 }
 
 public extension VideoAPI {
@@ -59,7 +60,7 @@ public extension VideoAPI {
     }
 }
 
-public final class APIClient: VideoAPI, @unchecked Sendable {
+public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
     private let store: CredentialStore
     private let session: URLSession
 
@@ -201,6 +202,12 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
     public func video(id: Int) async throws -> Video {
         let data = try await authedGet("api/videos/\(id)")
         do { return try Self.makeDecoder().decode(Video.self, from: data) }
+        catch { throw APIError.decoding(String(describing: error)) }
+    }
+
+    public func jobs() async throws -> JobsSnapshot {
+        let data = try await authedGet("api/jobs")
+        do { return try Self.makeDecoder().decode(JobsSnapshot.self, from: data) }
         catch { throw APIError.decoding(String(describing: error)) }
     }
 

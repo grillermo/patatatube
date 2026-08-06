@@ -111,6 +111,7 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         return videoResults.isEmpty ? makeVideo(id: id) : videoResults[min(videoCalls, videoResults.count) - 1]
     }
     func imageData(path: String) async throws -> Data { Data() }
+    func jobs() async throws -> JobsSnapshot { .empty }
 }
 
 @MainActor @Test func defaultsToAllWithNoPersistedFeed() {

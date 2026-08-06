@@ -36,6 +36,7 @@ private final class PromoteAPI: VideoAPI, @unchecked Sendable {
     func prepare(id: Int, bulk: Bool) async throws -> String { "done" }
     func video(id: Int) async throws -> Video { videosToReturn[0] }
     func imageData(path: String) async throws -> Data { Data() }
+    func jobs() async throws -> JobsSnapshot { .empty }
 }
 
 private func video(_ id: Int) -> Video {
