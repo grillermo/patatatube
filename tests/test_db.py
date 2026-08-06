@@ -518,3 +518,30 @@ def test_set_library_state_error_clears_converted_langs(fresh_db, tmp_path):
     db.set_library_state(vid, "unconverted", error_msg="boom", version_id=version["id"])
     version = db.get_video_versions(vid)[0]
     assert version["converted_langs"] is None
+
+
+def test_subtitle_lang_roundtrip(fresh_db, tmp_path):
+    import db
+
+    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
+    assert db.get_video(vid)["subtitle_lang"] is None
+    db.set_subtitle_lang(vid, "es")
+    assert db.get_video(vid)["subtitle_lang"] == "es"
+    db.set_subtitle_lang(vid, "")
+    assert db.get_video(vid)["subtitle_lang"] == ""
+
+
+def test_version_subtitle_langs_roundtrip(fresh_db, tmp_path):
+    import db
+
+    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
+    version = db.get_video_versions(vid)[0]
+    assert version["subtitle_langs"] is None
+    db.set_version_subtitle_langs(
+        version["id"],
+        '[{"language": "en", "name": "English", "default": true, "forced": false}]',
+    )
+    version = db.get_video_versions(vid)[0]
+    assert version["subtitle_langs"] == (
+        '[{"language": "en", "name": "English", "default": true, "forced": false}]'
+    )

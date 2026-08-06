@@ -147,6 +147,11 @@ def init_db():
             _add_column(conn, "ALTER TABLE videos ADD COLUMN hls_status TEXT NOT NULL DEFAULT 'none'")
         if "audio_lang" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN audio_lang TEXT")
+        # NULL = never chosen (client falls back to the server's default-flagged
+        # subtitle track); "" = explicitly off; anything else = the chosen
+        # language tag. See views/serializers.py for how this is exposed.
+        if "subtitle_lang" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN subtitle_lang TEXT")
         # Plex thumb version tokens (the trailing id in the /thumb/<version> path),
         # used to cache resized posters and only regenerate when Plex changes the
         # art. NULL until the next scan repopulates them.
@@ -236,6 +241,12 @@ def init_db():
             _add_column(conn, "ALTER TABLE video_versions ADD COLUMN audio_langs TEXT")
         if "converted_langs" not in version_columns:
             _add_column(conn, "ALTER TABLE video_versions ADD COLUMN converted_langs TEXT")
+        # JSON list of {language, name, default, forced}, filled once at scan
+        # time by library.py's _probe_missing_subtitle_langs (mirrors
+        # audio_langs). NULL means "not probed yet", not "no subtitles" — an
+        # empty JSON array `[]` means the latter.
+        if "subtitle_langs" not in version_columns:
+            _add_column(conn, "ALTER TABLE video_versions ADD COLUMN subtitle_langs TEXT")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_source_path ON videos(source_path)"
         )
@@ -565,6 +576,11 @@ def set_audio_lang(video_id: int, lang: str) -> None:
         conn.execute("UPDATE videos SET audio_lang = ? WHERE id = ?", (lang, video_id))
 
 
+def set_subtitle_lang(video_id: int, lang: str | None) -> None:
+    with _conn() as conn:
+        conn.execute("UPDATE videos SET subtitle_lang = ? WHERE id = ?", (lang, video_id))
+
+
 def set_resume_secs(video_id: int, secs: float) -> None:
     """Persist where playback got to. Negative input clamps to 0."""
     value = float(secs)
@@ -580,6 +596,14 @@ def set_version_audio_langs(version_id: int, audio_langs_json: str) -> None:
         conn.execute(
             "UPDATE video_versions SET audio_langs = ? WHERE id = ?",
             (audio_langs_json, version_id),
+        )
+
+
+def set_version_subtitle_langs(version_id: int, subtitle_langs_json: str) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE video_versions SET subtitle_langs = ? WHERE id = ?",
+            (subtitle_langs_json, version_id),
         )
 
 
