@@ -154,6 +154,10 @@ class AudioRequest(BaseModel):
     lang: str
 
 
+class SubtitleRequest(BaseModel):
+    lang: str | None = None
+
+
 class PositionRequest(BaseModel):
     secs: FiniteFloat
 
@@ -987,6 +991,36 @@ async def api_choose_audio(video_id: int, body: AudioRequest, request: Request):
     return {"ok": True}
 
 
+@router.post("/api/videos/{video_id}/subtitle")
+async def api_choose_subtitle(video_id: int, body: SubtitleRequest, request: Request):
+    """Persist a subtitle preference. Unlike audio, this never re-converts —
+    every discovered language is already packaged into the HLS multivariant
+    playlist at conversion time (see hls.py), so there is nothing to invalidate.
+    """
+    _check_token(request)
+    video = db.get_video(video_id)
+    if not video or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.get("source") != "library":
+        raise HTTPException(status_code=400, detail="Only library videos have subtitles")
+
+    if body.lang:
+        version = db.get_video_version(video_id)
+        if not version:
+            raise HTTPException(status_code=404, detail="Version not found")
+        try:
+            available = {
+                track["language"] for track in json.loads(version.get("subtitle_langs") or "[]")
+            }
+        except (TypeError, ValueError):
+            available = set()
+        if body.lang not in available:
+            raise HTTPException(status_code=400, detail="Language not available")
+
+    db.set_subtitle_lang(video_id, body.lang)
+    return {"ok": True}
+
+
 @router.post("/api/videos/{video_id}/position", status_code=204)
 async def api_save_position(video_id: int, body: PositionRequest, request: Request):
     """Where playback got to, reported by the iOS player.
@@ -1070,23 +1104,6 @@ async def api_video(video_id: int, request: Request):
     video = db.get_video(video_id)
     if not video or video.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Video not found")
-    # Single-row detail: a filesystem probe for sidecar subtitles is fine here
-    # (unlike the list endpoint, which must stay allocation-cheap per row).
-    if video.get("source") == "library":
-        version = db.get_video_version(video_id)
-        if version and version.get("source_path"):
-            video = {
-                **video,
-                "subtitle_tracks": [
-                    {
-                        "language": track.language,
-                        "name": track.name,
-                        "default": track.default,
-                        "forced": track.forced,
-                    }
-                    for track in hls.discover_subtitles(version["source_path"])
-                ],
-            }
     return serialize_video(video)
 
 

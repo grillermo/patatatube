@@ -1116,6 +1116,90 @@ def test_choose_audio_legacy_null_converted_langs_reconverts(client, tmp_path, m
     assert db.queued_job_count() == 1
 
 
+def _seed_subtitle_movie(tmp_path, subtitle_langs=None):
+    import db
+
+    src = tmp_path / "m.mkv"
+    src.write_bytes(b"x")
+    vid, _ = db.upsert_library_video({
+        "source_path": str(src), "title": "M", "plex_kind": "movies",
+        "show_title": None, "season": None, "episode": None, "summary": None,
+        "plex_rating_key": "sm1", "show_rating_key": None,
+    })
+    version = db.get_video_versions(vid)[0]
+    if subtitle_langs is None:
+        subtitle_langs = [
+            {"language": "en", "name": "English", "default": True, "forced": False},
+            {"language": "es", "name": "Spanish", "default": False, "forced": False},
+        ]
+    db.set_version_subtitle_langs(version["id"], json.dumps(subtitle_langs))
+    db.set_library_state(vid, "done", converted_path=str(tmp_path / "m.mp4"), version_id=version["id"])
+    return vid, version["id"]
+
+
+def test_choose_subtitle_requires_token(client, tmp_path):
+    vid, _ = _seed_subtitle_movie(tmp_path)
+
+    resp = client.post(f"/api/videos/{vid}/subtitle", json={"lang": "es"})
+
+    assert resp.status_code in (401, 403)
+
+
+def test_choose_subtitle_sets_lang(client, tmp_path):
+    import db
+
+    vid, _ = _seed_subtitle_movie(tmp_path)
+    resp = client.post(f"/api/videos/{vid}/subtitle", json={"lang": "es"}, headers=AUTH)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    assert db.get_video(vid)["subtitle_lang"] == "es"
+
+
+def test_choose_subtitle_off_is_valid(client, tmp_path):
+    import db
+
+    vid, _ = _seed_subtitle_movie(tmp_path)
+    resp = client.post(f"/api/videos/{vid}/subtitle", json={"lang": ""}, headers=AUTH)
+
+    assert resp.status_code == 200
+    assert db.get_video(vid)["subtitle_lang"] == ""
+
+
+def test_choose_subtitle_rejects_unknown_lang(client, tmp_path):
+    vid, _ = _seed_subtitle_movie(tmp_path)
+
+    resp = client.post(f"/api/videos/{vid}/subtitle", json={"lang": "jp"}, headers=AUTH)
+
+    assert resp.status_code == 400
+
+
+def test_choose_subtitle_does_not_invalidate_hls(client, tmp_path, monkeypatch):
+    import hls
+
+    vid, _ = _seed_subtitle_movie(tmp_path)
+    calls = []
+    monkeypatch.setattr(hls, "invalidate", lambda video_id: calls.append(video_id))
+
+    resp = client.post(f"/api/videos/{vid}/subtitle", json={"lang": "es"}, headers=AUTH)
+
+    assert resp.status_code == 200
+    assert calls == []
+
+
+def test_get_video_exposes_subtitle_tracks_from_scan_cache(client, tmp_path):
+    vid, _ = _seed_subtitle_movie(tmp_path)
+
+    resp = client.get(f"/api/videos/{vid}", headers=AUTH)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["subtitle_tracks"] == [
+        {"language": "en", "name": "English", "default": True, "forced": False},
+        {"language": "es", "name": "Spanish", "default": False, "forced": False},
+    ]
+
+
 def test_scan_requires_token(client):
     assert client.post("/api/library/scan").status_code == 401
 
