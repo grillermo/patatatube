@@ -11,12 +11,12 @@ All output for a video is constrained under ``HLS_DIR / str(video_id)``.
 import math
 import os
 import shutil
-import subprocess
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import db
+import ffmpeg_progress
 from library import audio_track_list, plan_conversion, probe_source, select_audio_indices
 from subtitles import (
     SubtitleTrack,
@@ -122,12 +122,6 @@ def build_ffmpeg_command(source: Path, out_dir: Path, plan) -> list[str]:
     ]
 
 
-def _run_ffmpeg(cmd: list[str]) -> None:
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stdout or "").strip() or "ffmpeg failed while packaging HLS")
-
-
 def _write(path: Path, text: str) -> None:
     """Atomic write within the target directory."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -203,8 +197,9 @@ def build_hls_package(
     *,
     probe: dict | None = None,
     subtitles: list[SubtitleTrack] | None = None,
-    run_ffmpeg=_run_ffmpeg,
+    run_ffmpeg=ffmpeg_progress.run_ffmpeg,
     audio_lang: str | None = None,
+    on_progress=None,
 ) -> HlsPackage:
     """Probe, segment, normalize subtitles, and write the multivariant playlist."""
     source = Path(source_path)
@@ -220,7 +215,11 @@ def build_hls_package(
     if audio_indices is None:
         audio_indices = select_audio_indices(probe, [])
     plan = plan_conversion(probe, audio_indices=audio_indices)
-    run_ffmpeg(build_ffmpeg_command(source, out_dir, plan))
+    run_ffmpeg(
+        build_ffmpeg_command(source, out_dir, plan),
+        duration=_duration(probe),
+        on_progress=on_progress,
+    )
 
     discovered = subtitles if subtitles is not None else discover_subtitles(source)
     duration = _duration(probe)
@@ -264,7 +263,7 @@ def safe_asset_path(video_id, asset_path: str, output_root: Path | None = None) 
     return target
 
 
-def prepare(video_id: int, source_path, *, raise_errors: bool = False) -> None:
+def prepare(video_id: int, source_path, *, raise_errors: bool = False, on_progress=None) -> None:
     """Background task: build the HLS package and record readiness in the DB.
 
     Runs synchronously (FastAPI runs sync background tasks on a thread). On
@@ -276,7 +275,7 @@ def prepare(video_id: int, source_path, *, raise_errors: bool = False) -> None:
     try:
         video = db.get_video(video_id)
         audio_lang = video.get("audio_lang") if video else None
-        build_hls_package(video_id, source_path, audio_lang=audio_lang)
+        build_hls_package(video_id, source_path, audio_lang=audio_lang, on_progress=on_progress)
         db.set_hls_status(video_id, "done")
     except Exception:  # noqa: BLE001 - persist state before optional re-raise
         traceback.print_exc()

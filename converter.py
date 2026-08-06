@@ -30,19 +30,21 @@ def _positive_int_env(name: str, default: int) -> int:
 FFMPEG_JOB_LIMIT = _positive_int_env("FFMPEG_JOB_LIMIT", 1)
 
 
-def _handle_convert(job: dict) -> None:
+def _handle_convert(job: dict, on_progress) -> None:
     version_id = job.get("version_id") or 0
     if version_id <= 0:
         raise ValueError("convert job requires a positive version_id")
-    library.convert_library_video(job["video_id"], version_id, raise_errors=True)
+    library.convert_library_video(
+        job["video_id"], version_id, raise_errors=True, on_progress=on_progress
+    )
 
 
-def _handle_hls(job: dict) -> None:
+def _handle_hls(job: dict, on_progress) -> None:
     payload = job.get("payload") or {}
-    hls.prepare(job["video_id"], payload["source_path"], raise_errors=True)
+    hls.prepare(job["video_id"], payload["source_path"], raise_errors=True, on_progress=on_progress)
 
 
-def _handle_normalize(job: dict) -> dict:
+def _handle_normalize(job: dict, on_progress) -> dict:
     # Imported lazily: downloader pulls in pybalt, which the other kinds do not
     # need, and a normalize job is rare compared to convert.
     from downloader import _normalize_media_for_ios_sync
@@ -71,7 +73,7 @@ def run_job(job: dict) -> None:
         handler = JOB_HANDLERS.get(job["kind"])
         if handler is None:
             raise ValueError(f"Unknown job kind: {job['kind']}")
-        result = handler(job)
+        result = handler(job, lambda fraction: db.set_job_progress(job["id"], fraction))
         db.finish_job(job["id"], "done", result=result)
         status = "done"
     except Exception as exc:  # noqa: BLE001 - a bad job must not kill the runner

@@ -2,11 +2,11 @@
 
 import json
 import os
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import db
+import ffmpeg_progress
 import plex
 import version_namer
 from downloader import _probe_media
@@ -161,17 +161,12 @@ def probe_source(path: Path) -> dict:
     return _probe_media(path)
 
 
-def _run_ffmpeg(cmd: list[str]) -> None:
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stdout or "").strip() or "ffmpeg failed while converting")
-
-
 def convert_library_video(
     video_id: int,
     version_id: int | None = None,
     *,
     raise_errors: bool = False,
+    on_progress=None,
 ) -> None:
     """Convert a library row's source to an iPad-ready sibling mp4.
 
@@ -219,7 +214,11 @@ def convert_library_video(
             "-movflags", "+faststart",
             str(tmp),
         ]
-        _run_ffmpeg(cmd)
+        ffmpeg_progress.run_ffmpeg(
+            cmd,
+            duration=ffmpeg_progress.probe_duration(probe),
+            on_progress=on_progress,
+        )
         os.replace(tmp, target)
         db.set_library_state(
             video_id, "done",

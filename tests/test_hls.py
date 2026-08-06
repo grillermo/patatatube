@@ -29,7 +29,7 @@ INCOMPAT_PROBE = {
 
 
 def _capture(cmds):
-    def fake(cmd):
+    def fake(cmd, *, duration=None, on_progress=None):
         cmds.append(cmd)
         # Emulate ffmpeg producing the media playlist so master gen can proceed.
         out_dir = Path(cmd[-1]).parent
@@ -170,10 +170,31 @@ def test_build_package_selects_audio_lang(tmp_path):
         output_root=tmp_path / "out",
         probe=probe,
         subtitles=[],
-        run_ffmpeg=commands.append,
+        run_ffmpeg=_capture(commands),
         audio_lang="spa",
     )
     assert "0:a:1" in commands[0]
+
+
+def test_build_hls_package_passes_duration_and_progress(tmp_path):
+    calls = {}
+
+    def fake_run_ffmpeg(cmd, *, duration=None, on_progress=None):
+        calls["duration"] = duration
+        out_dir = Path(cmd[-1]).parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        Path(cmd[-1]).write_text("#EXTM3U\n", encoding="utf-8")
+        if on_progress:
+            on_progress(0.25)
+
+    seen = []
+    hls.build_hls_package(
+        1, tmp_path / "source.mkv", tmp_path / "hls",
+        probe=COMPAT_PROBE, subtitles=[], run_ffmpeg=fake_run_ffmpeg,
+        on_progress=seen.append,
+    )
+    assert calls["duration"] == pytest.approx(hls._duration(COMPAT_PROBE))
+    assert seen == [0.25]
 
 
 @pytest.fixture()

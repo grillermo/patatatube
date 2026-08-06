@@ -18,7 +18,8 @@ def test_convert_job_success_marks_job_done(tmp_db, monkeypatch):
 
     called = []
     monkeypatch.setitem(
-        converter.JOB_HANDLERS, "convert", lambda job: called.append(job["video_id"])
+        converter.JOB_HANDLERS, "convert",
+        lambda job, on_progress: called.append(job["video_id"]),
     )
     tmp_db.enqueue_job("convert", video_id=42)
 
@@ -31,7 +32,7 @@ def test_convert_job_success_marks_job_done(tmp_db, monkeypatch):
 def test_handler_raising_marks_job_failed_with_the_message(tmp_db, monkeypatch):
     import converter
 
-    def boom(job):
+    def boom(job, on_progress):
         raise RuntimeError("ffmpeg exploded")
 
     monkeypatch.setitem(converter.JOB_HANDLERS, "convert", boom)
@@ -65,10 +66,10 @@ def test_convert_failure_resets_video_and_marks_job_failed(tmp_db, monkeypatch, 
         ],
     })
 
-    def fail_convert(cmd):
+    def fail_convert(cmd, *, duration=None, on_progress=None):
         raise RuntimeError("convert exploded")
 
-    monkeypatch.setattr(library, "_run_ffmpeg", fail_convert)
+    monkeypatch.setattr(library.ffmpeg_progress, "run_ffmpeg", fail_convert)
     version_id = tmp_db.get_video_versions(video_id)[0]["id"]
     tmp_db.enqueue_job("convert", video_id=video_id, version_id=version_id)
 
@@ -80,6 +81,41 @@ def test_convert_failure_resets_video_and_marks_job_failed(tmp_db, monkeypatch, 
     assert video["error_msg"] == "convert exploded"
     assert job["status"] == "failed"
     assert job["error_msg"] == "convert exploded"
+
+
+def test_run_job_writes_progress_to_the_job_row(tmp_db, monkeypatch):
+    import converter
+
+    job_id = tmp_db.enqueue_job("convert", video_id=1, version_id=1)
+    job = tmp_db.claim_job()
+
+    def fake_convert(video_id, version_id, *, raise_errors=False, on_progress=None):
+        on_progress(0.75)
+
+    monkeypatch.setattr(converter.library, "convert_library_video", fake_convert)
+
+    converter.run_job(job)
+
+    assert tmp_db.get_job(job_id)["progress"] == 0.75
+
+
+def test_run_job_still_marks_failures(tmp_db, monkeypatch):
+    """Regression guard: adding the callback must not swallow handler exceptions."""
+    import converter
+
+    job_id = tmp_db.enqueue_job("convert", video_id=1, version_id=1)
+    job = tmp_db.claim_job()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(converter.library, "convert_library_video", boom)
+
+    converter.run_job(job)
+
+    row = tmp_db.get_job(job_id)
+    assert row["status"] == "failed"
+    assert "nope" in row["error_msg"]
 
 
 def test_hls_failure_resets_video_and_marks_job_failed(tmp_db, monkeypatch, tmp_path):
@@ -110,7 +146,8 @@ def test_handler_result_is_stored_on_the_job(tmp_db, monkeypatch):
     import converter
 
     monkeypatch.setitem(
-        converter.JOB_HANDLERS, "normalize", lambda job: {"output_path": "/tmp/out.mp4"}
+        converter.JOB_HANDLERS, "normalize",
+        lambda job, on_progress: {"output_path": "/tmp/out.mp4"},
     )
     tmp_db.enqueue_job("normalize", video_id=7)
 
@@ -134,7 +171,7 @@ def test_unknown_kind_fails_the_job_instead_of_crashing_the_runner(tmp_db):
 def test_worker_loop_drains_the_queue_then_idles(tmp_db, monkeypatch):
     import converter
 
-    monkeypatch.setitem(converter.JOB_HANDLERS, "convert", lambda job: None)
+    monkeypatch.setitem(converter.JOB_HANDLERS, "convert", lambda job, on_progress: None)
     for video_id in range(1, 4):
         tmp_db.enqueue_job("convert", video_id=video_id)
 
@@ -163,7 +200,7 @@ def test_cap_holds_under_a_burst(tmp_db, monkeypatch):
     peak = 0
     guard = threading.Lock()
 
-    def handler(job):
+    def handler(job, on_progress):
         nonlocal concurrent, peak
         with guard:
             concurrent += 1
@@ -258,11 +295,11 @@ def test_convert_job_uses_persisted_version_after_selection_changes(
         ],
     })
 
-    def write_output(cmd):
+    def write_output(cmd, *, duration=None, on_progress=None):
         tmp_path = Path(cmd[-1])
         tmp_path.write_bytes(b"converted")
 
-    monkeypatch.setattr(library, "_run_ffmpeg", write_output)
+    monkeypatch.setattr(library.ffmpeg_progress, "run_ffmpeg", write_output)
     tmp_db.enqueue_job("convert", video_id=video_id, version_id=first["id"])
 
     converter.run_job(tmp_db.claim_job())

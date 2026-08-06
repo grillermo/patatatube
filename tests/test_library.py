@@ -250,11 +250,11 @@ def test_convert_runs_ffmpeg_and_records_sibling(fresh_db, tmp_path, monkeypatch
     monkeypatch.setattr(library, "probe_source", lambda p: probe())
     calls = []
 
-    def fake_run(cmd):
+    def fake_run(cmd, *, duration=None, on_progress=None):
         calls.append(cmd)
         Path(cmd[-1]).write_bytes(b"converted")  # ffmpeg output file
 
-    monkeypatch.setattr(library, "_run_ffmpeg", fake_run)
+    monkeypatch.setattr(library.ffmpeg_progress, "run_ffmpeg", fake_run)
     library.convert_library_video(vid)
     row = db.get_video(vid)
     assert row["status"] == "done"
@@ -263,6 +263,32 @@ def test_convert_runs_ffmpeg_and_records_sibling(fresh_db, tmp_path, monkeypatch
     cmd = calls[0]
     assert "-c:v" in cmd and "copy" in cmd and "+faststart" in cmd
     assert cmd[-1].startswith(str(tmp_path / "."))  # hidden temp file, atomic replace
+
+
+def test_convert_library_video_reports_progress(fresh_db, tmp_path, monkeypatch):
+    vid, src = lib_row(tmp_path)
+
+    def fake_probe(p):
+        pr = probe()
+        pr["format"]["duration"] = "42.0"
+        return pr
+
+    monkeypatch.setattr(library, "probe_source", fake_probe)
+
+    seen = []
+    captured = {}
+
+    def fake_run_ffmpeg(cmd, *, duration=None, on_progress=None):
+        captured["duration"] = duration
+        Path(cmd[-1]).write_bytes(b"converted")
+        if on_progress:
+            on_progress(0.5)
+
+    monkeypatch.setattr(library.ffmpeg_progress, "run_ffmpeg", fake_run_ffmpeg)
+    library.convert_library_video(vid, on_progress=seen.append)
+
+    assert seen == [0.5]
+    assert captured["duration"] > 0
 
 
 def test_reconversion_replaces_the_tracked_output(fresh_db, tmp_path, monkeypatch):
@@ -275,10 +301,10 @@ def test_reconversion_replaces_the_tracked_output(fresh_db, tmp_path, monkeypatc
     version = db.get_video_versions(vid)[0]
     db.set_library_state(vid, "done", converted_path=str(output), version_id=version["id"])
 
-    def fake_run(cmd):
+    def fake_run(cmd, *, duration=None, on_progress=None):
         Path(cmd[-1]).write_bytes(b"replacement")
 
-    monkeypatch.setattr(library, "_run_ffmpeg", fake_run)
+    monkeypatch.setattr(library.ffmpeg_progress, "run_ffmpeg", fake_run)
     library.convert_library_video(vid)
 
     assert output.read_bytes() == b"replacement"
@@ -293,11 +319,11 @@ def test_convert_maps_allowlisted_tracks_and_records_langs(fresh_db, tmp_path, m
     monkeypatch.setattr(library, "probe_source", lambda p: multi_probe())
     calls = []
 
-    def fake_run(cmd):
+    def fake_run(cmd, *, duration=None, on_progress=None):
         calls.append(cmd)
         Path(cmd[-1]).write_bytes(b"converted")
 
-    monkeypatch.setattr(library, "_run_ffmpeg", fake_run)
+    monkeypatch.setattr(library.ffmpeg_progress, "run_ffmpeg", fake_run)
     invalidated = []
     import hls
     monkeypatch.setattr(hls, "invalidate", invalidated.append)
@@ -328,10 +354,10 @@ def test_convert_failure_returns_to_unconverted(fresh_db, tmp_path, monkeypatch)
     vid, src = lib_row(tmp_path)
     monkeypatch.setattr(library, "probe_source", lambda p: probe())
 
-    def boom(cmd):
+    def boom(cmd, *, duration=None, on_progress=None):
         raise RuntimeError("ffmpeg exploded")
 
-    monkeypatch.setattr(library, "_run_ffmpeg", boom)
+    monkeypatch.setattr(library.ffmpeg_progress, "run_ffmpeg", boom)
     library.convert_library_video(vid)
     row = db.get_video(vid)
     assert row["status"] == "unconverted"
