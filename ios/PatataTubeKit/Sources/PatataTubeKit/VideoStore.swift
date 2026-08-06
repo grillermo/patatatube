@@ -380,6 +380,22 @@ public final class VideoStore: ObservableObject {
         }
     }
 
+    /// Optimistically records the chosen subtitle language. Unlike audio, this
+    /// never triggers a server-side reconversion (every subtitle language is
+    /// already packaged into HLS), so there is no need to reload after.
+    public func chooseSubtitle(id: Int, lang: String?) async {
+        guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
+        let previous = videos[index]
+        videos[index] = videos[index].withSubtitleLang(lang)
+        do {
+            let ok = try await api.chooseSubtitle(id: id, lang: lang)
+            if !ok { videos[index] = previous }
+        } catch {
+            videos[index] = previous
+            report(error)
+        }
+    }
+
     /// Deletes on the server, then refreshes the list (and cache) from the API.
     public func delete(id: Int) async {
         do {
