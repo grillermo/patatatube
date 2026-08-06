@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.6.6",
+          "buildVersion": "139",
+          "date": "2026-08-06T02:47:48Z",
+          "localizedDescription": "The cover picker preselects the current emoji\n\n• Opening Choose cover highlights the emoji already set, so the next one you tap replaces it instead of piling on",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.6/PatataTube-1.6.6.ipa",
+          "size": 4158790,
+          "sha256": "efe3a6b87ad0161ad01f0f53f1468125fd07cfb54641706272e2f36b92768f3d",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.6.5",
           "buildVersion": "138",
           "date": "2026-08-06T02:29:26Z",
@@ -1304,11 +1314,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.6.5",
-      "versionDate": "2026-08-06T02:29:26Z",
-      "versionDescription": "The cover picker opens on the emoji keyboard\n\n• Choosing a group cover comes up on the emoji keyboard instead of the letter keyboard\n• Renaming a group is back to the normal keyboard",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.5/PatataTube-1.6.5.ipa",
-      "size": 4158743
+      "version": "1.6.6",
+      "versionDate": "2026-08-06T02:47:48Z",
+      "versionDescription": "The cover picker preselects the current emoji\n\n• Opening Choose cover highlights the emoji already set, so the next one you tap replaces it instead of piling on",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.6/PatataTube-1.6.6.ipa",
+      "size": 4158790
     }
   ],
   "news": []
