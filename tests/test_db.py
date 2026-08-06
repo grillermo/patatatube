@@ -427,6 +427,19 @@ def test_changing_version_clears_audio_lang_missing_from_new_version(fresh_db):
     assert db.get_video(video_id)["audio_lang"] is None
 
 
+def test_changing_version_clears_subtitle_lang_missing_from_new_version(fresh_db):
+    import db
+
+    video_id, _ = db.upsert_library_video(_versioned_movie_item())
+    versions = db.get_video_versions(video_id)
+    db.set_version_subtitle_langs(versions[0]["id"], '[{"language": "eng", "name": "English"}]')
+    db.set_version_subtitle_langs(versions[1]["id"], '[{"language": "spa", "name": "Spanish"}]')
+    db.set_subtitle_lang(video_id, "eng")
+
+    assert db.set_chosen_version(video_id, versions[1]["id"])
+    assert db.get_video(video_id)["subtitle_lang"] is None
+
+
 def test_upsert_library_video_syncs_versions_by_rating_key(fresh_db):
     import db
 
@@ -518,3 +531,30 @@ def test_set_library_state_error_clears_converted_langs(fresh_db, tmp_path):
     db.set_library_state(vid, "unconverted", error_msg="boom", version_id=version["id"])
     version = db.get_video_versions(vid)[0]
     assert version["converted_langs"] is None
+
+
+def test_subtitle_lang_roundtrip(fresh_db, tmp_path):
+    import db
+
+    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
+    assert db.get_video(vid)["subtitle_lang"] is None
+    db.set_subtitle_lang(vid, "es")
+    assert db.get_video(vid)["subtitle_lang"] == "es"
+    db.set_subtitle_lang(vid, "")
+    assert db.get_video(vid)["subtitle_lang"] == ""
+
+
+def test_version_subtitle_langs_roundtrip(fresh_db, tmp_path):
+    import db
+
+    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
+    version = db.get_video_versions(vid)[0]
+    assert version["subtitle_langs"] is None
+    db.set_version_subtitle_langs(
+        version["id"],
+        '[{"language": "en", "name": "English", "default": true, "forced": false}]',
+    )
+    version = db.get_video_versions(vid)[0]
+    assert version["subtitle_langs"] == (
+        '[{"language": "en", "name": "English", "default": true, "forced": false}]'
+    )

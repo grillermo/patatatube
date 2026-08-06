@@ -77,6 +77,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let subtitleTracks: [SubtitleTrack]
     public let sourceFilename: String?
     public let audioLang: String?
+    public let subtitleLang: String?
     public let resumeSecs: Double
 
     enum CodingKeys: String, CodingKey {
@@ -86,6 +87,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         case showPreviewUrl, chosenVersionId, versions, hlsPath, subtitleTracks
         case sourceFilename
         case audioLang
+        case subtitleLang
         case resumeSecs
     }
 
@@ -107,6 +109,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
             chosenVersionId: Int? = nil, versions: [VideoVersion] = [],
             hlsPath: String? = nil, subtitleTracks: [SubtitleTrack] = [],
             sourceFilename: String? = nil, audioLang: String? = nil,
+            subtitleLang: String? = nil,
             resumeSecs: Double = 0) {
         self.id = id; self.url = url; self.title = title; self.platform = platform
         self.sourceKey = sourceKey; self.previewUrl = previewUrl
@@ -118,6 +121,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.hlsPath = hlsPath; self.subtitleTracks = subtitleTracks
         self.sourceFilename = sourceFilename
         self.audioLang = audioLang
+        self.subtitleLang = subtitleLang
         self.resumeSecs = resumeSecs
     }
 
@@ -150,6 +154,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.subtitleTracks = try c.decodeIfPresent([SubtitleTrack].self, forKey: .subtitleTracks) ?? []
         self.sourceFilename = try c.decodeIfPresent(String.self, forKey: .sourceFilename)
         self.audioLang = try c.decodeIfPresent(String.self, forKey: .audioLang)
+        self.subtitleLang = try c.decodeIfPresent(String.self, forKey: .subtitleLang)
         self.resumeSecs = try c.decodeIfPresent(Double.self, forKey: .resumeSecs) ?? 0
     }
 
@@ -170,7 +175,8 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
                                isChosen: $0.id == versionId, audioTracks: $0.audioTracks)
               },
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-              sourceFilename: sourceFilename, audioLang: audioLang, resumeSecs: resumeSecs)
+              sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
+              resumeSecs: resumeSecs)
     }
 
     func withGroupID(_ groupID: Int?) -> Video {
@@ -181,7 +187,8 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-              sourceFilename: sourceFilename, audioLang: audioLang, resumeSecs: resumeSecs)
+              sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
+              resumeSecs: resumeSecs)
     }
 
     func withAudioLang(_ lang: String) -> Video {
@@ -192,6 +199,39 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-              sourceFilename: sourceFilename, audioLang: lang, resumeSecs: resumeSecs)
+              sourceFilename: sourceFilename, audioLang: lang, subtitleLang: subtitleLang,
+              resumeSecs: resumeSecs)
+    }
+
+    func withSubtitleLang(_ lang: String?) -> Video {
+        return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
+              previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: position,
+              status: status, errorMsg: errorMsg, streamPath: streamPath,
+              source: source, showTitle: showTitle, season: season,
+              episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
+              chosenVersionId: chosenVersionId, versions: versions,
+              hlsPath: hlsPath, subtitleTracks: subtitleTracks,
+              sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: lang,
+              resumeSecs: resumeSecs)
+    }
+
+    /// The subtitle language to force on the player, or `nil` to force nothing.
+    /// Only an explicit stored choice counts (`""` means explicitly off). A
+    /// video the user has never touched deliberately resolves to `nil`: the HLS
+    /// multivariant playlist already carries DEFAULT=YES/AUTOSELECT=YES for the
+    /// server's default track (see hls._master_playlist), so AVKit's own
+    /// auto-select honours the viewer's system captions preference. Forcing a
+    /// selection here would override it. See `defaultSubtitleLang` for the
+    /// display-side resolution the pickers use.
+    public var effectiveSubtitleLang: String? {
+        guard let subtitleLang, !subtitleLang.isEmpty else { return nil }
+        return subtitleLang
+    }
+
+    /// Whichever track the server flagged `default`, for showing a sensible
+    /// pre-selection in a picker. Never fed to the player — see
+    /// `effectiveSubtitleLang`.
+    public var defaultSubtitleLang: String? {
+        subtitleTracks.first(where: { $0.default })?.language
     }
 }

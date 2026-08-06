@@ -266,6 +266,44 @@ struct EpisodesView: View {
         )
     }
 
+    /// Per-episode subtitle control, compact enough for the row alongside the
+    /// download button. Mirrors `MovieDetailView`'s Subtitles picker binding
+    /// exactly, scoped to this row's `episode` instead of `currentVideo`.
+    /// Renders nothing when the episode has no sidecar tracks.
+    @ViewBuilder
+    private func subtitleMenu(for episode: Video) -> some View {
+        let subtitleTracks = episode.subtitleTracks
+        if !subtitleTracks.isEmpty {
+            Picker(selection: Binding(
+                // Display-side resolution (gap #5): show the server's default
+                // track as selected while nothing is stored, without that
+                // ever reaching the player or the server.
+                get: {
+                    episode.effectiveSubtitleLang
+                        ?? (episode.subtitleLang == nil ? episode.defaultSubtitleLang ?? "" : "")
+                },
+                set: { lang in
+                    // Compare against the optional, not `?? ""`: with nothing
+                    // stored the displayed value is the default track, so
+                    // picking "Off" ("") is a real change that a `?? ""`
+                    // comparison would swallow.
+                    guard lang != episode.subtitleLang else { return }
+                    Task { await model.store.chooseSubtitle(id: episode.id, lang: lang) }
+                }
+            )) {
+                Text("Off").tag("")
+                ForEach(subtitleTracks, id: \.language) { t in
+                    Text(t.name).tag(t.language)
+                }
+            } label: {
+                Label("Subtitles", systemImage: "captions.bubble")
+            }
+            .labelStyle(.iconOnly)
+            .pickerStyle(.menu)
+            .accessibilityLabel("Subtitles")
+        }
+    }
+
     private func row(for episode: Video) -> some View {
         HStack(spacing: 12) {
             Button {
@@ -297,6 +335,8 @@ struct EpisodesView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Play episode")
+
+            subtitleMenu(for: episode)
 
             DownloadButton(
                 identity: DownloadButtonIdentity(

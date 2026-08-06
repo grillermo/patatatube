@@ -247,6 +247,7 @@ struct VideoPlayerView: View {
         playbackProbe.attach(item: item, player: player, video: video, source: source)
         playWhenReady(item: item, on: player)
         Task { await applyAudioSelection(item: item, lang: video.audioLang) }
+        Task { await applySubtitleSelection(item: item, lang: video.subtitleLang) }
         nowPlaying.onNext = { advance(by: 1) }
         nowPlaying.onPrevious = { handlePrevious() }
         nowPlaying.attach(player: player, title: title(of: video))
@@ -644,6 +645,7 @@ struct VideoPlayerView: View {
         bindPauseTransitions(player: player, item: item, videoID: videos[nextIndex].id)
         playbackProbe.attach(item: item, player: player, video: videos[nextIndex], source: source)
         Task { await applyAudioSelection(item: item, lang: videos[nextIndex].audioLang) }
+        Task { await applySubtitleSelection(item: item, lang: videos[nextIndex].subtitleLang) }
         bindPlayToEnd()
         playWhenReady(item: item, on: player)
         nowPlaying.updateTitle(title(of: video))
@@ -700,6 +702,33 @@ struct VideoPlayerView: View {
     private func applyAudioSelection(item: AVPlayerItem, lang: String?) async {
         guard let lang,
               let group = try? await item.asset.loadMediaSelectionGroup(for: .audible) else { return }
+        let target = normalizedLanguage(lang)
+        guard let option = group.options.first(where: { option in
+            guard let tag = option.extendedLanguageTag ?? option.locale?.identifier else { return false }
+            return normalizedLanguage(tag) == target
+        }) else { return }
+        item.select(option, in: group)
+    }
+
+    /// Applies the user's stored subtitle choice, if there is one.
+    ///
+    /// - `nil` (never chosen): does nothing at all, leaving AVKit's own
+    ///   auto-select to honour the playlist's DEFAULT=YES/AUTOSELECT=YES and
+    ///   the viewer's system captions preference.
+    /// - `""` (explicitly off): deselects the legible group, which is the only
+    ///   way to beat that same auto-select.
+    /// - a language tag: selects the matching option; no match leaves the
+    ///   selection untouched.
+    ///
+    /// Live in-player switching is handled by AVKit's own captions menu, not
+    /// this app.
+    private func applySubtitleSelection(item: AVPlayerItem, lang: String?) async {
+        guard let lang,
+              let group = try? await item.asset.loadMediaSelectionGroup(for: .legible) else { return }
+        if lang.isEmpty {
+            item.select(nil, in: group)
+            return
+        }
         let target = normalizedLanguage(lang)
         guard let option = group.options.first(where: { option in
             guard let tag = option.extendedLanguageTag ?? option.locale?.identifier else { return false }

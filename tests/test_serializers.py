@@ -1,3 +1,5 @@
+import json
+
 from views.serializers import serialize_video
 
 
@@ -101,15 +103,26 @@ def test_unready_row_omits_hls_path():
     assert "hls_path" not in data
 
 
-def test_injected_subtitle_tracks_are_passed_through():
-    row = {
-        "id": 8, "url": "/vol/tv/ep.mkv", "status": "done", "source": "library",
-        "converted_path": "/vol/tv/ep.mp4",
-        "subtitle_tracks": [{"language": "en", "name": "English", "default": True, "forced": False}],
-    }
-    data = serialize_video(row)
-    assert data["subtitle_tracks"][0]["language"] == "en"
-    assert data["hls_path"] == "/videos/8/hls/master.m3u8"
+def test_serialize_subtitle_tracks_from_chosen_version():
+    video = _library_video()
+    video["subtitle_lang"] = "en"
+    video["versions"][0]["subtitle_langs"] = json.dumps([
+        {"language": "en", "name": "English", "default": True, "forced": False},
+        {"language": "es", "name": "Spanish", "default": False, "forced": False},
+    ])
+    data = serialize_video(video)
+    assert data["subtitle_lang"] == "en"
+    assert data["subtitle_tracks"] == [
+        {"language": "en", "name": "English", "default": True, "forced": False},
+        {"language": "es", "name": "Spanish", "default": False, "forced": False},
+    ]
+
+
+def test_serialize_subtitle_tracks_unprobed():
+    video = _library_video()
+    data = serialize_video(video)
+    assert data["subtitle_tracks"] == []
+    assert data["subtitle_lang"] is None
 
 
 def test_serialize_video_emits_group_id_and_plex_kind():

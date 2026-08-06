@@ -79,6 +79,8 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     private(set) var chosenVersions: [(id: Int, versionId: Int)] = []
     var chooseAudioResult = true
     private(set) var chosenAudio: [(id: Int, lang: String)] = []
+    var chooseSubtitleResult = true
+    private(set) var chosenSubtitle: [(id: Int, lang: String?)] = []
     var prepareResult = "done"
     var videoResults: [Video] = []
     private(set) var videoCalls = 0
@@ -100,6 +102,11 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         if let mutationError { throw mutationError }
         chosenAudio.append((id, lang))
         return chooseAudioResult
+    }
+    func chooseSubtitle(id: Int, lang: String?) async throws -> Bool {
+        if let mutationError { throw mutationError }
+        chosenSubtitle.append((id, lang))
+        return chooseSubtitleResult
     }
     func savePosition(id: Int, secs: Double) async throws {
         if let mutationError { throw mutationError }
@@ -1085,6 +1092,32 @@ private actor StaleVideoFetch {
 
     #expect(store.videos[0].audioLang == nil)
     #expect(api.loadCount == 1)
+}
+
+@MainActor @Test func chooseSubtitleOptimisticallyUpdates() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.load()
+
+    await store.chooseSubtitle(id: 1, lang: "es")
+
+    #expect(api.chosenSubtitle.map(\.id) == [1])
+    #expect(api.chosenSubtitle.map(\.lang) == ["es"])
+    #expect(store.videos[0].subtitleLang == "es")
+    #expect(api.loadCount == 1)
+}
+
+@MainActor @Test func chooseSubtitleRevertsWhenServerReturnsNotOk() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1)]
+    api.chooseSubtitleResult = false
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.load()
+
+    await store.chooseSubtitle(id: 1, lang: "es")
+
+    #expect(store.videos[0].subtitleLang == nil)
 }
 
 private func tempCache() -> VideoListCache {

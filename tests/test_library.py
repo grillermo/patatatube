@@ -533,3 +533,57 @@ def test_scan_survives_probe_failure(fresh_db, tmp_path, monkeypatch):
     assert result["added"] == 1  # scan not aborted
     movie = db.get_all_videos(plex_kind="movies")[0]
     assert db.get_video_versions(movie["id"])[0]["audio_langs"] is None  # retried next scan
+
+
+def test_scan_probes_missing_subtitle_langs(fresh_db, tmp_path, monkeypatch):
+    import db
+    import plex
+
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    (tmp_path / "a.eng.srt").write_bytes(b"1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+    item = {"source_path": str(src), "title": "a", "plex_kind": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "a", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+    monkeypatch.setattr(library, "probe_source", lambda p: {"streams": [], "format": {}})
+
+    calls = []
+    real_discover = library.discover_subtitles
+
+    def counting_discover(path):
+        calls.append(str(path))
+        return real_discover(path)
+
+    monkeypatch.setattr(library, "discover_subtitles", counting_discover)
+
+    library.scan_library()
+    movie = db.get_all_videos(plex_kind="movies")[0]
+    version = db.get_video_versions(movie["id"])[0]
+    import json
+    tracks = json.loads(version["subtitle_langs"])
+    assert [t["language"] for t in tracks] == ["en"]
+    assert calls == [str(src)]
+
+    library.scan_library()  # second scan: already probed, no new discovery call
+    assert calls == [str(src)]
+
+
+def test_scan_survives_subtitle_probe_failure(fresh_db, tmp_path, monkeypatch):
+    import db
+    import plex
+
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    item = {"source_path": str(src), "title": "a", "plex_kind": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "a", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+    monkeypatch.setattr(library, "probe_source", lambda p: {"streams": [], "format": {}})
+
+    def boom(path):
+        raise RuntimeError("fs error")
+
+    monkeypatch.setattr(library, "discover_subtitles", boom)
+    result = library.scan_library()
+    assert result["added"] == 1  # scan not aborted

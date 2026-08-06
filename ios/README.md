@@ -136,7 +136,7 @@ On first launch grid is empty / errors — need server config:
 ### Stream cache / offline HLS
 
 - [ ] Stream an HLS video partway, then tap Download — server access log shows only the *unstreamed* segments being fetched.
-- [ ] Downloaded HLS video plays in airplane mode, with subtitle tracks available.
+- [ ] Downloaded HLS video plays in airplane mode, with subtitle tracks available. (This is the offline-HLS cache route specifically — see the caveat under "Subtitle picker" below for the separate local-MP4 download route, which has no subtitle support at all.)
 - [ ] Stream a Twitter/YouTube MP4 partway, then download — download completes and the file plays; progress starts ahead of 0% when part was streamed.
 - [ ] Scrub backwards in a video you've been streaming — replay is instant (no network stall).
 - [ ] Change a movie's audio language on the server, replay — new audio plays (stale segments not served).
@@ -207,6 +207,23 @@ On first launch grid is empty / errors — need server config:
       choice (tracks are embedded in the MP4).
 - [ ] While streaming (HLS), switching language repackages: next play carries
       the new language.
+
+### Subtitle picker (sidecar subtitles)
+- [ ] Open a movie with sidecar subs in MovieDetailView: a "Subtitles" picker
+      appears next to Version/Audio, listing "Off" plus one entry per track,
+      pre-selected to the server-flagged default without persisting a choice.
+- [ ] Episode rows in EpisodesView show the same picker as a compact
+      captions-bubble icon menu; episodes with no subtitle tracks show none.
+- [ ] Pick a track, then play: subtitles appear in the chosen language; pick
+      Off: captions are explicitly deselected instead of AVKit auto-selecting;
+      leave untouched: AVKit auto-selects per its own default/system prefs.
+- [ ] Background/foreground the app mid-playback: the subtitle selection and
+      resume position are both still correct on return.
+- [ ] Downloaded/offline playback via the local-MP4 cache route (`local_mp4`
+      in `VideoPlayerView`) has zero subtitle support — no `.legible` media
+      selection group at all on that route. This is an existing architectural
+      constraint, not a bug; only the offline-HLS cache route (see "Stream
+      cache / offline HLS" above) carries subtitles offline.
 
 ### Background audio
 - [ ] Play a video, lock the phone → audio continues; lock screen shows title, artwork, and controls
