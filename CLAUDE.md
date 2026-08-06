@@ -137,6 +137,17 @@ exits with its parent via `--watch-pid`. Queue depth is visible in
     [job] +1 kind=convert id=812 priority=100 queued=225
     [job] -1 kind=convert id=812 status=done secs=412
 
+`ffmpeg_progress.run_ffmpeg` is the only place that spawns ffmpeg's subprocess.
+It appends `-progress pipe:1 -nostats` when given a duration and a callback,
+and writes a 0..1 fraction to `jobs.progress` (throttled to ≥1% or ≥2s). stderr
+gets its own pipe drained on a thread — merging it into stdout would corrupt the
+progress stream, and not draining it deadlocks a verbose failure.
+
+`GET /api/jobs` exposes running jobs plus the next 20 queued (`convert` and
+`hls` only; `normalize` is excluded) with a `queued_total`. The iOS `JobsStore`
+polls it every 2s while any view is subscribed, and both the download button's
+determinate ring and the Downloads view's "Converting" section read from it.
+
 Only this process may run ffmpeg — that is the invariant that makes the startup
 orphan reset correct (nothing else can hold a `running` job) and the cap real.
 Adding a fourth ffmpeg call site means adding a job kind, not a BackgroundTask.
