@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.6.5",
+          "buildVersion": "138",
+          "date": "2026-08-06T02:29:26Z",
+          "localizedDescription": "The cover picker opens on the emoji keyboard\n\n• Choosing a group cover comes up on the emoji keyboard instead of the letter keyboard\n• Renaming a group is back to the normal keyboard",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.5/PatataTube-1.6.5.ipa",
+          "size": 4158743,
+          "sha256": "e7022c9e3c3506aa0bea9e053a5266c3e47b6e84c05119a96047edfe7a5c1a5a",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.6.4",
           "buildVersion": "137",
           "date": "2026-08-06T02:22:57Z",
@@ -1294,11 +1304,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.6.4",
-      "versionDate": "2026-08-06T02:22:57Z",
-      "versionDescription": "Renaming a group opens the emoji keyboard\n\n• The rename field now comes up on the emoji keyboard, so a cover emoji is one tap away",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.4/PatataTube-1.6.4.ipa",
-      "size": 4158258
+      "version": "1.6.5",
+      "versionDate": "2026-08-06T02:29:26Z",
+      "versionDescription": "The cover picker opens on the emoji keyboard\n\n• Choosing a group cover comes up on the emoji keyboard instead of the letter keyboard\n• Renaming a group is back to the normal keyboard",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.5/PatataTube-1.6.5.ipa",
+      "size": 4158743
     }
   ],
   "news": []
