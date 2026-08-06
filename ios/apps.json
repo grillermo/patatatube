@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.6.3",
+          "buildVersion": "136",
+          "date": "2026-08-06T01:12:50Z",
+          "localizedDescription": "Open Web shortcut lands on the web bridge\n\n• The Open Web home-screen shortcut no longer flashes back into last session's tab, list or player\n• That session restores when you tap the back button in the web bridge",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.3/PatataTube-1.6.3.ipa",
+          "size": 4154717,
+          "sha256": "d7837d637a571a6442e42e18ac4dbb88ea2da6e7e3491c84c73322e328685b43",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.6.2",
           "buildVersion": "135",
           "date": "2026-08-05T05:55:46Z",
@@ -1274,11 +1284,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "1.6.2",
-      "versionDate": "2026-08-05T05:55:46Z",
-      "versionDescription": "Download all knows when it's done\n\n• Download all in the grid menu greys out once every video on screen is already downloaded",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.2/PatataTube-1.6.2.ipa",
-      "size": 4151356
+      "version": "1.6.3",
+      "versionDate": "2026-08-06T01:12:50Z",
+      "versionDescription": "Open Web shortcut lands on the web bridge\n\n• The Open Web home-screen shortcut no longer flashes back into last session's tab, list or player\n• That session restores when you tap the back button in the web bridge",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v1.6.3/PatataTube-1.6.3.ipa",
+      "size": 4154717
     }
   ],
   "news": []
