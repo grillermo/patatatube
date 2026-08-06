@@ -208,6 +208,12 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs (status, priority, id);
             """
         )
+        job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        # Fraction 0..1 written by the converter process while ffmpeg runs. NULL
+        # until a job is claimed; SQLite is the only channel between converter.py
+        # and the web workers, which is why this lives on the row.
+        if "progress" not in job_columns:
+            _add_column(conn, "ALTER TABLE jobs ADD COLUMN progress REAL")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS groups (
@@ -1200,7 +1206,7 @@ def claim_job() -> dict | None:
         row = conn.execute(
             """
             UPDATE jobs
-            SET status = 'running', started_at = ?, attempts = attempts + 1
+            SET status = 'running', started_at = ?, attempts = attempts + 1, progress = 0
             WHERE id = (
                 SELECT id FROM jobs
                 WHERE status = 'queued' AND attempts < ?
@@ -1231,6 +1237,63 @@ def finish_job(
                 job_id,
             ),
         )
+
+
+# Kinds whose progress the iOS UI shows. 'normalize' is deliberately absent:
+# those rows render as "downloading" in the app, not as a convert spinner.
+PROGRESS_JOB_KINDS = ("convert", "hls")
+
+
+def set_job_progress(job_id: int, fraction: float) -> None:
+    """Record how far along a running job's ffmpeg is (0..1)."""
+    with _conn() as conn:
+        conn.execute("UPDATE jobs SET progress = ? WHERE id = ?", (fraction, job_id))
+
+
+def active_jobs(queued_limit: int = 20) -> dict:
+    """Running jobs, the next `queued_limit` queued ones, and the queued total.
+
+    The queued slice uses claim_job's ordering, so it is genuinely the next work
+    up. The cap exists because a bulk Download-all leaves 200+ rows queued and
+    this feeds a 2s poll.
+    """
+    placeholders = ",".join("?" for _ in PROGRESS_JOB_KINDS)
+    columns = """
+        job.id, job.kind, job.video_id, job.version_id, job.priority, job.progress,
+        video.title AS title, video.show_title AS show_title
+    """
+    with _conn() as conn:
+        running = conn.execute(
+            f"""
+            SELECT {columns} FROM jobs AS job
+            LEFT JOIN videos AS video ON video.id = job.video_id
+            WHERE job.status = 'running' AND job.kind IN ({placeholders})
+            ORDER BY job.id
+            """,
+            PROGRESS_JOB_KINDS,
+        ).fetchall()
+        queued = conn.execute(
+            f"""
+            SELECT {columns} FROM jobs AS job
+            LEFT JOIN videos AS video ON video.id = job.video_id
+            WHERE job.status = 'queued' AND job.attempts < ? AND job.kind IN ({placeholders})
+            ORDER BY job.priority, job.id
+            LIMIT ?
+            """,
+            (MAX_JOB_ATTEMPTS, *PROGRESS_JOB_KINDS, queued_limit),
+        ).fetchall()
+        total = conn.execute(
+            f"""
+            SELECT COUNT(*) FROM jobs
+            WHERE status = 'queued' AND attempts < ? AND kind IN ({placeholders})
+            """,
+            (MAX_JOB_ATTEMPTS, *PROGRESS_JOB_KINDS),
+        ).fetchone()[0]
+    return {
+        "running": [dict(row) for row in running],
+        "queued": [dict(row) for row in queued],
+        "queued_total": total,
+    }
 
 
 def requeue_job(job_id: int) -> None:

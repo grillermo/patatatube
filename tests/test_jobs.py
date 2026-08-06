@@ -241,3 +241,63 @@ def test_init_db_is_idempotent_with_the_jobs_table(tmp_db):
     tmp_db.enqueue_job("convert", video_id=1)
     tmp_db.init_db()
     assert tmp_db.queued_job_count() == 1
+
+
+def test_set_job_progress_stores_the_fraction(tmp_db):
+    job_id = tmp_db.enqueue_job("convert", video_id=1, version_id=2)
+    tmp_db.claim_job()
+    tmp_db.set_job_progress(job_id, 0.42)
+    assert tmp_db.get_job(job_id)["progress"] == 0.42
+
+
+def test_claim_job_resets_progress_to_zero(tmp_db):
+    job_id = tmp_db.enqueue_job("convert", video_id=1, version_id=2)
+    tmp_db.claim_job()
+    tmp_db.set_job_progress(job_id, 0.9)
+    tmp_db.requeue_job(job_id)
+    claimed = tmp_db.claim_job()
+    assert claimed["id"] == job_id
+    assert claimed["progress"] == 0
+
+
+def test_active_jobs_splits_running_from_queued(tmp_db):
+    running_id = tmp_db.enqueue_job("convert", video_id=1, version_id=1)
+    tmp_db.claim_job()
+    tmp_db.set_job_progress(running_id, 0.3)
+    tmp_db.enqueue_job("convert", video_id=2, version_id=2)
+
+    snapshot = tmp_db.active_jobs()
+    assert [job["id"] for job in snapshot["running"]] == [running_id]
+    assert snapshot["running"][0]["progress"] == 0.3
+    assert [job["video_id"] for job in snapshot["queued"]] == [2]
+    assert snapshot["queued"][0]["progress"] is None
+    assert snapshot["queued_total"] == 1
+
+
+def test_active_jobs_excludes_normalize(tmp_db):
+    tmp_db.enqueue_job("normalize", video_id=5, version_id=0)
+    snapshot = tmp_db.active_jobs()
+    assert snapshot["queued"] == []
+    assert snapshot["queued_total"] == 0
+
+
+def test_active_jobs_caps_queued_but_counts_all(tmp_db):
+    for video_id in range(1, 26):
+        tmp_db.enqueue_job("convert", video_id=video_id, version_id=video_id)
+    snapshot = tmp_db.active_jobs(queued_limit=20)
+    assert len(snapshot["queued"]) == 20
+    assert snapshot["queued_total"] == 25
+
+
+def test_active_jobs_orders_queued_by_priority_then_id(tmp_db):
+    tmp_db.enqueue_job("convert", video_id=1, version_id=1, priority=tmp_db.PRIORITY_BULK)
+    tmp_db.enqueue_job("convert", video_id=2, version_id=2, priority=tmp_db.PRIORITY_INTERACTIVE)
+    snapshot = tmp_db.active_jobs()
+    assert [job["video_id"] for job in snapshot["queued"]] == [2, 1]
+
+
+def test_active_jobs_carries_the_video_title(tmp_db):
+    video_id = tmp_db.add_video("https://example.com/a", platform="youtube", title="Blade Runner")
+    tmp_db.enqueue_job("convert", video_id=video_id, version_id=1)
+    snapshot = tmp_db.active_jobs()
+    assert snapshot["queued"][0]["title"] == "Blade Runner"
