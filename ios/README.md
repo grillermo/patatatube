@@ -208,6 +208,18 @@ On first launch grid is empty / errors — need server config:
 - [ ] While streaming (HLS), switching language repackages: next play carries
       the new language.
 
+### Subtitle picker (sidecar subtitles)
+- [ ] Open a movie with sidecar subs in MovieDetailView: a "Subtitles" picker
+      appears next to Version/Audio, listing "Off" plus one entry per track,
+      pre-selected to the server-flagged default without persisting a choice.
+- [ ] Episode rows in EpisodesView show the same picker as a compact
+      captions-bubble icon menu; episodes with no subtitle tracks show none.
+- [ ] Pick a track, then play: subtitles appear in the chosen language; pick
+      Off: captions are explicitly deselected instead of AVKit auto-selecting;
+      leave untouched: AVKit auto-selects per its own default/system prefs.
+- [ ] Background/foreground the app mid-playback: the subtitle selection and
+      resume position are both still correct on return.
+
 ### Background audio
 - [ ] Play a video, lock the phone → audio continues; lock screen shows title, artwork, and controls
 - [ ] Play/pause and scrub from the lock screen and Control Center
