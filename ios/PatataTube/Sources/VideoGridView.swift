@@ -587,32 +587,20 @@ struct VideoGridView: View {
     }
 
     private var optionsMenu: some View {
-        Menu {
-            Button {
-                showUpload = true
-            } label: { Label("New video", systemImage: "plus") }
-
-            Toggle(isOn: model.autoplayBinding(for: store.feed)) {
-                Label("Autoplay", systemImage: "play.circle")
-            }
-
-            Toggle(isOn: model.randomizeBinding(for: store.feed)) {
-                Label("Randomize", systemImage: "shuffle")
-            }
-
-            Divider()
-
-            Button {
-                presentDownloadAll()
-            } label: { Label("Download all", systemImage: "arrow.down.circle") }
-            .disabled(downloadingAll || !showsVideoGrid || !hasDownloadableVideos)
-
-            Button {
-                path.append(.downloads)
-            } label: {
-                Label("Downloads", systemImage: "arrow.down.circle")
-            }
-
+        ListOptionsMenu(
+            scope: .feed(store.feed),
+            actions: OptionsMenuActions(
+                newVideo: { showUpload = true },
+                downloads: { path.append(.downloads) },
+                settings: { showSettings = true }
+            ),
+            downloadAll: DownloadAllOption(
+                isEnabled: !downloadingAll && showsVideoGrid && hasDownloadableVideos,
+                action: { presentDownloadAll() }
+            )
+        ) {
+            // Only the grid has cells to resize, so the steps stay here rather
+            // than in the shared menu.
             let smallerStep = GridDisplayMode.smaller(from: model.cellSize(for: store.feed))
             Button {
                 if let smallerStep { model.setCellSize(smallerStep.target, for: store.feed) }
@@ -632,14 +620,6 @@ struct VideoGridView: View {
             }
             .disabled(biggerStep == nil)
             .menuActionDismissBehavior(.disabled)
-
-            Divider()
-
-            Button {
-                showSettings = true
-            } label: { Label("Settings", systemImage: "gear") }
-        } label: {
-            Image(systemName: "ellipsis.circle")
         }
     }
 
@@ -687,7 +667,8 @@ struct VideoGridView: View {
             if let video = store.videos.first(where: { $0.id == id }) {
                 MovieDetailView(video: video,
                                 onPlay: { play($0, caller: "movie-detail") },
-                                onDownload: { await download($0) })
+                                onDownload: { await download($0) },
+                                showDownloads: { path.append(.downloads) })
             }
         case .downloads:
             DownloadsView(

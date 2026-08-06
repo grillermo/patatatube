@@ -10,12 +10,17 @@ struct MovieDetailView: View {
     let onPlay: (Video) -> Void
     /// Returns true only when the MP4 actually cached, so we don't paint a false checkmark.
     let onDownload: (Video) async -> Bool
+    /// Pushing Downloads belongs to the stack's owner — this view declares
+    /// no destinations of its own.
+    var showDownloads: () -> Void = {}
 
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
 
     /// Forces the shared button to reread cache state after an explicit delete.
     @State private var downloadRefreshToken = 0
+    @State private var showSettings = false
+    @State private var showUpload = false
 
     /// The pushed Video is a value snapshot; prefer the live store row so a
     /// version change made from this page is reflected immediately.
@@ -165,20 +170,34 @@ struct MovieDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button(role: .destructive) {
-                        model.cache.removeAllCached(id: currentVideo.id)
-                        // Flip the download button back to the arrow now,
-                        // instead of waiting for the 500ms cache poll.
-                        withAnimation { downloadRefreshToken &+= 1 }
-                    } label: {
-                        Label("Delete cached", systemImage: "trash")
-                    }
-                    .disabled(!model.cache.hasAnyCached(id: currentVideo.id))
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
+                optionsMenu
             }
+        }
+        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showUpload) { UploadView() }
+    }
+
+    /// The shared single-resource menu. Autoplay and randomize stay keyed by
+    /// `store.feed`, the same scope the player gets when this page starts
+    /// playback; Delete cached is this page's own extra.
+    private var optionsMenu: some View {
+        SingleOptionsMenu(
+            scope: .feed(store.feed),
+            actions: OptionsMenuActions(
+                newVideo: { showUpload = true },
+                downloads: { showDownloads() },
+                settings: { showSettings = true }
+            )
+        ) {
+            Button(role: .destructive) {
+                model.cache.removeAllCached(id: currentVideo.id)
+                // Flip the download button back to the arrow now,
+                // instead of waiting for the 500ms cache poll.
+                withAnimation { downloadRefreshToken &+= 1 }
+            } label: {
+                Label("Delete cached", systemImage: "trash")
+            }
+            .disabled(!model.cache.hasAnyCached(id: currentVideo.id))
         }
     }
 

@@ -135,48 +135,25 @@ struct EpisodesView: View {
         }
     }
 
-    /// The grid's menu, minus what a season list has no use for: there are no
-    /// grid cells to resize here. Every setting is keyed by `scope`, so
-    /// autoplay and randomize answer for this show alone, and Download all
-    /// only ever sees `show.episodes`.
+    /// The shared list menu, with no extras: there are no grid cells to resize
+    /// here. Every setting is keyed by `scope`, so autoplay and randomize
+    /// answer for this show alone, and Download all only ever sees
+    /// `show.episodes`.
     private var optionsMenu: some View {
-        Menu {
-            Button {
-                showUpload = true
-            } label: { Label("New video", systemImage: "plus") }
-
-            Toggle(isOn: model.autoplayBinding(for: scope)) {
-                Label("Autoplay", systemImage: "play.circle")
-            }
-
-            Toggle(isOn: model.randomizeBinding(for: scope)) {
-                Label("Randomize", systemImage: "shuffle")
-            }
-
-            Divider()
-
-            Button {
-                presentDownloadAll()
-            } label: { Label("Download all", systemImage: "arrow.down.circle") }
-            .disabled(downloadState.isDownloading || !downloadState.canDownloadAll)
-            .accessibilityLabel("Download all episodes")
-
-            Button {
-                showDownloads()
-            } label: { Label("Downloads", systemImage: "arrow.down.circle") }
-
-            Divider()
-
-            Button {
-                showSettings = true
-            } label: { Label("Settings", systemImage: "gear") }
-        } label: {
-            if downloadState.isDownloading {
-                ProgressView()
-            } else {
-                Image(systemName: "ellipsis.circle")
-            }
-        }
+        ListOptionsMenu(
+            scope: .named(scope),
+            actions: OptionsMenuActions(
+                newVideo: { showUpload = true },
+                downloads: { showDownloads() },
+                settings: { showSettings = true }
+            ),
+            downloadAll: DownloadAllOption(
+                isEnabled: !downloadState.isDownloading && downloadState.canDownloadAll,
+                accessibilityLabel: "Download all episodes",
+                action: { presentDownloadAll() }
+            ),
+            isBusy: downloadState.isDownloading
+        )
     }
 
     private func scheduleAnchorSave() {
