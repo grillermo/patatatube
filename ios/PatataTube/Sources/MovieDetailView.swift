@@ -13,6 +13,8 @@ struct MovieDetailView: View {
     /// Pushing Downloads belongs to the stack's owner — this view declares
     /// no destinations of its own.
     var showDownloads: () -> Void = {}
+    /// Only used to label the Group row in the Info sheet; Plex rows have none.
+    var groups: [VideoGroup] = []
 
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
@@ -21,6 +23,7 @@ struct MovieDetailView: View {
     @State private var downloadRefreshToken = 0
     @State private var showSettings = false
     @State private var showUpload = false
+    @State private var showingInfo = false
 
     /// The pushed Video is a value snapshot; prefer the live store row so a
     /// version change made from this page is reflected immediately.
@@ -175,6 +178,18 @@ struct MovieDetailView: View {
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showUpload) { UploadView() }
+        .sheet(isPresented: $showingInfo) {
+            VideoInfoView(
+                video: currentVideo,
+                groups: groups,
+                cacheState: model.cache.state(for: currentVideo.id,
+                                              versionId: currentVideo.chosenVersionId),
+                cachedPreviewURL: model.cache.cachedPreviewURL(for: currentVideo.id,
+                                                              path: currentVideo.previewUrl),
+                localFileURL: model.cache.localURL(for: currentVideo.id,
+                                                   versionId: currentVideo.chosenVersionId)
+            )
+        }
     }
 
     /// The shared single-resource menu. Autoplay and randomize stay keyed by
@@ -189,6 +204,8 @@ struct MovieDetailView: View {
                 settings: { showSettings = true }
             )
         ) {
+            Button("Info", systemImage: "info.circle") { showingInfo = true }
+
             Button(role: .destructive) {
                 model.cache.removeAllCached(id: currentVideo.id)
                 // Flip the download button back to the arrow now,

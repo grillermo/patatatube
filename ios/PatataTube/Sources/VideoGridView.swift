@@ -668,7 +668,8 @@ struct VideoGridView: View {
                 MovieDetailView(video: video,
                                 onPlay: { play($0, caller: "movie-detail") },
                                 onDownload: { await download($0) },
-                                showDownloads: { path.append(.downloads) })
+                                showDownloads: { path.append(.downloads) },
+                                groups: groups.groups)
             }
         case .downloads:
             DownloadsView(
