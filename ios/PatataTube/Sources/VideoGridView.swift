@@ -963,8 +963,21 @@ struct VideoGridView: View {
         let preview = resolveImageURL(target.previewUrl)
         let posterKey = target.showPreviewUrl
         let poster = resolveImageURL(posterKey)
+        let master = model.hlsURL(for: target)
+        let takesHLS = master != nil && target.hlsPath?.isEmpty == false
+        // The ring reads `cache.state`, so recording it next to the branch is what
+        // ties a frozen percentage to either a live transfer or a stale inFlight
+        // entry left behind by an earlier attempt.
+        DevLog.event(.download, "download branch", [
+            "video_id": "\(target.id)",
+            "branch": takesHLS ? "hls" : "mp4",
+            "status": target.status,
+            "hls_path": target.hlsPath ?? "-",
+            "bulk": "\(bulk)",
+            "state": DevLog.describe(model.cache.state(for: target.id, versionId: target.chosenVersionId)),
+        ])
         do {
-            if let master = model.hlsURL(for: target), target.hlsPath?.isEmpty == false {
+            if let master, takesHLS {
                 try await model.cache.downloadHLS(
                     id: target.id, versionId: target.chosenVersionId,
                     masterURL: master,

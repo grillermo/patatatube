@@ -394,6 +394,9 @@ def test_exhausted_convert_orphan_resets_its_version(tmp_db, monkeypatch, tmp_pa
     monkeypatch.setattr(tmp_db, "MAX_JOB_ATTEMPTS", 1)
     tmp_db.enqueue_job("convert", video_id=video_id, version_id=exhausted["id"])
     tmp_db.claim_job()
+    # `first` needs pending work of its own to stay 'converting': a version at
+    # that status with no queued/running job is debris the reconciler frees.
+    tmp_db.enqueue_job("convert", video_id=video_id, version_id=first["id"])
 
     converter.recover_orphans()
 
@@ -438,6 +441,50 @@ def test_recover_orphans_repairs_exhausted_version_after_interrupted_recovery(
     recovered = tmp_db.get_video_version(video_id, version["id"])
     assert recovered["status"] == "unconverted"
     assert recovered["error_msg"] == "gave up after 1 attempts"
+
+
+def test_recover_orphans_frees_a_version_stranded_without_any_job(
+    tmp_db, tmp_path
+):
+    """Crash between /prepare's 'converting' write and its enqueue."""
+    import converter
+
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(tmp_path / "movie.mkv"),
+        "title": "Movie",
+        "plex_kind": "movies",
+        "summary": None,
+        "plex_rating_key": "1",
+    })
+    version = tmp_db.get_video_versions(video_id)[0]
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
+
+    converter.recover_orphans()
+
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "unconverted"
+    assert tmp_db.get_video(video_id)["status"] == "unconverted"
+
+
+def test_recover_orphans_keeps_a_requeued_orphan_job_converting(tmp_db, tmp_path):
+    """A crashed *running* job is requeued, so its version is live work, not debris."""
+    import converter
+
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(tmp_path / "movie.mkv"),
+        "title": "Movie",
+        "plex_kind": "movies",
+        "summary": None,
+        "plex_rating_key": "1",
+    })
+    version = tmp_db.get_video_versions(video_id)[0]
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
+    job_id = tmp_db.enqueue_job("convert", video_id=video_id, version_id=version["id"])
+    tmp_db.claim_job()
+
+    converter.recover_orphans()
+
+    assert tmp_db.get_job(job_id)["status"] == "queued"
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
 
 
 def test_legacy_exhausted_job_does_not_override_newer_explicit_version_work(

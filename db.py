@@ -1414,6 +1414,51 @@ def recover_exhausted_convert_versions() -> int:
     return recovered
 
 
+def recover_jobless_converting_versions() -> int:
+    """Free versions stuck at 'converting' with no pending convert job behind them.
+
+    `/prepare` writes 'converting' before it enqueues, and short-circuits on
+    that status, so a process that dies between the two lines strands the
+    version forever: `recover_exhausted_convert_versions` can't see it (it
+    joins jobs, and there is no job row), and the orphan reset only touches
+    the jobs table. 226 versions sat this way after the 2026-07-31 incident.
+
+    Only safe to call before the workers start, while nothing can be mid-claim.
+    """
+    recovered = 0
+    with _write_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT video_id, id FROM video_versions
+            WHERE status = 'converting'
+              AND NOT EXISTS (
+                  SELECT 1 FROM jobs
+                  WHERE jobs.kind = 'convert'
+                    AND jobs.video_id = video_versions.video_id
+                    AND jobs.version_id = video_versions.id
+                    AND jobs.status IN ('queued', 'running')
+              )
+            ORDER BY video_id, id
+            """
+        ).fetchall()
+        for row in rows:
+            cursor = conn.execute(
+                """
+                UPDATE video_versions
+                SET status = 'unconverted',
+                    converted_path = NULL,
+                    converted_langs = NULL,
+                    error_msg = ?
+                WHERE video_id = ? AND id = ? AND status = 'converting'
+                """,
+                ("interrupted before conversion started", row["video_id"], row["id"]),
+            )
+            if cursor.rowcount:
+                _sync_video_from_chosen(conn, row["video_id"])
+                recovered += 1
+    return recovered
+
+
 def queued_job_count() -> int:
     with _conn() as conn:
         return conn.execute("SELECT COUNT(*) FROM jobs WHERE status = 'queued'").fetchone()[0]

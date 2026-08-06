@@ -441,13 +441,32 @@ public final class VideoStore: ObservableObject {
     /// is streamable. Throws PrepareError when the server reports a failed conversion.
     public func ensureReady(id: Int, bulk: Bool = false, pollIntervalSeconds: Double = 2.0) async throws -> Video {
         let status = try await api.prepare(id: id, bulk: bulk)
+        DevLog.event(.net, "ensureReady prepare returned", [
+            "video_id": "\(id)", "status": status, "bulk": "\(bulk)",
+        ])
         if status == "done" {
             return try await api.video(id: id)
         }
+        var polls = 0
         while true {
             let video = try await api.video(id: id)
-            if video.status == "done" { return video }
+            polls += 1
+            // Every poll, not just the exit: 108 of these ran past a server-side
+            // 'done' once, and only the per-poll status shows whether the client
+            // saw a stale value or ignored a fresh one.
+            DevLog.event(.net, "ensureReady poll", [
+                "video_id": "\(id)", "poll": "\(polls)", "status": video.status,
+                "error_msg": video.errorMsg ?? "-",
+                "chosen_version_id": video.chosenVersionId.map(String.init) ?? "-",
+            ])
+            if video.status == "done" {
+                DevLog.event(.net, "ensureReady done", ["video_id": "\(id)", "polls": "\(polls)"])
+                return video
+            }
             if let message = video.errorMsg, !message.isEmpty {
+                DevLog.event(.error, "ensureReady conversion failed", [
+                    "video_id": "\(id)", "polls": "\(polls)", "error_msg": message,
+                ])
                 throw PrepareError.conversionFailed(message)
             }
             try await Task.sleep(nanoseconds: UInt64(pollIntervalSeconds * 1_000_000_000))

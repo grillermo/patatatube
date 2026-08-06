@@ -461,7 +461,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             "state": DevLog.describe(state(for: id, versionId: versionId)),
         ])
         await concurrencyGate.acquire()
-        defer { concurrencyGate.release() }
+        DevLog.event(.download, "download passed gate", ["video_id": "\(id)"])
+        defer {
+            DevLog.event(.download, "download releasing gate", ["video_id": "\(id)"])
+            concurrencyGate.release()
+        }
         _ = try await downloadVideo(
             id: id,
             versionId: versionId,

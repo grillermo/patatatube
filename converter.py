@@ -127,6 +127,12 @@ def recover_orphans() -> None:
     swept = db.sweep_exhausted_jobs()
     db.recover_exhausted_convert_versions()
 
+    # After the requeue above, anything still 'converting' with no pending job
+    # is debris from a crash between /prepare's status write and its enqueue.
+    stranded = db.recover_jobless_converting_versions()
+    if stranded:
+        print(f"[job] freed {stranded} version(s) stuck converting with no job", flush=True)
+
     if swept:
         print(f"[job] failed {swept} job(s) past {db.MAX_JOB_ATTEMPTS} attempts", flush=True)
 

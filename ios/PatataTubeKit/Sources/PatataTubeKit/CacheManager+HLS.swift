@@ -13,8 +13,20 @@ extension CacheManager {
         bearerToken: String?
     ) async throws {
         let key = cacheKey(videoId: id, versionId: versionId)
+        // Bracketing the gate: a "waiting" with no matching "passed" is the
+        // signature of permit starvation, which leaves no server-side trace at
+        // all because acquire() sits in front of every network call here.
+        DevLog.event(.download, "downloadHLS waiting on gate", [
+            "video_id": "\(id)",
+            "version_id": versionId.map(String.init) ?? "-",
+            "state": DevLog.describe(state(for: id, versionId: versionId)),
+        ])
         await concurrencyGate.acquire()
-        defer { concurrencyGate.release() }
+        DevLog.event(.download, "downloadHLS passed gate", ["video_id": "\(id)"])
+        defer {
+            DevLog.event(.download, "downloadHLS releasing gate", ["video_id": "\(id)"])
+            concurrencyGate.release()
+        }
 
         guard beginExternalActivity(
             key: key,

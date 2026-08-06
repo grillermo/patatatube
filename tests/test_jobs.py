@@ -228,6 +228,79 @@ def test_recover_exhausted_convert_versions_ignores_legacy_zero_id(
     assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
 
 
+def _library_version(tmp_db, tmp_path, name="movie.mkv", rating_key="1"):
+    video_id, _ = tmp_db.upsert_library_video({
+        "source_path": str(tmp_path / name),
+        "title": name,
+        "plex_kind": "movies",
+        "summary": None,
+        "plex_rating_key": rating_key,
+    })
+    return video_id, tmp_db.get_video_versions(video_id)[0]
+
+
+def test_recover_jobless_converting_versions_frees_a_version_with_no_job(
+    tmp_db, tmp_path
+):
+    """The 2026-07-31 debris: 'converting' written, process died before enqueue.
+
+    No job row exists, so recover_exhausted_convert_versions can never see it
+    and /prepare short-circuits on 'converting' forever.
+    """
+    video_id, version = _library_version(tmp_db, tmp_path)
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
+
+    assert tmp_db.recover_jobless_converting_versions() == 1
+
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "unconverted"
+    assert tmp_db.get_video(video_id)["status"] == "unconverted"
+
+
+def test_recover_jobless_converting_versions_leaves_queued_work_alone(
+    tmp_db, tmp_path
+):
+    video_id, version = _library_version(tmp_db, tmp_path)
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
+    tmp_db.enqueue_job("convert", video_id=video_id, version_id=version["id"])
+
+    assert tmp_db.recover_jobless_converting_versions() == 0
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
+
+
+def test_recover_jobless_converting_versions_leaves_running_work_alone(
+    tmp_db, tmp_path
+):
+    video_id, version = _library_version(tmp_db, tmp_path)
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
+    tmp_db.enqueue_job("convert", video_id=video_id, version_id=version["id"])
+    tmp_db.claim_job()
+
+    assert tmp_db.recover_jobless_converting_versions() == 0
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
+
+
+def test_recover_jobless_converting_versions_ignores_finished_jobs(tmp_db, tmp_path):
+    """A done/failed job is not pending work, so its stuck version is debris too."""
+    video_id, version = _library_version(tmp_db, tmp_path)
+    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
+    job_id = tmp_db.enqueue_job("convert", video_id=video_id, version_id=version["id"])
+    tmp_db.claim_job()
+    tmp_db.finish_job(job_id, "done")
+
+    assert tmp_db.recover_jobless_converting_versions() == 1
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "unconverted"
+
+
+def test_recover_jobless_converting_versions_leaves_other_statuses_alone(
+    tmp_db, tmp_path
+):
+    video_id, version = _library_version(tmp_db, tmp_path)
+    tmp_db.set_library_state(video_id, "done", version_id=version["id"])
+
+    assert tmp_db.recover_jobless_converting_versions() == 0
+    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "done"
+
+
 def test_queued_job_count_excludes_running_and_finished(tmp_db):
     tmp_db.enqueue_job("convert", video_id=1)
     tmp_db.enqueue_job("convert", video_id=2)
