@@ -151,7 +151,7 @@ map for the intermittent-playback investigation:
 `converter.py` is the only process that spawns ffmpeg. Web workers never do —
 `/api/videos/{id}/prepare`, a cold `master.m3u8`, and upload normalization all
 call `db.enqueue_job` and return immediately. The runner claims jobs
-`FFMPEG_JOB_LIMIT` at a time (default 1, env-overridable) from the `jobs` table,
+`FFMPEG_JOB_LIMIT` at a time (default 2, env-overridable) from the `jobs` table,
 ordered by `priority` then `id`; `priority=100` is the iOS Download-all path and
 queues behind interactive taps at `priority=0`.
 

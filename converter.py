@@ -27,7 +27,7 @@ def _positive_int_env(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
-FFMPEG_JOB_LIMIT = _positive_int_env("FFMPEG_JOB_LIMIT", 1)
+FFMPEG_JOB_LIMIT = _positive_int_env("FFMPEG_JOB_LIMIT", 2)
 
 
 def _handle_convert(job: dict, on_progress) -> None:
