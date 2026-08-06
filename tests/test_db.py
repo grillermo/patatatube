@@ -427,6 +427,19 @@ def test_changing_version_clears_audio_lang_missing_from_new_version(fresh_db):
     assert db.get_video(video_id)["audio_lang"] is None
 
 
+def test_changing_version_clears_subtitle_lang_missing_from_new_version(fresh_db):
+    import db
+
+    video_id, _ = db.upsert_library_video(_versioned_movie_item())
+    versions = db.get_video_versions(video_id)
+    db.set_version_subtitle_langs(versions[0]["id"], '[{"language": "eng", "name": "English"}]')
+    db.set_version_subtitle_langs(versions[1]["id"], '[{"language": "spa", "name": "Spanish"}]')
+    db.set_subtitle_lang(video_id, "eng")
+
+    assert db.set_chosen_version(video_id, versions[1]["id"])
+    assert db.get_video(video_id)["subtitle_lang"] is None
+
+
 def test_upsert_library_video_syncs_versions_by_rating_key(fresh_db):
     import db
 

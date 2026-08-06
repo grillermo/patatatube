@@ -996,6 +996,13 @@ async def api_choose_subtitle(video_id: int, body: SubtitleRequest, request: Req
     """Persist a subtitle preference. Unlike audio, this never re-converts —
     every discovered language is already packaged into the HLS multivariant
     playlist at conversion time (see hls.py), so there is nothing to invalidate.
+
+    `video_versions.subtitle_langs` (read below to build `available`) is filled
+    only by `library._probe_missing_subtitle_langs`, which runs at scan time —
+    there is no per-request probe anymore. Existing rows stay NULL (no tracks
+    offered) until the next `POST /api/library/scan`, so a fresh deploy of this
+    feature needs one manual scan for pre-existing library videos to surface
+    subtitle tracks.
     """
     _check_token(request)
     video = db.get_video(video_id)

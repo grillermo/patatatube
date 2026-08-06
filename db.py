@@ -546,7 +546,7 @@ def set_chosen_version(video_id: int, version_id: int) -> bool:
     with _conn() as conn:
         row = conn.execute(
             """
-            SELECT id, audio_langs
+            SELECT id, audio_langs, subtitle_langs
             FROM video_versions
             WHERE video_id = ? AND id = ?
             """,
@@ -555,9 +555,10 @@ def set_chosen_version(video_id: int, version_id: int) -> bool:
         if not row:
             return False
         conn.execute("UPDATE videos SET chosen_version_id = ? WHERE id = ?", (version_id, video_id))
-        selected_lang = conn.execute(
-            "SELECT audio_lang FROM videos WHERE id = ?", (video_id,)
-        ).fetchone()["audio_lang"]
+        selected = conn.execute(
+            "SELECT audio_lang, subtitle_lang FROM videos WHERE id = ?", (video_id,)
+        ).fetchone()
+        selected_lang = selected["audio_lang"]
         if selected_lang:
             try:
                 available_langs = {
@@ -567,6 +568,17 @@ def set_chosen_version(video_id: int, version_id: int) -> bool:
                 available_langs = set()
             if selected_lang not in available_langs:
                 conn.execute("UPDATE videos SET audio_lang = NULL WHERE id = ?", (video_id,))
+        selected_subtitle_lang = selected["subtitle_lang"]
+        if selected_subtitle_lang:
+            try:
+                available_subtitle_langs = {
+                    track.get("language")
+                    for track in json.loads(row["subtitle_langs"] or "[]")
+                }
+            except (TypeError, ValueError):
+                available_subtitle_langs = set()
+            if selected_subtitle_lang not in available_subtitle_langs:
+                conn.execute("UPDATE videos SET subtitle_lang = NULL WHERE id = ?", (video_id,))
         _sync_video_from_chosen(conn, video_id)
         return True
 

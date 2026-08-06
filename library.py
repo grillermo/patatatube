@@ -284,7 +284,14 @@ def _probe_missing_audio_langs(video_id: int) -> None:
 
 
 def _probe_missing_subtitle_langs(video_id: int) -> None:
-    """Fill missing per-version subtitle metadata without aborting a library scan."""
+    """Fill missing per-version subtitle metadata without aborting a library scan.
+
+    This is the only writer of `video_versions.subtitle_langs` — there is no
+    per-request probe. A row's subtitle_langs stays NULL (picker shows no
+    tracks) until this runs, so on a fresh deploy of sidecar-subtitle support,
+    existing library rows need one `POST /api/library/scan` before they'll
+    report subtitle tracks.
+    """
     for version in db.get_video_versions(video_id):
         if version.get("subtitle_langs") is not None:
             continue
