@@ -137,7 +137,9 @@ exits with its parent via `--watch-pid`. Queue depth is visible in
     [job] +1 kind=convert id=812 priority=100 queued=225
     [job] -1 kind=convert id=812 status=done secs=412
 
-`ffmpeg_progress.run_ffmpeg` is the only place that spawns ffmpeg's subprocess.
+`ffmpeg_progress.run_ffmpeg` is the only place `convert` and `hls` jobs spawn
+ffmpeg (the `normalize` job still shells out via `downloader.py`, and the
+preview endpoints grab frames directly in the web worker).
 It appends `-progress pipe:1 -nostats` when given a duration and a callback,
 and writes a 0..1 fraction to `jobs.progress` (throttled to ≥1% or ≥2s). stderr
 gets its own pipe drained on a thread — merging it into stdout would corrupt the

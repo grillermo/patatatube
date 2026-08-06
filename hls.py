@@ -58,10 +58,7 @@ def _first_stream(probe: dict, kind: str) -> dict | None:
 
 
 def _duration(probe: dict) -> float:
-    try:
-        return float(probe.get("format", {}).get("duration") or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
+    return ffmpeg_progress.probe_duration(probe)
 
 
 def _frame_rate(probe: dict) -> float:

@@ -96,41 +96,41 @@ def run_ffmpeg(
     throttle = ProgressThrottle(on_progress) if wants_progress else None
     stderr_tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
 
-    proc = subprocess.Popen(
+    with subprocess.Popen(
         full_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-    )
+    ) as proc:
 
-    def drain_stderr() -> None:
-        assert proc.stderr is not None
-        for line in proc.stderr:
-            stderr_tail.append(line.rstrip("\n"))
+        def drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stderr_tail.append(line.rstrip("\n"))
 
-    stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
-    stderr_thread.start()
+        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        stderr_thread.start()
 
-    last_fraction = 0.0
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        if _debug_line_sink is not None:
-            _debug_line_sink(line.rstrip("\n"))
-        if throttle is None:
-            continue
-        if line.strip() == "progress=end":
-            throttle.flush(1.0)
-            last_fraction = 1.0
-            continue
-        micros = parse_progress_line(line)
-        if micros is None:
-            continue
-        last_fraction = min(max(micros / (duration * 1_000_000), 0.0), 1.0)
-        throttle.emit(last_fraction)
+        last_fraction = 0.0
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if _debug_line_sink is not None:
+                _debug_line_sink(line.rstrip("\n"))
+            if throttle is None:
+                continue
+            if line.strip() == "progress=end":
+                throttle.flush(1.0)
+                last_fraction = 1.0
+                continue
+            micros = parse_progress_line(line)
+            if micros is None:
+                continue
+            last_fraction = min(max(micros / (duration * 1_000_000), 0.0), 1.0)
+            throttle.emit(last_fraction)
 
-    returncode = proc.wait()
-    stderr_thread.join(timeout=5)
+        returncode = proc.wait()
+        stderr_thread.join(timeout=5)
 
     if returncode != 0:
         raise RuntimeError("\n".join(stderr_tail).strip() or "ffmpeg failed")

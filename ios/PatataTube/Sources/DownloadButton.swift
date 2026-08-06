@@ -320,6 +320,6 @@ private struct ConversionRing: View {
                 .monospacedDigit()
         }
         .frame(width: 44, height: 44)
-        .accessibilityLabel("Converting, \(Int(fraction * 100)) percent")
+        .accessibilityLabel("Converting, \(Int(clamped * 100)) percent")
     }
 }
