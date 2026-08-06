@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.0.3",
+          "buildVersion": "143",
+          "date": "2026-08-06T17:50:48Z",
+          "localizedDescription": "[DEVLOG] Diagnostic build for the stuck download bug\n\n• Movies stuck on Converting forever are freed and can be downloaded again\n• This build records download and conversion diagnostics to help track down downloads that stall before they start\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.3/PatataTube-2.0.3.ipa",
+          "size": 4221471,
+          "sha256": "d0637cafa6007d67164c32c8859ff536306dc9807ed29a83e016539ca8f532d5",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.0.2",
           "buildVersion": "142",
           "date": "2026-08-06T16:46:14Z",
@@ -1344,11 +1354,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.0.2",
-      "versionDate": "2026-08-06T16:46:14Z",
-      "versionDescription": "What's new in 2.0.2:\n\n• perf: raise default FFMPEG_JOB_LIMIT to 2\n• fix(ios): repair the app target's test build and green the suite\n• docs: record the pre-existing PlayerViewControllerTests build break\n• refactor(ios): share one options menu across list and detail views\n• fix: stop macOS EXC_GUARD worker kills from post-fork setproctitle\n• docs: track docs/ directory in git\n• fix: document post-deploy scan requirement and clear stale subtitle_lang on version switch\n• fix: address final review findings (doc accuracy, a11y label, dedup duration helper, deterministic Popen cleanup)",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.2/PatataTube-2.0.2.ipa",
-      "size": 4197315
+      "version": "2.0.3",
+      "versionDate": "2026-08-06T17:50:48Z",
+      "versionDescription": "[DEVLOG] Diagnostic build for the stuck download bug\n\n• Movies stuck on Converting forever are freed and can be downloaded again\n• This build records download and conversion diagnostics to help track down downloads that stall before they start\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.3/PatataTube-2.0.3.ipa",
+      "size": 4221471
     }
   ],
   "news": []
