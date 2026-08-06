@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.0.1",
+          "buildVersion": "141",
+          "date": "2026-08-06T16:22:32Z",
+          "localizedDescription": "Movie pages get the full options menu\n\n• Movie detail now carries the same menu as the lists: New video, Autoplay, Randomize, Downloads, Delete cached and Settings\n• Two videos convert at once, so downloads finish sooner",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.1/PatataTube-2.0.1.ipa",
+          "size": 4196579,
+          "sha256": "7b022b7d5ac4e27a9431c78986a2cce3d7307410c25c8b5dd385d2a9f969aa46",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.0.0",
           "buildVersion": "140",
           "date": "2026-08-06T12:48:09Z",
@@ -1324,11 +1334,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.0.0",
-      "versionDate": "2026-08-06T12:48:09Z",
-      "versionDescription": "Movies and shows can now play with the right subtitles\n\n• Pick a subtitle language per movie from the info screen — it sticks, no re-conversion needed\n• Downloads view now shows what's actively converting, with live percent on the download button\n• Download-all queues behind whatever you tap interactively, so it never hogs the converter",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.0/PatataTube-2.0.0.ipa",
-      "size": 4189483
+      "version": "2.0.1",
+      "versionDate": "2026-08-06T16:22:32Z",
+      "versionDescription": "Movie pages get the full options menu\n\n• Movie detail now carries the same menu as the lists: New video, Autoplay, Randomize, Downloads, Delete cached and Settings\n• Two videos convert at once, so downloads finish sooner",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.1/PatataTube-2.0.1.ipa",
+      "size": 4196579
     }
   ],
   "news": []
