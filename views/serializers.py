@@ -30,6 +30,14 @@ def _audio_tracks(version: dict) -> list[dict]:
     return tracks
 
 
+def _subtitle_tracks(version: dict) -> list[dict]:
+    """Parse the scan-time-cached subtitle track list for one version."""
+    try:
+        return json.loads(version.get("subtitle_langs") or "[]")
+    except (TypeError, ValueError):
+        return []
+
+
 def _hls_ready(video: dict) -> bool:
     """Whether an HLS package can be served for this row.
 
@@ -91,15 +99,20 @@ def serialize_video(video: dict) -> dict:
         "episode": video.get("episode"),
         "summary": video.get("summary"),
         "show_preview_url": None,
-        # Sidecar subtitles only exist for library rows; callers that have
-        # discovered them inject `subtitle_tracks`. Download rows are always [].
-        "subtitle_tracks": video.get("subtitle_tracks") or [],
+        "subtitle_tracks": [],
     }
     if _hls_ready(video):
         data["hls_path"] = f"/videos/{video['id']}/hls/master.m3u8"
     if video.get("versions") is not None:
         data["chosen_version_id"] = video.get("chosen_version_id")
         data["audio_lang"] = video.get("audio_lang")
+        data["subtitle_lang"] = video.get("subtitle_lang")
+        versions = video.get("versions") or []
+        chosen = next((v for v in versions if v.get("is_chosen")), None) or (
+            versions[0] if versions else None
+        )
+        if chosen:
+            data["subtitle_tracks"] = _subtitle_tracks(chosen)
         data["versions"] = [
             {
                 "id": version["id"],
@@ -108,7 +121,7 @@ def serialize_video(video: dict) -> dict:
                 "is_chosen": bool(version.get("is_chosen")),
                 "audio_tracks": _audio_tracks(version),
             }
-            for version in video.get("versions", [])
+            for version in versions
         ]
     if source == "library":
         # `url` holds the raw filesystem source_path for library rows (see
