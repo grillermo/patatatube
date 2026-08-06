@@ -98,6 +98,34 @@ struct DownloadButtonStateTests {
     }
 }
 
+private struct StubJobsAPI: JobsAPI {
+    let snapshot: JobsSnapshot
+
+    init(running videoID: Int, progress: Double) {
+        snapshot = JobsSnapshot(
+            running: [ConversionJob(
+                id: 1, videoID: videoID, versionID: nil, kind: "convert",
+                progress: progress, title: nil, showTitle: nil
+            )],
+            queued: [],
+            queuedTotal: 0
+        )
+    }
+
+    init(queued videoID: Int) {
+        snapshot = JobsSnapshot(
+            running: [],
+            queued: [ConversionJob(
+                id: 1, videoID: videoID, versionID: nil, kind: "convert",
+                progress: nil, title: nil, showTitle: nil
+            )],
+            queuedTotal: 1
+        )
+    }
+
+    func jobs() async throws -> JobsSnapshot { snapshot }
+}
+
 @MainActor
 private final class CacheStateSource {
     var value: CacheState
@@ -184,6 +212,38 @@ private func makeDownloadButton(
                 .environment(\.continuousClock, clock),
             function: function
         )
+    }
+}
+
+/// Hosts a `DownloadButton` with a `JobsStore` in its environment and resolves
+/// once SwiftUI has actually installed that environment -- reading
+/// `@Environment(JobsStore.self)` from an un-hosted view returns the default
+/// `nil`, so `sut.inspect()` alone (no `ViewHosting.host`) cannot see the
+/// store passed via `.environment(store)`.
+@MainActor
+private func hostedDownloadButtonWithJobsStore(
+    videoID: Int,
+    store: JobsStore,
+    function: String = #function
+) async throws -> DownloadButton {
+    return try await withCheckedThrowingContinuation { continuation in
+        var button = DownloadButton(
+            identity: DownloadButtonIdentity(videoID: videoID, versionID: nil, audioLanguage: nil),
+            currentCacheState: { .notCached },
+            onDownload: { true },
+            onCancel: {},
+            onDeleteCache: {}
+        )
+        _ = button.on(\.didAppear, function: function) { view in
+            do {
+                var resolvedButton = try view.actualView()
+                resolvedButton.didAppear = nil
+                continuation.resume(returning: resolvedButton)
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+        ViewHosting.host(view: button.environment(store), function: function)
     }
 }
 
@@ -402,6 +462,23 @@ struct DownloadButtonViewTests {
 
         let control = try sut.inspect().find(ViewType.Button.self)
         #expect(try control.accessibilityLabel().string() == "Download")
+    }
+
+    @Test func showsThePercentWhileConverting() async throws {
+        let store = JobsStore(api: StubJobsAPI(running: 9, progress: 0.47))
+        await store.refreshNow()
+        let sut = try await hostedDownloadButtonWithJobsStore(videoID: 9, store: store)
+        defer { ViewHosting.expel() }
+        let text = try sut.inspect().find(text: "47%")
+        #expect(try text.string() == "47%")
+    }
+
+    @Test func showsNoPercentWhileQueued() async throws {
+        let store = JobsStore(api: StubJobsAPI(queued: 9))
+        await store.refreshNow()
+        let sut = try await hostedDownloadButtonWithJobsStore(videoID: 9, store: store)
+        defer { ViewHosting.expel() }
+        #expect(throws: (any Error).self) { try sut.inspect().find(ViewType.Text.self) }
     }
 
     @Test func armedStateAutoRevertsAfterTimeout() async throws {

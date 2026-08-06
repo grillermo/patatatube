@@ -148,6 +148,7 @@ struct DownloadButton: View {
     // Optional: a missing tracker means "nothing preparing" rather than a trap,
     // so the button renders anywhere in the hierarchy (including inspection).
     @Environment(VideoPreparationTracker.self) private var preparationTracker: VideoPreparationTracker?
+    @Environment(JobsStore.self) private var jobsStore: JobsStore?
     @State private var state: DownloadButtonState
 
     private struct ObservationID: Hashable {
@@ -204,7 +205,12 @@ struct DownloadButton: View {
 
     @ViewBuilder
     private var control: some View {
-        if preparationTracker?.isPreparing(videoID: identity.videoID) == true {
+        // The server may be converting this video even if this device did not
+        // ask for it, so the job row counts as much as the local tracker.
+        if case .running(let fraction) = jobsStore?.state(videoID: identity.videoID) {
+            ConversionRing(fraction: fraction)
+        } else if preparationTracker?.isPreparing(videoID: identity.videoID) == true
+                    || jobsStore?.state(videoID: identity.videoID) == .queued {
             ProgressView()
                 .frame(width: 44, height: 44)
                 .accessibilityLabel("Preparing video")
@@ -285,5 +291,35 @@ struct DownloadButton: View {
             .logTap("download-start", ["video_id": "\(identity.videoID)"])
             .accessibilityLabel("Download")
         }
+    }
+}
+
+/// Determinate ring with the percentage inside, sized to the same 44x44 the
+/// spinner and the cached checkmark use so nothing shifts when it swaps in.
+///
+/// Uses an explicit `Circle().trim(from:to:)` rather than
+/// `ProgressView(value:)`: on this toolchain the `.circular` progress-view
+/// style rendered in a way that made its content unreachable to inspection
+/// (and, going by the platform's known history of treating `.circular`
+/// `ProgressView(value:)` as indeterminate in some contexts, likely to a
+/// sighted user too) -- the explicit shape draws and inspects reliably.
+private struct ConversionRing: View {
+    let fraction: Double
+
+    var body: some View {
+        let clamped = min(max(fraction, 0), 1)
+        ZStack {
+            Circle()
+                .stroke(.tertiary, lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: clamped)
+                .stroke(style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Text("\(Int(clamped * 100))%")
+                .font(.system(size: 11, weight: .semibold))
+                .monospacedDigit()
+        }
+        .frame(width: 44, height: 44)
+        .accessibilityLabel("Converting, \(Int(fraction * 100)) percent")
     }
 }

@@ -156,11 +156,14 @@ struct VideoGridView: View {
     /// inactive stacks.
     let selectedTab: MediaTab
 
-    init(tab: MediaTab, groups: GroupStore, selectedTab: MediaTab? = nil, activation: MediaTab? = nil) {
+    init(tab: MediaTab, groups: GroupStore, api: APIClient, selectedTab: MediaTab? = nil, activation: MediaTab? = nil) {
         self.tab = tab
         _groups = ObservedObject(wrappedValue: groups)
         self.selectedTab = selectedTab ?? tab
         self.activation = activation
+        // Same APIClient the store uses -- reached via the caller (model.api)
+        // since model itself isn't available until after init.
+        _jobsStore = State(initialValue: JobsStore(api: api))
     }
 
     @EnvironmentObject var model: AppModel
@@ -184,6 +187,7 @@ struct VideoGridView: View {
     /// alert below turns it into either a seek or a fresh start.
     @State private var pendingResume: PendingResume?
     @State private var preparationTracker = VideoPreparationTracker()
+    @State private var jobsStore: JobsStore
     @State private var downloadingAll = false
     @State private var pendingDownloadAll: DownloadAllRequest?
     @State private var errorBannerOffset: CGFloat = 0
@@ -405,6 +409,12 @@ struct VideoGridView: View {
             .overlay { if let error = store.errorText { errorBanner(error) } }
         }
         .environment(preparationTracker)
+        .environment(jobsStore)
+        // Task.never() (ConcurrencyExtras) isn't linkable from this target --
+        // it isn't a direct dependency here, only transitively via test-only
+        // packages -- so subscribe/unsubscribe follow view appearance instead.
+        .onAppear { jobsStore.subscribe() }
+        .onDisappear { jobsStore.unsubscribe() }
     }
 
     @ViewBuilder
