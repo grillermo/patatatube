@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.0.5",
+          "buildVersion": "145",
+          "date": "2026-08-07T01:29:34Z",
+          "localizedDescription": "Videos you play now download themselves once conversion finishes\n\n• Tapping play on an unconverted movie or episode starts its download automatically as soon as the server finishes converting\n• The download still happens if the app was closed and reopened while converting",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.5/PatataTube-2.0.5.ipa",
+          "size": 4202400,
+          "sha256": "5447883ab21ff00daa33ee9b78ec825d330e9db78f4826dd1ac3f05ab626e187",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.0.4",
           "buildVersion": "144",
           "date": "2026-08-06T17:55:55Z",
@@ -1364,11 +1374,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.0.4",
-      "versionDate": "2026-08-06T17:55:55Z",
-      "versionDescription": "What's new in 2.0.4:\n\n• fix(jobs): free versions stuck converting with no job; add download gate instrumentation\n• perf: raise default FFMPEG_JOB_LIMIT to 2\n• fix(ios): repair the app target's test build and green the suite\n• docs: record the pre-existing PlayerViewControllerTests build break\n• refactor(ios): share one options menu across list and detail views\n• fix: stop macOS EXC_GUARD worker kills from post-fork setproctitle\n• docs: track docs/ directory in git\n• fix: document post-deploy scan requirement and clear stale subtitle_lang on version switch",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.4/PatataTube-2.0.4.ipa",
-      "size": 4198628
+      "version": "2.0.5",
+      "versionDate": "2026-08-07T01:29:34Z",
+      "versionDescription": "Videos you play now download themselves once conversion finishes\n\n• Tapping play on an unconverted movie or episode starts its download automatically as soon as the server finishes converting\n• The download still happens if the app was closed and reopened while converting",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.5/PatataTube-2.0.5.ipa",
+      "size": 4202400
     }
   ],
   "news": []
