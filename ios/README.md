@@ -132,6 +132,9 @@ On first launch grid is empty / errors — need server config:
 - **Upload**: open a group, tap + (top-right) → paste video URL → Add → new video appears in that group after processing
 - **Error banner**: point Base URL at unreachable host → red error banner appears at bottom of grid
 - **Missing token**: clear upload token in Settings, try Add Video → upload should fail (401 from backend)
+- Downloads tab: with several downloads running, the "In Progress" header shows
+  an aggregate `MB/s` averaged over 5s; it stays non-negative as individual
+  downloads finish, and disappears with the section when the queue empties.
 
 ### Stream cache / offline HLS
 
