@@ -91,9 +91,17 @@ struct InFlightActivities {
     subscript(key: String) -> DownloadActivityAccumulator? {
         get { storage[key] }
         set {
-            let before = storage[key]?.activity.transferredByteCount ?? 0
-            let after = newValue?.activity.transferredByteCount ?? before
-            cumulativeByteCount += max(after - before, 0)
+            // An absent -> present transition (a resumed segmented download,
+            // or one seeded from previously-streamed parts) must contribute
+            // zero here: `before` starting from an accumulator that already
+            // has non-zero bytes on disk is not "transferred" in this tick,
+            // and counting it produces a one-shot false speed spike. Only
+            // accumulate a delta when updating an existing key.
+            let before = storage[key]?.activity.transferredByteCount
+            let after = newValue?.activity.transferredByteCount
+            if let before, let after {
+                cumulativeByteCount += max(after - before, 0)
+            }
             storage[key] = newValue
         }
     }
