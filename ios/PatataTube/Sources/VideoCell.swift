@@ -1,5 +1,6 @@
 // ios/PatataTube/Sources/VideoCell.swift
 import SwiftUI
+import UIKit
 import PatataTubeKit
 
 struct VideoCell: View {
@@ -172,6 +173,11 @@ struct VideoInfoView: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    /// Identifies the row that was last copied, so only that one shows the
+    /// "Copied" confirmation. Cleared by `copyResetTask` after a beat.
+    @State private var copiedKey: String?
+    @State private var copyResetTask: Task<Void, Never>?
+
     var body: some View {
         NavigationStack {
             List {
@@ -241,10 +247,37 @@ struct VideoInfoView: View {
 
     @ViewBuilder private func row(_ label: String, _ value: String?) -> some View {
         if let value, !value.isEmpty {
+            let key = "\(label)|\(value)"
+            let copied = copiedKey == key
             VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(label).font(.caption).foregroundStyle(.secondary)
+                    if copied {
+                        Label("Copied", systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                            .transition(.opacity.combined(with: .scale))
+                    }
+                }
                 Text(value).font(.body).textSelection(.enabled)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .listRowBackground(copied ? Color.green.opacity(0.15) : nil)
+            .onTapGesture { copy(value, key: key) }
+        }
+    }
+
+    /// Tap-to-copy: pasteboard + haptic + a transient per-row confirmation.
+    private func copy(_ value: String, key: String) {
+        UIPasteboard.general.string = value
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.easeOut(duration: 0.15)) { copiedKey = key }
+        copyResetTask?.cancel()
+        copyResetTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { copiedKey = nil }
         }
     }
 
