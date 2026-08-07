@@ -74,6 +74,33 @@ struct DownloadActivityAccumulator {
     }
 }
 
+/// The in-flight download table, plus a cumulative byte counter derived from
+/// writes to it.
+///
+/// Exists so `CacheManager` gets a **monotonic** total for the speed meter
+/// without touching its ~19 `inFlight[key] = …` sites: `inFlight[key]?.record(…)`
+/// is a get-modify-set through this subscript, so the setter sees every
+/// progress update from the plain, segmented, and external/HLS paths alike.
+///
+/// Removing a key contributes zero, so a finishing or cancelled download can
+/// never make the counter go down.
+struct InFlightActivities {
+    private(set) var cumulativeByteCount: Int64 = 0
+    private var storage: [String: DownloadActivityAccumulator] = [:]
+
+    subscript(key: String) -> DownloadActivityAccumulator? {
+        get { storage[key] }
+        set {
+            let before = storage[key]?.activity.transferredByteCount ?? 0
+            let after = newValue?.activity.transferredByteCount ?? before
+            cumulativeByteCount += max(after - before, 0)
+            storage[key] = newValue
+        }
+    }
+
+    var values: Dictionary<String, DownloadActivityAccumulator>.Values { storage.values }
+}
+
 struct DownloadCompletionHistoryStore {
     private let url: URL
     private let fileManager: FileManager

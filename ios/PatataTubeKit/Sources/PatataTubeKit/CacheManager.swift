@@ -164,7 +164,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private let cancellationFence: any CacheManagerCancellationFencing
     let concurrencyGate: any DownloadConcurrencyGating
     private let beforeExternalPromotion: @Sendable () async -> Void
-    private var inFlight: [String: DownloadActivityAccumulator] = [:]
+    private var inFlight = InFlightActivities()
     private var externalActivityKeys: Set<String> = []
     private var externalCancellationRequests: Set<String> = []
     private var externalTasks: [String: Task<Void, Error>] = [:]
@@ -443,6 +443,13 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
 
     public func activeDownloads() -> [DownloadActivity] {
         lock.withLock { inFlight.values.map(\.activity).sorted { $0.id < $1.id } }
+    }
+
+    /// Total bytes this process has downloaded since launch, across every
+    /// transfer, finished or not. Monotonic by construction — feed it to
+    /// `DownloadSpeedMeter`, not the sum of `activeDownloads()`.
+    public func downloadedByteCount() -> Int64 {
+        lock.withLock { inFlight.cumulativeByteCount }
     }
 
     public func recentDownloads() -> [DownloadCompletion] {
