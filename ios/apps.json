@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.0.6",
+          "buildVersion": "146",
+          "date": "2026-08-07T02:35:08Z",
+          "localizedDescription": "Video Info fields are now tap-to-copy\n\n• Tap any field in Video Info to copy its value to the clipboard\n• The tapped row confirms with a green Copied check and a haptic tap",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.6/PatataTube-2.0.6.ipa",
+          "size": 4210300,
+          "sha256": "fef9b98db3977e2729a8a8c5770ea7949a6ba61def107a39d4f7bdc3a96663c6",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.0.5",
           "buildVersion": "145",
           "date": "2026-08-07T01:29:34Z",
@@ -1374,11 +1384,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.0.5",
-      "versionDate": "2026-08-07T01:29:34Z",
-      "versionDescription": "Videos you play now download themselves once conversion finishes\n\n• Tapping play on an unconverted movie or episode starts its download automatically as soon as the server finishes converting\n• The download still happens if the app was closed and reopened while converting",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.5/PatataTube-2.0.5.ipa",
-      "size": 4202400
+      "version": "2.0.6",
+      "versionDate": "2026-08-07T02:35:08Z",
+      "versionDescription": "Video Info fields are now tap-to-copy\n\n• Tap any field in Video Info to copy its value to the clipboard\n• The tapped row confirms with a green Copied check and a haptic tap",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.6/PatataTube-2.0.6.ipa",
+      "size": 4210300
     }
   ],
   "news": []
