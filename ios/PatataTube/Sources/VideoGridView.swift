@@ -188,6 +188,10 @@ struct VideoGridView: View {
     @State private var pendingResume: PendingResume?
     @State private var preparationTracker = VideoPreparationTracker()
     @State private var jobsStore: JobsStore
+    /// Conversions this device asked for that should download themselves when
+    /// the server finishes. Persisted, so a conversion that outlives the
+    /// process still lands on disk. See `startPendingAutoDownloads`.
+    @State private var pendingAutoDownloads = PendingAutoDownloadStore()
     @State private var downloadingAll = false
     @State private var pendingDownloadAll: DownloadAllRequest?
     @State private var errorBannerOffset: CGFloat = 0
@@ -413,8 +417,15 @@ struct VideoGridView: View {
         // Task.never() (ConcurrencyExtras) isn't linkable from this target --
         // it isn't a direct dependency here, only transitively via test-only
         // packages -- so subscribe/unsubscribe follow view appearance instead.
-        .onAppear { jobsStore.subscribe() }
+        .onAppear {
+            jobsStore.subscribe()
+            startPendingAutoDownloads()
+        }
         .onDisappear { jobsStore.unsubscribe() }
+        // Every poll is a chance for a tracked conversion to have left the job
+        // list -- that disappearance is the "conversion done" signal for the
+        // ones this process did not start (or no longer awaits).
+        .onChange(of: jobsStore.snapshot) { _, _ in startPendingAutoDownloads() }
     }
 
     @ViewBuilder
@@ -881,6 +892,11 @@ struct VideoGridView: View {
             startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, caller: caller)
             return
         }
+        // Playing an unconverted row is this device asking for a conversion, so
+        // its output is ours to download once ffmpeg is done.
+        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached {
+            pendingAutoDownloads.add(video.id)
+        }
         Task {
             do {
                 guard let readyVideo = try await preparationTracker.trackIfIdle(
@@ -891,6 +907,7 @@ struct VideoGridView: View {
                 ) else {
                     return
                 }
+                autoDownloadIfPending(readyVideo)
                 startPlayback(
                     readyVideo,
                     queueSnapshot: queueSnapshot,
@@ -898,8 +915,36 @@ struct VideoGridView: View {
                     caller: caller
                 )
             } catch {
+                // A conversion that never completed has nothing to download.
+                pendingAutoDownloads.remove(video.id)
                 store.errorText = String(describing: error)
             }
+        }
+    }
+
+    /// Downloads a converted video this device had asked to convert, once.
+    /// Claiming the pending entry before starting is what keeps a second caller
+    /// (another tab's watcher, a re-fired poll) from downloading it twice.
+    private func autoDownloadIfPending(_ video: Video) {
+        guard pendingAutoDownloads.contains(video.id) else { return }
+        pendingAutoDownloads.remove(video.id)
+        guard model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached else { return }
+        DevLog.event(.download, "auto-download after conversion", ["video_id": "\(video.id)"])
+        Task { await download(video) }
+    }
+
+    /// Fires the auto-downloads whose conversion the server has finished: an id
+    /// this device tracked that no longer has a job and whose row reads `done`.
+    /// A row still converting (or reverted to `unconverted` by a failure) is
+    /// left alone -- the next snapshot re-evaluates it.
+    private func startPendingAutoDownloads() {
+        let pending = pendingAutoDownloads.ids
+        guard !pending.isEmpty else { return }
+        for video in store.videos where pending.contains(video.id) {
+            guard jobsStore.state(videoID: video.id) == nil else { continue }
+            guard !preparationTracker.isPreparing(videoID: video.id) else { continue }
+            guard video.status == "done" else { continue }
+            autoDownloadIfPending(video)
         }
     }
 
