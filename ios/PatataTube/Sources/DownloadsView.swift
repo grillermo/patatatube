@@ -7,10 +7,19 @@ struct DownloadsView: View {
     let video: (Int, Int?) -> Video?
     let onCancel: (DownloadActivity) -> Void
     let onPlay: (Video) -> Void
+    /// Monotonic cumulative downloaded bytes. Defaults to a constant so tests
+    /// and previews that don't care about the speed readout stay untouched.
+    var byteCount: () -> Int64 = { 0 }
     // Optional lifecycle seam for hosted inspection of SwiftUI-resolved environment values.
     var didAppear: ((Self) -> Void)? = nil
     @EnvironmentObject var model: AppModel
     @Environment(JobsStore.self) private var jobsStore: JobsStore?
+    @State private var meter = DownloadSpeedMeter()
+    // Deliberately not driven from inside the TimelineView body below:
+    // mutating @State during body evaluation is a render-phase write.
+    @State private var speedTicks = Timer
+        .publish(every: 0.25, on: .main, in: .common)
+        .autoconnect()
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { _ in
@@ -35,9 +44,17 @@ struct DownloadsView: View {
                     }
                 }
                 if !activeItems.isEmpty {
-                    Section("In Progress") {
+                    Section {
                         ForEach(activeItems) { item in
                             activeRow(item)
+                        }
+                    } header: {
+                        HStack {
+                            Text("In Progress")
+                            Spacer()
+                            if let rate = meter.formattedRate {
+                                Text(rate).monospacedDigit()
+                            }
                         }
                     }
                 }
@@ -52,6 +69,9 @@ struct DownloadsView: View {
                 }
             }
             .navigationTitle("Downloads")
+            .onReceive(speedTicks) { date in
+                meter.record(byteCount: byteCount(), at: date)
+            }
         }
         .onAppear {
             jobsStore?.subscribe()

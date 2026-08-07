@@ -101,6 +101,27 @@ struct DownloadsViewTests {
         #expect((try? empty.inspect().find(text: "In Progress")) == nil)
         #expect((try? empty.inspect().find(text: "Recently Completed")) == nil)
     }
+
+    @Test func inProgressHeaderRendersWithActiveDownloads() throws {
+        let activity = DownloadActivity(
+            videoID: 3,
+            versionID: nil,
+            progress: 0.1,
+            transferredByteCount: 100,
+            totalByteCount: 1_000
+        )
+        let sut = DownloadsView(
+            active: { [activity] },
+            recent: { [] },
+            video: { id, _ in sampleVideo(id: id) },
+            onCancel: { _ in },
+            onPlay: { _ in },
+            byteCount: { 4_000_000 }
+        )
+        .environmentObject(AppModel())
+
+        #expect(throws: Never.self) { try sut.inspect().find(text: "In Progress") }
+    }
 }
 
 /// Hosts a `DownloadsView` with a `JobsStore` in its environment and resolves

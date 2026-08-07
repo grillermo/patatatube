@@ -692,7 +692,8 @@ struct VideoGridView: View {
                 onCancel: { activity in
                     model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
                 },
-                onPlay: { video in play(video, caller: "downloads") }
+                onPlay: { video in play(video, caller: "downloads") },
+                byteCount: { model.cache.downloadedByteCount() }
             )
         }
     }
