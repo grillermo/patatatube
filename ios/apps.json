@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.0.8",
+          "buildVersion": "148",
+          "date": "2026-08-08T02:25:59Z",
+          "localizedDescription": "[DEVLOG] Downloads speed readout now reports real throughput\n\n• The In Progress header no longer sits at 0.0 MB/s while downloads run\n• Instrumented build: posts download diagnostics to the server log\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.8/PatataTube-2.0.8.ipa",
+          "size": 4242069,
+          "sha256": "607172488815879a3f04654f63ac07d0985a3b2d18f6863d251ed7498c832c97",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.0.7",
           "buildVersion": "147",
           "date": "2026-08-08T00:59:42Z",
@@ -1394,11 +1404,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.0.7",
-      "versionDate": "2026-08-08T00:59:42Z",
-      "versionDescription": "See how fast your downloads are moving\n\n• The Downloads tab now shows a live speed readout (e.g. 12.4 MB/s) next to \"In Progress\"\n• The rate is a smooth 5-second average across everything downloading at once\n• It stays accurate as individual downloads finish, and disappears once the queue is empty",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.7/PatataTube-2.0.7.ipa",
-      "size": 4216666
+      "version": "2.0.8",
+      "versionDate": "2026-08-08T02:25:59Z",
+      "versionDescription": "[DEVLOG] Downloads speed readout now reports real throughput\n\n• The In Progress header no longer sits at 0.0 MB/s while downloads run\n• Instrumented build: posts download diagnostics to the server log\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.8/PatataTube-2.0.8.ipa",
+      "size": 4242069
     }
   ],
   "news": []
