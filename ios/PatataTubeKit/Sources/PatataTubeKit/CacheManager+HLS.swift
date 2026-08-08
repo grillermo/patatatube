@@ -119,8 +119,11 @@ extension CacheManager {
         let total = max(assets.count, 1)
         let segmentCache = streamSegmentCache
         let reusablePackageHash = packageHash
+        // Third element: bytes actually pulled off the network for this asset.
+        // A segment-cache hit is zero — it advances progress without
+        // transferring anything, and counting it would inflate the speed meter.
         try await withThrowingTaskGroup(
-            of: (String, Data).self
+            of: (String, Data, Int64).self
         ) { group in
             var nextIndex = 0
 
@@ -135,7 +138,7 @@ extension CacheManager {
                        )
                     {
                         try self.throwIfExternalActivityCancelled(key: key)
-                        return (asset, cached)
+                        return (asset, cached, 0)
                     }
                     let data = try await self.fetchHLSAsset(
                         try self.hlsAssetURL(asset, relativeTo: masterURL),
@@ -143,7 +146,7 @@ extension CacheManager {
                         cacheKey: key
                     )
                     try self.throwIfExternalActivityCancelled(key: key)
-                    return (asset, data)
+                    return (asset, data, Int64(data.count))
                 }
             }
 
@@ -153,13 +156,23 @@ extension CacheManager {
             }
 
             var completed = 0
-            while let (asset, data) = try await group.next() {
+            var transferredBytes: Int64 = 0
+            while let (asset, data, networkBytes) = try await group.next() {
                 try write(data, asset: asset)
                 completed += 1
+                transferredBytes += networkBytes
                 updateExternalActivity(
                     key: key,
-                    completedUnits: Int64(completed * 10_000 / total)
+                    completedUnits: Int64(completed * 10_000 / total),
+                    transferredByteCount: transferredBytes
                 )
+                DevLog.event(.download, "hls asset stored", [
+                    "video_id": "\(id)",
+                    "asset": (asset as NSString).lastPathComponent,
+                    "net_bytes": "\(networkBytes)",
+                    "transferred": "\(transferredBytes)",
+                    "completed": "\(completed)/\(total)",
+                ])
                 if nextIndex < assets.count {
                     add(assets[nextIndex])
                     nextIndex += 1

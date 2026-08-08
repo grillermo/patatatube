@@ -37,6 +37,12 @@ cd ios/PatataTube && xcodebuild -project PatataTube.xcodeproj -scheme PatataTube
 
 See `ios/README.md` for the full manual test checklist.
 
+**Never run the iOS tests unless explicitly asked.** Neither `swift test` nor
+`xcodebuild ... test`. They take many minutes on this machine and are the
+user's call to start, not an agent's. Ship the change and say which tests
+*would* cover it; wait to be asked before running any of them. The rest of this
+section documents how to run them **when asked**.
+
 Run **both** `swift test` invocations when touching `DevLog` — the two
 configurations exercise opposite halves of the gating (see below).
 

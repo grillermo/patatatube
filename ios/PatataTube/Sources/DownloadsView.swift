@@ -70,11 +70,28 @@ struct DownloadsView: View {
             }
             .navigationTitle("Downloads")
             .onReceive(speedTicks) { date in
-                meter.record(byteCount: byteCount(), at: date)
+                let bytes = byteCount()
+                meter.record(byteCount: bytes, at: date)
+                let d = meter.diagnostics
+                DevLog.event(.download, "speed tick", [
+                    "bytes": "\(bytes)",
+                    "samples": "\(d.samples)",
+                    "span": String(format: "%.2f", d.span),
+                    "window_delta": "\(d.newest - d.oldest)",
+                    "rate": meter.bytesPerSecond.map { String(format: "%.0f", $0) } ?? "-",
+                    "shown": meter.formattedRate ?? "-",
+                    "active": "\(activeItems.count)",
+                ])
             }
         }
         .onAppear {
             jobsStore?.subscribe()
+            // Confirms the real counter is wired here and not the `{ 0 }`
+            // default this view falls back to for tests and previews.
+            DevLog.event(.download, "downloads view appeared", [
+                "bytes": "\(byteCount())",
+                "active": "\(active().count)",
+            ])
             didAppear?(self)
         }
         .onDisappear { jobsStore?.unsubscribe() }

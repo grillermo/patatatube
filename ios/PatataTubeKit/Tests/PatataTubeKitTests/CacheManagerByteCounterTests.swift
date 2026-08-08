@@ -18,30 +18,66 @@ struct CacheManagerByteCounterTests {
         #expect(manager.downloadedByteCount() == 0)
 
         manager.beginExternalActivity(key: "1", videoId: 1, versionId: nil, totalUnits: 1_000)
-        manager.updateExternalActivity(key: "1", completedUnits: 400)
+        manager.updateExternalActivity(key: "1", completedUnits: 400, transferredByteCount: 400)
         #expect(manager.downloadedByteCount() == 400)
 
-        manager.updateExternalActivity(key: "1", completedUnits: 900)
+        manager.updateExternalActivity(key: "1", completedUnits: 900, transferredByteCount: 900)
         #expect(manager.downloadedByteCount() == 900)
+    }
+
+    // The offline-HLS packager is the only external-activity caller, and it
+    // reports *permille* progress (`totalUnits: 10_000`), not bytes. Counting
+    // those units as bytes capped an entire movie's contribution at 10 kB,
+    // which is what pinned the Downloads readout at "0.0 MB/s". Progress and
+    // transferred bytes are now separate arguments.
+    @Test func unitProgressDoesNotStandInForTransferredBytes() {
+        let manager = makeManager()
+        manager.beginExternalActivity(key: "1", videoId: 1, versionId: nil, totalUnits: 10_000)
+        manager.updateExternalActivity(
+            key: "1",
+            completedUnits: 5_000,
+            transferredByteCount: 12_000_000
+        )
+        #expect(manager.downloadedByteCount() == 12_000_000)
+        #expect(manager.activeDownloads().first?.progress == 0.5)
+    }
+
+    // Assets served from the local segment cache advance progress without
+    // transferring anything, so the counter must stay put across that update.
+    @Test func progressWithoutNewBytesAddsNothing() {
+        let manager = makeManager()
+        manager.beginExternalActivity(key: "1", videoId: 1, versionId: nil, totalUnits: 10_000)
+        manager.updateExternalActivity(
+            key: "1",
+            completedUnits: 3_000,
+            transferredByteCount: 5_000_000
+        )
+        manager.updateExternalActivity(
+            key: "1",
+            completedUnits: 6_000,
+            transferredByteCount: 5_000_000
+        )
+        #expect(manager.downloadedByteCount() == 5_000_000)
+        #expect(manager.activeDownloads().first?.progress == 0.6)
     }
 
     @Test func aFinishedDownloadDoesNotSubtractItsBytes() {
         let manager = makeManager()
         manager.beginExternalActivity(key: "1", videoId: 1, versionId: nil, totalUnits: 1_000)
-        manager.updateExternalActivity(key: "1", completedUnits: 400)
+        manager.updateExternalActivity(key: "1", completedUnits: 400, transferredByteCount: 400)
         manager.endExternalActivity(key: "1")
         #expect(manager.activeDownloads().isEmpty)
         #expect(manager.downloadedByteCount() == 400)
 
         manager.beginExternalActivity(key: "2", videoId: 2, versionId: nil, totalUnits: 1_000)
-        manager.updateExternalActivity(key: "2", completedUnits: 300)
+        manager.updateExternalActivity(key: "2", completedUnits: 300, transferredByteCount: 300)
         #expect(manager.downloadedByteCount() == 700)
     }
 
     @Test func aCancelledDownloadDoesNotSubtractItsBytes() {
         let manager = makeManager()
         manager.beginExternalActivity(key: "1", videoId: 1, versionId: nil, totalUnits: 1_000)
-        manager.updateExternalActivity(key: "1", completedUnits: 250)
+        manager.updateExternalActivity(key: "1", completedUnits: 250, transferredByteCount: 250)
         manager.cancelExternalActivity(key: "1")
         #expect(manager.downloadedByteCount() == 250)
     }
@@ -50,8 +86,8 @@ struct CacheManagerByteCounterTests {
         // A restarted transfer can report fewer completed units than before.
         let manager = makeManager()
         manager.beginExternalActivity(key: "1", videoId: 1, versionId: nil, totalUnits: 1_000)
-        manager.updateExternalActivity(key: "1", completedUnits: 600)
-        manager.updateExternalActivity(key: "1", completedUnits: 100)
+        manager.updateExternalActivity(key: "1", completedUnits: 600, transferredByteCount: 600)
+        manager.updateExternalActivity(key: "1", completedUnits: 100, transferredByteCount: 100)
         #expect(manager.downloadedByteCount() == 600)
     }
 
@@ -59,7 +95,7 @@ struct CacheManagerByteCounterTests {
         let manager = makeManager()
         manager.beginExternalActivity(key: "1", videoId: 1, versionId: nil, totalUnits: 1_000)
         manager.beginExternalActivity(key: "2", videoId: 2, versionId: 7, totalUnits: 2_000)
-        manager.updateExternalActivity(key: "2", completedUnits: 1_000)
+        manager.updateExternalActivity(key: "2", completedUnits: 1_000, transferredByteCount: 1_000)
 
         let active = manager.activeDownloads()
         #expect(active.count == 2)
@@ -87,5 +123,22 @@ struct CacheManagerByteCounterTests {
         seeded.record(transferredByteCount: 600, progress: 0.6)
         activities["1"] = seeded
         #expect(activities.cumulativeByteCount == 200)
+    }
+
+    // The counters exist so a flat readout can be attributed to a layer.
+    @Test func writeTalliesDistinguishUpdatesFromTransitions() {
+        var activities = InFlightActivities()
+        var accumulator = DownloadActivityAccumulator(videoID: 1, versionID: nil, totalByteCount: 10)
+        activities["1"] = accumulator          // insert  -> transition
+        accumulator.record(transferredByteCount: 4, progress: 0.4)
+        activities["1"] = accumulator          // update  -> delta 4
+        activities["1"] = accumulator          // update  -> delta 0
+        activities["1"] = nil                  // remove  -> transition
+
+        #expect(activities.writeCount == 4)
+        #expect(activities.updateWriteCount == 2)
+        #expect(activities.zeroDeltaCount == 1)
+        #expect(activities.transitionCount == 2)
+        #expect(activities.cumulativeByteCount == 4)
     }
 }

@@ -88,6 +88,19 @@ struct InFlightActivities {
     private(set) var cumulativeByteCount: Int64 = 0
     private var storage: [String: DownloadActivityAccumulator] = [:]
 
+    /// Write tallies, kept so the speed meter's "always 0.0 MB/s" failure mode
+    /// can be attributed to a specific layer: no writes at all (nothing reaches
+    /// the table), writes that are all insert/remove transitions (every update
+    /// is skipped by the guard below), or deltas that are counted but never
+    /// read. All four are cheap `Int`s bumped under the caller's existing lock.
+    private(set) var writeCount: Int = 0
+    /// Writes where both sides were present, i.e. a real update.
+    private(set) var updateWriteCount: Int = 0
+    /// Updates whose delta was zero or negative — counted nothing.
+    private(set) var zeroDeltaCount: Int = 0
+    /// Writes skipped because the key was absent on one side (insert/remove).
+    private(set) var transitionCount: Int = 0
+
     subscript(key: String) -> DownloadActivityAccumulator? {
         get { storage[key] }
         set {
@@ -99,14 +112,42 @@ struct InFlightActivities {
             // accumulate a delta when updating an existing key.
             let before = storage[key]?.activity.transferredByteCount
             let after = newValue?.activity.transferredByteCount
+            writeCount += 1
             if let before, let after {
-                cumulativeByteCount += max(after - before, 0)
+                updateWriteCount += 1
+                let delta = max(after - before, 0)
+                if delta == 0 { zeroDeltaCount += 1 }
+                cumulativeByteCount += delta
+            } else {
+                transitionCount += 1
+                // Rare (once per download start/finish), so it is safe to log
+                // every one: this is where a path that only ever inserts and
+                // removes — never updating — would show up.
+                DevLog.event(.download, "inflight transition", [
+                    "key": key,
+                    "before": before.map(String.init) ?? "-",
+                    "after": after.map(String.init) ?? "-",
+                    "cumulative": "\(cumulativeByteCount)",
+                    "writes": "\(writeCount)",
+                ])
             }
             storage[key] = newValue
         }
     }
 
     var values: Dictionary<String, DownloadActivityAccumulator>.Values { storage.values }
+
+    /// Counter snapshot for one `download` record. Cheap: five stored fields.
+    var counterMeta: [String: String] {
+        [
+            "cumulative": "\(cumulativeByteCount)",
+            "writes": "\(writeCount)",
+            "updates": "\(updateWriteCount)",
+            "zero_deltas": "\(zeroDeltaCount)",
+            "transitions": "\(transitionCount)",
+            "keys": "\(storage.count)",
+        ]
+    }
 }
 
 struct DownloadCompletionHistoryStore {

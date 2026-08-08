@@ -313,15 +313,29 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
     }
 
-    func updateExternalActivity(key: String, completedUnits: Int64) {
+    /// Report an external transfer's progress.
+    ///
+    /// `completedUnits` is an **abstract** progress unit out of the `totalUnits`
+    /// given to `beginExternalActivity` — the offline-HLS packager counts
+    /// assets, in permille, because an HLS package's byte size isn't known
+    /// until it has been fetched. `transferredByteCount` is the real cumulative
+    /// bytes pulled off the network for this key. The two must stay separate:
+    /// feeding permille units to the speed meter capped a whole movie at 10 kB
+    /// and pinned the Downloads readout at "0.0 MB/s".
+    func updateExternalActivity(
+        key: String,
+        completedUnits: Int64,
+        transferredByteCount: Int64
+    ) {
         lock.withLock {
+            externalProgressCallCount += 1
             guard var accumulator = inFlight[key] else { return }
             let totalUnits = accumulator.activity.totalByteCount ?? 0
             let progress = totalUnits > 0
                 ? Double(completedUnits) / Double(totalUnits)
                 : 0
             accumulator.record(
-                transferredByteCount: completedUnits,
+                transferredByteCount: transferredByteCount,
                 progress: progress,
                 totalByteCount: totalUnits
             )
@@ -449,8 +463,29 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// transfer, finished or not. Monotonic by construction — feed it to
     /// `DownloadSpeedMeter`, not the sum of `activeDownloads()`.
     public func downloadedByteCount() -> Int64 {
-        lock.withLock { inFlight.cumulativeByteCount }
+        lock.withLock {
+            // Read at the meter's 0.25s cadence only while the Downloads view
+            // is on screen, so logging every read is affordable and gives the
+            // counter's whole timeline against the write tallies that fed it.
+            DevLog.event(.download, "byte counter read", {
+                var meta = inFlight.counterMeta
+                meta["seg_progress_calls"] = "\(segmentProgressCallCount)"
+                meta["ext_progress_calls"] = "\(externalProgressCallCount)"
+                meta["plain_progress_calls"] = "\(plainProgressCallCount)"
+                return meta
+            }())
+            return inFlight.cumulativeByteCount
+        }
     }
+
+    /// Progress-callback tallies, per download path. A flat cumulative counter
+    /// means either nothing is calling these (the transfer isn't going through
+    /// `CacheManager` at all) or they call but their writes count nothing —
+    /// two very different bugs, distinguished by comparing these against
+    /// `InFlightActivities.updateWriteCount`.
+    private var segmentProgressCallCount = 0
+    private var externalProgressCallCount = 0
+    private var plainProgressCallCount = 0
 
     public func recentDownloads() -> [DownloadCompletion] {
         lock.withLock {
@@ -763,6 +798,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             progress = 0
         }
         lock.withLock {
+            plainProgressCallCount += 1
             guard tasksByKey[key]?.taskIdentifier == downloadTask.taskIdentifier else { return }
             inFlight[key]?.record(
                 transferredByteCount: totalBytesWritten,
@@ -1355,6 +1391,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         bytesWritten: Int64
     ) {
         lock.withLock {
+            segmentProgressCallCount += 1
             guard let attempt = segmentedAttempts[context.cacheKey],
                   attempt.id == context.attemptID,
                   !attempt.terminalClaimed

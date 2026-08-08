@@ -861,7 +861,11 @@ final class CacheManagerHLSTests: XCTestCase {
                 totalUnits: 10_000
             )
         )
-        cache.updateExternalActivity(key: "5", completedUnits: 2_500)
+        cache.updateExternalActivity(
+            key: "5",
+            completedUnits: 2_500,
+            transferredByteCount: 1_500_000
+        )
 
         XCTAssertFalse(
             cache.beginExternalActivity(

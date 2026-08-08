@@ -48,6 +48,19 @@ public struct DownloadSpeedMeter: Sendable {
         return Double(newest.byteCount - oldest.byteCount) / span
     }
 
+    /// Retained sample count and the span they cover — the two things that
+    /// decide whether `bytesPerSecond` is `nil`, a real rate, or a flat zero.
+    /// Exposed for `DevLog` so a stuck readout can be attributed to the meter
+    /// or to the counter feeding it.
+    public var diagnostics: (samples: Int, span: TimeInterval, oldest: Int64, newest: Int64) {
+        (
+            samples.count,
+            (samples.last?.date.timeIntervalSince(samples.first?.date ?? .distantPast)) ?? 0,
+            samples.first?.byteCount ?? 0,
+            samples.last?.byteCount ?? 0
+        )
+    }
+
     /// Decimal megabytes per second to one decimal place, e.g. `"12.4 MB/s"`.
     public var formattedRate: String? {
         guard let bytesPerSecond else { return nil }
