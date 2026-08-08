@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.0.7",
+          "buildVersion": "147",
+          "date": "2026-08-08T00:59:42Z",
+          "localizedDescription": "See how fast your downloads are moving\n\n• The Downloads tab now shows a live speed readout (e.g. 12.4 MB/s) next to \"In Progress\"\n• The rate is a smooth 5-second average across everything downloading at once\n• It stays accurate as individual downloads finish, and disappears once the queue is empty",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.7/PatataTube-2.0.7.ipa",
+          "size": 4216666,
+          "sha256": "ab5fe29f159fcedd75a32cd74cdb7f4d15aeacdce45dd192d3e47ffef6952d02",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.0.6",
           "buildVersion": "146",
           "date": "2026-08-07T02:35:08Z",
@@ -1384,11 +1394,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.0.6",
-      "versionDate": "2026-08-07T02:35:08Z",
-      "versionDescription": "Video Info fields are now tap-to-copy\n\n• Tap any field in Video Info to copy its value to the clipboard\n• The tapped row confirms with a green Copied check and a haptic tap",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.6/PatataTube-2.0.6.ipa",
-      "size": 4210300
+      "version": "2.0.7",
+      "versionDate": "2026-08-08T00:59:42Z",
+      "versionDescription": "See how fast your downloads are moving\n\n• The Downloads tab now shows a live speed readout (e.g. 12.4 MB/s) next to \"In Progress\"\n• The rate is a smooth 5-second average across everything downloading at once\n• It stays accurate as individual downloads finish, and disappears once the queue is empty",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.7/PatataTube-2.0.7.ipa",
+      "size": 4216666
     }
   ],
   "news": []
