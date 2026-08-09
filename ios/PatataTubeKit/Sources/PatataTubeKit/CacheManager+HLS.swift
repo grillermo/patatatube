@@ -10,7 +10,8 @@ extension CacheManager {
         preview: URL? = nil,
         showPosterKey: String? = nil,
         showPoster: URL? = nil,
-        bearerToken: String?
+        bearerToken: String?,
+        acquiresPermit: Bool = true
     ) async throws {
         let key = cacheKey(videoId: id, versionId: versionId)
         // Bracketing the gate: a "waiting" with no matching "passed" is the
@@ -21,11 +22,15 @@ extension CacheManager {
             "version_id": versionId.map(String.init) ?? "-",
             "state": DevLog.describe(state(for: id, versionId: versionId)),
         ])
-        await concurrencyGate.acquire()
-        DevLog.event(.download, "downloadHLS passed gate", ["video_id": "\(id)"])
+        if acquiresPermit {
+            await concurrencyGate.acquire()
+            DevLog.event(.download, "downloadHLS passed gate", ["video_id": "\(id)"])
+        }
         defer {
-            DevLog.event(.download, "downloadHLS releasing gate", ["video_id": "\(id)"])
-            releasePermit(for: key)
+            if acquiresPermit {
+                DevLog.event(.download, "downloadHLS releasing gate", ["video_id": "\(id)"])
+                releasePermit(for: key)
+            }
         }
 
         guard beginExternalActivity(

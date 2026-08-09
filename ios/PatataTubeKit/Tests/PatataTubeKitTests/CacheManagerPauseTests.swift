@@ -212,3 +212,44 @@ extension CacheManagerPauseTests {
         #expect(FileManager.default.fileExists(atPath: manifest.path))
     }
 }
+
+extension CacheManagerPauseTests {
+    @Test func resumingClearsTheEntryAndReusesTheHeldPermit() async throws {
+        let root = temporaryRoot()
+        let spy = PauseSpyGate()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }
+        defer { MockURLProtocol.handler = nil }
+
+        var store = PausedDownloadStore(root: root)
+        store.insert(pausedEntry(videoID: 7))
+        let manager = CacheManager(
+            root: root,
+            configuration: config,
+            fileManager: .default,
+            concurrencyGate: spy
+        )
+        await manager.awaitPermit(for: "7")
+        #expect(spy.acquireCount == 1)
+
+        // The transfer itself fails (offline), but resume must still consume the
+        // entry and hand the reserved permit back exactly once.
+        try? await manager.resume(id: 7)
+
+        #expect(PausedDownloadStore(root: root).contains("7") == false)
+        #expect(manager.activeDownloads().isEmpty)
+        #expect(spy.acquireCount == 1)   // no second acquire
+        #expect(spy.releaseCount == 1)
+    }
+
+    @Test func resumingAnUnknownKeyDoesNothing() async throws {
+        let manager = CacheManager(
+            root: temporaryRoot(),
+            configuration: .ephemeral,
+            fileManager: .default
+        )
+        try await manager.resume(id: 999)
+        #expect(manager.activeDownloads().isEmpty)
+    }
+}

@@ -566,6 +566,21 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             DevLog.event(.download, "download releasing gate", ["video_id": "\(id)"])
             releasePermit(for: key)
         }
+        try await performDownload(
+            id: id, versionId: versionId, from: remote, preview: preview,
+            showPosterKey: showPosterKey, showPoster: showPoster,
+            bearerToken: bearerToken, streamCount: streamCount
+        )
+    }
+
+    /// The transfer itself, with no gate interaction. `download` wraps it in an
+    /// acquire/release; `resume` calls it directly because the permit for a
+    /// paused entry is already held.
+    private func performDownload(
+        id: Int, versionId: Int?, from remote: URL, preview: URL?,
+        showPosterKey: String?, showPoster: URL?,
+        bearerToken: String?, streamCount: Int
+    ) async throws {
         _ = try await downloadVideo(
             id: id,
             versionId: versionId,
@@ -578,6 +593,48 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         // Show poster is shared across episodes: fetch once, skip when cached.
         if let showPosterKey, let showPoster, cachedShowPosterURL(for: showPosterKey) == nil {
             try? await cacheShowPoster(key: showPosterKey, from: showPoster, bearerToken: bearerToken)
+        }
+    }
+
+    /// Restarts a paused download. The permit it has been holding is reused, so
+    /// this never queues behind other pending downloads. Nothing calls this
+    /// automatically — only the Resume menu item does.
+    public func resume(id: Int, versionId: Int? = nil, bearerToken: String? = nil) async throws {
+        let key = cacheKey(videoId: id, versionId: versionId)
+        guard let entry = lock.withLock({ pausedStore.entry(key) }) else { return }
+        await awaitPermit(for: key)
+        lock.withLock {
+            pausedStore.remove(key)
+            pausedKeys.remove(key)
+        }
+        DevLog.event(.download, "resume", [
+            "video_id": "\(id)",
+            "version_id": versionId.map(String.init) ?? "-",
+            "hls": "\(entry.isHLS)",
+            "progress": String(format: "%.3f", entry.progress),
+        ])
+        defer {
+            // The permit was reserved for the paused entry; hand it back now
+            // that the transfer has ended, however it ended.
+            releasePausedPermit(for: key)
+        }
+        if entry.isHLS {
+            try await downloadHLS(
+                id: id, versionId: versionId,
+                masterURL: entry.remoteURL,
+                preview: entry.previewURL,
+                showPosterKey: entry.showPosterKey,
+                showPoster: entry.showPosterURL,
+                bearerToken: bearerToken,
+                acquiresPermit: false
+            )
+        } else {
+            try await performDownload(
+                id: id, versionId: versionId, from: entry.remoteURL,
+                preview: entry.previewURL,
+                showPosterKey: entry.showPosterKey, showPoster: entry.showPosterURL,
+                bearerToken: bearerToken, streamCount: entry.streamCount
+            )
         }
     }
 
