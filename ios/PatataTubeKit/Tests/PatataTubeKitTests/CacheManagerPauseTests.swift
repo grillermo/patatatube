@@ -131,3 +131,84 @@ extension CacheManagerPauseTests {
         #expect(spy.releaseCount == 1)
     }
 }
+
+extension CacheManagerPauseTests {
+    @Test func pausingRecordsTheEntryAndKeepsThePermit() async throws {
+        let root = temporaryRoot()
+        let spy = PauseSpyGate()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        // Never responds: the download stays in flight while we pause it.
+        let releaseRequest = DispatchSemaphore(value: 0)
+        MockURLProtocol.handler = { _ in
+            releaseRequest.wait()
+            throw URLError(.timedOut)
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let manager = CacheManager(
+            root: root,
+            configuration: config,
+            fileManager: .default,
+            concurrencyGate: spy
+        )
+        let remote = URL(string: "https://example.com/7.mp4")!
+        let download = Task { try await manager.download(id: 7, from: remote) }
+        // Let the probe register the key in `inFlight`.
+        try await Task.sleep(for: .milliseconds(200))
+
+        manager.pause(
+            id: 7, versionId: nil, remote: remote, isHLS: false, streamCount: 1,
+            preview: nil, showPosterKey: nil, showPoster: nil
+        )
+        _ = try? await download.value
+
+        #expect(PausedDownloadStore(root: root).contains("7"))
+        #expect(manager.activeDownloads().first?.isPaused == true)
+        // Acquired once for the download; never released, because it is paused.
+        #expect(spy.acquireCount == 1)
+        #expect(spy.releaseCount == 0)
+    }
+
+    @Test func pausingASegmentedDownloadKeepsItsManifest() async throws {
+        let root = temporaryRoot()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let total = 4_000
+        // Range requests never respond: the segments stay in flight while we pause.
+        let releaseRequest = DispatchSemaphore(value: 0)
+        MockURLProtocol.handler = { request in
+            if request.httpMethod == "HEAD" || request.value(forHTTPHeaderField: "Range") == nil {
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil,
+                    headerFields: [
+                        "Content-Length": "\(total)",
+                        "Accept-Ranges": "bytes",
+                        "ETag": "\"abc\"",
+                    ]
+                )!
+                return (response, Data())
+            }
+            releaseRequest.wait()
+            throw URLError(.timedOut)
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let manager = CacheManager(root: root, configuration: config, fileManager: .default)
+        let remote = URL(string: "https://example.com/7.mp4")!
+        let download = Task {
+            try await manager.download(id: 7, from: remote, streamCount: 2)
+        }
+        try await Task.sleep(for: .milliseconds(300))
+
+        manager.pause(
+            id: 7, versionId: nil, remote: remote, isHLS: false, streamCount: 2,
+            preview: nil, showPosterKey: nil, showPoster: nil
+        )
+        _ = try? await download.value
+
+        let manifest = SegmentedDownloadStore(root: root, fileManager: .default)
+            .manifestURL(cacheKey: "7")
+        #expect(FileManager.default.fileExists(atPath: manifest.path))
+    }
+}

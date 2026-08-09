@@ -741,6 +741,115 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         if held { concurrencyGate.release() }
     }
 
+    /// Suspends a download, keeping every byte already on disk **and** its gate
+    /// permit. Deliberately not `cancel(id:)`: that path exists to wipe resume
+    /// state so a re-tap starts clean, which is the opposite of a pause.
+    ///
+    /// The download parameters are taken as arguments and stored, because the
+    /// HLS path leaves nothing on disk to recover them from and a resume may
+    /// happen in a later process.
+    public func pause(
+        id: Int,
+        versionId: Int? = nil,
+        remote: URL,
+        isHLS: Bool,
+        streamCount: Int,
+        preview: URL? = nil,
+        showPosterKey: String? = nil,
+        showPoster: URL? = nil
+    ) {
+        let key = cacheKey(videoId: id, versionId: versionId)
+        let snapshot = lock.withLock { () -> DownloadActivity? in
+            guard !pausedKeys.contains(key) else { return nil }
+            let activity = inFlight[key]?.activity
+            pausedKeys.insert(key)
+            pausedStore.insert(PausedDownload(
+                videoID: id,
+                versionID: versionId,
+                remoteURL: remote,
+                isHLS: isHLS,
+                streamCount: streamCount,
+                previewURL: preview,
+                showPosterKey: showPosterKey,
+                showPosterURL: showPoster,
+                progress: activity?.progress ?? 0,
+                transferredByteCount: activity?.transferredByteCount ?? 0,
+                totalByteCount: activity?.totalByteCount
+            ))
+            inFlight[key] = nil
+            return activity
+        }
+        DevLog.event(.download, "pause", [
+            "video_id": "\(id)",
+            "version_id": versionId.map(String.init) ?? "-",
+            "progress": snapshot.map { String(format: "%.3f", $0.progress) } ?? "-",
+            "hls": "\(isHLS)",
+        ])
+        pauseExternal(key: key)
+        pauseSegmented(key: key)
+        pausePlain(key: key)
+    }
+
+    /// HLS packaging keeps no partial state, so pausing it is a cancel; the
+    /// stored entry is what makes the row survive, and resuming restarts at 0.
+    private func pauseExternal(key: String) {
+        guard lock.withLock({ externalActivityKeys.contains(key) }) else { return }
+        cancelExternalActivity(key: key)
+    }
+
+    /// Cancels the segment tasks while producing resume data, reusing the same
+    /// preservation machinery a resumable transport error goes through:
+    /// `preservingResumeData` makes `finishFailedSegmentedAttemptIfReady` write
+    /// the manifest back and skip `segmentedStore.remove`, so the partial parts
+    /// survive for `startIncompleteSegments` to pick up.
+    private func pauseSegmented(key: String) {
+        guard let attempt = lock.withLock({ segmentedAttempts[key] }) else { return }
+        let tasks: [(task: URLSessionDownloadTask, taskID: Int, segmentIndex: Int)] =
+            lock.withLock {
+                guard let current = segmentedAttempts[key],
+                      current.id == attempt.id,
+                      !current.terminalClaimed
+                else { return [] }
+                current.preservingResumeData = true
+                if current.terminalError == nil {
+                    current.terminalError = DownloadPausedError()
+                }
+                return current.taskIDs.compactMap { taskID in
+                    guard let task = tasksByIdentifier[taskID],
+                          let context = segmentContextByTask[taskID],
+                          context.attemptID == current.id
+                    else { return nil }
+                    current.resumeDataPendingTaskIDs.insert(taskID)
+                    return (task, taskID, context.segmentIndex)
+                }
+            }
+        for entry in tasks {
+            entry.task.cancel(byProducingResumeData: { [weak self, weak attempt] data in
+                guard let self, let attempt else { return }
+                self.preserveSegmentResumeData(
+                    data,
+                    attempt: attempt,
+                    segmentIndex: entry.segmentIndex,
+                    pendingTaskIdentifier: entry.taskID
+                )
+            })
+        }
+        finishFailedSegmentedAttemptIfReady(attempt)
+    }
+
+    /// The plain path (a download already running off a `{key}.resume` file):
+    /// cancel producing fresh resume data and write it back over that file.
+    private func pausePlain(key: String) {
+        guard let task = lock.withLock({ tasksByKey[key] }) else { return }
+        task.cancel(byProducingResumeData: { [weak self] data in
+            guard let self, let data, !data.isEmpty else { return }
+            try? self.fileManager.createDirectory(
+                at: self.root, withIntermediateDirectories: true
+            )
+            try? data.write(to: self.resumeURL(for: key), options: .atomic)
+        })
+    }
+
     /// Cancels an in-flight download for this id/version. The awaiting
     /// `download` call throws; `state(for:)` returns to `.notCached`.
     /// Explicit cancel restarts from scratch - it does not persist resume data.
