@@ -176,6 +176,22 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var pausedKeys: Set<String> = []
     /// Paused keys currently holding a gate permit.
     private var pausedPermitKeys: Set<String> = []
+    /// Keys a pause claimed the permit *ownership* of, independently of
+    /// whether the old transfer has handed it over yet. Survives the moment
+    /// `resume` clears `pausedKeys`, so a slow unwind's `releasePermit` still
+    /// hands the permit to the resumed transfer rather than to the gate.
+    /// Cleared by `releasePausedPermit` — i.e. when the resumed (or cancelled)
+    /// transfer is finally done with it.
+    private var permitOwnerKeys: Set<String> = []
+    /// Keys whose pause teardown is still writing resume data. `pause` returns
+    /// as soon as cancellation has been *requested*; the URLSession callbacks
+    /// that persist the partial state land later, and a resume that starts
+    /// before they do would race the manifest/resume file it needs.
+    private var pauseTeardownKeys: Set<String> = []
+    /// How long `resume` waits for a pause teardown before proceeding anyway.
+    /// A bound, not a deadline: it must never be possible for a lost callback
+    /// to make Resume permanently dead.
+    private let pauseTeardownTimeout: Duration = .seconds(5)
     /// Launch-time reservations still waiting on the gate. Completing means the
     /// permit was granted (or the key stopped being paused, in which case the
     /// task released it again).
@@ -316,6 +332,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     ) -> Bool {
         lock.withLock {
             guard inFlight[key] == nil,
+                  !pausedKeys.contains(key),
                   !externalActivityKeys.contains(key)
             else { return false }
             externalActivityKeys.insert(key)
@@ -480,35 +497,54 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// Live transfers plus paused entries, sorted by key. A paused entry whose
     /// file has since landed is stale (a pause that raced a completion) — drop
     /// it here, the same staleness check `recentDownloads()` applies.
+    ///
+    /// This runs at UI-refresh cadence, so the filesystem probes happen on a
+    /// snapshot taken under `lock` and released again — never with the lock
+    /// held. Dropping a stale entry also **releases its permit**: the pause
+    /// that raced a completion is exactly the case where the finishing
+    /// download handed its permit to the paused table, and forgetting it here
+    /// costs a gate slot for the rest of the process.
     public func activeDownloads() -> [DownloadActivity] {
-        lock.withLock {
-            let live = inFlight.values.map(\.activity)
-            let liveKeys = Set(live.map(\.id))
-            var stale: [String] = []
-            var paused: [DownloadActivity] = []
-            for entry in pausedStore.entries where !liveKeys.contains(entry.id) {
-                let landed = fileManager.fileExists(
-                    atPath: localURL(for: entry.videoID, versionId: entry.versionID).path
-                )
-                if landed {
-                    stale.append(entry.id)
-                    continue
-                }
-                paused.append(DownloadActivity(
-                    videoID: entry.videoID,
-                    versionID: entry.versionID,
-                    progress: entry.progress,
-                    transferredByteCount: entry.transferredByteCount,
-                    totalByteCount: entry.totalByteCount,
-                    isPaused: true
-                ))
-            }
-            for key in stale {
-                pausedStore.remove(key)
-                pausedKeys.remove(key)
-            }
-            return (live + paused).sorted { $0.id < $1.id }
+        let (live, entries) = lock.withLock {
+            (inFlight.values.map(\.activity), pausedStore.entries)
         }
+        let liveKeys = Set(live.map(\.id))
+        var stale: [String] = []
+        var paused: [DownloadActivity] = []
+        for entry in entries where !liveKeys.contains(entry.id) {
+            // Both shapes count as landed: a plain/segmented download leaves an
+            // mp4, an HLS download leaves a package — `state(for:)` treats
+            // either as `.cached`, and so must this.
+            let landed = fileManager.fileExists(
+                atPath: localURL(for: entry.videoID, versionId: entry.versionID).path
+            ) || offlineHLSMasterURL(
+                for: entry.videoID,
+                versionId: entry.versionID
+            ) != nil
+            if landed {
+                stale.append(entry.id)
+                continue
+            }
+            paused.append(DownloadActivity(
+                videoID: entry.videoID,
+                versionID: entry.versionID,
+                progress: entry.progress,
+                transferredByteCount: entry.transferredByteCount,
+                totalByteCount: entry.totalByteCount,
+                isPaused: true
+            ))
+        }
+        if !stale.isEmpty {
+            lock.withLock {
+                for key in stale {
+                    pausedStore.remove(key)
+                    pausedKeys.remove(key)
+                }
+            }
+            // Outside the lock: `releasePausedPermit` takes it itself.
+            stale.forEach { releasePausedPermit(for: $0) }
+        }
+        return (live + paused).sorted { $0.id < $1.id }
     }
 
     /// Total bytes this process has downloaded since launch, across every
@@ -601,12 +637,26 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// automatically — only the Resume menu item does.
     public func resume(id: Int, versionId: Int? = nil, bearerToken: String? = nil) async throws {
         let key = cacheKey(videoId: id, versionId: versionId)
-        guard let entry = lock.withLock({ pausedStore.entry(key) }) else { return }
+        guard lock.withLock({ pausedStore.contains(key) }) else { return }
+        // Can block indefinitely when more entries were paused than the gate
+        // allows, so nothing may be claimed before it returns.
         await awaitPermit(for: key)
-        lock.withLock {
+        // Claim the entry: whoever removes it from `pausedStore` owns the
+        // resume. A second Resume tap during the await above finds it gone and
+        // no-ops, so one key never gets two concurrent transfers.
+        guard let entry = lock.withLock({ () -> PausedDownload? in
+            guard let entry = pausedStore.entry(key) else { return nil }
             pausedStore.remove(key)
-            pausedKeys.remove(key)
-        }
+            return entry
+        }) else { return }
+        // `pause` only *requests* cancellation — the resume-data and manifest
+        // writes land in later URLSession callbacks. Starting a new transfer
+        // before they finish would read state the old teardown is still
+        // rewriting, so wait it out first. `pausedKeys` stays set for the
+        // duration, which keeps every registration path closed for this key
+        // until the disk state has settled.
+        await awaitPauseTeardown(for: key)
+        lock.withLock { _ = pausedKeys.remove(key) }
         DevLog.event(.download, "resume", [
             "video_id": "\(id)",
             "version_id": versionId.map(String.init) ?? "-",
@@ -758,7 +808,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// `concurrencyGate.release()`.
     func releasePermit(for key: String) {
         let handedOver = lock.withLock { () -> Bool in
-            guard pausedKeys.contains(key), !pausedPermitKeys.contains(key)
+            // `permitOwnerKeys` rather than `pausedKeys` alone: a Resume that
+            // landed while this transfer was still unwinding has already
+            // cleared `pausedKeys`, and it is that resumed transfer the permit
+            // now belongs to.
+            guard pausedKeys.contains(key) || permitOwnerKeys.contains(key),
+                  !pausedPermitKeys.contains(key)
             else { return false }
             pausedPermitKeys.insert(key)
             return true
@@ -793,10 +848,44 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         await task.value
     }
 
+    /// True while the previous transfer for `key` is still unwinding: the
+    /// segmented attempt has not reached its terminal claim, the plain task's
+    /// resume-data callback has not fired, the plain task is still registered,
+    /// or the plain task is still registered.
+    ///
+    /// The permit half of the same race is handled by `permitOwnerKeys`
+    /// instead of by waiting — see `releasePermit`.
+    private func pauseTeardownInProgressLocked(_ key: String) -> Bool {
+        pauseTeardownKeys.contains(key)
+            || segmentedAttempts[key] != nil
+            || tasksByKey[key] != nil
+    }
+
+    /// Waits for a pause teardown of `key` to finish before a new transfer for
+    /// the same key starts. Bounded by `pauseTeardownTimeout` so a callback
+    /// URLSession never delivers can't wedge Resume forever.
+    private func awaitPauseTeardown(for key: String) async {
+        guard lock.withLock({ pauseTeardownInProgressLocked(key) }) else { return }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: pauseTeardownTimeout)
+        while lock.withLock({ pauseTeardownInProgressLocked(key) }) {
+            guard clock.now < deadline else {
+                DevLog.event(.download, "pause teardown wait timed out", [
+                    "key": key,
+                ])
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     /// Hands a paused entry's permit back to the gate. Safe to call for a key
     /// that never held one.
     func releasePausedPermit(for key: String) {
-        let held = lock.withLock { pausedPermitKeys.remove(key) != nil }
+        let held = lock.withLock { () -> Bool in
+            permitOwnerKeys.remove(key)
+            return pausedPermitKeys.remove(key) != nil
+        }
         lock.withLock { pausedReservations[key] = nil }
         if held { concurrencyGate.release() }
     }
@@ -823,6 +912,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             guard !pausedKeys.contains(key) else { return nil }
             let activity = inFlight[key]?.activity
             pausedKeys.insert(key)
+            permitOwnerKeys.insert(key)
             pausedStore.insert(PausedDownload(
                 videoID: id,
                 versionID: versionId,
@@ -845,9 +935,39 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             "progress": snapshot.map { String(format: "%.3f", $0.progress) } ?? "-",
             "hls": "\(isHLS)",
         ])
+        // Order matters: the probe is the earliest stage, and tearing it down
+        // first means a probe that lands mid-pause can only turn into a
+        // segmented attempt that `pauseSegmented` still sees. `pausedKeys` was
+        // inserted above, and every registration path checks it, so nothing new
+        // can be registered for this key from here on either way.
+        pauseProbe(key: key)
         pauseExternal(key: key)
         pauseSegmented(key: key)
         pausePlain(key: key)
+    }
+
+    /// A pause during the probe stage: `downloadVideo` registers `inFlight`
+    /// (so the row, and its Pause button, already exist) before the probe
+    /// response arrives. Without this the probe would return, register the real
+    /// transfer, and run to completion while the store said "paused" — the row
+    /// un-pausing itself. Mirrors `cancel(id:)`'s probe teardown.
+    private func pauseProbe(key: String) {
+        let claim: (
+            task: URLSessionDataTask?,
+            continuation: CheckedContinuation<DownloadProbe, Error>?
+        )? = lock.withLock {
+            guard let probe = probeAttempts.removeValue(forKey: key) else {
+                return nil
+            }
+            let task = probe.task
+            let continuation = probe.continuation
+            probe.task = nil
+            probe.continuation = nil
+            return (task, continuation)
+        }
+        guard let claim else { return }
+        claim.task?.cancel()
+        claim.continuation?.resume(throwing: DownloadPausedError())
     }
 
     /// HLS packaging keeps no partial state, so pausing it is a cancel; the
@@ -900,9 +1020,20 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// The plain path (a download already running off a `{key}.resume` file):
     /// cancel producing fresh resume data and write it back over that file.
     private func pausePlain(key: String) {
-        guard let task = lock.withLock({ tasksByKey[key] }) else { return }
+        guard let task = lock.withLock({ () -> URLSessionDownloadTask? in
+            guard let task = tasksByKey[key] else { return nil }
+            // Marks the teardown as in progress *before* requesting the cancel,
+            // so a Resume arriving in the same instant waits for the resume
+            // data to hit disk instead of racing the write.
+            pauseTeardownKeys.insert(key)
+            return task
+        }) else { return }
         task.cancel(byProducingResumeData: { [weak self] data in
-            guard let self, let data, !data.isEmpty else { return }
+            guard let self else { return }
+            defer {
+                self.lock.withLock { _ = self.pauseTeardownKeys.remove(key) }
+            }
+            guard let data, !data.isEmpty else { return }
             try? self.fileManager.createDirectory(
                 at: self.root, withIntermediateDirectories: true
             )
@@ -1195,6 +1326,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             guard segmentedAttempts[key] == nil,
                   probeAttempts[key] == nil,
                   inFlight[key] == nil,
+                  !pausedKeys.contains(key),
                   !externalActivityKeys.contains(key)
             else { return false }
             probeAttempts[key] = probeAttempt
@@ -1371,6 +1503,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 guard segmentedAttempts[manifest.cacheKey] == nil,
                       probeAttempts[manifest.cacheKey] == nil,
                       inFlight[manifest.cacheKey] == nil,
+                      !pausedKeys.contains(manifest.cacheKey),
                       !externalActivityKeys.contains(manifest.cacheKey)
                 else { return false }
                 segmentedAttempts[manifest.cacheKey] = attempt
@@ -1403,7 +1536,8 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             )
             let registration = lock.withLock { () -> Result<Void, Error> in
                 guard probeAttempts[manifest.cacheKey]?.id == probeAttempt.id,
-                      segmentedAttempts[manifest.cacheKey] == nil
+                      segmentedAttempts[manifest.cacheKey] == nil,
+                      !pausedKeys.contains(manifest.cacheKey)
                 else { return .failure(CancellationError()) }
                 do {
                     try cancellationFence.performMutation(
@@ -1656,6 +1790,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             let task = session.downloadTask(withResumeData: resumeData)
             let registered = lock.withLock {
                 guard inFlight[key] == nil,
+                      !pausedKeys.contains(key),
                       !externalActivityKeys.contains(key)
                 else { return false }
                 inFlight[key] = DownloadActivityAccumulator(

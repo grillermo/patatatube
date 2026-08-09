@@ -696,7 +696,20 @@ struct VideoGridView: View {
                 onPause: { activity in
                     guard let parameters = pauseParameters(
                         for: activity.videoID, versionID: activity.versionID
-                    ) else { return }
+                    ) else {
+                        // The Downloads view lists every transfer, including
+                        // ones started from another tab or group whose video
+                        // isn't in this feed's `store.videos`. Pause can't
+                        // resolve its parameters there and silently does
+                        // nothing; make that visible in the log at least.
+                        DevLog.event(.error, "pause parameters unresolved", [
+                            "video_id": "\(activity.videoID)",
+                            "version_id": activity.versionID
+                                .map(String.init) ?? "-",
+                            "loaded_videos": "\(store.videos.count)",
+                        ])
+                        return
+                    }
                     model.cache.pause(
                         id: activity.videoID,
                         versionId: activity.versionID,

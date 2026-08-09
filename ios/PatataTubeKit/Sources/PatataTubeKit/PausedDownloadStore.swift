@@ -3,7 +3,7 @@ import Foundation
 /// Thrown by a download whose transfer was paused. Distinct from
 /// `CancellationError` so callers can tell "the user paused this, its partial
 /// bytes are still on disk" from "the user cancelled, everything was wiped".
-public struct DownloadPausedError: Error, Equatable {
+public struct DownloadPausedError: Error, Equatable, Sendable {
     public init() {}
 }
 

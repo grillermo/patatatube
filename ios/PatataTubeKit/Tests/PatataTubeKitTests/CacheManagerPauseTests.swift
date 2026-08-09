@@ -243,6 +243,100 @@ extension CacheManagerPauseTests {
         #expect(spy.releaseCount == 1)
     }
 
+    /// The live-handover shape, end to end: no launch-restored entry, no
+    /// reservation — the permit is the one the finishing `download` handed to
+    /// the paused table. One acquire, one release, across the whole cycle.
+    @Test func pausingAndResumingALiveDownloadBalancesTheGate() async throws {
+        let root = temporaryRoot()
+        let spy = PauseSpyGate()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        // Never responds: the download is genuinely in flight when we pause it.
+        let releaseRequest = DispatchSemaphore(value: 0)
+        MockURLProtocol.handler = { _ in
+            releaseRequest.wait()
+            throw URLError(.timedOut)
+        }
+        defer {
+            MockURLProtocol.handler = nil
+            releaseRequest.signal()
+        }
+
+        let manager = CacheManager(
+            root: root,
+            configuration: config,
+            fileManager: .default,
+            concurrencyGate: spy
+        )
+        let remote = URL(string: "https://example.com/7.mp4")!
+        let download = Task { try await manager.download(id: 7, from: remote) }
+        try await Task.sleep(for: .milliseconds(200))
+
+        manager.pause(
+            id: 7, versionId: nil, remote: remote, isHLS: false, streamCount: 1,
+            preview: nil, showPosterKey: nil, showPoster: nil
+        )
+        _ = try? await download.value
+        #expect(spy.acquireCount == 1)
+        #expect(spy.releaseCount == 0)   // handed over to the paused entry
+
+        // The resumed transfer fails immediately; what matters is that it
+        // reuses the held permit and returns it exactly once.
+        MockURLProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }
+        try? await manager.resume(id: 7)
+
+        #expect(PausedDownloadStore(root: root).contains("7") == false)
+        #expect(manager.activeDownloads().isEmpty)
+        #expect(spy.acquireCount == 1)
+        #expect(spy.releaseCount == 1)
+    }
+
+    /// A pause that raced a completion: the file lands while the entry is
+    /// paused. Dropping the stale entry must also return the permit the
+    /// finishing download handed over, or the gate slot is gone for good.
+    @Test func droppingAStalePausedEntryReleasesItsPermit() async throws {
+        let root = temporaryRoot()
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true
+        )
+        let spy = PauseSpyGate()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let releaseRequest = DispatchSemaphore(value: 0)
+        MockURLProtocol.handler = { _ in
+            releaseRequest.wait()
+            throw URLError(.timedOut)
+        }
+        defer {
+            MockURLProtocol.handler = nil
+            releaseRequest.signal()
+        }
+
+        let manager = CacheManager(
+            root: root,
+            configuration: config,
+            fileManager: .default,
+            concurrencyGate: spy
+        )
+        let remote = URL(string: "https://example.com/7.mp4")!
+        let download = Task { try await manager.download(id: 7, from: remote) }
+        try await Task.sleep(for: .milliseconds(200))
+
+        manager.pause(
+            id: 7, versionId: nil, remote: remote, isHLS: false, streamCount: 1,
+            preview: nil, showPosterKey: nil, showPoster: nil
+        )
+        _ = try? await download.value
+        #expect(spy.releaseCount == 0)
+
+        // The file landed anyway — the paused row is now stale.
+        try Data("mp4".utf8).write(to: manager.localURL(for: 7))
+
+        #expect(manager.activeDownloads().isEmpty)
+        #expect(PausedDownloadStore(root: root).contains("7") == false)
+        #expect(spy.releaseCount == 1)
+    }
+
     @Test func resumingAnUnknownKeyDoesNothing() async throws {
         let manager = CacheManager(
             root: temporaryRoot(),
