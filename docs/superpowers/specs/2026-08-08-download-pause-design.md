@@ -38,6 +38,10 @@ public struct PausedDownload: Codable, Equatable, Identifiable, Sendable {
     public let videoID: Int
     public let versionID: Int?
     public let remoteURL: URL
+    /// True when `remoteURL` is an HLS master playlist, so resuming goes
+    /// through `downloadHLS` rather than `download` — two different entry
+    /// points, and nothing on disk distinguishes them for an HLS row.
+    public let isHLS: Bool
     public let streamCount: Int
     public let previewURL: URL?
     public let showPosterKey: String?
