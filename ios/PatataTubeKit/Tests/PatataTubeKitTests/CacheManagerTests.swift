@@ -1782,6 +1782,12 @@ struct CacheManagerTests {
         #expect(try Data(contentsOf: manager.localURL(for: 70)) == expected)
         #expect(manager.state(for: 70) == .cached)
         // The 0-3 segment blipped once and was retried; siblings ran once.
+        // The retry re-requests the whole range here because this protocol
+        // fails the task in the same breath as the one byte it sent, and
+        // URLSession discards a response the delegate has not consumed yet —
+        // so nothing ever reached the part file to continue from. The
+        // continue-from-the-part-file path is covered by
+        // `aRetriedSegmentContinuesFromItsPartFile`.
         #expect(SegmentBlipThenSucceedProtocol.attempts(forRange: "bytes=0-3") == 2)
         #expect(SegmentBlipThenSucceedProtocol.attempts(forRange: "bytes=4-7") == 1)
         #expect(!FileManager.default.fileExists(
@@ -1833,12 +1839,14 @@ struct CacheManagerTests {
         let store = SegmentedDownloadStore(root: root)
         let manifest = try store.load(cacheKey: "65")
         #expect(!manifest.segments[0].isComplete)
-        // The one byte the server managed to send is on disk and accounted for.
-        #expect(manifest.segments[0].persistedByteCount == 1)
-        let part = store.partURL(cacheKey: "65", index: 0)
-        #expect(((try FileManager.default.attributesOfItem(
-            atPath: part.path
-        )[.size]) as? NSNumber)?.int64Value == 1)
+        // No `.resume` sidecar is written any more — the part file is the
+        // durable record. This protocol fails the task in the same breath as
+        // the byte it sends, so nothing reaches that part file here; the
+        // continue-from-the-part-file behaviour is covered by
+        // `resumeContinuesFromPersistedBytesNotZero` and
+        // `aRetriedSegmentContinuesFromItsPartFile`, which pace their bodies.
+        // What matters here is that the *manifest* survived the siblings
+        // stopping, so the next attempt resumes rather than restarts.
         #expect(!FileManager.default.fileExists(
             atPath: store.resumeURL(cacheKey: "65", index: 0).path
         ))

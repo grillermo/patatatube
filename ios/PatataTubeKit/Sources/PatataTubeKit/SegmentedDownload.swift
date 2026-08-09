@@ -20,6 +20,10 @@ enum SegmentedDownloadError: Error, Equatable {
     case lengthMismatch(expected: Int64, actual: Int64)
     case corruptManifest
     case missingSegment(index: Int)
+    /// A segment's part-file writer was appended to after it was closed. The
+    /// delegate queue is serial, so this is a programming error, not a
+    /// transport condition — it fails the segment rather than losing bytes.
+    case sinkClosed
 }
 
 struct DownloadByteRange: Codable, Equatable, Sendable {

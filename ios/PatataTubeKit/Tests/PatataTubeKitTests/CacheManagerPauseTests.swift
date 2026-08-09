@@ -144,7 +144,13 @@ extension CacheManagerPauseTests {
             releaseRequest.wait()
             throw URLError(.timedOut)
         }
-        defer { MockURLProtocol.handler = nil }
+        // Releasing matters beyond this test: a handler left blocked holds a
+        // CFNetwork loader thread for the rest of the process, and the pool is
+        // shared, so it stalls unrelated tests' sessions too.
+        defer {
+            MockURLProtocol.handler = nil
+            releaseRequest.signal()
+        }
 
         let manager = CacheManager(
             root: root,
@@ -175,7 +181,19 @@ extension CacheManagerPauseTests {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         let total = 4_000
-        // Range requests never respond: the segments stay in flight while we pause.
+        // Range requests never respond: the segments stay in flight while we
+        // pause.
+        //
+        // Known pre-existing gap, left as-is deliberately: the probe is
+        // `bytes=0-0`, so it *does* carry a Range header and hangs here too,
+        // which means no manifest is ever written and this expectation fails
+        // when the suite is run filtered. It fails identically on the commit
+        // before this work. Answering the probe fixes it but destabilises
+        // `pausingRecordsTheEntryAndKeepsThePermit`,
+        // `pausingAndResumingALiveDownloadBalancesTheGate` and
+        // `droppingAStalePausedEntryReleasesItsPermit`, because
+        // `MockURLProtocol.handler` is one global that every parallel test
+        // overwrites. Untangling that shared stub is its own change.
         let releaseRequest = DispatchSemaphore(value: 0)
         MockURLProtocol.handler = { request in
             if request.httpMethod == "HEAD" || request.value(forHTTPHeaderField: "Range") == nil {
@@ -192,7 +210,12 @@ extension CacheManagerPauseTests {
             releaseRequest.wait()
             throw URLError(.timedOut)
         }
-        defer { MockURLProtocol.handler = nil }
+        // See the note in `pausingRecordsTheEntryAndKeepsThePermit`: a handler
+        // left blocked holds a shared loader thread for the whole test process.
+        defer {
+            MockURLProtocol.handler = nil
+            releaseRequest.signal()
+        }
 
         let manager = CacheManager(root: root, configuration: config, fileManager: .default)
         let remote = URL(string: "https://example.com/7.mp4")!
@@ -426,6 +449,37 @@ private final class OnceFlag: @unchecked Sendable {
     }
 }
 
+/// Size of a segment's part file, or 0 when it does not exist yet.
+private func partByteCount(root: URL, cacheKey: String, index: Int = 0) -> Int64 {
+    let url = SegmentedDownloadStore(root: root, fileManager: .default)
+        .partURL(cacheKey: cacheKey, index: index)
+    return ((try? FileManager.default.attributesOfItem(
+        atPath: url.path
+    )[.size]) as? NSNumber)?.int64Value ?? 0
+}
+
+/// Waits until a segment's part file has at least `byteCount` bytes on disk.
+///
+/// Tests drive the cut *from observed durable state* rather than from a
+/// sleep: the stub stalls mid-body until this returns, so the assertion that
+/// bytes survived never races the delegate queue, however loaded the machine.
+private func awaitPartByteCount(
+    root: URL,
+    cacheKey: String,
+    atLeast byteCount: Int64,
+    timeout: Duration = .seconds(20)
+) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while clock.now < deadline {
+        if partByteCount(root: root, cacheKey: cacheKey) >= byteCount {
+            return true
+        }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return false
+}
+
 extension CacheManagerPauseTests {
     /// The whole point of the part-file transport: a paused segment resumes
     /// from the bytes already on disk instead of re-requesting from zero.
@@ -434,42 +488,45 @@ extension CacheManagerPauseTests {
     /// restarted.
     @Test func resumeContinuesFromPersistedBytesNotZero() async throws {
         let root = temporaryRoot()
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
-        MockURLProtocol.reset()
-        defer { MockURLProtocol.reset() }
+        let path = "/91.mp4"
+        defer { ChunkedRangeProtocol.reset(path: path) }
 
         let total = 1_048_576
         let body = Data((0..<total).map { UInt8($0 % 251) })
         let manager = CacheManager(
             root: root,
-            configuration: config,
+            configuration: ChunkedRangeProtocol.configuration(),
             fileManager: .default
         )
-        let remote = URL(string: "https://example.com/91.mp4")!
-        let pauseOnce = OnceFlag()
-        MockURLProtocol.stubRangedChunked(
-            path: "/91.mp4",
+        let remote = URL(string: "https://example.com\(path)")!
+        let stallOnce = OnceFlag()
+        // The stub holds the connection open at a quarter of the body until the
+        // test has seen those bytes land, then cuts it.
+        let cut = DispatchSemaphore(value: 0)
+        ChunkedRangeProtocol.stub(path: path, plan: .init(
             fullBody: body,
             etag: "\"continuation\"",
-            chunkSize: 32_768
-        ) { delivered in
-            // Pause a quarter of the way in, once, then cut the response.
-            guard delivered >= 262_144, pauseOnce.claim() else { return true }
-            manager.pause(
-                id: 91, versionId: nil, remote: remote, isHLS: false,
-                streamCount: 1, preview: nil, showPosterKey: nil, showPoster: nil
-            )
-            return false
-        }
+            chunkSize: 32_768,
+            failureError: URLError(.cancelled),
+            afterChunk: { delivered in
+                guard delivered >= 262_144, stallOnce.claim() else { return true }
+                cut.wait()
+                return false
+            }
+        ))
+        defer { cut.signal() }
 
-        _ = try? await manager.download(id: 91, from: remote, streamCount: 1)
+        let download = Task { try await manager.download(id: 91, from: remote, streamCount: 1) }
+        #expect(await awaitPartByteCount(root: root, cacheKey: "91", atLeast: 262_144))
+        manager.pause(
+            id: 91, versionId: nil, remote: remote, isHLS: false,
+            streamCount: 1, preview: nil, showPosterKey: nil, showPoster: nil
+        )
+        cut.signal()
+        _ = try? await download.value
 
         let store = SegmentedDownloadStore(root: root, fileManager: .default)
-        let part = store.partURL(cacheKey: "91", index: 0)
-        let partSize = ((try FileManager.default.attributesOfItem(
-            atPath: part.path
-        )[.size]) as? NSNumber)?.int64Value ?? -1
+        let partSize = partByteCount(root: root, cacheKey: "91")
         #expect(partSize > 0)
         #expect(partSize < Int64(total))
         let paused = try store.load(cacheKey: "91")
@@ -479,11 +536,61 @@ extension CacheManagerPauseTests {
         try await manager.resume(id: 91)
 
         // The resumed request asked for the tail, not the whole file.
-        let ranges = MockURLProtocol.recordedRanges()
+        let ranges = ChunkedRangeProtocol.recordedRanges(path: path)
         #expect(ranges.last == "bytes=\(partSize)-\(total - 1)")
         #expect(ranges.contains("bytes=0-0"))   // the probe, once
         #expect(try Data(contentsOf: manager.localURL(for: 91)) == body)
         #expect(manager.state(for: 91) == .cached)
         #expect(PausedDownloadStore(root: root).contains("91") == false)
+    }
+
+    /// The same continuation rule on the in-attempt retry path: a transient
+    /// transport blip re-requests only the bytes the part file does not
+    /// already hold, instead of discarding the segment's progress.
+    @Test func aRetriedSegmentContinuesFromItsPartFile() async throws {
+        let root = temporaryRoot()
+        let path = "/92.mp4"
+        defer { ChunkedRangeProtocol.reset(path: path) }
+
+        let total = 1_048_576
+        let body = Data((0..<total).map { UInt8($0 % 251) })
+        let manager = CacheManager(
+            root: root,
+            configuration: ChunkedRangeProtocol.configuration(),
+            fileManager: .default
+        )
+        let remote = URL(string: "https://example.com\(path)")!
+        let blipOnce = OnceFlag()
+        let cut = DispatchSemaphore(value: 0)
+        ChunkedRangeProtocol.stub(path: path, plan: .init(
+            fullBody: body,
+            etag: "\"retry\"",
+            chunkSize: 32_768,
+            failureError: URLError(.networkConnectionLost),
+            afterChunk: { delivered in
+                guard delivered >= 262_144, blipOnce.claim() else { return true }
+                cut.wait()
+                return false
+            }
+        ))
+        defer { cut.signal() }
+
+        let download = Task { try await manager.download(id: 92, from: remote, streamCount: 1) }
+        #expect(await awaitPartByteCount(root: root, cacheKey: "92", atLeast: 262_144))
+        cut.signal()
+        try await download.value
+
+        let ranges = ChunkedRangeProtocol.recordedRanges(path: path)
+        // probe, first attempt, retry — and the retry starts mid-file.
+        #expect(ranges.count == 3)
+        #expect(ranges.first == "bytes=0-0")
+        #expect(ranges[1] == "bytes=0-\(total - 1)")
+        let retryStart = ranges[2]
+            .dropFirst("bytes=".count)
+            .prefix { $0 != "-" }
+        #expect(Int(retryStart) ?? 0 > 0)
+        #expect(ranges[2] == "bytes=\(retryStart)-\(total - 1)")
+        #expect(try Data(contentsOf: manager.localURL(for: 92)) == body)
+        #expect(manager.state(for: 92) == .cached)
     }
 }

@@ -6,32 +6,10 @@ final class MockURLProtocol: URLProtocol {
     nonisolated(unsafe) private static var requestCounts: [String: Int] = [:]
     private static let lock = NSLock()
 
-    /// Serves a ranged body in chunks so a test can act (pause, cancel) part
-    /// way through a transfer. Set by `stubRangedChunked`; takes precedence
-    /// over `handler` while it is installed.
-    nonisolated(unsafe) private static var chunkedPlan: (
-        (URLRequest) throws -> (
-            response: HTTPURLResponse,
-            body: Data,
-            chunkSize: Int,
-            afterChunk: (Int) -> Bool
-        )
-    )?
-    /// Every `Range` header seen, in request order — how a test proves a
-    /// resumed transfer asked for the bytes it did not already have.
-    nonisolated(unsafe) private static var ranges: [String] = []
-
-    private let cancelLock = NSLock()
-    private var isCancelled = false
-
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        if let plan = MockURLProtocol.chunkedPlan {
-            startChunkedLoading(plan)
-            return
-        }
         guard let handler = MockURLProtocol.handler else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
@@ -45,104 +23,7 @@ final class MockURLProtocol: URLProtocol {
             client?.urlProtocol(self, didFailWithError: error)
         }
     }
-    override func stopLoading() {
-        cancelLock.withLock { isCancelled = true }
-    }
-
-    private func startChunkedLoading(
-        _ plan: (URLRequest) throws -> (
-            response: HTTPURLResponse,
-            body: Data,
-            chunkSize: Int,
-            afterChunk: (Int) -> Bool
-        )
-    ) {
-        do {
-            let planned = try plan(request)
-            client?.urlProtocol(
-                self,
-                didReceive: planned.response,
-                cacheStoragePolicy: .notAllowed
-            )
-            var offset = 0
-            while offset < planned.body.count {
-                if cancelLock.withLock({ isCancelled }) { return }
-                let end = min(offset + planned.chunkSize, planned.body.count)
-                client?.urlProtocol(self, didLoad: planned.body.subdata(in: offset..<end))
-                offset = end
-                // `afterChunk` returning false cuts the response short. A
-                // cancel requested from inside it cannot be relied on to reach
-                // `stopLoading` while this thread is still in `startLoading`,
-                // so the stub severs the connection itself — which is what the
-                // client sees when a real transfer is cancelled mid-body.
-                guard planned.afterChunk(offset) else {
-                    client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
-                    return
-                }
-            }
-            if cancelLock.withLock({ isCancelled }) { return }
-            client?.urlProtocolDidFinishLoading(self)
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
-    }
-
-    /// Serves `fullBody` honoring `Range`, delivered `chunkSize` bytes at a
-    /// time, calling `afterChunk` with the number of bytes delivered so far.
-    static func stubRangedChunked(
-        path: String,
-        fullBody: Data,
-        etag: String,
-        chunkSize: Int,
-        afterChunk: @escaping (Int) -> Bool
-    ) {
-        lock.withLock {
-            chunkedPlan = { request in
-                guard request.url?.path == path else {
-                    throw URLError(.resourceUnavailable)
-                }
-                let header = request.value(forHTTPHeaderField: "Range") ?? ""
-                lock.withLock { ranges.append(header) }
-                guard header.hasPrefix("bytes=") else {
-                    throw URLError(.badServerResponse)
-                }
-                let bounds = header.dropFirst("bytes=".count)
-                    .split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
-                guard bounds.count == 2, let start = Int(bounds[0]) else {
-                    throw URLError(.badServerResponse)
-                }
-                let requestedEnd = bounds[1].isEmpty
-                    ? fullBody.count - 1
-                    : Int(bounds[1])
-                guard let requestedEnd,
-                      start >= 0,
-                      start < fullBody.count,
-                      requestedEnd >= start
-                else {
-                    throw URLError(.badServerResponse)
-                }
-                let end = min(requestedEnd, fullBody.count - 1)
-                let body = fullBody.subdata(in: start..<(end + 1))
-                let response = HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 206,
-                    httpVersion: nil,
-                    headerFields: [
-                        "Content-Range": "bytes \(start)-\(end)/\(fullBody.count)",
-                        "ETag": etag,
-                        "Accept-Ranges": "bytes",
-                        "Content-Length": "\(body.count)",
-                    ]
-                )!
-                return (response, body, chunkSize, afterChunk)
-            }
-        }
-    }
-
-    /// Every `Range` header served by `stubRangedChunked`, in request order.
-    static func recordedRanges() -> [String] {
-        lock.withLock { ranges }
-    }
+    override func stopLoading() {}
 
     static func stub(path: String, data: Data) {
         register(path: path) { request in
@@ -257,8 +138,6 @@ final class MockURLProtocol: URLProtocol {
             stubs = [:]
             requestCounts = [:]
             handler = nil
-            chunkedPlan = nil
-            ranges = []
         }
     }
 
