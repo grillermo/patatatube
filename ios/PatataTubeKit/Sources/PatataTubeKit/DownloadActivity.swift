@@ -6,19 +6,25 @@ public struct DownloadActivity: Equatable, Identifiable, Sendable {
     public let progress: Double
     public let transferredByteCount: Int64
     public let totalByteCount: Int64?
+    /// True for an entry restored from `PausedDownloadStore` rather than a live
+    /// transfer. Paused entries never enter `inFlight`, so they contribute
+    /// nothing to the speed meter.
+    public let isPaused: Bool
 
     public init(
         videoID: Int,
         versionID: Int?,
         progress: Double,
         transferredByteCount: Int64,
-        totalByteCount: Int64?
+        totalByteCount: Int64?,
+        isPaused: Bool = false
     ) {
         self.videoID = videoID
         self.versionID = versionID
         self.progress = progress
         self.transferredByteCount = transferredByteCount
         self.totalByteCount = totalByteCount
+        self.isPaused = isPaused
     }
 
     public var id: String { versionID.map { "\(videoID):\($0)" } ?? "\(videoID)" }

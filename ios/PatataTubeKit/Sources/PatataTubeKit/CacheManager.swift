@@ -169,6 +169,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var externalCancellationRequests: Set<String> = []
     private var externalTasks: [String: Task<Void, Error>] = [:]
     private var completionHistory: DownloadCompletionHistoryStore
+    private var pausedStore: PausedDownloadStore
+    /// In-memory mirror of `pausedStore`'s keys, read under `lock` on the hot
+    /// paths (`releasePermit`, `resumeInterrupted`) so they never touch the
+    /// filesystem.
+    private var pausedKeys: Set<String> = []
     private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
     private var idByTask: [Int: String] = [:]
     private var tasksByKey: [String: URLSessionDownloadTask] = [:]
@@ -230,7 +235,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             root: self.root,
             fileManager: fileManager
         )
+        self.pausedStore = PausedDownloadStore(root: self.root, fileManager: fileManager)
         super.init()
+        self.pausedKeys = Set(self.pausedStore.entries.map(\.id))
         self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         try? fileManager.createDirectory(at: self.root, withIntermediateDirectories: true)
         // Visible in the Files app (Documents), but keep it out of iCloud/device
@@ -451,12 +458,48 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         if fileManager.fileExists(atPath: localURL(for: id, versionId: versionId).path) { return .cached }
         if offlineHLSMasterURL(for: id, versionId: versionId) != nil { return .cached }
         return lock.withLock {
-            inFlight[key].map { .downloading($0.activity.progress) } ?? .notCached
+            if let activity = inFlight[key]?.activity {
+                return .downloading(activity.progress)
+            }
+            if let entry = pausedStore.entry(key) {
+                return .downloading(entry.progress)
+            }
+            return .notCached
         }
     }
 
+    /// Live transfers plus paused entries, sorted by key. A paused entry whose
+    /// file has since landed is stale (a pause that raced a completion) — drop
+    /// it here, the same staleness check `recentDownloads()` applies.
     public func activeDownloads() -> [DownloadActivity] {
-        lock.withLock { inFlight.values.map(\.activity).sorted { $0.id < $1.id } }
+        lock.withLock {
+            let live = inFlight.values.map(\.activity)
+            let liveKeys = Set(live.map(\.id))
+            var stale: [String] = []
+            var paused: [DownloadActivity] = []
+            for entry in pausedStore.entries where !liveKeys.contains(entry.id) {
+                let landed = fileManager.fileExists(
+                    atPath: localURL(for: entry.videoID, versionId: entry.versionID).path
+                )
+                if landed {
+                    stale.append(entry.id)
+                    continue
+                }
+                paused.append(DownloadActivity(
+                    videoID: entry.videoID,
+                    versionID: entry.versionID,
+                    progress: entry.progress,
+                    transferredByteCount: entry.transferredByteCount,
+                    totalByteCount: entry.totalByteCount,
+                    isPaused: true
+                ))
+            }
+            for key in stale {
+                pausedStore.remove(key)
+                pausedKeys.remove(key)
+            }
+            return (live + paused).sorted { $0.id < $1.id }
+        }
     }
 
     /// Total bytes this process has downloaded since launch, across every
