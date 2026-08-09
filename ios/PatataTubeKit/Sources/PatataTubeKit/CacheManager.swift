@@ -7,7 +7,15 @@ public enum CacheState: Equatable, Sendable {
     case cached
 }
 
-private struct SegmentTaskContext {
+/// Why a pause teardown wait ended without the teardown having finished.
+/// Exists so the timeout reaches `DevLog.error` as a typed error.
+enum CacheManagerPauseError: Error, Equatable {
+    case teardownTimedOut(key: String)
+}
+
+/// Internal rather than private so the sink-replacement and start-decision
+/// seams below can be unit-tested.
+struct SegmentTaskContext {
     let attemptID: UUID
     let cacheKey: String
     let segmentIndex: Int
@@ -199,11 +207,18 @@ public final class CacheManager:
     /// as soon as cancellation has been *requested*; the URLSession callbacks
     /// that persist the partial state land later, and a resume that starts
     /// before they do would race the manifest/resume file it needs.
-    private var pauseTeardownKeys: Set<String> = []
+    /// Internal (not private) so tests can put a key into teardown.
+    var pauseTeardownKeys: Set<String> = []
+    /// Keys whose teardown wait hit `pauseTeardownTimeout`. The previous
+    /// transfer's sinks may still be open on the part files, so the resumed
+    /// transfer must not continue from them — see `segmentStartPrefix`.
+    /// Consumed once, by the transfer that follows the timed-out wait.
+    private var pauseTeardownTimeoutKeys: Set<String> = []
     /// How long `resume` waits for a pause teardown before proceeding anyway.
     /// A bound, not a deadline: it must never be possible for a lost callback
-    /// to make Resume permanently dead.
-    private let pauseTeardownTimeout: Duration = .seconds(5)
+    /// to make Resume permanently dead. A `var` only so tests need not wait
+    /// five real seconds.
+    var pauseTeardownTimeout: Duration = .seconds(5)
     /// Launch-time reservations still waiting on the gate. Completing means the
     /// permit was granted (or the key stopped being paused, in which case the
     /// task released it again).
@@ -218,7 +233,8 @@ public final class CacheManager:
     private var tasksByIdentifier: [Int: URLSessionTask] = [:]
     /// The open part-file writer for each in-flight segment data task. Created
     /// when its response headers validate, closed in `didCompleteWithError`.
-    private var segmentSinks: [Int: SegmentByteSink] = [:]
+    /// Internal (not private) so `takeExistingSegmentSink` can be tested.
+    var segmentSinks: [Int: SegmentByteSink] = [:]
     /// Last time (and byte count) each sink's progress was written back into
     /// the manifest, so durability bookkeeping is throttled rather than run on
     /// every delivered chunk.
@@ -691,6 +707,10 @@ public final class CacheManager:
             // The permit was reserved for the paused entry; hand it back now
             // that the transfer has ended, however it ended.
             releasePausedPermit(for: key)
+            // The HLS path has no segments to consume the flag, and a segmented
+            // transfer that never reached `startIncompleteSegments` leaves it
+            // set. Either way it must not outlive this resume.
+            _ = consumePauseTeardownTimeout(for: key)
         }
         if entry.isHLS {
             try await downloadHLS(
@@ -888,19 +908,57 @@ public final class CacheManager:
     /// Waits for a pause teardown of `key` to finish before a new transfer for
     /// the same key starts. Bounded by `pauseTeardownTimeout` so a callback
     /// URLSession never delivers can't wedge Resume forever.
-    private func awaitPauseTeardown(for key: String) async {
+    /// A timeout is not benign: the old transfer's `SegmentByteSink`s can still
+    /// be open on the part files, with their own file offsets. Anything that
+    /// starts after one must therefore refuse to continue from those bytes, so
+    /// the key is recorded for `consumePauseTeardownTimeout` and reported at
+    /// error severity rather than as a routine event.
+    func awaitPauseTeardown(for key: String) async {
         guard lock.withLock({ pauseTeardownInProgressLocked(key) }) else { return }
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: pauseTeardownTimeout)
         while lock.withLock({ pauseTeardownInProgressLocked(key) }) {
             guard clock.now < deadline else {
-                DevLog.event(.download, "pause teardown wait timed out", [
-                    "key": key,
-                ])
+                lock.withLock { _ = pauseTeardownTimeoutKeys.insert(key) }
+                DevLog.error(
+                    CacheManagerPauseError.teardownTimedOut(key: key),
+                    "pause teardown wait timed out; segments restart from 0",
+                    ["key": key]
+                )
                 return
             }
             try? await Task.sleep(for: .milliseconds(20))
         }
+    }
+
+    /// Whether the transfer about to start for `key` follows a timed-out pause
+    /// teardown. One-shot: the flag is cleared as it is read, so only the very
+    /// next transfer pays for it.
+    func consumePauseTeardownTimeout(for key: String) -> Bool {
+        lock.withLock { pauseTeardownTimeoutKeys.remove(key) != nil }
+    }
+
+    /// Where a segment's next request starts.
+    ///
+    /// Normally the part file on disk is the durable record, so its size is the
+    /// continuation point. A part at exactly the segment length on a segment
+    /// still marked incomplete is untrustworthy (no bytes left to request, and
+    /// the completion bookkeeping never ran), and after a timed-out pause
+    /// teardown *nothing* on disk is trustworthy: another sink may still be
+    /// draining queued writes into that part file with its own offset. Both
+    /// cases restart the segment from byte 0 — re-downloading is cheap next to
+    /// silently interleaved bytes that no checksum downstream would catch.
+    static func segmentStartPrefix(
+        partByteCount: Int64?,
+        segmentLength: Int64,
+        teardownTimedOut: Bool
+    ) -> Int64 {
+        guard !teardownTimedOut,
+              let partByteCount,
+              partByteCount > 0,
+              partByteCount < segmentLength
+        else { return 0 }
+        return partByteCount
     }
 
     /// Hands a paused entry's permit back to the gate. Safe to call for a key
@@ -1423,6 +1481,48 @@ public final class CacheManager:
         }
     }
 
+    /// Unregisters any sink already open for `taskIdentifier`, resets the
+    /// segment's in-flight byte accounting back to the prefix the next sink
+    /// will start from, and hands the old sink back so the **caller closes it
+    /// outside the lock** — closing drains up to
+    /// `SegmentByteSink.maxPendingByteCount` of queued writes, which is I/O and
+    /// must never run under the lock that serializes every download.
+    ///
+    /// Must be called with `lock` held.
+    private func takeExistingSegmentSinkLocked(
+        context: SegmentTaskContext,
+        taskIdentifier: Int
+    ) -> SegmentByteSink? {
+        guard let stale = segmentSinks.removeValue(forKey: taskIdentifier)
+        else { return nil }
+        segmentSinkFlushes[taskIdentifier] = nil
+        // The stale sink's bytes are about to be truncated away (or the
+        // segment re-fetched); leaving its count in `activeByteCounts` would
+        // report progress no part file holds.
+        if let attempt = segmentedAttempts[context.cacheKey],
+           attempt.id == context.attemptID {
+            attempt.activeByteCounts[context.segmentIndex] =
+                context.durablePrefixByteCount > 0
+                    ? context.durablePrefixByteCount
+                    : nil
+        }
+        return stale
+    }
+
+    /// Locking wrapper around `takeExistingSegmentSinkLocked`. The returned
+    /// sink is still open; the caller owns closing it.
+    func takeExistingSegmentSink(
+        context: SegmentTaskContext,
+        taskIdentifier: Int
+    ) -> SegmentByteSink? {
+        lock.withLock {
+            takeExistingSegmentSinkLocked(
+                context: context,
+                taskIdentifier: taskIdentifier
+            )
+        }
+    }
+
     /// Validates a segment's response headers and opens its part-file sink.
     /// Returns false (with the failure recorded on the attempt) when the
     /// response is not the 206 continuation we asked for, so the caller
@@ -1437,13 +1537,35 @@ public final class CacheManager:
         taskIdentifier: Int,
         response: URLResponse
     ) -> Bool {
-        guard let manifest = lock.withLock({ () -> SegmentedDownloadManifest? in
+        // URLSession can deliver `didReceive response:` more than once for a
+        // single data task — an authentication challenge retry, a redirect
+        // chain, or an `.allow` following a 401. Whatever the first response
+        // opened has to be torn down *before* a second sink truncates the same
+        // part file, or that sink's queued writes land past the truncation
+        // point and silently corrupt it.
+        let (manifest, stale) = lock.withLock {
+            () -> (SegmentedDownloadManifest?, SegmentByteSink?) in
+            let stale = takeExistingSegmentSinkLocked(
+                context: context,
+                taskIdentifier: taskIdentifier
+            )
             guard let attempt = segmentedAttempts[context.cacheKey],
                   attempt.id == context.attemptID,
                   !attempt.terminalClaimed
-            else { return nil }
-            return attempt.manifest
-        }) else { return false }
+            else { return (nil, stale) }
+            return (attempt.manifest, stale)
+        }
+        if let stale {
+            // `close()` drains the queued writes, so it is I/O and stays off
+            // the lock — and it must complete before the new sink truncates.
+            stale.close()
+            DevLog.event(.download, "stale segment sink closed", [
+                "key": context.cacheKey,
+                "segment": "\(context.segmentIndex)",
+                "task": "\(taskIdentifier)",
+            ])
+        }
+        guard let manifest else { return false }
 
         let record = manifest.segments[context.segmentIndex]
         let requested = DownloadByteRange(
@@ -1488,18 +1610,22 @@ public final class CacheManager:
 
         switch opened {
         case .success(let sink):
-            let registered = lock.withLock { () -> Bool in
+            let (registered, raced) = lock.withLock {
+                () -> (Bool, SegmentByteSink?) in
                 // The attempt can have been claimed while the file was being
                 // opened; re-check rather than registering into a dead attempt.
                 guard let attempt = segmentedAttempts[context.cacheKey],
                       attempt.id == context.attemptID,
                       !attempt.terminalClaimed
-                else { return false }
-                segmentSinks[taskIdentifier] = sink
+                else { return (false, nil) }
+                // Never blind-assign: an entry here means a sink this call did
+                // not account for is still open on the same part file.
+                let raced = segmentSinks.updateValue(sink, forKey: taskIdentifier)
                 segmentSinkFlushes[taskIdentifier] = (now(), sink.byteCount)
                 attempt.activeByteCounts[context.segmentIndex] = sink.byteCount
-                return true
+                return (true, raced)
             }
+            raced?.close()
             guard registered else {
                 sink.close()
                 return false
@@ -1938,6 +2064,9 @@ public final class CacheManager:
         // still marked incomplete is treated as untrustworthy and re-fetched:
         // there would be no bytes left to request, and the completion
         // bookkeeping never ran for it.
+        // A pause teardown that timed out may have left the previous transfer's
+        // sinks open on these very part files, so every segment restarts clean.
+        let teardownTimedOut = consumePauseTeardownTimeout(for: attempt.cacheKey)
         let starts = incompleteSegments.map { segment in
             let part = segmentedStore.partURL(
                 cacheKey: attempt.cacheKey,
@@ -1946,18 +2075,18 @@ public final class CacheManager:
             let partSize = ((try? fileManager.attributesOfItem(
                 atPath: part.path
             )[.size]) as? NSNumber)?.int64Value
-            let durablePrefixByteCount: Int64
-            if let partSize, partSize > 0, partSize < segment.range.length {
-                durablePrefixByteCount = partSize
-            } else {
-                durablePrefixByteCount = 0
-            }
+            let durablePrefixByteCount = Self.segmentStartPrefix(
+                partByteCount: partSize,
+                segmentLength: segment.range.length,
+                teardownTimedOut: teardownTimedOut
+            )
             DevLog.event(.download, "segment start decision", [
                 "key": attempt.cacheKey,
                 "segment": "\(segment.index)",
                 "part_bytes": partSize.map(String.init) ?? "-",
                 "persisted": "\(segment.persistedByteCount)",
                 "durable_prefix": "\(durablePrefixByteCount)",
+                "teardown_timed_out": "\(teardownTimedOut)",
             ])
             return (
                 segment: segment,
@@ -2075,12 +2204,13 @@ public final class CacheManager:
         let partSize = ((try? fileManager.attributesOfItem(
             atPath: part.path
         )[.size]) as? NSNumber)?.int64Value
-        let durablePrefixByteCount: Int64
-        if let partSize, partSize > 0, partSize < segment.range.length {
-            durablePrefixByteCount = partSize
-        } else {
-            durablePrefixByteCount = 0
-        }
+        // No teardown flag here: `startIncompleteSegments` already consumed it
+        // for this transfer, and by now its sinks are this attempt's own.
+        let durablePrefixByteCount = Self.segmentStartPrefix(
+            partByteCount: partSize,
+            segmentLength: segment.range.length,
+            teardownTimedOut: false
+        )
         let requestRange = DownloadByteRange(
             start: segment.range.start + durablePrefixByteCount,
             end: segment.range.end

@@ -38,6 +38,11 @@ final class SegmentByteSink: @unchecked Sendable {
     /// queued writes drain). Safe to read from the delegate queue.
     var byteCount: Int64 { state.withLock { count } }
 
+    /// False once `close()` has drained and released the file handle. Lets a
+    /// caller (and a test) prove a replaced sink was actually torn down rather
+    /// than leaked with its handle still open on the part file.
+    var isOpen: Bool { state.withLock { !isClosed } }
+
     init(
         partURL: URL,
         expectedOffset: Int64,
