@@ -174,6 +174,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     /// paths (`releasePermit`, `resumeInterrupted`) so they never touch the
     /// filesystem.
     private var pausedKeys: Set<String> = []
+    /// Paused keys currently holding a gate permit.
+    private var pausedPermitKeys: Set<String> = []
+    /// Launch-time reservations still waiting on the gate. Completing means the
+    /// permit was granted (or the key stopped being paused, in which case the
+    /// task released it again).
+    private var pausedReservations: [String: Task<Void, Never>] = [:]
     private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
     private var idByTask: [Int: String] = [:]
     private var tasksByKey: [String: URLSessionDownloadTask] = [:]
@@ -238,6 +244,9 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         self.pausedStore = PausedDownloadStore(root: self.root, fileManager: fileManager)
         super.init()
         self.pausedKeys = Set(self.pausedStore.entries.map(\.id))
+        for key in self.pausedKeys {
+            reservePermit(for: key)
+        }
         self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         try? fileManager.createDirectory(at: self.root, withIntermediateDirectories: true)
         // Visible in the Files app (Documents), but keep it out of iCloud/device
@@ -550,11 +559,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             "streams": "\(streamCount)",
             "state": DevLog.describe(state(for: id, versionId: versionId)),
         ])
+        let key = cacheKey(videoId: id, versionId: versionId)
         await concurrencyGate.acquire()
         DevLog.event(.download, "download passed gate", ["video_id": "\(id)"])
         defer {
             DevLog.event(.download, "download releasing gate", ["video_id": "\(id)"])
-            concurrencyGate.release()
+            releasePermit(for: key)
         }
         _ = try await downloadVideo(
             id: id,
@@ -680,6 +690,55 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             "free_bytes": DevLog.freeDiskBytes(),
         ])
         return resumed
+    }
+
+    /// Returns a finished download's permit — unless the key was paused, in
+    /// which case ownership transfers to the paused-permit table and the slot
+    /// stays occupied. Called from `download`'s `defer` instead of a bare
+    /// `concurrencyGate.release()`.
+    func releasePermit(for key: String) {
+        let handedOver = lock.withLock { () -> Bool in
+            guard pausedKeys.contains(key), !pausedPermitKeys.contains(key)
+            else { return false }
+            pausedPermitKeys.insert(key)
+            return true
+        }
+        DevLog.event(.download, handedOver ? "permit held for pause" : "permit released", [
+            "key": key,
+        ])
+        if !handedOver { concurrencyGate.release() }
+    }
+
+    /// Re-acquires a permit for an entry that was paused in a previous process.
+    /// Queues through the gate like any other acquirer; if the entry stops being
+    /// paused before the permit is granted, it is handed straight back.
+    private func reservePermit(for key: String) {
+        let task = Task.detached { [weak self] in
+            guard let self else { return }
+            await self.concurrencyGate.acquire()
+            let stillPaused = self.lock.withLock { () -> Bool in
+                guard self.pausedKeys.contains(key) else { return false }
+                self.pausedPermitKeys.insert(key)
+                return true
+            }
+            if !stillPaused { self.concurrencyGate.release() }
+        }
+        lock.withLock { pausedReservations[key] = task }
+    }
+
+    /// Waits until this paused key's permit has actually been granted. A no-op
+    /// when the permit was handed over from a live download (no reservation).
+    func awaitPermit(for key: String) async {
+        guard let task = lock.withLock({ pausedReservations[key] }) else { return }
+        await task.value
+    }
+
+    /// Hands a paused entry's permit back to the gate. Safe to call for a key
+    /// that never held one.
+    func releasePausedPermit(for key: String) {
+        let held = lock.withLock { pausedPermitKeys.remove(key) != nil }
+        lock.withLock { pausedReservations[key] = nil }
+        if held { concurrencyGate.release() }
     }
 
     /// Cancels an in-flight download for this id/version. The awaiting

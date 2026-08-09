@@ -82,3 +82,52 @@ struct CacheManagerPauseTests {
         #expect(PausedDownloadStore(root: root).contains("7") == false)
     }
 }
+
+private final class PauseSpyGate: DownloadConcurrencyGating, @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var acquireCount = 0
+    private(set) var releaseCount = 0
+    private var limit = 3
+
+    func acquire() async { lock.withLock { acquireCount += 1 } }
+    func release() { lock.withLock { releaseCount += 1 } }
+    func setLimit(_ n: Int) { lock.withLock { limit = max(n, 1) } }
+    var currentLimit: Int { lock.withLock { limit } }
+}
+
+extension CacheManagerPauseTests {
+    @Test func aStoredPausedEntryReservesAPermitAtLaunch() async throws {
+        let root = temporaryRoot()
+        var store = PausedDownloadStore(root: root)
+        store.insert(pausedEntry(videoID: 7))
+        let spy = PauseSpyGate()
+        let manager = CacheManager(
+            root: root,
+            configuration: .ephemeral,
+            fileManager: .default,
+            concurrencyGate: spy
+        )
+        // The reservation runs in a detached task; wait for it to be granted.
+        await manager.awaitPermit(for: "7")
+
+        #expect(spy.acquireCount == 1)
+        #expect(spy.releaseCount == 0)
+    }
+
+    @Test func releasingAPausedPermitReturnsItToTheGate() async throws {
+        let root = temporaryRoot()
+        var store = PausedDownloadStore(root: root)
+        store.insert(pausedEntry(videoID: 7))
+        let spy = PauseSpyGate()
+        let manager = CacheManager(
+            root: root,
+            configuration: .ephemeral,
+            fileManager: .default,
+            concurrencyGate: spy
+        )
+        await manager.awaitPermit(for: "7")
+        manager.releasePausedPermit(for: "7")
+
+        #expect(spy.releaseCount == 1)
+    }
+}

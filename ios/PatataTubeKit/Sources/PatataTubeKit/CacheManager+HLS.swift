@@ -25,7 +25,7 @@ extension CacheManager {
         DevLog.event(.download, "downloadHLS passed gate", ["video_id": "\(id)"])
         defer {
             DevLog.event(.download, "downloadHLS releasing gate", ["video_id": "\(id)"])
-            concurrencyGate.release()
+            releasePermit(for: key)
         }
 
         guard beginExternalActivity(
