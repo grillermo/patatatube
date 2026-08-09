@@ -693,6 +693,35 @@ struct VideoGridView: View {
                     model.cache.cancel(id: activity.videoID, versionId: activity.versionID)
                 },
                 onPlay: { video in play(video, caller: "downloads") },
+                onPause: { activity in
+                    guard let parameters = pauseParameters(
+                        for: activity.videoID, versionID: activity.versionID
+                    ) else { return }
+                    model.cache.pause(
+                        id: activity.videoID,
+                        versionId: activity.versionID,
+                        remote: parameters.remote,
+                        isHLS: parameters.isHLS,
+                        streamCount: parameters.streamCount,
+                        preview: parameters.preview,
+                        showPosterKey: parameters.posterKey,
+                        showPoster: parameters.poster
+                    )
+                },
+                onResume: { activity in
+                    Task {
+                        do {
+                            try await model.cache.resume(
+                                id: activity.videoID,
+                                versionId: activity.versionID,
+                                bearerToken: model.credentials.token
+                            )
+                        } catch {
+                            guard !isCancellation(error) else { return }
+                            store.errorText = "Download failed: \(error)"
+                        }
+                    }
+                },
                 byteCount: { model.cache.downloadedByteCount() }
             )
         }
@@ -1042,6 +1071,30 @@ struct VideoGridView: View {
             store.errorText = "Download failed: \(error)"
             return false
         }
+    }
+
+    /// The parameters a paused entry has to remember, resolved from the loaded
+    /// video. Mirrors the branch in `download(_:)` — an HLS row pauses with its
+    /// master playlist URL, everything else with its stream URL.
+    private func pauseParameters(
+        for videoID: Int, versionID: Int?
+    ) -> (remote: URL, isHLS: Bool, streamCount: Int,
+          preview: URL?, posterKey: String?, poster: URL?)? {
+        guard let target = Self.downloadVideo(
+            id: videoID, versionID: versionID, videos: store.videos
+        ) else { return nil }
+        let master = model.hlsURL(for: target)
+        let takesHLS = master != nil && target.hlsPath?.isEmpty == false
+        guard let remote = takesHLS ? master : model.streamURL(for: target) else { return nil }
+        let posterKey = target.showPreviewUrl
+        return (
+            remote: remote,
+            isHLS: takesHLS,
+            streamCount: model.downloadStreamCount,
+            preview: resolveImageURL(target.previewUrl),
+            posterKey: posterKey,
+            poster: resolveImageURL(posterKey)
+        )
     }
 
     /// Absolute URL for a server image path; absolute URLs pass through.
