@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.0.10",
+          "buildVersion": "150",
+          "date": "2026-08-09T01:45:55Z",
+          "localizedDescription": "What's new in 2.0.10:\n\n• chore(ios): drop unrelated Package.resolved churn from the fix wave\n• fix(ios): close permit leak and pause races found in final review\n• docs: describe pausable downloads\n• feat(ios): wire pause/resume from the downloads menu to the cache\n• feat(ios): move cancel into a per-download menu with pause/resume\n• feat(ios): keep paused downloads paused across foreground and launch\n• feat(ios): resume a paused download on its held permit\n• feat(ios): pause a download without discarding its partial bytes",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.10/PatataTube-2.0.10.ipa",
+          "size": 4247322,
+          "sha256": "61c899b31fe54ba6994de84ef87968b40d9f474e559978e10626f2ef7b1319de",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.0.9",
           "buildVersion": "149",
           "date": "2026-08-08T02:37:17Z",
@@ -1414,11 +1424,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.0.9",
-      "versionDate": "2026-08-08T02:37:17Z",
-      "versionDescription": "Maintenance rebuild\n\n• No user-facing changes since 2.0.8",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.9/PatataTube-2.0.9.ipa",
-      "size": 4217698
+      "version": "2.0.10",
+      "versionDate": "2026-08-09T01:45:55Z",
+      "versionDescription": "What's new in 2.0.10:\n\n• chore(ios): drop unrelated Package.resolved churn from the fix wave\n• fix(ios): close permit leak and pause races found in final review\n• docs: describe pausable downloads\n• feat(ios): wire pause/resume from the downloads menu to the cache\n• feat(ios): move cancel into a per-download menu with pause/resume\n• feat(ios): keep paused downloads paused across foreground and launch\n• feat(ios): resume a paused download on its held permit\n• feat(ios): pause a download without discarding its partial bytes",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.0.10/PatataTube-2.0.10.ipa",
+      "size": 4247322
     }
   ],
   "news": []
