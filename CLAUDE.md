@@ -246,6 +246,20 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
   Download-all in `EpisodesView` shares its `onDownload` closure with
   individual per-episode taps and deliberately does not, so it enqueues at
   interactive (non-bulk) priority.
+- **Downloads can be paused, and a pause outlives the process.** Each row in
+  the Downloads view carries a three-dot menu holding Cancel plus Pause (or
+  Resume). `CacheManager.pause` is deliberately not `cancel`: cancel wipes
+  resume state so a re-tap starts clean, pause preserves it — the segmented
+  path cancels its tasks `byProducingResumeData` through the same
+  `preservingResumeData` machinery a resumable transport error uses, so the
+  manifest and parts survive. Entries live in `paused-downloads.json`
+  (`PausedDownloadStore`) in the cache root, and `resumeInterrupted()` skips
+  their keys, which is the only thing stopping the next foreground from
+  silently un-pausing them. A paused download **keeps its concurrency permit**:
+  `download`'s `defer` hands ownership to the paused-permit table instead of
+  releasing, and every stored entry re-reserves one at launch, so pausing
+  everything means nothing downloads until the user acts. HLS packages have no
+  partial state on disk, so pausing one restarts it from zero on resume.
 - **The in-app web bridge has an address bar.** `WebBridgeView` opens on the
   last committed page (`WebHistoryStore.lastURL`, `UserDefaults` key
   `webBridgeHistory`, 200 entries) rather than a hardcoded URL. Typing
