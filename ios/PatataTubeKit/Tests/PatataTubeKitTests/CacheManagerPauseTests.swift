@@ -411,3 +411,79 @@ extension CacheManagerPauseTests {
         #expect(await VideoStore.isCancellation(DownloadPausedError()))
     }
 }
+
+/// One-shot latch so a chunk callback fires its side effect exactly once.
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.withLock {
+            guard !claimed else { return false }
+            claimed = true
+            return true
+        }
+    }
+}
+
+extension CacheManagerPauseTests {
+    /// The whole point of the part-file transport: a paused segment resumes
+    /// from the bytes already on disk instead of re-requesting from zero.
+    /// URLSession hands back no resume data for a deliberate cancel, so before
+    /// this the second request was always `bytes=0-…` and the transfer
+    /// restarted.
+    @Test func resumeContinuesFromPersistedBytesNotZero() async throws {
+        let root = temporaryRoot()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.reset()
+        defer { MockURLProtocol.reset() }
+
+        let total = 1_048_576
+        let body = Data((0..<total).map { UInt8($0 % 251) })
+        let manager = CacheManager(
+            root: root,
+            configuration: config,
+            fileManager: .default
+        )
+        let remote = URL(string: "https://example.com/91.mp4")!
+        let pauseOnce = OnceFlag()
+        MockURLProtocol.stubRangedChunked(
+            path: "/91.mp4",
+            fullBody: body,
+            etag: "\"continuation\"",
+            chunkSize: 32_768
+        ) { delivered in
+            // Pause a quarter of the way in, once, then cut the response.
+            guard delivered >= 262_144, pauseOnce.claim() else { return true }
+            manager.pause(
+                id: 91, versionId: nil, remote: remote, isHLS: false,
+                streamCount: 1, preview: nil, showPosterKey: nil, showPoster: nil
+            )
+            return false
+        }
+
+        _ = try? await manager.download(id: 91, from: remote, streamCount: 1)
+
+        let store = SegmentedDownloadStore(root: root, fileManager: .default)
+        let part = store.partURL(cacheKey: "91", index: 0)
+        let partSize = ((try FileManager.default.attributesOfItem(
+            atPath: part.path
+        )[.size]) as? NSNumber)?.int64Value ?? -1
+        #expect(partSize > 0)
+        #expect(partSize < Int64(total))
+        let paused = try store.load(cacheKey: "91")
+        #expect(paused.segments[0].persistedByteCount == partSize)
+        #expect(paused.segments[0].isComplete == false)
+
+        try await manager.resume(id: 91)
+
+        // The resumed request asked for the tail, not the whole file.
+        let ranges = MockURLProtocol.recordedRanges()
+        #expect(ranges.last == "bytes=\(partSize)-\(total - 1)")
+        #expect(ranges.contains("bytes=0-0"))   // the probe, once
+        #expect(try Data(contentsOf: manager.localURL(for: 91)) == body)
+        #expect(manager.state(for: 91) == .cached)
+        #expect(PausedDownloadStore(root: root).contains("91") == false)
+    }
+}

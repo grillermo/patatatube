@@ -1812,7 +1812,11 @@ struct CacheManagerTests {
         ))
     }
 
-    @Test func transportFailurePreservesManifestAndResumeDataAfterSiblingsStop() async throws {
+    /// Partial bytes survive a resumable transport failure in the segment's
+    /// *part file* — the durable record — not in a URLSession resume blob.
+    /// The blob is written to a `.resume` sidecar no more, because
+    /// `startIncompleteSegments` now sizes the part file instead of reading it.
+    @Test func transportFailurePreservesManifestAndPartialBytesAfterSiblingsStop() async throws {
         ResumableFailureProtocol.reset()
         let root = tempRoot()
         let manager = CacheManager(root: root, configuration: resumableFailureConfig())
@@ -1829,8 +1833,15 @@ struct CacheManagerTests {
         let store = SegmentedDownloadStore(root: root)
         let manifest = try store.load(cacheKey: "65")
         #expect(!manifest.segments[0].isComplete)
-        #expect(try Data(contentsOf: store.resumeURL(cacheKey: "65", index: 0))
-                == ResumableFailureProtocol.resumeMarker)
+        // The one byte the server managed to send is on disk and accounted for.
+        #expect(manifest.segments[0].persistedByteCount == 1)
+        let part = store.partURL(cacheKey: "65", index: 0)
+        #expect(((try FileManager.default.attributesOfItem(
+            atPath: part.path
+        )[.size]) as? NSNumber)?.int64Value == 1)
+        #expect(!FileManager.default.fileExists(
+            atPath: store.resumeURL(cacheKey: "65", index: 0).path
+        ))
         #expect(manager.state(for: 65) == .notCached)
         #expect(!FileManager.default.fileExists(
             atPath: manager.localURL(for: 65).path

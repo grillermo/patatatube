@@ -11,7 +11,8 @@ private struct SegmentTaskContext {
     let attemptID: UUID
     let cacheKey: String
     let segmentIndex: Int
-    let resumed: Bool
+    /// Bytes already on disk in this segment's part file when the task started.
+    /// The request's `Range` begins there, and the sink appends behind it.
     let durablePrefixByteCount: Int64
 }
 
@@ -126,6 +127,12 @@ private final class SegmentedAttempt: @unchecked Sendable {
     var segmentRetryCounts: [Int: Int] = [:]
     var terminalError: Error?
     var preservingResumeData = false
+    /// Segment tasks whose teardown still owes durable state before the
+    /// attempt may reach its terminal claim. Data tasks make their bytes
+    /// durable synchronously in `finalizeSegmentSink`, so nothing populates
+    /// this today; the guards that read it are kept because they are the
+    /// heavily-reviewed ordering contract between pause teardown and the
+    /// terminal claim, and any future async teardown belongs here.
     var resumeDataPendingTaskIDs: Set<Int> = []
     var explicitlyCancelled = false
     var terminalClaimed = false
@@ -143,7 +150,12 @@ private final class SegmentedAttempt: @unchecked Sendable {
     }
 }
 
-public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+public final class CacheManager:
+    NSObject,
+    URLSessionDownloadDelegate,
+    URLSessionDataDelegate,
+    @unchecked Sendable
+{
     private let root: URL
     private let segmentedStore: SegmentedDownloadStore
     let streamCache: (any StreamCacheSeeding)?
@@ -203,7 +215,19 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     private var segmentedAttempts: [String: SegmentedAttempt] = [:]
     private var probeAttempts: [String: FreshProbeAttempt] = [:]
     private var segmentContextByTask: [Int: SegmentTaskContext] = [:]
-    private var tasksByIdentifier: [Int: URLSessionDownloadTask] = [:]
+    private var tasksByIdentifier: [Int: URLSessionTask] = [:]
+    /// The open part-file writer for each in-flight segment data task. Created
+    /// when its response headers validate, closed in `didCompleteWithError`.
+    private var segmentSinks: [Int: SegmentByteSink] = [:]
+    /// Last time (and byte count) each sink's progress was written back into
+    /// the manifest, so durability bookkeeping is throttled rather than run on
+    /// every delivered chunk.
+    private var segmentSinkFlushes: [Int: (at: Date, byteCount: Int64)] = [:]
+    /// Rewrite the manifest at most this often, or after this many new bytes —
+    /// whichever comes first. A crash then loses a bounded amount of progress
+    /// without the delegate queue hammering the disk.
+    private static let segmentManifestFlushInterval: TimeInterval = 2
+    private static let segmentManifestFlushByteCount: Int64 = 1_048_576
 
     /// Default session config for app use. `waitsForConnectivity` lets a retry
     /// started during an outage park inside URLSession instead of failing
@@ -977,43 +1001,35 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         cancelExternalActivity(key: key)
     }
 
-    /// Cancels the segment tasks while producing resume data, reusing the same
-    /// preservation machinery a resumable transport error goes through:
-    /// `preservingResumeData` makes `finishFailedSegmentedAttemptIfReady` write
-    /// the manifest back and skip `segmentedStore.remove`, so the partial parts
-    /// survive for `startIncompleteSegments` to pick up.
+    /// Cancels the segment tasks outright. Nothing has to be extracted from
+    /// URLSession any more: every byte is already in the segment's part file,
+    /// and each task's own completion callback closes its sink and writes the
+    /// byte count into the manifest on the way out.
+    ///
+    /// `preservingResumeData` stays set for exactly one remaining reason — it
+    /// makes `finishFailedSegmentedAttemptIfReady` write the manifest back and
+    /// skip `segmentedStore.remove`, so the parts survive for
+    /// `startIncompleteSegments` to continue from.
     private func pauseSegmented(key: String) {
         guard let attempt = lock.withLock({ segmentedAttempts[key] }) else { return }
-        let tasks: [(task: URLSessionDownloadTask, taskID: Int, segmentIndex: Int)] =
-            lock.withLock {
-                guard let current = segmentedAttempts[key],
-                      current.id == attempt.id,
-                      !current.terminalClaimed
-                else { return [] }
-                current.preservingResumeData = true
-                if current.terminalError == nil {
-                    current.terminalError = DownloadPausedError()
-                }
-                return current.taskIDs.compactMap { taskID in
-                    guard let task = tasksByIdentifier[taskID],
-                          let context = segmentContextByTask[taskID],
-                          context.attemptID == current.id
-                    else { return nil }
-                    current.resumeDataPendingTaskIDs.insert(taskID)
-                    return (task, taskID, context.segmentIndex)
-                }
+        let tasks: [URLSessionTask] = lock.withLock {
+            guard let current = segmentedAttempts[key],
+                  current.id == attempt.id,
+                  !current.terminalClaimed
+            else { return [] }
+            current.preservingResumeData = true
+            if current.terminalError == nil {
+                current.terminalError = DownloadPausedError()
             }
-        for entry in tasks {
-            entry.task.cancel(byProducingResumeData: { [weak self, weak attempt] data in
-                guard let self, let attempt else { return }
-                self.preserveSegmentResumeData(
-                    data,
-                    attempt: attempt,
-                    segmentIndex: entry.segmentIndex,
-                    pendingTaskIdentifier: entry.taskID
-                )
-            })
+            return current.taskIDs.compactMap { taskID in
+                guard let task = tasksByIdentifier[taskID],
+                      let context = segmentContextByTask[taskID],
+                      context.attemptID == current.id
+                else { return nil }
+                return task
+            }
         }
+        tasks.forEach { $0.cancel() }
         finishFailedSegmentedAttemptIfReady(attempt)
     }
 
@@ -1092,7 +1108,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         if let attempt = segmentedAttempt {
             let claim = lock.withLock { () -> (
                 continuation: CheckedContinuation<URL, Error>?,
-                tasks: [URLSessionDownloadTask],
+                tasks: [URLSessionTask],
                 error: Error?
             )? in
                 attempt.explicitlyCancelled = true
@@ -1210,12 +1226,8 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                            didWriteData bytesWritten: Int64,
                            totalBytesWritten: Int64,
                            totalBytesExpectedToWrite: Int64) {
-        if let context = lock.withLock({
-            segmentContextByTask[downloadTask.taskIdentifier]
-        }) {
-            updateSegmentProgress(context: context, bytesWritten: bytesWritten)
-            return
-        }
+        // Segments no longer run on download tasks, so this only ever fires for
+        // the plain/legacy resume-data path.
         guard let key = lock.withLock({ idByTask[downloadTask.taskIdentifier] }) else { return }
         let progress: Double
         if totalBytesExpectedToWrite > 0 {
@@ -1239,20 +1251,6 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                            didFinishDownloadingTo location: URL) {
         let taskIdentifier = downloadTask.taskIdentifier
-        if let context = lock.withLock({ segmentContextByTask[taskIdentifier] }) {
-            let result = recordSegmentFile(
-                context: context,
-                task: downloadTask,
-                location: location
-            )
-            lock.withLock {
-                guard let attempt = segmentedAttempts[context.cacheKey],
-                      attempt.id == context.attemptID
-                else { return }
-                attempt.completedResults[context.segmentIndex] = result
-            }
-            return
-        }
         guard let key = lock.withLock({ idByTask[taskIdentifier] }) else { return }
 
         let result: Result<URL, Error>
@@ -1278,6 +1276,13 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                            didCompleteWithError error: Error?) {
         let taskIdentifier = task.taskIdentifier
         if let context = lock.withLock({ segmentContextByTask[taskIdentifier] }) {
+            // Close and account for the part file *before* the state machine
+            // reads the segment's result: the bytes on disk are the outcome.
+            finalizeSegmentSink(
+                context: context,
+                taskIdentifier: taskIdentifier,
+                error: error
+            )
             completeSegmentTask(
                 context: context,
                 taskIdentifier: taskIdentifier,
@@ -1297,6 +1302,243 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             completedResults[taskIdentifier] ?? .failure(URLError(.unknown))
         }
         finish(key: key, taskIdentifier: taskIdentifier, result: result)
+    }
+
+    // MARK: - Segment data-task transport
+    //
+    // Segments stream through data tasks appending straight to their part
+    // file, rather than download tasks handing back a finished temp file. The
+    // part file is the durable state, which is what makes a pause resumable:
+    // URLSession refuses to produce resume data for a deliberate cancel, so
+    // anything living only in its private temp file is gone.
+
+    public func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let context = lock.withLock({
+            segmentContextByTask[dataTask.taskIdentifier]
+        }) else {
+            completionHandler(.allow)
+            return
+        }
+        let opened = openSegmentSink(
+            context: context,
+            taskIdentifier: dataTask.taskIdentifier,
+            response: response
+        )
+        completionHandler(opened ? .allow : .cancel)
+    }
+
+    public func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive data: Data
+    ) {
+        let taskIdentifier = dataTask.taskIdentifier
+        guard let context = lock.withLock({
+            segmentContextByTask[taskIdentifier]
+        }) else { return }
+
+        // The write happens outside the lock. Delegate callbacks for this
+        // session are serialized (nil `delegateQueue`), so the sink has exactly
+        // one writer, and this app has already shipped one main-thread hang
+        // from file I/O on a shared path — see `VideoStore.swift`'s history.
+        guard let sink = lock.withLock({ () -> SegmentByteSink? in
+            guard let attempt = segmentedAttempts[context.cacheKey],
+                  attempt.id == context.attemptID,
+                  !attempt.terminalClaimed
+            else { return nil }
+            return segmentSinks[taskIdentifier]
+        }) else { return }
+
+        var failure: Error?
+        do {
+            try sink.append(data)
+        } catch {
+            failure = error
+        }
+
+        var manifestToFlush: SegmentedDownloadManifest?
+        lock.withLock {
+            segmentProgressCallCount += 1
+            guard failure == nil,
+                  let attempt = segmentedAttempts[context.cacheKey],
+                  attempt.id == context.attemptID,
+                  !attempt.terminalClaimed
+            else { return }
+            // `activeByteCounts` holds the segment's absolute byte count, which
+            // is what `progress` and `updatePersistedByteCountLocked` compare
+            // against `persistedByteCount`.
+            attempt.activeByteCounts[context.segmentIndex] = sink.byteCount
+            inFlight[context.cacheKey]?.record(
+                transferredByteCount: transferredByteCount(
+                    manifest: attempt.manifest,
+                    activeByteCounts: attempt.activeByteCounts
+                ),
+                progress: SegmentedDownloadStore.progress(
+                    manifest: attempt.manifest,
+                    activeByteCounts: attempt.activeByteCounts
+                )
+            )
+            let last = segmentSinkFlushes[taskIdentifier]
+            let elapsed = now().timeIntervalSince(last?.at ?? .distantPast)
+            let grown = sink.byteCount - (last?.byteCount ?? 0)
+            guard elapsed >= Self.segmentManifestFlushInterval
+                    || grown >= Self.segmentManifestFlushByteCount
+            else { return }
+            let length = attempt.manifest.segments[context.segmentIndex].range.length
+            attempt.manifest.segments[context.segmentIndex].persistedByteCount =
+                min(length, sink.byteCount)
+            segmentSinkFlushes[taskIdentifier] = (now(), sink.byteCount)
+            manifestToFlush = attempt.manifest
+        }
+
+        if let failure {
+            DevLog.error(failure, "segment part write failed", [
+                "key": context.cacheKey,
+                "segment": "\(context.segmentIndex)",
+            ])
+            lock.withLock {
+                guard let attempt = segmentedAttempts[context.cacheKey],
+                      attempt.id == context.attemptID
+                else { return }
+                attempt.completedResults[context.segmentIndex] = .failure(failure)
+            }
+            dataTask.cancel()
+            return
+        }
+        if let manifestToFlush {
+            try? cancellationFence.performMutation(cacheKey: context.cacheKey) {
+                try segmentedStore.write(manifestToFlush)
+            }
+        }
+    }
+
+    /// Validates a segment's response headers and opens its part-file sink.
+    /// Returns false (with the failure recorded on the attempt) when the
+    /// response is not the 206 continuation we asked for, so the caller
+    /// cancels the task and the existing per-segment failure path takes over.
+    private func openSegmentSink(
+        context: SegmentTaskContext,
+        taskIdentifier: Int,
+        response: URLResponse
+    ) -> Bool {
+        lock.withLock {
+            guard let attempt = segmentedAttempts[context.cacheKey],
+                  attempt.id == context.attemptID,
+                  !attempt.terminalClaimed
+            else { return false }
+            do {
+                guard let http = response as? HTTPURLResponse else {
+                    throw SegmentedDownloadError.invalidSegmentResponse(
+                        index: context.segmentIndex
+                    )
+                }
+                let record = attempt.manifest.segments[context.segmentIndex]
+                let requested = DownloadByteRange(
+                    start: record.range.start + context.durablePrefixByteCount,
+                    end: record.range.end
+                )
+                // `fileSize` is the body we are about to receive; the real
+                // part-file length check happens once the task completes.
+                try SegmentedDownloadStore.validateSegment(
+                    http,
+                    planned: DownloadSegmentRecord(
+                        index: record.index,
+                        range: requested,
+                        isComplete: false,
+                        persistedByteCount: 0
+                    ),
+                    etag: attempt.manifest.etag,
+                    totalByteCount: attempt.manifest.totalByteCount,
+                    fileSize: requested.length,
+                    resumed: false
+                )
+                let part = segmentedStore.partURL(
+                    cacheKey: context.cacheKey,
+                    index: context.segmentIndex
+                )
+                try fileManager.createDirectory(
+                    at: part.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                let sink = try SegmentByteSink(
+                    partURL: part,
+                    expectedOffset: context.durablePrefixByteCount,
+                    fileManager: fileManager
+                )
+                segmentSinks[taskIdentifier] = sink
+                segmentSinkFlushes[taskIdentifier] = (now(), sink.byteCount)
+                attempt.activeByteCounts[context.segmentIndex] = sink.byteCount
+                DevLog.event(.download, "segment sink opened", [
+                    "key": context.cacheKey,
+                    "segment": "\(context.segmentIndex)",
+                    "offset": "\(context.durablePrefixByteCount)",
+                    "range": requested.headerValue,
+                ])
+                return true
+            } catch {
+                attempt.completedResults[context.segmentIndex] = .failure(error)
+                return false
+            }
+        }
+    }
+
+    /// Closes a segment's sink and turns the bytes on disk into the segment's
+    /// result. Runs before `completeSegmentTask`, which consumes that result.
+    private func finalizeSegmentSink(
+        context: SegmentTaskContext,
+        taskIdentifier: Int,
+        error: Error?
+    ) {
+        let sink = lock.withLock { () -> SegmentByteSink? in
+            segmentSinkFlushes[taskIdentifier] = nil
+            return segmentSinks.removeValue(forKey: taskIdentifier)
+        }
+        // No sink means the task died before its headers validated; nothing was
+        // written, so there is nothing to account for.
+        guard let sink else { return }
+        sink.close()
+        lock.withLock {
+            guard let attempt = segmentedAttempts[context.cacheKey],
+                  attempt.id == context.attemptID,
+                  !attempt.terminalClaimed
+            else { return }
+            let record = attempt.manifest.segments[context.segmentIndex]
+            // Whatever happened, the bytes are on disk — record them so a pause
+            // or a transport failure resumes from here instead of from zero.
+            attempt.manifest.segments[context.segmentIndex].persistedByteCount =
+                min(record.range.length, max(record.persistedByteCount, sink.byteCount))
+            attempt.activeByteCounts[context.segmentIndex] = sink.byteCount
+            DevLog.event(.download, "segment sink closed", [
+                "key": context.cacheKey,
+                "segment": "\(context.segmentIndex)",
+                "bytes": "\(sink.byteCount)",
+                "expected": "\(record.range.length)",
+                "err": error.map { "\($0)" } ?? "-",
+            ])
+            guard error == nil,
+                  attempt.completedResults[context.segmentIndex] == nil
+            else { return }
+            if sink.byteCount == record.range.length {
+                attempt.completedResults[context.segmentIndex] = .success(
+                    segmentedStore.partURL(
+                        cacheKey: context.cacheKey,
+                        index: context.segmentIndex
+                    )
+                )
+            } else {
+                attempt.completedResults[context.segmentIndex] = .failure(
+                    SegmentedDownloadError.lengthMismatch(
+                        expected: record.range.length,
+                        actual: sink.byteCount
+                    )
+                )
+            }
+        }
     }
 
     private func downloadVideo(
@@ -1626,12 +1868,13 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             return
         }
 
+        // The part file — not URLSession's resume blob — is the durable record
+        // of a segment's progress, so its size on disk decides where the next
+        // request starts. A part at exactly the segment length on a segment
+        // still marked incomplete is treated as untrustworthy and re-fetched:
+        // there would be no bytes left to request, and the completion
+        // bookkeeping never ran for it.
         let starts = incompleteSegments.map { segment in
-            let resumeURL = segmentedStore.resumeURL(
-                cacheKey: attempt.cacheKey,
-                index: segment.index
-            )
-            let resumeData = try? Data(contentsOf: resumeURL)
             let part = segmentedStore.partURL(
                 cacheKey: attempt.cacheKey,
                 index: segment.index
@@ -1640,41 +1883,40 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 atPath: part.path
             )[.size]) as? NSNumber)?.int64Value
             let durablePrefixByteCount: Int64
-            if resumeData?.isEmpty != false,
-               segment.persistedByteCount > 0,
-               partSize == segment.persistedByteCount {
-                durablePrefixByteCount = segment.persistedByteCount
+            if let partSize, partSize > 0, partSize < segment.range.length {
+                durablePrefixByteCount = partSize
             } else {
                 durablePrefixByteCount = 0
             }
             DevLog.event(.download, "segment start decision", [
                 "key": attempt.cacheKey,
                 "segment": "\(segment.index)",
-                "resume_data": "\(resumeData?.count ?? -1)",
                 "part_bytes": partSize.map(String.init) ?? "-",
                 "persisted": "\(segment.persistedByteCount)",
                 "durable_prefix": "\(durablePrefixByteCount)",
             ])
             return (
                 segment: segment,
-                resumeData: resumeData?.isEmpty == false ? resumeData : nil,
                 durablePrefixByteCount: durablePrefixByteCount
             )
         }
-        let freshSegmentIndexes = starts.compactMap {
-            $0.resumeData == nil && $0.durablePrefixByteCount == 0
-                ? $0.segment.index
-                : nil
-        }
+        // The manifest must agree with the disk before anything else reads it:
+        // `progress`, `transferredByteCount` and the resume decision all key
+        // off `persistedByteCount`.
+        let prefixesByIndex = Dictionary(
+            uniqueKeysWithValues: starts.map {
+                ($0.segment.index, $0.durablePrefixByteCount)
+            }
+        )
         let resetManifest: SegmentedDownloadManifest? = lock.withLock { () -> SegmentedDownloadManifest? in
             guard let current = segmentedAttempts[attempt.cacheKey],
                   current.id == attempt.id
             else { return nil }
             var didReset = false
-            for index in freshSegmentIndexes
-            where current.manifest.segments[index].persistedByteCount != 0 {
-                current.manifest.segments[index].persistedByteCount = 0
-                current.activeByteCounts[index] = nil
+            for (index, prefix) in prefixesByIndex
+            where current.manifest.segments[index].persistedByteCount != prefix {
+                current.manifest.segments[index].persistedByteCount = prefix
+                current.activeByteCounts[index] = prefix > 0 ? prefix : nil
                 didReset = true
             }
             guard didReset else { return nil }
@@ -1706,39 +1948,30 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             }
         }
 
-        var tasksToStart: [URLSessionDownloadTask] = []
+        var tasksToStart: [URLSessionDataTask] = []
         for start in starts {
             let segment = start.segment
-            let task: URLSessionDownloadTask
-            let resumed: Bool
-            if let resumeData = start.resumeData {
-                task = session.downloadTask(withResumeData: resumeData)
-                resumed = true
-            } else {
-                var request = URLRequest(url: attempt.manifest.remoteURL)
-                let requestRange = DownloadByteRange(
-                    start: segment.range.start + start.durablePrefixByteCount,
-                    end: segment.range.end
-                )
+            var request = URLRequest(url: attempt.manifest.remoteURL)
+            let requestRange = DownloadByteRange(
+                start: segment.range.start + start.durablePrefixByteCount,
+                end: segment.range.end
+            )
+            request.setValue(
+                requestRange.headerValue,
+                forHTTPHeaderField: "Range"
+            )
+            request.setValue(attempt.manifest.etag, forHTTPHeaderField: "If-Range")
+            if let bearerToken {
                 request.setValue(
-                    requestRange.headerValue,
-                    forHTTPHeaderField: "Range"
+                    "Bearer \(bearerToken)",
+                    forHTTPHeaderField: "Authorization"
                 )
-                request.setValue(attempt.manifest.etag, forHTTPHeaderField: "If-Range")
-                if let bearerToken {
-                    request.setValue(
-                        "Bearer \(bearerToken)",
-                        forHTTPHeaderField: "Authorization"
-                    )
-                }
-                task = session.downloadTask(with: request)
-                resumed = false
             }
+            let task = session.dataTask(with: request)
             let context = SegmentTaskContext(
                 attemptID: attempt.id,
                 cacheKey: attempt.cacheKey,
                 segmentIndex: segment.index,
-                resumed: resumed,
                 durablePrefixByteCount: start.durablePrefixByteCount
             )
             let shouldResume = lock.withLock {
@@ -1773,12 +2006,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 forHTTPHeaderField: "Authorization"
             )
         }
-        let task = session.downloadTask(with: request)
+        let task = session.dataTask(with: request)
         let context = SegmentTaskContext(
             attemptID: attempt.id,
             cacheKey: attempt.cacheKey,
             segmentIndex: segmentIndex,
-            resumed: false,
             durablePrefixByteCount: 0
         )
         let shouldResume = lock.withLock {
@@ -1824,31 +2056,6 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         }
     }
 
-    private func updateSegmentProgress(
-        context: SegmentTaskContext,
-        bytesWritten: Int64
-    ) {
-        lock.withLock {
-            segmentProgressCallCount += 1
-            guard let attempt = segmentedAttempts[context.cacheKey],
-                  attempt.id == context.attemptID,
-                  !attempt.terminalClaimed
-            else { return }
-            attempt.activeByteCounts[context.segmentIndex, default: 0]
-                += max(bytesWritten, 0)
-            inFlight[context.cacheKey]?.record(
-                transferredByteCount: transferredByteCount(
-                    manifest: attempt.manifest,
-                    activeByteCounts: attempt.activeByteCounts
-                ),
-                progress: SegmentedDownloadStore.progress(
-                    manifest: attempt.manifest,
-                    activeByteCounts: attempt.activeByteCounts
-                )
-            )
-        }
-    }
-
     private func activityAccumulator(
         manifest: SegmentedDownloadManifest,
         activeByteCounts: [Int: Int64]
@@ -1872,132 +2079,21 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         return accumulator
     }
 
+    /// Mirrors `SegmentedDownloadStore.progress`'s numerator exactly.
+    /// `activeByteCounts` holds each segment's *absolute* byte count now that
+    /// the sink owns the part file, so this takes the larger of the live and
+    /// persisted counts rather than adding them — adding would double-count
+    /// every byte the throttled manifest flush has already recorded.
     private func transferredByteCount(
         manifest: SegmentedDownloadManifest,
         activeByteCounts: [Int: Int64]
     ) -> Int64 {
-        manifest.segments.reduce(0) { $0 + $1.persistedByteCount }
-            + activeByteCounts.values.reduce(0, +)
-    }
-
-    private func recordSegmentFile(
-        context: SegmentTaskContext,
-        task: URLSessionDownloadTask,
-        location: URL
-    ) -> Result<URL, Error> {
-        lock.withLock {
-            guard let attempt = segmentedAttempts[context.cacheKey],
-                  attempt.id == context.attemptID,
-                  !attempt.terminalClaimed
-            else {
-                return .failure(CancellationError())
-            }
-
-            do {
-                guard let response = task.response as? HTTPURLResponse else {
-                    throw SegmentedDownloadError.invalidSegmentResponse(
-                        index: context.segmentIndex
-                    )
-                }
-                let record = attempt.manifest.segments[context.segmentIndex]
-                let size = ((try fileManager.attributesOfItem(
-                    atPath: location.path
-                )[.size]) as? NSNumber)?.int64Value ?? -1
-                let downloadedRecord: DownloadSegmentRecord
-                if context.durablePrefixByteCount > 0 {
-                    downloadedRecord = DownloadSegmentRecord(
-                        index: record.index,
-                        range: DownloadByteRange(
-                            start: record.range.start
-                                + context.durablePrefixByteCount,
-                            end: record.range.end
-                        ),
-                        isComplete: false,
-                        persistedByteCount: 0
-                    )
-                } else {
-                    downloadedRecord = record
-                }
-                try SegmentedDownloadStore.validateSegment(
-                    response,
-                    planned: downloadedRecord,
-                    etag: attempt.manifest.etag,
-                    totalByteCount: attempt.manifest.totalByteCount,
-                    fileSize: size,
-                    resumed: context.resumed
-                )
-                let part = segmentedStore.partURL(
-                    cacheKey: context.cacheKey,
-                    index: context.segmentIndex
-                )
-                try cancellationFence.performMutation(cacheKey: context.cacheKey) {
-                    if context.durablePrefixByteCount > 0 {
-                        try combineSegment(
-                            prefix: part,
-                            prefixByteCount: context.durablePrefixByteCount,
-                            suffix: location,
-                            totalByteCount: record.range.length
-                        )
-                    } else {
-                        try? fileManager.removeItem(at: part)
-                        try fileManager.moveItem(at: location, to: part)
-                    }
-                }
-                return .success(part)
-            } catch {
-                return .failure(error)
-            }
-        }
-    }
-
-    private func combineSegment(
-        prefix: URL,
-        prefixByteCount: Int64,
-        suffix: URL,
-        totalByteCount: Int64
-    ) throws {
-        let prefixSize = ((try fileManager.attributesOfItem(
-            atPath: prefix.path
-        )[.size]) as? NSNumber)?.int64Value ?? -1
-        guard prefixSize == prefixByteCount else {
-            throw SegmentedDownloadError.lengthMismatch(
-                expected: prefixByteCount,
-                actual: prefixSize
-            )
-        }
-
-        let staging = prefix.deletingLastPathComponent()
-            .appendingPathComponent("combined-\(UUID().uuidString).tmp")
-        try? fileManager.removeItem(at: staging)
-        guard fileManager.createFile(atPath: staging.path, contents: nil) else {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        do {
-            let output = try FileHandle(forWritingTo: staging)
-            defer { try? output.close() }
-            for source in [prefix, suffix] {
-                let input = try FileHandle(forReadingFrom: source)
-                defer { try? input.close() }
-                while let chunk = try input.read(upToCount: 1_048_576),
-                      !chunk.isEmpty {
-                    try output.write(contentsOf: chunk)
-                }
-            }
-            try output.synchronize()
-            let combinedSize = ((try fileManager.attributesOfItem(
-                atPath: staging.path
-            )[.size]) as? NSNumber)?.int64Value ?? -1
-            guard combinedSize == totalByteCount else {
-                throw SegmentedDownloadError.lengthMismatch(
-                    expected: totalByteCount,
-                    actual: combinedSize
-                )
-            }
-            try fileManager.removeItem(at: prefix)
-            try fileManager.moveItem(at: staging, to: prefix)
-        } catch {
-            try? fileManager.removeItem(at: staging)
-            throw error
+        manifest.segments.reduce(Int64(0)) { total, segment in
+            let active = activeByteCounts[segment.index] ?? 0
+            let bytes = segment.isComplete
+                ? segment.range.length
+                : min(segment.range.length, max(segment.persistedByteCount, active))
+            return total + bytes
         }
     }
 
@@ -2010,14 +2106,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         var completionError = error
         var unsafeCompletionError: Error?
         var segmentToRetry: Int?
-        var directResumeData: Data?
-        var directResumeDataNeedsPendingRemoval = false
-        var tasksToPreserve: [(
-            task: URLSessionDownloadTask,
-            taskIdentifier: Int,
-            segmentIndex: Int
-        )] = []
-        var tasksToCancel: [URLSessionDownloadTask] = []
+        var tasksToCancel: [URLSessionTask] = []
 
         lock.withLock {
             tasksByIdentifier[taskIdentifier] = nil
@@ -2128,22 +2217,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                             attempt: attempt,
                             segmentIndex: context.segmentIndex
                         )
-                        directResumeData = resumeData(from: transportError)
-                        if directResumeData != nil {
-                            attempt.resumeDataPendingTaskIDs.insert(taskIdentifier)
-                            directResumeDataNeedsPendingRemoval = true
-                        }
-                        tasksToPreserve = attempt.taskIDs.compactMap { siblingID in
-                            guard let task = tasksByIdentifier[siblingID],
-                                  let siblingContext = segmentContextByTask[siblingID],
-                                  siblingContext.attemptID == attempt.id
-                            else { return nil }
-                            attempt.resumeDataPendingTaskIDs.insert(siblingID)
-                            return (
-                                task,
-                                siblingID,
-                                siblingContext.segmentIndex
-                            )
+                        // Siblings are cancelled outright. Their part files are
+                        // already durable, and each one's own completion
+                        // callback records its bytes on the way out — which is
+                        // what `cancel(byProducingResumeData:)` used to buy.
+                        tasksToCancel = attempt.taskIDs.compactMap {
+                            tasksByIdentifier[$0]
                         }
                     } else {
                         tasksToCancel = attempt.taskIDs.compactMap {
@@ -2160,7 +2239,6 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                         attempt: attempt,
                         segmentIndex: context.segmentIndex
                     )
-                    directResumeData = resumeData(from: transportError)
                 }
             }
         }
@@ -2169,28 +2247,6 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         if let segmentToRetry {
             relaunchSegment(attempt: attempt, segmentIndex: segmentToRetry)
             return
-        }
-        if directResumeData != nil || directResumeDataNeedsPendingRemoval {
-            preserveSegmentResumeData(
-                directResumeData,
-                attempt: attempt,
-                segmentIndex: context.segmentIndex,
-                pendingTaskIdentifier: directResumeDataNeedsPendingRemoval
-                    ? taskIdentifier
-                    : nil
-            )
-        }
-        for sibling in tasksToPreserve {
-            sibling.task.cancel(byProducingResumeData: {
-                [weak self, weak attempt] data in
-                guard let self, let attempt else { return }
-                self.preserveSegmentResumeData(
-                    data,
-                    attempt: attempt,
-                    segmentIndex: sibling.segmentIndex,
-                    pendingTaskIdentifier: sibling.taskIdentifier
-                )
-            })
         }
         tasksToCancel.forEach { $0.cancel() }
 
@@ -2203,7 +2259,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
     ) {
         var claim: (
             continuation: CheckedContinuation<URL, Error>?,
-            tasks: [URLSessionDownloadTask],
+            tasks: [URLSessionTask],
             error: Error?
         )?
         _ = cancellationFence.performTerminalClaim(cacheKey: attempt.cacheKey) {
@@ -2283,7 +2339,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
 
         var claim: (
             continuation: CheckedContinuation<URL, Error>?,
-            tasks: [URLSessionDownloadTask],
+            tasks: [URLSessionTask],
             error: Error?
         )?
         var preservesScratch = false
@@ -2344,76 +2400,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         )
     }
 
-    private func preserveSegmentResumeData(
-        _ data: Data?,
-        attempt: SegmentedAttempt,
-        segmentIndex: Int,
-        pendingTaskIdentifier: Int?
-    ) {
-        let shouldPersist = lock.withLock {
-            guard let current = segmentedAttempts[attempt.cacheKey],
-                  current.id == attempt.id,
-                  current.preservingResumeData,
-                  !current.manifest.segments[segmentIndex].isComplete
-            else { return false }
-            updatePersistedByteCountLocked(
-                attempt: current,
-                segmentIndex: segmentIndex
-            )
-            return data?.isEmpty == false
-        }
-
-        DevLog.event(.download, "pause resume data", [
-            "key": attempt.cacheKey,
-            "path": "segmented",
-            "segment": "\(segmentIndex)",
-            "bytes": "\(data?.count ?? -1)",
-            "persisting": "\(shouldPersist)",
-        ])
-
-        var persistenceFailed = false
-        if shouldPersist, let data {
-            do {
-                try cancellationFence.performMutation(
-                    cacheKey: attempt.cacheKey
-                ) {
-                    try data.write(
-                        to: segmentedStore.resumeURL(
-                            cacheKey: attempt.cacheKey,
-                            index: segmentIndex
-                        ),
-                        options: .atomic
-                    )
-                }
-            } catch let error {
-                persistenceFailed = true
-                DevLog.error(error, "segment resume data write failed", [
-                    "key": attempt.cacheKey,
-                    "segment": "\(segmentIndex)",
-                ])
-            }
-        }
-
-        lock.withLock {
-            guard let current = segmentedAttempts[attempt.cacheKey],
-                  current.id == attempt.id
-            else { return }
-            if persistenceFailed {
-                current.preservingResumeData = false
-            }
-            if let pendingTaskIdentifier {
-                current.resumeDataPendingTaskIDs.remove(pendingTaskIdentifier)
-            }
-        }
-        finishFailedSegmentedAttemptIfReady(attempt)
-    }
-
     private func claimSegmentedAttemptLocked(
         _ attempt: SegmentedAttempt,
         error: Error? = nil
     ) -> (
         continuation: CheckedContinuation<URL, Error>?,
-        tasks: [URLSessionDownloadTask],
+        tasks: [URLSessionTask],
         error: Error?
     )? {
         guard let current = segmentedAttempts[attempt.cacheKey],
