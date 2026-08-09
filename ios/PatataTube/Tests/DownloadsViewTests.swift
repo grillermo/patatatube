@@ -30,7 +30,7 @@ private func sampleVideo(id: Int) -> Video {
 @Suite("Downloads view")
 @MainActor
 struct DownloadsViewTests {
-    @Test func activeRowShowsProgressAndCancelInvokesIdentity() async throws {
+    @Test func theMenuCancelsWithTheDownloadIdentity() async throws {
         var cancelled: DownloadActivity.ID?
         let activity = DownloadActivity(
             videoID: 7,
@@ -48,8 +48,7 @@ struct DownloadsViewTests {
         )
         .environmentObject(AppModel())
 
-        let inspected = try sut.inspect()
-        try inspected.find(button: "Cancel").tap()
+        try sut.inspect().find(button: "Cancel download").tap()
         #expect(cancelled == activity.id)
     }
 
@@ -71,9 +70,53 @@ struct DownloadsViewTests {
         )
         .environmentObject(AppModel())
 
-        try sut.inspect().find(button: "Cancel").tap()
+        try sut.inspect().find(button: "Cancel download").tap()
         #expect(cancelled?.0 == 12)
         #expect(cancelled?.1 == 99)
+    }
+
+    @Test func aLiveRowOffersPauseAndInvokesIt() throws {
+        var paused: DownloadActivity.ID?
+        let activity = DownloadActivity(
+            videoID: 4, versionID: nil, progress: 0.3,
+            transferredByteCount: 300, totalByteCount: 1_000
+        )
+        let sut = DownloadsView(
+            active: { [activity] },
+            recent: { [] },
+            video: { id, _ in sampleVideo(id: id) },
+            onCancel: { _ in },
+            onPlay: { _ in },
+            onPause: { paused = $0.id }
+        )
+        .environmentObject(AppModel())
+
+        #expect((try? sut.inspect().find(button: "Resume")) == nil)
+        try sut.inspect().find(button: "Pause").tap()
+        #expect(paused == "4")
+    }
+
+    @Test func aPausedRowOffersResumeAndLabelsItself() throws {
+        var resumed: DownloadActivity.ID?
+        let activity = DownloadActivity(
+            videoID: 4, versionID: nil, progress: 0.3,
+            transferredByteCount: 300, totalByteCount: 1_000,
+            isPaused: true
+        )
+        let sut = DownloadsView(
+            active: { [activity] },
+            recent: { [] },
+            video: { id, _ in sampleVideo(id: id) },
+            onCancel: { _ in },
+            onPlay: { _ in },
+            onResume: { resumed = $0.id }
+        )
+        .environmentObject(AppModel())
+
+        #expect((try? sut.inspect().find(button: "Pause")) == nil)
+        #expect(throws: Never.self) { try sut.inspect().find(text: "Paused") }
+        try sut.inspect().find(button: "Resume").tap()
+        #expect(resumed == "4")
     }
 
     @Test func completedRowPlaysAndEmptyViewOmitsBothSections() async throws {

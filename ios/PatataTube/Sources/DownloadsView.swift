@@ -7,6 +7,8 @@ struct DownloadsView: View {
     let video: (Int, Int?) -> Video?
     let onCancel: (DownloadActivity) -> Void
     let onPlay: (Video) -> Void
+    var onPause: (DownloadActivity) -> Void = { _ in }
+    var onResume: (DownloadActivity) -> Void = { _ in }
     /// Monotonic cumulative downloaded bytes. Defaults to a constant so tests
     /// and previews that don't care about the speed readout stay untouched.
     var byteCount: () -> Int64 = { 0 }
@@ -104,12 +106,34 @@ struct DownloadsView: View {
             VStack(alignment: .leading) {
                 Text(itemVideo?.title ?? "Video \(item.videoID)")
                 ProgressView(value: item.progress)
+                if item.isPaused {
+                    Text("Paused")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer()
-            Button("Cancel") { onCancel(item) }
-                .buttonStyle(.bordered)
+            Menu {
+                if item.isPaused {
+                    Button("Resume", systemImage: "play.fill") { onResume(item) }
+                } else {
+                    Button("Pause", systemImage: "pause.fill") { onPause(item) }
+                }
+                Button("Cancel download", systemImage: "xmark.circle", role: .destructive) {
+                    onCancel(item)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .logTap("download-menu", [
+                "video_id": "\(item.videoID)",
+                "paused": "\(item.isPaused)",
+            ])
+            .accessibilityLabel("Download options")
         }
-        .accessibilityElement(children: .combine)
+        // Not `.combine`: combining children collapses the menu's own
+        // accessibility element, and the menu has to stay separately tappable.
+        .accessibilityElement(children: .contain)
     }
 
     private func convertingRow(_ job: ConversionJob) -> some View {
