@@ -679,6 +679,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                       tasksByKey[key] == nil,
                       probeAttempts[key] == nil,
                       inFlight[key] == nil,
+                      !pausedKeys.contains(key),
                       !externalActivityKeys.contains(key)
                 else { return false }
                 segmentedAttempts[key] = attempt
@@ -711,6 +712,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                 || segmentedAttempts[key] != nil
                 || probeAttempts[key] != nil
                 || inFlight[key] != nil
+                || pausedKeys.contains(key)
                 || externalActivityKeys.contains(key)
         }) {
                 continue
@@ -722,6 +724,7 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                       segmentedAttempts[key] == nil,
                       probeAttempts[key] == nil,
                       inFlight[key] == nil,
+                      !pausedKeys.contains(key),
                       !externalActivityKeys.contains(key)
                 else { return false }
                 inFlight[key] = DownloadActivityAccumulator(
@@ -920,6 +923,18 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             "version_id": versionId.map(String.init) ?? "-",
             "state": DevLog.describe(state(for: id, versionId: versionId)),
         ])
+        let wasPaused = lock.withLock { () -> Bool in
+            guard pausedKeys.contains(key) else { return false }
+            pausedStore.remove(key)
+            pausedKeys.remove(key)
+            return true
+        }
+        if wasPaused {
+            releasePausedPermit(for: key)
+            segmentedStore.remove(cacheKey: key)
+            try? fileManager.removeItem(at: resumeURL(for: key))
+            try? fileManager.removeItem(at: offlineHLSDir(for: id, versionId: versionId))
+        }
         cancelExternalActivity(key: key)
         cancellationFence.beginCancellation(cacheKey: key)
         defer {
@@ -1021,6 +1036,13 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
         for manifest in segmentedStore.manifests() {
             segmentedStore.remove(cacheKey: manifest.cacheKey)
         }
+        let strandedPermits = lock.withLock { () -> [String] in
+            let keys = Array(pausedKeys)
+            pausedStore.removeAll()
+            pausedKeys.removeAll()
+            return keys
+        }
+        strandedPermits.forEach { releasePausedPermit(for: $0) }
         lock.withLock { completionHistory.clear() }
     }
 

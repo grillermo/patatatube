@@ -253,3 +253,67 @@ extension CacheManagerPauseTests {
         #expect(manager.activeDownloads().isEmpty)
     }
 }
+
+extension CacheManagerPauseTests {
+    @Test func resumeInterruptedSkipsPausedKeys() async throws {
+        let root = temporaryRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // A paused plain download leaves exactly this artifact behind.
+        try Data("resume-bytes".utf8).write(to: root.appendingPathComponent("7.resume"))
+        var store = PausedDownloadStore(root: root)
+        store.insert(pausedEntry(videoID: 7))
+
+        let manager = CacheManager(
+            root: root, configuration: .ephemeral, fileManager: .default
+        )
+        #expect(manager.resumeInterrupted().isEmpty)
+        #expect(manager.activeDownloads().first?.isPaused == true)
+    }
+
+    @Test func cancellingAPausedEntryClearsItAndItsPermit() async throws {
+        let root = temporaryRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("resume-bytes".utf8).write(to: root.appendingPathComponent("7.resume"))
+        var store = PausedDownloadStore(root: root)
+        store.insert(pausedEntry(videoID: 7))
+        let spy = PauseSpyGate()
+        let manager = CacheManager(
+            root: root, configuration: .ephemeral, fileManager: .default,
+            concurrencyGate: spy
+        )
+        await manager.awaitPermit(for: "7")
+
+        manager.cancel(id: 7)
+
+        #expect(PausedDownloadStore(root: root).contains("7") == false)
+        #expect(manager.activeDownloads().isEmpty)
+        #expect(spy.releaseCount == 1)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("7.resume").path
+            ) == false
+        )
+    }
+
+    @Test func clearingAllVideosDropsPausedEntries() async throws {
+        let root = temporaryRoot()
+        var store = PausedDownloadStore(root: root)
+        store.insert(pausedEntry(videoID: 7))
+        let spy = PauseSpyGate()
+        let manager = CacheManager(
+            root: root, configuration: .ephemeral, fileManager: .default,
+            concurrencyGate: spy
+        )
+        await manager.awaitPermit(for: "7")
+
+        manager.clearAllVideos()
+
+        #expect(PausedDownloadStore(root: root).entries.isEmpty)
+        #expect(manager.activeDownloads().isEmpty)
+        #expect(spy.releaseCount == 1)
+    }
+
+    @Test func aPausedDownloadIsTreatedAsACancellation() async {
+        #expect(await VideoStore.isCancellation(DownloadPausedError()))
+    }
+}

@@ -173,6 +173,7 @@ public final class VideoStore: ObservableObject {
     /// or a newer request superseding an older one. Never a server-side failure.
     public static func isCancellation(_ error: Error) -> Bool {
         if error is CancellationError { return true }
+        if error is DownloadPausedError { return true }
         if let urlError = error as? URLError, urlError.code == .cancelled { return true }
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
