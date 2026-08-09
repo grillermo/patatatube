@@ -1033,6 +1033,11 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             defer {
                 self.lock.withLock { _ = self.pauseTeardownKeys.remove(key) }
             }
+            DevLog.event(.download, "pause resume data", [
+                "key": key,
+                "path": "plain",
+                "bytes": "\(data?.count ?? -1)",
+            ])
             guard let data, !data.isEmpty else { return }
             try? self.fileManager.createDirectory(
                 at: self.root, withIntermediateDirectories: true
@@ -1642,6 +1647,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             } else {
                 durablePrefixByteCount = 0
             }
+            DevLog.event(.download, "segment start decision", [
+                "key": attempt.cacheKey,
+                "segment": "\(segment.index)",
+                "resume_data": "\(resumeData?.count ?? -1)",
+                "part_bytes": partSize.map(String.init) ?? "-",
+                "persisted": "\(segment.persistedByteCount)",
+                "durable_prefix": "\(durablePrefixByteCount)",
+            ])
             return (
                 segment: segment,
                 resumeData: resumeData?.isEmpty == false ? resumeData : nil,
@@ -2350,6 +2363,14 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
             return data?.isEmpty == false
         }
 
+        DevLog.event(.download, "pause resume data", [
+            "key": attempt.cacheKey,
+            "path": "segmented",
+            "segment": "\(segmentIndex)",
+            "bytes": "\(data?.count ?? -1)",
+            "persisting": "\(shouldPersist)",
+        ])
+
         var persistenceFailed = false
         if shouldPersist, let data {
             do {
@@ -2364,8 +2385,12 @@ public final class CacheManager: NSObject, URLSessionDownloadDelegate, @unchecke
                         options: .atomic
                     )
                 }
-            } catch {
+            } catch let error {
                 persistenceFailed = true
+                DevLog.error(error, "segment resume data write failed", [
+                    "key": attempt.cacheKey,
+                    "segment": "\(segmentIndex)",
+                ])
             }
         }
 
