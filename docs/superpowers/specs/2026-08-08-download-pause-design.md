@@ -72,7 +72,7 @@ a re-tap starts clean. Pause preserves it. Per path:
 | path | pause | resume |
 |---|---|---|
 | segmented | stop the segment data tasks; **keep** the manifest and partial part files (the durable state) | re-request remaining bytes via `Range: bytes=(start+partSize)-(end)` + `If-Range` from part file size; `startIncompleteSegments` reuses existing logic |
-| plain `URLSession` | `task.cancel(byProducingResumeData:)`, preserve `.resume` file if produced (legacy) | part file size is authoritative; re-request remaining bytes via `Range` + `If-Range` (prefers part-file durability over Apple resume data) |
+| plain `URLSession` | `task.cancel(byProducingResumeData:)`, write `{key}.resume` | `session.downloadTask(withResumeData:)` |
 | external / HLS | `cancelExternalActivity(key:)`, drop the partial package directory | fresh download from zero |
 
 Order of operations, so no other code path can undo the pause mid-flight:
@@ -85,12 +85,12 @@ Order of operations, so no other code path can undo the pause mid-flight:
 The awaiting `download(id:)` call unwinds with `CancellationError` as it does
 today; step 1 is what makes its `defer` keep the permit (see below).
 
-**Durability model:** Part files are the durable record of a segment's progress.
-Segments append data directly to part files via data tasks (not download tasks);
-on pause, the part file's current size is the byte count to resume from. Legacy
-`.resume` sidecar files are still honored on read for old on-disk state
-predating this model, but are no longer load-bearing — the part file is
-authoritative.
+**Durability model (segmented path only):** Part files are the durable record
+of a segment's progress. Segments append data directly to part files via data
+tasks (not download tasks); on pause, the part file's current size is the byte
+count to resume from. The plain `URLSession` path is unchanged — it still uses
+Apple's resume-data mechanism for both pause and resume, unchanged from before
+this durability model was added.
 
 ### `CacheManager.resume(id:versionId:)`
 
