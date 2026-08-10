@@ -14,10 +14,9 @@ from pathlib import Path
 import db
 import hls
 import plex
+from paths import VIDEOS_DIR
 
 logger = logging.getLogger(__name__)
-
-VIDEOS_DIR = Path("videos")
 
 # Classification -> (env var holding its Plex directory, default path).
 _DEST_ENV = {
@@ -96,10 +95,12 @@ def promote_to_plex(video: dict, kind: str) -> Path:
         raise PromotionError(f"library directory is unavailable: {directory}")
 
     target = unique_target(directory, sanitize_title(video.get("title"), video["id"]))
-    # videos/ lives on the boot volume and the library on /Volumes/Media, so a
-    # plain os.rename would fail with EXDEV. Copy to a hidden sibling of the
-    # target first: that replace is same-volume and atomic, so Plex never picks
-    # up a half-written file, and the dotfile is invisible to its scanner.
+    # A plain os.rename risks EXDEV when VIDEOS_DIR and the library directory
+    # are on different filesystems (true by default, and whenever MEDIA_ROOT
+    # is left local even after the library lives on /Volumes/Media). Copy to a
+    # hidden sibling of the target first: that replace is same-volume and
+    # atomic, so Plex never picks up a half-written file, and the dotfile is
+    # invisible to its scanner.
     tmp = target.with_name(f".{target.name}.part")
     try:
         shutil.copyfile(source, tmp)

@@ -18,6 +18,7 @@ import cache
 import db
 import hls
 import library
+from paths import ensure_media_root
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -149,6 +150,7 @@ def main() -> None:
     parser.add_argument("--poll-interval", type=float, default=1.0)
     args = parser.parse_args()
 
+    ensure_media_root()
     db.init_db()
 
     # Only this process runs jobs, so nothing can legitimately be 'running' at

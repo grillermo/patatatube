@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 import db
 from middleware import setup_middleware
+from paths import ensure_media_root
 from router import SPLASH_DIR, VIDEOS_DIR, _load_static_asset_cache, router
 
 load_dotenv()
@@ -30,8 +31,9 @@ def _set_process_name(name: str = PROCESS_NAME) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _set_process_name()
+    ensure_media_root()
     db.init_db()
-    VIDEOS_DIR.mkdir(exist_ok=True)
+    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
     SPLASH_DIR.mkdir(parents=True, exist_ok=True)
     _load_static_asset_cache()
     yield

@@ -26,12 +26,12 @@ import plex
 import promote
 import services
 from downloader import download_video, process_uploaded_video
+from paths import VIDEOS_DIR
 from views.serializers import serialize_video
 from views.render import build_videos_page
 
 router = APIRouter()
 
-VIDEOS_DIR = Path("videos")
 PREVIEWS_DIR = Path("data/previews")
 # Longest-edge cap for cached Plex posters. Plex serves full-resolution thumbs
 # (often 1000s of px), which bloated the iPad's memory when decoded across a

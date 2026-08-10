@@ -11,8 +11,7 @@ from pathlib import Path
 from pybalt import download as pybalt_download
 
 import db
-
-VIDEOS_DIR = Path("videos")
+from paths import VIDEOS_DIR
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 FFPROBE_BIN = os.getenv("FFPROBE_BIN", "ffprobe")
 YTDLP_BROWSER = os.getenv("YTDLP_BROWSER", "chrome")

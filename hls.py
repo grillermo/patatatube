@@ -18,14 +18,13 @@ from pathlib import Path
 import db
 import ffmpeg_progress
 from library import audio_track_list, plan_conversion, probe_source, select_audio_indices
+from paths import HLS_DIR
 from subtitles import (
     SubtitleTrack,
     UnsupportedSubtitleError,
     convert_to_webvtt,
     discover_subtitles,
 )
-
-HLS_DIR = Path(os.getenv("HLS_DIR", "data/hls"))
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 HLS_TIME = int(os.getenv("HLS_TIME", "6"))
 SUBTITLE_GROUP = "subs"
