@@ -2,14 +2,15 @@ import multiprocessing
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
-
-import db
-from middleware import setup_middleware
-from paths import ensure_media_root
-from router import SPLASH_DIR, VIDEOS_DIR, _load_static_asset_cache, router
 
 load_dotenv()
+
+from fastapi import FastAPI  # noqa: E402
+
+import db  # noqa: E402
+from middleware import setup_middleware  # noqa: E402
+from paths import ensure_media_root  # noqa: E402
+from router import SPLASH_DIR, VIDEOS_DIR, _load_static_asset_cache, router  # noqa: E402
 
 PROCESS_NAME = "[PatataTube]"
 

@@ -14,11 +14,15 @@ import time
 import traceback
 from pathlib import Path
 
-import cache
-import db
-import hls
-import library
-from paths import ensure_media_root
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import cache  # noqa: E402
+import db  # noqa: E402
+import hls  # noqa: E402
+import library  # noqa: E402
+from paths import ensure_media_root  # noqa: E402
 
 
 def _positive_int_env(name: str, default: int) -> int:
