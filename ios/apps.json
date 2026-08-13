@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.1.1",
+          "buildVersion": "152",
+          "date": "2026-08-13T06:45:30Z",
+          "localizedDescription": "Search bar stays put while you scroll\n\n• The search field is pinned to the top instead of scrolling out of view",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.1.1/PatataTube-2.1.1.ipa",
+          "size": 4251992,
+          "sha256": "9be5a20871ff9485a79a95fd0cd0c585eb7a29dd0c4f1a976765f67d8410855d",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.1.0",
           "buildVersion": "151",
           "date": "2026-08-10T16:43:59Z",
@@ -1434,11 +1444,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.1.0",
-      "versionDate": "2026-08-10T16:43:59Z",
-      "versionDescription": "Paused downloads now pick up right where they left off\n\n• Resuming a paused download continues from the saved point instead of starting over\n• Fixed an edge case that could corrupt a download's saved progress",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.1.0/PatataTube-2.1.0.ipa",
-      "size": 4251712
+      "version": "2.1.1",
+      "versionDate": "2026-08-13T06:45:30Z",
+      "versionDescription": "Search bar stays put while you scroll\n\n• The search field is pinned to the top instead of scrolling out of view",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.1.1/PatataTube-2.1.1.ipa",
+      "size": 4251992
     }
   ],
   "news": []
