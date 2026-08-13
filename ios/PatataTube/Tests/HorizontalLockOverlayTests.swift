@@ -15,15 +15,15 @@ private func eventually(_ message: String, condition: @escaping @MainActor () ->
 
 @Suite("Orientation lock overlay", .serialized)
 @MainActor
-struct OrientationLockOverlayTests {
+struct HorizontalLockOverlayTests {
     @Test func buttonIsPositionedTwentyPercentDownThePlayer() {
-        #expect(OrientationLockOverlay.verticalOffsetFraction == 0.20)
+        #expect(HorizontalLockOverlay.verticalOffsetFraction == 0.20)
     }
 
     @Test func unlockedAndLockedStatesUseAccessibleSystemSymbols() throws {
         var toggles = 0
-        let unlocked = OrientationLockOverlay(
-            isLocked: false, isVisible: true, isBlocked: false,
+        let unlocked = HorizontalLockOverlay(
+            isHorizontal: false, isVisible: true, isBlocked: false,
             onToggle: { toggles += 1 }, isSleepOn: false, onToggleSleep: {}
         )
         let unlockedButton = try unlocked.inspect().find(
@@ -33,8 +33,8 @@ struct OrientationLockOverlayTests {
         try unlockedButton.tap()
         #expect(toggles == 1)
 
-        let locked = OrientationLockOverlay(
-            isLocked: true, isVisible: true, isBlocked: false,
+        let locked = HorizontalLockOverlay(
+            isHorizontal: true, isVisible: true, isBlocked: false,
             onToggle: {}, isSleepOn: false, onToggleSleep: {}
         )
         let lockedButton = try locked.inspect().find(
@@ -45,8 +45,8 @@ struct OrientationLockOverlayTests {
 
     @Test func sleepButtonTogglesAndTintsWhenOn() throws {
         var sleepToggles = 0
-        let off = OrientationLockOverlay(
-            isLocked: false, isVisible: true, isBlocked: false,
+        let off = HorizontalLockOverlay(
+            isHorizontal: false, isVisible: true, isBlocked: false,
             onToggle: {}, isSleepOn: false, onToggleSleep: { sleepToggles += 1 }
         )
         let offButton = try off.inspect().find(
@@ -56,8 +56,8 @@ struct OrientationLockOverlayTests {
         try offButton.tap()
         #expect(sleepToggles == 1)
 
-        let on = OrientationLockOverlay(
-            isLocked: false, isVisible: true, isBlocked: false,
+        let on = HorizontalLockOverlay(
+            isHorizontal: false, isVisible: true, isBlocked: false,
             onToggle: {}, isSleepOn: true, onToggleSleep: {}
         )
         #expect(throws: Never.self) {
@@ -68,8 +68,8 @@ struct OrientationLockOverlayTests {
     }
 
     @Test func blockedOverlayContainsNoButton() throws {
-        let sut = OrientationLockOverlay(
-            isLocked: false, isVisible: true, isBlocked: true,
+        let sut = HorizontalLockOverlay(
+            isHorizontal: false, isVisible: true, isBlocked: true,
             onToggle: {}, isSleepOn: false, onToggleSleep: {}
         )
         #expect(throws: InspectionError.self) {
@@ -78,8 +78,8 @@ struct OrientationLockOverlayTests {
     }
 
     @Test func hiddenOverlayContainsNoButton() throws {
-        let sut = OrientationLockOverlay(
-            isLocked: false, isVisible: false, isBlocked: false,
+        let sut = HorizontalLockOverlay(
+            isHorizontal: false, isVisible: false, isBlocked: false,
             onToggle: {}, isSleepOn: false, onToggleSleep: {}
         )
         #expect(throws: InspectionError.self) {

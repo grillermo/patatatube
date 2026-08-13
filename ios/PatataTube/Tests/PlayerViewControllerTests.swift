@@ -58,14 +58,14 @@ struct PlayerViewControllerTests {
         let window = UIWindow(windowScene: scene)
         window.rootViewController = controller
         window.addSubview(controller.view)
-        var receivedScene: (any OrientationLockScene)?
+        var receivedScene: (any HorizontalLockScene)?
         controller.onSceneAvailable = { receivedScene = $0 }
 
         controller.beginAppearanceTransition(true, animated: false)
         controller.endAppearanceTransition()
 
         #expect(controller.view.window === window)
-        #expect(receivedScene?.orientationLockIdentifier == ObjectIdentifier(scene))
+        #expect(receivedScene?.horizontalLockIdentifier == ObjectIdentifier(scene))
     }
 
     @Test func playerControllerHidesTheHomeIndicatorItself() {
@@ -99,7 +99,7 @@ struct PlayerViewControllerTests {
             ViewHosting.host(view: sut, function: #function)
             defer { ViewHosting.expel(function: #function) }
             #expect(try sut.inspect(function: #function)
-                .find(OrientationLockOverlay.self) != nil)
+                .find(HorizontalLockOverlay.self) != nil)
         }
     }
 }

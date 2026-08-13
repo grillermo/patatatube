@@ -27,7 +27,7 @@ struct VideoPlayerView: View {
     /// going forward. Unused (stays empty) when `randomize` is false.
     @State private var playbackOrder: [Int] = []
     @State private var orderPosition: Int = 0
-    @StateObject private var orientationLock: OrientationLockCoordinator
+    @StateObject private var horizontalLock: HorizontalLockCoordinator
     @StateObject private var orientationControlVisibility = OrientationControlVisibility()
 
     init(videos: [Video], startIndex: Int, sleepMode: Bool = false,
@@ -43,7 +43,7 @@ struct VideoPlayerView: View {
         _currentIndex = State(initialValue: startIndex)
         _sleepAfterCurrent = State(initialValue: sleepMode)
         _suppressAutoplayOnce = State(initialValue: startPaused)
-        _orientationLock = StateObject(wrappedValue: OrientationLockCoordinator())
+        _horizontalLock = StateObject(wrappedValue: HorizontalLockCoordinator())
     }
 
     private var video: Video { videos[currentIndex] }
@@ -105,7 +105,7 @@ struct VideoPlayerView: View {
                     resumeAfterDetaching: resumeAfterDetaching,
                     revealControlsToken: revealControlsToken,
                     onPlayerTap: { orientationControlVisibility.reveal() },
-                    onSceneAvailable: { orientationLock.beginPlayerSession(in: $0) }
+                    onSceneAvailable: { horizontalLock.beginPlayerSession(in: $0) }
                 )
                     .ignoresSafeArea()
                     .offset(y: dragOffset)
@@ -113,12 +113,12 @@ struct VideoPlayerView: View {
             } else {
                 ProgressView().tint(.white)
             }
-            OrientationLockOverlay(
-                isLocked: orientationLock.isLocked,
+            HorizontalLockOverlay(
+                isHorizontal: horizontalLock.isHorizontal,
                 isVisible: orientationControlVisibility.isVisible,
                 isBlocked: false,
                 onToggle: {
-                    orientationLock.toggle()
+                    horizontalLock.toggle()
                     orientationControlVisibility.reveal()
                 },
                 isSleepOn: sleepAfterCurrent,
@@ -157,7 +157,7 @@ struct VideoPlayerView: View {
         .onDisappear {
             hasDisappeared = true
             orientationControlVisibility.hide()
-            orientationLock.endPlayerSession()
+            horizontalLock.endPlayerSession()
             reportPosition()
             pauseTransitionObserver?.invalidate()
             pauseTransitionObserver = nil

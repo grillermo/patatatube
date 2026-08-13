@@ -1,13 +1,13 @@
 import Combine
 import UIKit
 
-struct OrientationLockState {
+struct HorizontalLockState {
     let normalMask: UIInterfaceOrientationMask
     private(set) var supportedMask: UIInterfaceOrientationMask
     private(set) var lockedOrientation: UIInterfaceOrientation?
     private(set) var latestRequestedInterfaceOrientation: UIInterfaceOrientation?
 
-    var isLocked: Bool { lockedOrientation != nil }
+    var isHorizontal: Bool { lockedOrientation != nil }
 
     init(normalMask: UIInterfaceOrientationMask) {
         self.normalMask = normalMask
@@ -66,22 +66,22 @@ private extension UIInterfaceOrientation {
 }
 
 @MainActor
-protocol OrientationLockScene: AnyObject {
-    var orientationLockIdentifier: ObjectIdentifier { get }
+protocol HorizontalLockScene: AnyObject {
+    var horizontalLockIdentifier: ObjectIdentifier { get }
     var interfaceOrientationForLock: UIInterfaceOrientation { get }
 
-    func applyOrientationLock(
-        supportedOrientations: UIInterfaceOrientationMask,
+    func applySupportedOrientations(
+        _ supportedOrientations: UIInterfaceOrientationMask,
         requestedOrientation: UIInterfaceOrientation?
     )
 }
 
-extension UIWindowScene: OrientationLockScene {
-    var orientationLockIdentifier: ObjectIdentifier { ObjectIdentifier(self) }
+extension UIWindowScene: HorizontalLockScene {
+    var horizontalLockIdentifier: ObjectIdentifier { ObjectIdentifier(self) }
     var interfaceOrientationForLock: UIInterfaceOrientation { interfaceOrientation }
 
-    func applyOrientationLock(
-        supportedOrientations: UIInterfaceOrientationMask,
+    func applySupportedOrientations(
+        _ supportedOrientations: UIInterfaceOrientationMask,
         requestedOrientation: UIInterfaceOrientation?
     ) {
         keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
@@ -104,8 +104,8 @@ protocol DeviceOrientationNotifications: AnyObject {
 extension UIDevice: DeviceOrientationNotifications {}
 
 @MainActor
-final class OrientationLockRegistry {
-    static let shared = OrientationLockRegistry()
+final class HorizontalLockRegistry {
+    static let shared = HorizontalLockRegistry()
 
     private final class Entry {
         weak var owner: AnyObject?
@@ -124,10 +124,10 @@ final class OrientationLockRegistry {
     @discardableResult
     func register(
         owner: AnyObject,
-        scene: any OrientationLockScene,
+        scene: any HorizontalLockScene,
         supportedOrientations: UIInterfaceOrientationMask
     ) -> Bool {
-        let identifier = scene.orientationLockIdentifier
+        let identifier = scene.horizontalLockIdentifier
         let ownerIdentifier = ObjectIdentifier(owner)
         let previousEntry = entries[identifier]
         entries[identifier] = Entry(
@@ -142,18 +142,18 @@ final class OrientationLockRegistry {
     @discardableResult
     func update(
         owner: AnyObject,
-        scene: any OrientationLockScene,
+        scene: any HorizontalLockScene,
         supportedOrientations: UIInterfaceOrientationMask
     ) -> Bool {
-        guard let entry = entries[scene.orientationLockIdentifier],
+        guard let entry = entries[scene.horizontalLockIdentifier],
               entry.ownerIdentifier == ObjectIdentifier(owner),
               entry.owner != nil else { return false }
         entry.supportedOrientations = supportedOrientations
         return true
     }
 
-    func unregister(owner: AnyObject, scene: any OrientationLockScene) {
-        unregister(owner: owner, sceneIdentifier: scene.orientationLockIdentifier)
+    func unregister(owner: AnyObject, scene: any HorizontalLockScene) {
+        unregister(owner: owner, sceneIdentifier: scene.horizontalLockIdentifier)
     }
 
     func unregister(owner: AnyObject, sceneIdentifier: ObjectIdentifier) {
@@ -164,11 +164,11 @@ final class OrientationLockRegistry {
     }
 
     func supportedOrientations(
-        for scene: (any OrientationLockScene)?,
+        for scene: (any HorizontalLockScene)?,
         default normalMask: UIInterfaceOrientationMask
     ) -> UIInterfaceOrientationMask {
         guard let scene else { return normalMask }
-        let identifier = scene.orientationLockIdentifier
+        let identifier = scene.horizontalLockIdentifier
         guard let entry = entries[identifier] else { return normalMask }
         guard entry.owner != nil else {
             entries.removeValue(forKey: identifier)
@@ -179,13 +179,13 @@ final class OrientationLockRegistry {
 }
 
 @MainActor
-final class OrientationLockCoordinator: ObservableObject {
+final class HorizontalLockCoordinator: ObservableObject {
 
-    @Published private(set) var isLocked = false
-    private var state: OrientationLockState
-    private weak var activeScene: (any OrientationLockScene)?
+    @Published private(set) var isHorizontal = false
+    private var state: HorizontalLockState
+    private weak var activeScene: (any HorizontalLockScene)?
     private var activeSceneIdentifier: ObjectIdentifier?
-    private let registry: OrientationLockRegistry
+    private let registry: HorizontalLockRegistry
     private let deviceOrientationNotifications: any DeviceOrientationNotifications
     private let notificationCenter: NotificationCenter
     private var orientationObserver: NSObjectProtocol?
@@ -200,34 +200,31 @@ final class OrientationLockCoordinator: ObservableObject {
     }
 
     init(
-        normalMask: UIInterfaceOrientationMask = OrientationLockCoordinator.normalMask,
-        registry: OrientationLockRegistry = .shared,
+        normalMask: UIInterfaceOrientationMask = HorizontalLockCoordinator.normalMask,
+        registry: HorizontalLockRegistry = .shared,
         deviceOrientationNotifications: any DeviceOrientationNotifications = UIDevice.current,
         notificationCenter: NotificationCenter = .default
     ) {
-        state = OrientationLockState(normalMask: normalMask)
+        state = HorizontalLockState(normalMask: normalMask)
         self.registry = registry
         self.deviceOrientationNotifications = deviceOrientationNotifications
         self.notificationCenter = notificationCenter
     }
 
-    func beginPlayerSession(in scene: any OrientationLockScene) {
-        if activeScene?.orientationLockIdentifier == scene.orientationLockIdentifier { return }
+    func beginPlayerSession(in scene: any HorizontalLockScene) {
+        if activeScene?.horizontalLockIdentifier == scene.horizontalLockIdentifier { return }
         if activeSceneIdentifier != nil { endPlayerSession() }
         state.reset()
-        isLocked = false
+        isHorizontal = false
         activeScene = scene
-        activeSceneIdentifier = scene.orientationLockIdentifier
+        activeSceneIdentifier = scene.horizontalLockIdentifier
         let replacedOwner = registry.register(
             owner: self,
             scene: scene,
             supportedOrientations: state.supportedMask
         )
         if replacedOwner {
-            scene.applyOrientationLock(
-                supportedOrientations: state.supportedMask,
-                requestedOrientation: nil
-            )
+            scene.applySupportedOrientations(state.supportedMask, requestedOrientation: nil)
         }
         beginObservation()
     }
@@ -235,13 +232,13 @@ final class OrientationLockCoordinator: ObservableObject {
     func toggle() {
         guard let activeScene else { return }
         let requestedOrientation: UIInterfaceOrientation?
-        if state.isLocked {
+        if state.isHorizontal {
             requestedOrientation = state.unlock()
-            isLocked = false
+            isHorizontal = false
         } else {
             let interfaceOrientation = activeScene.interfaceOrientationForLock
             guard state.lock(to: interfaceOrientation) else { return }
-            isLocked = true
+            isHorizontal = true
             requestedOrientation = interfaceOrientation
         }
         guard registry.update(
@@ -249,25 +246,19 @@ final class OrientationLockCoordinator: ObservableObject {
             scene: activeScene,
             supportedOrientations: state.supportedMask
         ) else { return }
-        activeScene.applyOrientationLock(
-            supportedOrientations: state.supportedMask,
-            requestedOrientation: requestedOrientation
-        )
+        activeScene.applySupportedOrientations(state.supportedMask, requestedOrientation: requestedOrientation)
     }
 
     func endPlayerSession() {
         let pending = state.unlock()
-        isLocked = false
+        isHorizontal = false
         if let activeScene {
             if registry.update(
                 owner: self,
                 scene: activeScene,
                 supportedOrientations: state.supportedMask
             ) {
-                activeScene.applyOrientationLock(
-                    supportedOrientations: state.supportedMask,
-                    requestedOrientation: pending
-                )
+                activeScene.applySupportedOrientations(state.supportedMask, requestedOrientation: pending)
             }
         }
         if let activeSceneIdentifier {

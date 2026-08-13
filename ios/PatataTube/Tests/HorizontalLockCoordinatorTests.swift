@@ -3,12 +3,12 @@ import UIKit
 @testable import PatataTube
 
 @MainActor
-private final class OrientationLockTestScene: OrientationLockScene {
+private final class HorizontalLockTestScene: HorizontalLockScene {
     var interfaceOrientationForLock: UIInterfaceOrientation
     private(set) var applications: [(UIInterfaceOrientationMask, UIInterfaceOrientation?)] = []
     private let customIdentifier: ObjectIdentifier?
 
-    var orientationLockIdentifier: ObjectIdentifier {
+    var horizontalLockIdentifier: ObjectIdentifier {
         customIdentifier ?? ObjectIdentifier(self)
     }
 
@@ -17,8 +17,8 @@ private final class OrientationLockTestScene: OrientationLockScene {
         customIdentifier = identifierOwner.map(ObjectIdentifier.init)
     }
 
-    func applyOrientationLock(
-        supportedOrientations: UIInterfaceOrientationMask,
+    func applySupportedOrientations(
+        _ supportedOrientations: UIInterfaceOrientationMask,
         requestedOrientation: UIInterfaceOrientation?
     ) {
         applications.append((supportedOrientations, requestedOrientation))
@@ -40,30 +40,30 @@ private final class DeviceOrientationNotificationsSpy: DeviceOrientationNotifica
 }
 
 @Suite("Player orientation lock state")
-struct OrientationLockCoordinatorTests {
+struct HorizontalLockCoordinatorTests {
     @Test func phoneStartsUnlockedWithItsConfiguredMask() {
-        let sut = OrientationLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
-        #expect(!sut.isLocked)
+        let sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        #expect(!sut.isHorizontal)
         #expect(sut.supportedMask == [.portrait, .landscapeLeft, .landscapeRight])
     }
 
     @Test func lockCapturesTheDisplayedInterfaceOrientation() {
-        var sut = OrientationLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
         let didLock = sut.lock(to: .landscapeLeft)
         #expect(didLock)
-        #expect(sut.isLocked)
+        #expect(sut.isHorizontal)
         #expect(sut.supportedMask == .landscapeLeft)
     }
 
     @Test func invalidInterfaceOrientationCannotLock() {
-        var sut = OrientationLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
         let didLock = sut.lock(to: .unknown)
         #expect(!didLock)
-        #expect(!sut.isLocked)
+        #expect(!sut.isHorizontal)
     }
 
     @Test func rotationWhileLockedIsRememberedWithoutChangingTheMask() {
-        var sut = OrientationLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
         _ = sut.lock(to: .portrait)
         sut.record(deviceOrientation: .landscapeLeft)
         #expect(sut.supportedMask == .portrait)
@@ -71,7 +71,7 @@ struct OrientationLockCoordinatorTests {
     }
 
     @Test func faceUpFaceDownAndUnknownReadingsAreIgnored() {
-        var sut = OrientationLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
         sut.record(deviceOrientation: .landscapeRight)
         sut.record(deviceOrientation: .faceUp)
         sut.record(deviceOrientation: .faceDown)
@@ -80,30 +80,30 @@ struct OrientationLockCoordinatorTests {
     }
 
     @Test func unlockRestoresNormalMaskAndReturnsLatestSupportedOrientation() {
-        var sut = OrientationLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
         _ = sut.lock(to: .portrait)
         sut.record(deviceOrientation: .landscapeRight)
         #expect(sut.unlock() == .landscapeLeft)
-        #expect(!sut.isLocked)
+        #expect(!sut.isHorizontal)
         #expect(sut.supportedMask == [.portrait, .landscapeLeft, .landscapeRight])
     }
 
     @Test func phoneRejectsUpsideDownButPadAcceptsIt() {
-        var phone = OrientationLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        var phone = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
         phone.record(deviceOrientation: .portraitUpsideDown)
         #expect(phone.latestRequestedInterfaceOrientation == nil)
 
-        var pad = OrientationLockState(normalMask: .all)
+        var pad = HorizontalLockState(normalMask: .all)
         pad.record(deviceOrientation: .portraitUpsideDown)
         #expect(pad.latestRequestedInterfaceOrientation == .portraitUpsideDown)
     }
 
     @Test func resetClearsLockAndPendingRotation() {
-        var sut = OrientationLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
         _ = sut.lock(to: .landscapeRight)
         sut.record(deviceOrientation: .portrait)
         sut.reset()
-        #expect(!sut.isLocked)
+        #expect(!sut.isHorizontal)
         #expect(sut.supportedMask == [.portrait, .landscapeLeft, .landscapeRight])
         #expect(sut.latestRequestedInterfaceOrientation == nil)
     }
@@ -111,29 +111,29 @@ struct OrientationLockCoordinatorTests {
 
 @Suite("Player orientation lock scenes", .serialized)
 @MainActor
-struct OrientationLockSceneTests {
+struct HorizontalLockSceneTests {
     private let phoneMask: UIInterfaceOrientationMask = [
         .portrait, .landscapeLeft, .landscapeRight
     ]
 
     @Test func simultaneousPlayerSessionsKeepSceneMasksAndObservationIndependent() {
-        let registry = OrientationLockRegistry()
+        let registry = HorizontalLockRegistry()
         let firstDevice = DeviceOrientationNotificationsSpy()
         let secondDevice = DeviceOrientationNotificationsSpy()
-        let first = OrientationLockCoordinator(
+        let first = HorizontalLockCoordinator(
             normalMask: phoneMask,
             registry: registry,
             deviceOrientationNotifications: firstDevice,
             notificationCenter: NotificationCenter()
         )
-        let second = OrientationLockCoordinator(
+        let second = HorizontalLockCoordinator(
             normalMask: phoneMask,
             registry: registry,
             deviceOrientationNotifications: secondDevice,
             notificationCenter: NotificationCenter()
         )
-        let portraitScene = OrientationLockTestScene(interfaceOrientation: .portrait)
-        let landscapeScene = OrientationLockTestScene(interfaceOrientation: .landscapeRight)
+        let portraitScene = HorizontalLockTestScene(interfaceOrientation: .portrait)
+        let landscapeScene = HorizontalLockTestScene(interfaceOrientation: .landscapeRight)
 
         first.beginPlayerSession(in: portraitScene)
         first.toggle()
@@ -142,30 +142,30 @@ struct OrientationLockSceneTests {
 
         #expect(registry.supportedOrientations(for: portraitScene, default: phoneMask) == .portrait)
         #expect(registry.supportedOrientations(for: landscapeScene, default: phoneMask) == .landscapeRight)
-        #expect(first.isLocked)
-        #expect(second.isLocked)
+        #expect(first.isHorizontal)
+        #expect(second.isHorizontal)
 
         first.endPlayerSession()
 
         #expect(registry.supportedOrientations(for: portraitScene, default: phoneMask) == phoneMask)
         #expect(registry.supportedOrientations(for: landscapeScene, default: phoneMask) == .landscapeRight)
-        #expect(!first.isLocked)
-        #expect(second.isLocked)
+        #expect(!first.isHorizontal)
+        #expect(second.isHorizontal)
         #expect(firstDevice.endCount == 1)
         #expect(secondDevice.endCount == 0)
     }
 
     @Test func sceneHandoffUnlocksOnlyTheOldSceneAndThenTargetsTheExactNewScene() {
-        let registry = OrientationLockRegistry()
+        let registry = HorizontalLockRegistry()
         let device = DeviceOrientationNotificationsSpy()
-        let sut = OrientationLockCoordinator(
+        let sut = HorizontalLockCoordinator(
             normalMask: phoneMask,
             registry: registry,
             deviceOrientationNotifications: device,
             notificationCenter: NotificationCenter()
         )
-        let firstScene = OrientationLockTestScene(interfaceOrientation: .portrait)
-        let secondScene = OrientationLockTestScene(interfaceOrientation: .landscapeLeft)
+        let firstScene = HorizontalLockTestScene(interfaceOrientation: .portrait)
+        let secondScene = HorizontalLockTestScene(interfaceOrientation: .landscapeLeft)
 
         sut.beginPlayerSession(in: firstScene)
         sut.toggle()
@@ -183,8 +183,8 @@ struct OrientationLockSceneTests {
     }
 
     @Test func staleOwnerCannotUnregisterTheCurrentSceneSession() {
-        let registry = OrientationLockRegistry()
-        let scene = OrientationLockTestScene(interfaceOrientation: .portrait)
+        let registry = HorizontalLockRegistry()
+        let scene = HorizontalLockTestScene(interfaceOrientation: .portrait)
         let oldOwner = NSObject()
         let currentOwner = NSObject()
 
@@ -196,15 +196,15 @@ struct OrientationLockSceneTests {
     }
 
     @Test func replacingALockedOwnerInTheSameSceneAppliesTheNewNormalMaskOnce() {
-        let registry = OrientationLockRegistry()
-        let scene = OrientationLockTestScene(interfaceOrientation: .portrait)
-        let first = OrientationLockCoordinator(
+        let registry = HorizontalLockRegistry()
+        let scene = HorizontalLockTestScene(interfaceOrientation: .portrait)
+        let first = HorizontalLockCoordinator(
             normalMask: phoneMask,
             registry: registry,
             deviceOrientationNotifications: DeviceOrientationNotificationsSpy(),
             notificationCenter: NotificationCenter()
         )
-        let second = OrientationLockCoordinator(
+        let second = HorizontalLockCoordinator(
             normalMask: phoneMask,
             registry: registry,
             deviceOrientationNotifications: DeviceOrientationNotificationsSpy(),
@@ -226,16 +226,16 @@ struct OrientationLockSceneTests {
     }
 
     @Test func endingAfterTheSceneDisappearsStillResetsAndUnregistersTheSession() {
-        let registry = OrientationLockRegistry()
+        let registry = HorizontalLockRegistry()
         let device = DeviceOrientationNotificationsSpy()
         let identifierOwner = NSObject()
-        let sut = OrientationLockCoordinator(
+        let sut = HorizontalLockCoordinator(
             normalMask: phoneMask,
             registry: registry,
             deviceOrientationNotifications: device,
             notificationCenter: NotificationCenter()
         )
-        var scene: OrientationLockTestScene? = OrientationLockTestScene(
+        var scene: HorizontalLockTestScene? = HorizontalLockTestScene(
             interfaceOrientation: .portrait,
             identifierOwner: identifierOwner
         )
@@ -245,22 +245,22 @@ struct OrientationLockSceneTests {
         scene = nil
         sut.endPlayerSession()
 
-        let sceneProbe = OrientationLockTestScene(
+        let sceneProbe = HorizontalLockTestScene(
             interfaceOrientation: .portrait,
             identifierOwner: identifierOwner
         )
-        #expect(!sut.isLocked)
+        #expect(!sut.isHorizontal)
         #expect(sut.supportedOrientations == phoneMask)
         #expect(registry.supportedOrientations(for: sceneProbe, default: phoneMask) == phoneMask)
         #expect(device.endCount == 1)
     }
 
     @Test func deallocationBalancesAnOwnedNotificationSession() {
-        let registry = OrientationLockRegistry()
+        let registry = HorizontalLockRegistry()
         let device = DeviceOrientationNotificationsSpy()
         let notificationCenter = NotificationCenter()
-        let scene = OrientationLockTestScene(interfaceOrientation: .portrait)
-        var sut: OrientationLockCoordinator? = OrientationLockCoordinator(
+        let scene = HorizontalLockTestScene(interfaceOrientation: .portrait)
+        var sut: HorizontalLockCoordinator? = HorizontalLockCoordinator(
             normalMask: phoneMask,
             registry: registry,
             deviceOrientationNotifications: device,
@@ -281,12 +281,12 @@ struct OrientationLockSceneTests {
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
         let owner = NSObject()
-        OrientationLockRegistry.shared.register(
+        HorizontalLockRegistry.shared.register(
             owner: owner,
             scene: scene,
             supportedOrientations: .landscapeLeft
         )
-        defer { OrientationLockRegistry.shared.unregister(owner: owner, scene: scene) }
+        defer { HorizontalLockRegistry.shared.unregister(owner: owner, scene: scene) }
         let window = UIWindow(windowScene: scene)
 
         let result = AppDelegate().application(
@@ -299,13 +299,13 @@ struct OrientationLockSceneTests {
 
     @Test func notificationGenerationEndsExactlyOnceOnlyAfterThisCoordinatorBeginsIt() {
         let device = DeviceOrientationNotificationsSpy()
-        let sut = OrientationLockCoordinator(
+        let sut = HorizontalLockCoordinator(
             normalMask: phoneMask,
-            registry: OrientationLockRegistry(),
+            registry: HorizontalLockRegistry(),
             deviceOrientationNotifications: device,
             notificationCenter: NotificationCenter()
         )
-        let scene = OrientationLockTestScene(interfaceOrientation: .portrait)
+        let scene = HorizontalLockTestScene(interfaceOrientation: .portrait)
 
         sut.endPlayerSession()
         #expect(device.beginCount == 0)

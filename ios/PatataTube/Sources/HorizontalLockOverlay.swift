@@ -31,10 +31,10 @@ final class OrientationControlVisibility: ObservableObject {
     }
 }
 
-struct OrientationLockOverlay: View {
+struct HorizontalLockOverlay: View {
     static let verticalOffsetFraction: CGFloat = 0.20
 
-    let isLocked: Bool
+    let isHorizontal: Bool
     let isVisible: Bool
     let isBlocked: Bool
     let onToggle: () -> Void
@@ -49,11 +49,11 @@ struct OrientationLockOverlay: View {
                         Button {
                             onToggle()
                         } label: {
-                            controlIcon(isLocked ? "lock.rotation" : "rotate.right",
-                                        active: isLocked)
+                            controlIcon(isHorizontal ? "lock.rotation" : "rotate.right",
+                                        active: isHorizontal)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(isLocked ? "Unlock video orientation" : "Lock video orientation")
+                        .accessibilityLabel(isHorizontal ? "Unlock video orientation" : "Lock video orientation")
 
                         Button {
                             onToggleSleep()

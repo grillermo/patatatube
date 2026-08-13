@@ -3,8 +3,8 @@ import AVKit
 
 @MainActor
 class SceneReportingPlayerViewController: AVPlayerViewController {
-    var onSceneAvailable: ((any OrientationLockScene) -> Void)?
-    var playerWindowScene: (any OrientationLockScene)? { view.window?.windowScene }
+    var onSceneAvailable: ((any HorizontalLockScene) -> Void)?
+    var playerWindowScene: (any HorizontalLockScene)? { view.window?.windowScene }
 
     /// Hide the home indicator while a video is on screen, like the YouTube app.
     /// AVPlayerViewController only does this for itself in its own full-screen
@@ -57,7 +57,7 @@ struct PlayerViewController: UIViewControllerRepresentable {
     /// a tap; the parent bumps this so the controls are there immediately.
     let revealControlsToken: Int
     let onPlayerTap: () -> Void
-    let onSceneAvailable: (any OrientationLockScene) -> Void
+    let onSceneAvailable: (any HorizontalLockScene) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onPlayerTap: onPlayerTap)
