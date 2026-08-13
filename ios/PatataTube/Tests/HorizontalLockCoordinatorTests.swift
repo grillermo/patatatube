@@ -138,6 +138,7 @@ struct HorizontalLockSceneTests {
     private let phoneMask: UIInterfaceOrientationMask = [
         .portrait, .landscapeLeft, .landscapeRight
     ]
+    private let landscapeMask: UIInterfaceOrientationMask = [.landscapeLeft, .landscapeRight]
 
     @Test func simultaneousPlayerSessionsKeepSceneMasksAndObservationIndependent() {
         let registry = HorizontalLockRegistry()
@@ -163,19 +164,47 @@ struct HorizontalLockSceneTests {
         second.beginPlayerSession(in: landscapeScene)
         second.toggle()
 
-        #expect(registry.supportedOrientations(for: portraitScene, default: phoneMask) == .portrait)
-        #expect(registry.supportedOrientations(for: landscapeScene, default: phoneMask) == .landscapeRight)
+        #expect(registry.supportedOrientations(for: portraitScene, default: phoneMask) == landscapeMask)
+        #expect(registry.supportedOrientations(for: landscapeScene, default: phoneMask) == landscapeMask)
         #expect(first.isHorizontal)
         #expect(second.isHorizontal)
 
         first.endPlayerSession()
 
         #expect(registry.supportedOrientations(for: portraitScene, default: phoneMask) == phoneMask)
-        #expect(registry.supportedOrientations(for: landscapeScene, default: phoneMask) == .landscapeRight)
+        #expect(registry.supportedOrientations(for: landscapeScene, default: phoneMask) == landscapeMask)
         #expect(!first.isHorizontal)
         #expect(second.isHorizontal)
         #expect(firstDevice.endCount == 1)
         #expect(secondDevice.endCount == 0)
+    }
+
+    /// A portrait phone has no seen landscape, so it takes the default; a scene
+    /// that is already landscape seeds the memory and keeps that side.
+    @Test func lockTargetComesFromTheSceneWhenTheDeviceHasNeverBeenLandscape() {
+        let registry = HorizontalLockRegistry()
+        let portraitCoordinator = HorizontalLockCoordinator(
+            normalMask: phoneMask,
+            registry: registry,
+            deviceOrientationNotifications: DeviceOrientationNotificationsSpy(orientation: .portrait),
+            notificationCenter: NotificationCenter()
+        )
+        let landscapeCoordinator = HorizontalLockCoordinator(
+            normalMask: phoneMask,
+            registry: registry,
+            deviceOrientationNotifications: DeviceOrientationNotificationsSpy(orientation: .faceUp),
+            notificationCenter: NotificationCenter()
+        )
+        let portraitScene = HorizontalLockTestScene(interfaceOrientation: .portrait)
+        let landscapeScene = HorizontalLockTestScene(interfaceOrientation: .landscapeLeft)
+
+        portraitCoordinator.beginPlayerSession(in: portraitScene)
+        portraitCoordinator.toggle()
+        landscapeCoordinator.beginPlayerSession(in: landscapeScene)
+        landscapeCoordinator.toggle()
+
+        #expect(portraitScene.applications.last?.1 == .landscapeRight)
+        #expect(landscapeScene.applications.last?.1 == .landscapeLeft)
     }
 
     @Test func sceneHandoffUnlocksOnlyTheOldSceneAndThenTargetsTheExactNewScene() {
@@ -196,11 +225,12 @@ struct HorizontalLockSceneTests {
         sut.toggle()
 
         #expect(registry.supportedOrientations(for: firstScene, default: phoneMask) == phoneMask)
-        #expect(registry.supportedOrientations(for: secondScene, default: phoneMask) == .landscapeLeft)
+        #expect(registry.supportedOrientations(for: secondScene, default: phoneMask) == landscapeMask)
         #expect(firstScene.applications.count == 2)
         #expect(firstScene.applications.last?.0 == phoneMask)
         #expect(secondScene.applications.count == 1)
-        #expect(secondScene.applications.last?.0 == .landscapeLeft)
+        #expect(secondScene.applications.last?.0 == landscapeMask)
+        #expect(secondScene.applications.last?.1 == .landscapeLeft)
         #expect(device.beginCount == 2)
         #expect(device.endCount == 1)
     }

@@ -242,6 +242,10 @@ final class HorizontalLockCoordinator: ObservableObject {
         if activeSceneIdentifier != nil { endPlayerSession() }
         state.reset()
         isHorizontal = false
+        // The player can open while the device reports .faceUp/.unknown, which
+        // no device notification will ever resolve into a side. The scene's own
+        // interface orientation is the only landscape evidence in that case.
+        state.record(interfaceOrientation: scene.interfaceOrientationForLock)
         activeScene = scene
         activeSceneIdentifier = scene.horizontalLockIdentifier
         let replacedOwner = registry.register(
