@@ -47,29 +47,6 @@ struct HorizontalLockCoordinatorTests {
         #expect(sut.supportedMask == [.portrait, .landscapeLeft, .landscapeRight])
     }
 
-    @Test func lockCapturesTheDisplayedInterfaceOrientation() {
-        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
-        let didLock = sut.lock(to: .landscapeLeft)
-        #expect(didLock)
-        #expect(sut.isHorizontal)
-        #expect(sut.supportedMask == .landscapeLeft)
-    }
-
-    @Test func invalidInterfaceOrientationCannotLock() {
-        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
-        let didLock = sut.lock(to: .unknown)
-        #expect(!didLock)
-        #expect(!sut.isHorizontal)
-    }
-
-    @Test func rotationWhileLockedIsRememberedWithoutChangingTheMask() {
-        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
-        _ = sut.lock(to: .portrait)
-        sut.record(deviceOrientation: .landscapeLeft)
-        #expect(sut.supportedMask == .portrait)
-        #expect(sut.latestRequestedInterfaceOrientation == .landscapeRight)
-    }
-
     @Test func faceUpFaceDownAndUnknownReadingsAreIgnored() {
         var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
         sut.record(deviceOrientation: .landscapeRight)
@@ -77,15 +54,6 @@ struct HorizontalLockCoordinatorTests {
         sut.record(deviceOrientation: .faceDown)
         sut.record(deviceOrientation: .unknown)
         #expect(sut.latestRequestedInterfaceOrientation == .landscapeLeft)
-    }
-
-    @Test func unlockRestoresNormalMaskAndReturnsLatestSupportedOrientation() {
-        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
-        _ = sut.lock(to: .portrait)
-        sut.record(deviceOrientation: .landscapeRight)
-        #expect(sut.unlock() == .landscapeLeft)
-        #expect(!sut.isHorizontal)
-        #expect(sut.supportedMask == [.portrait, .landscapeLeft, .landscapeRight])
     }
 
     @Test func phoneRejectsUpsideDownButPadAcceptsIt() {
@@ -100,12 +68,67 @@ struct HorizontalLockCoordinatorTests {
 
     @Test func resetClearsLockAndPendingRotation() {
         var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
-        _ = sut.lock(to: .landscapeRight)
+        _ = sut.lock()
         sut.record(deviceOrientation: .portrait)
         sut.reset()
         #expect(!sut.isHorizontal)
         #expect(sut.supportedMask == [.portrait, .landscapeLeft, .landscapeRight])
         #expect(sut.latestRequestedInterfaceOrientation == nil)
+    }
+
+    @Test func lockingWithoutAnySeenLandscapeDefaultsToLandscapeRight() {
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        sut.record(deviceOrientation: .portrait)
+        let requested = sut.lock()
+        #expect(requested == .landscapeRight)
+        #expect(sut.isHorizontal)
+        #expect(sut.supportedMask == [.landscapeLeft, .landscapeRight])
+    }
+
+    @Test func lockingFromPortraitRequestsTheLastSeenLandscape() {
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        sut.record(deviceOrientation: .landscapeRight)   // interface .landscapeLeft
+        sut.record(deviceOrientation: .portrait)
+        #expect(sut.lock() == .landscapeLeft)
+        #expect(sut.supportedMask == [.landscapeLeft, .landscapeRight])
+    }
+
+    @Test func seededInterfaceOrientationCountsAsASeenLandscape() {
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        sut.record(interfaceOrientation: .landscapeRight)
+        #expect(sut.lock() == .landscapeRight)
+    }
+
+    @Test func bothLandscapesStaySupportedSoAOneEightyFlipStillRotates() {
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        _ = sut.lock()
+        sut.record(deviceOrientation: .landscapeLeft)
+        #expect(sut.supportedMask == [.landscapeLeft, .landscapeRight])
+        #expect(sut.isHorizontal)
+    }
+
+    @Test func portraitRotationsWhileLockedAreStillRecordedForTheUnlockRestore() {
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        _ = sut.lock()
+        sut.record(deviceOrientation: .portrait)
+        #expect(sut.supportedMask == [.landscapeLeft, .landscapeRight])
+        #expect(sut.unlock() == .portrait)
+        #expect(!sut.isHorizontal)
+        #expect(sut.supportedMask == [.portrait, .landscapeLeft, .landscapeRight])
+    }
+
+    @Test func aPortraitOnlyMaskCannotGoHorizontal() {
+        var sut = HorizontalLockState(normalMask: .portrait)
+        #expect(sut.lock() == nil)
+        #expect(!sut.isHorizontal)
+        #expect(sut.supportedMask == .portrait)
+    }
+
+    @Test func resetClearsTheRememberedLandscape() {
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        sut.record(deviceOrientation: .landscapeRight)
+        sut.reset()
+        #expect(sut.lock() == .landscapeRight)   // back to the default, not .landscapeLeft
     }
 }
 

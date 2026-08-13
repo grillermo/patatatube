@@ -6,8 +6,19 @@ struct HorizontalLockState {
     private(set) var supportedMask: UIInterfaceOrientationMask
     private(set) var lockedOrientation: UIInterfaceOrientation?
     private(set) var latestRequestedInterfaceOrientation: UIInterfaceOrientation?
+    /// Last landscape the device was actually seen in. This is the target a
+    /// lock requests, so toggling on from portrait rotates the way the viewer
+    /// last held the phone rather than always the same way.
+    private(set) var latestLandscapeInterfaceOrientation: UIInterfaceOrientation?
 
     var isHorizontal: Bool { lockedOrientation != nil }
+
+    /// The landscape orientations this device is willing to display. Both stay
+    /// supported while locked, so a 180° flip still rotates the video — only
+    /// portrait is taken away.
+    var landscapeMask: UIInterfaceOrientationMask {
+        normalMask.intersection([.landscapeLeft, .landscapeRight])
+    }
 
     init(normalMask: UIInterfaceOrientationMask) {
         self.normalMask = normalMask
@@ -15,17 +26,31 @@ struct HorizontalLockState {
     }
 
     mutating func record(deviceOrientation: UIDeviceOrientation) {
-        guard let interfaceOrientation = deviceOrientation.interfaceOrientation,
-              normalMask.contains(interfaceOrientation.mask) else { return }
-        latestRequestedInterfaceOrientation = interfaceOrientation
+        guard let interfaceOrientation = deviceOrientation.interfaceOrientation else { return }
+        record(interfaceOrientation: interfaceOrientation)
     }
 
+    /// Recorded even while locked: `latestRequestedInterfaceOrientation` is what
+    /// unlocking restores, so a portrait phone must still be observed.
+    mutating func record(interfaceOrientation: UIInterfaceOrientation) {
+        guard normalMask.contains(interfaceOrientation.mask) else { return }
+        latestRequestedInterfaceOrientation = interfaceOrientation
+        if landscapeMask.contains(interfaceOrientation.mask) {
+            latestLandscapeInterfaceOrientation = interfaceOrientation
+        }
+    }
+
+    /// Narrow to landscape and report the orientation to rotate to, or nil when
+    /// this device supports no landscape at all (nothing changes in that case).
     @discardableResult
-    mutating func lock(to orientation: UIInterfaceOrientation) -> Bool {
-        guard orientation != .unknown, normalMask.contains(orientation.mask) else { return false }
-        lockedOrientation = orientation
-        supportedMask = orientation.mask
-        return true
+    mutating func lock() -> UIInterfaceOrientation? {
+        let mask = landscapeMask
+        guard !mask.isEmpty else { return nil }
+        let target = latestLandscapeInterfaceOrientation
+            ?? (mask.contains(.landscapeRight) ? .landscapeRight : .landscapeLeft)
+        lockedOrientation = target
+        supportedMask = mask
+        return target
     }
 
     mutating func unlock() -> UIInterfaceOrientation? {
@@ -37,6 +62,7 @@ struct HorizontalLockState {
     mutating func reset() {
         lockedOrientation = nil
         latestRequestedInterfaceOrientation = nil
+        latestLandscapeInterfaceOrientation = nil
         supportedMask = normalMask
     }
 }
@@ -236,10 +262,9 @@ final class HorizontalLockCoordinator: ObservableObject {
             requestedOrientation = state.unlock()
             isHorizontal = false
         } else {
-            let interfaceOrientation = activeScene.interfaceOrientationForLock
-            guard state.lock(to: interfaceOrientation) else { return }
+            guard let target = state.lock() else { return }
             isHorizontal = true
-            requestedOrientation = interfaceOrientation
+            requestedOrientation = target
         }
         guard registry.update(
             owner: self,
