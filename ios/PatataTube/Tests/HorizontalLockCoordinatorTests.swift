@@ -99,6 +99,12 @@ struct HorizontalLockCoordinatorTests {
         #expect(sut.lock() == .landscapeRight)
     }
 
+    @Test func unknownSeededInterfaceOrientationIsIgnored() {
+        var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
+        sut.record(interfaceOrientation: .unknown)
+        #expect(sut.lock() == .landscapeRight)   // default, not remembered as .unknown
+    }
+
     @Test func bothLandscapesStaySupportedSoAOneEightyFlipStillRotates() {
         var sut = HorizontalLockState(normalMask: [.portrait, .landscapeLeft, .landscapeRight])
         _ = sut.lock()

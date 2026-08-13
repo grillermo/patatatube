@@ -33,9 +33,10 @@ struct HorizontalLockState {
     /// Recorded even while locked: `latestRequestedInterfaceOrientation` is what
     /// unlocking restores, so a portrait phone must still be observed.
     mutating func record(interfaceOrientation: UIInterfaceOrientation) {
-        guard normalMask.contains(interfaceOrientation.mask) else { return }
+        let mask = interfaceOrientation.mask
+        guard !mask.isEmpty, normalMask.contains(mask) else { return }
         latestRequestedInterfaceOrientation = interfaceOrientation
-        if landscapeMask.contains(interfaceOrientation.mask) {
+        if landscapeMask.contains(mask) {
             latestLandscapeInterfaceOrientation = interfaceOrientation
         }
     }
