@@ -434,7 +434,11 @@ struct VideoGridView: View {
             rootScrollView.refreshable { await refreshGroups() }
         } else {
             rootScrollView
-                .searchable(text: $searchText, prompt: "Search videos")
+                // `.always` pins the field to the navigation bar; the default
+                // (.automatic) tucks it into a drawer that scrolls away.
+                .searchable(text: $searchText,
+                            placement: .navigationBarDrawer(displayMode: .always),
+                            prompt: "Search videos")
                 .refreshable { await store.refreshLibrary() }
         }
     }
@@ -660,7 +664,9 @@ struct VideoGridView: View {
                     restoredGroupAnchor = nil
                 }
             }
-            .searchable(text: $searchText, prompt: "Search videos")
+            .searchable(text: $searchText,
+                        placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: "Search videos")
             .refreshable { await store.refreshLibrary() }
             .toolbar { optionsToolbar }
         case .show(let title):
