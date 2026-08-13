@@ -49,11 +49,11 @@ struct HorizontalLockOverlay: View {
                         Button {
                             onToggle()
                         } label: {
-                            controlIcon(isHorizontal ? "lock.rotation" : "rotate.right",
+                            controlIcon(isHorizontal ? "lock.rotation" : "rectangle.landscape.rotate",
                                         active: isHorizontal)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(isHorizontal ? "Unlock video orientation" : "Lock video orientation")
+                        .accessibilityLabel(isHorizontal ? "Stop forcing horizontal video" : "Force horizontal video")
 
                         Button {
                             onToggleSleep()

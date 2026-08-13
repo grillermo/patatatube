@@ -20,27 +20,27 @@ struct HorizontalLockOverlayTests {
         #expect(HorizontalLockOverlay.verticalOffsetFraction == 0.20)
     }
 
-    @Test func unlockedAndLockedStatesUseAccessibleSystemSymbols() throws {
+    @Test func horizontalOffAndOnStatesUseAccessibleSystemSymbols() throws {
         var toggles = 0
-        let unlocked = HorizontalLockOverlay(
+        let off = HorizontalLockOverlay(
             isHorizontal: false, isVisible: true, isBlocked: false,
             onToggle: { toggles += 1 }, isSleepOn: false, onToggleSleep: {}
         )
-        let unlockedButton = try unlocked.inspect().find(
-            ViewType.Button.self, where: { try $0.accessibilityLabel().string() == "Lock video orientation" }
+        let offButton = try off.inspect().find(
+            ViewType.Button.self, where: { try $0.accessibilityLabel().string() == "Force horizontal video" }
         )
-        #expect(try unlockedButton.find(ViewType.Image.self).actualImage().name() == "rotate.right")
-        try unlockedButton.tap()
+        #expect(try offButton.find(ViewType.Image.self).actualImage().name() == "rectangle.landscape.rotate")
+        try offButton.tap()
         #expect(toggles == 1)
 
-        let locked = HorizontalLockOverlay(
+        let on = HorizontalLockOverlay(
             isHorizontal: true, isVisible: true, isBlocked: false,
             onToggle: {}, isSleepOn: false, onToggleSleep: {}
         )
-        let lockedButton = try locked.inspect().find(
-            ViewType.Button.self, where: { try $0.accessibilityLabel().string() == "Unlock video orientation" }
+        let onButton = try on.inspect().find(
+            ViewType.Button.self, where: { try $0.accessibilityLabel().string() == "Stop forcing horizontal video" }
         )
-        #expect(try lockedButton.find(ViewType.Image.self).actualImage().name() == "lock.rotation")
+        #expect(try onButton.find(ViewType.Image.self).actualImage().name() == "lock.rotation")
     }
 
     @Test func sleepButtonTogglesAndTintsWhenOn() throws {
