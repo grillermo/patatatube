@@ -148,9 +148,22 @@ map for the intermittent-playback investigation:
 ### Request → download → serve flow
 
 1. `POST /upload` (or `/api/videos` paths) — `main.py` classifies the URL (`_classify_url`) into `twitter` or `youtube`, inserts a `queued` row via `db.add_video`, and schedules `downloader.download_video` as a FastAPI `BackgroundTask`.
-2. `downloader.py` runs the download off the event loop: **pybalt** for Twitter/X, **yt-dlp** (`--cookies-from-browser`) for YouTube. Every file is passed through `_normalize_media_for_ios` — an ffmpeg step that guarantees H.264/AAC + `+faststart` so iOS can stream it. Output lands at `videos/{id}.mp4`.
-3. Status transitions queued → downloading → done. **Failures don't get an `error` status** — `db.update_video(status="error")` and the download exception handler both *delete the row* instead. Don't rely on error rows existing.
-4. `GET /videos/{id}/stream` serves the MP4 with HTTP Range support (206 partial content), hand-rolled in `_parse_byte_range` / `_iter_file_range`, gated by an asyncio semaphore (`VIDEO_STREAM_LIMIT`).
+2. A YouTube **playlist** URL (`/playlist?list=…`, on `youtube.com`,
+   `m.youtube.com` or `music.youtube.com`) classifies as `youtube_playlist` and
+   takes a different route: no row is inserted, `body.group_id` is ignored, and
+   `downloader.import_playlist` runs as a BackgroundTask. It calls
+   `yt-dlp --flat-playlist -J` once, creates a **new** group named after the
+   playlist title (`name` slugified, suffixed `-2`, `-3`… on collision — an
+   existing group is never reused), inserts one row per entry, and downloads
+   them **sequentially**. `watch?v=X&list=Y` is deliberately *not* a playlist:
+   shared links routinely carry a Mix id nobody meant to hand over. The
+   response is `202 {"status": "queued", "playlist": "<list_id>"}` — no ids,
+   because neither the group nor the rows exist yet; clients poll
+   `/api/groups`. A failed or empty playlist creates nothing and is only
+   visible in `log/backend.log`.
+3. `downloader.py` runs the download off the event loop: **pybalt** for Twitter/X, **yt-dlp** (`--cookies-from-browser`) for YouTube. Every file is passed through `_normalize_media_for_ios` — an ffmpeg step that guarantees H.264/AAC + `+faststart` so iOS can stream it. Output lands at `videos/{id}.mp4`.
+4. Status transitions queued → downloading → done. **Failures don't get an `error` status** — `db.update_video(status="error")` and the download exception handler both *delete the row* instead. Don't rely on error rows existing.
+5. `GET /videos/{id}/stream` serves the MP4 with HTTP Range support (206 partial content), hand-rolled in `_parse_byte_range` / `_iter_file_range`, gated by an asyncio semaphore (`VIDEO_STREAM_LIMIT`).
 
 ### ffmpeg runs in exactly one process
 
