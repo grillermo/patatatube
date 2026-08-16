@@ -2142,6 +2142,7 @@ def test_upload_accepts_youtube_music_watch_url(client, monkeypatch):
     video = db.get_video(resp.json()["id"])
     assert video["platform"] == "youtube"
     assert video["source_key"] == "dQw4w9WgXcQ"
+    assert video["url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 
 @pytest.mark.parametrize(
