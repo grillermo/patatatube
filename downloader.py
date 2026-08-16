@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -290,3 +291,27 @@ def _resolve_downloaded_path(tmpdir_path: Path) -> Path:
         return matches[0]
 
     raise FileNotFoundError("yt-dlp did not produce a downloadable file")
+
+
+PLAYLIST_SLUG_MAX_LEN = 40
+# Guards against a pathological run of pre-existing groups; hitting it means
+# something is wrong, not that the user has 200 identically-named playlists.
+PLAYLIST_NAME_MAX_ATTEMPTS = 200
+
+
+def _slugify_playlist_title(title: str) -> str:
+    """A `groups.name` candidate. Non-ASCII-alnum runs collapse to a hyphen."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (title or "").lower()).strip("-")
+    slug = slug[:PLAYLIST_SLUG_MAX_LEN].strip("-")
+    return slug or "playlist"
+
+
+def _unique_group_name(slug: str, label: str) -> tuple[str, str]:
+    """A free (name, label) pair. Playlists never reuse an existing group, so
+    a clash suffixes instead of returning the incumbent."""
+    for attempt in range(1, PLAYLIST_NAME_MAX_ATTEMPTS + 1):
+        name = slug if attempt == 1 else f"{slug}-{attempt}"
+        candidate_label = label if attempt == 1 else f"{label} ({attempt})"
+        if name not in db.PLEX_KINDS and db.get_group_by_name(name) is None:
+            return name, candidate_label
+    raise RuntimeError(f"Could not find a free group name for {slug!r}")

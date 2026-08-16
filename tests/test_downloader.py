@@ -342,3 +342,46 @@ async def test_normalize_raises_when_the_job_fails(monkeypatch, downloader_env, 
             downloader._normalize_media_for_ios(source, video_id=42),
             fail_the_job(),
         )
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        ("Lo-fi Beats", "lo-fi-beats"),
+        ("  Summer 2026 Mix!!  ", "summer-2026-mix"),
+        ("Café Música", "caf-m-sica"),
+        ("🎵🎵", "playlist"),
+        ("", "playlist"),
+        ("a" * 80, "a" * 40),
+    ],
+)
+def test_slugify_playlist_title(downloader_env, title, expected):
+    _db, downloader, _videos_dir = downloader_env
+
+    assert downloader._slugify_playlist_title(title) == expected
+
+
+def test_unique_group_name_returns_slug_when_free(downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+
+    assert downloader._unique_group_name("lo-fi-beats", "Lo-fi Beats") == (
+        "lo-fi-beats",
+        "Lo-fi Beats",
+    )
+
+
+def test_unique_group_name_suffixes_past_existing_groups(downloader_env):
+    db, downloader, _videos_dir = downloader_env
+    db.create_group("lo-fi-beats", "Lo-fi Beats")
+    db.create_group("lo-fi-beats-2", "Lo-fi Beats (2)")
+
+    assert downloader._unique_group_name("lo-fi-beats", "Lo-fi Beats") == (
+        "lo-fi-beats-3",
+        "Lo-fi Beats (3)",
+    )
+
+
+def test_unique_group_name_avoids_plex_kinds(downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+
+    assert downloader._unique_group_name("movies", "Movies") == ("movies-2", "Movies (2)")
