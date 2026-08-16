@@ -24,11 +24,9 @@ reachable via the PiP window's restore button.
 
 Recorded because each had a cheaper alternative that was considered and rejected:
 
-- **Dismiss gets its own affordance.** With pull-down repurposed, the player
-  has no exit — AVKit shows no close button when embedded inline in a
-  `fullScreenCover`. A close button is added to the existing overlay rather
-  than overloading the same drag with two thresholds or adding a second
-  (swipe-up) gesture.
+- **No new close affordance.** AVKit's player already shows its own close
+  control, so repurposing pull-down costs the user nothing. No overlay button,
+  no second gesture, no dual-threshold drag.
 - **PiP is started by firing AVKit's own button, not by hosting our own
   `AVPictureInPictureController`.** Verified against the SDK headers on this
   machine: `AVPlayerViewController.h` exposes only
@@ -125,15 +123,6 @@ cover) holds while PiP is active: a strong `AVPlayer` reference, the
   the player, `deactivateAudioSession()`, `nowPlaying.detach()` — and clear the
   coordinator.
 
-## Close button
-
-A third control in `HorizontalLockOverlay`'s `VStack`
-(`HorizontalLockOverlay.swift:48`): `xmark` in the same 44pt
-`.black.opacity(0.55)` circle, placed above the lock and moon icons, driven by
-a new `onClose: () -> Void`, accessibility label "Close player". It inherits
-the overlay's 4-second auto-hide, so the same tap that reveals the lock and
-sleep controls reveals it.
-
 ## Files
 
 New:
@@ -146,12 +135,13 @@ Edited:
 - `ios/PatataTube/Sources/PlayerViewController.swift` — `allowsPictureInPicturePlayback = true`,
   the button finder, `AVPlayerViewControllerDelegate` conformance on `Coordinator`.
 - `ios/PatataTube/Sources/VideoPlayerView.swift` — `pullDownToPiP` and its
-  fallback, the `onDisappear` handoff gate, wiring `onClose`.
-- `ios/PatataTube/Sources/HorizontalLockOverlay.swift` — the close button.
+  fallback, the `onDisappear` handoff gate.
 - `ios/PatataTube/Sources/AppModel.swift` — owns the `PiPCoordinator`.
 - `ios/PatataTube/Sources/VideoGridView.swift` — re-presentation on restore.
-- `ios/PatataTube/Tests/PlayerViewControllerTests.swift`,
-  `HorizontalLockOverlayTests.swift` — see below.
+- `ios/PatataTube/Tests/PlayerViewControllerTests.swift` — see below.
+
+Untouched by this change: `HorizontalLockOverlay.swift`. The player's exit is
+AVKit's own close control, which is already there.
 
 Untouched: the backend, PatataTubeKit, `Info.plist` (`UIBackgroundModes`
 already contains `audio`, which is what PiP requires).
@@ -167,7 +157,7 @@ dead and the window-level `AVPlayerLayer` host is the only route — stop and
 re-plan rather than working around it.
 
 Only after the spike answers yes: the button finder and its tests, the
-`onDisappear` gate, the coordinator, restore, then the close button.
+`onDisappear` gate, the coordinator, then restore.
 
 ## Testing
 
@@ -182,8 +172,6 @@ New unit tests in `PatataTubeTests` (the `xcodebuild`-only target):
 - The gesture's commit decision (threshold, downward-only,
   vertical-dominance) as a pure function, in the style of
   `VideoGridViewTests.dismissesOnlyForDominantHorizontalFlicksPastThreshold`.
-- `HorizontalLockOverlayTests`: the close button exists, is hidden with the
-  rest of the overlay, and invokes `onClose`.
 
 Note that `PatataTubeTests` only ever builds through `xcodebuild`, so it rots
 silently — this change touches `ios/PatataTube/Sources/`, so that target must
@@ -191,9 +179,10 @@ be built. Per CLAUDE.md, tests are run only when the user asks.
 
 Manual checks: pull down starts PiP and returns to the grid with video playing;
 restore reopens the player at the right time; the PiP X ends playback cleanly;
-the close button dismisses without PiP; backgrounding during PiP keeps the
-float alive; PiP during a Plex HLS stream with a chosen audio/subtitle track;
-the fallback path (simulator without PiP support) still dismisses.
+AVKit's close control still dismisses the player as before; backgrounding
+during PiP keeps the float alive; PiP during a Plex HLS stream with a chosen
+audio/subtitle track; the fallback path (simulator without PiP support) still
+dismisses.
 
 ## Verification
 
