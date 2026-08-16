@@ -40,9 +40,6 @@ struct HorizontalLockOverlay: View {
     let onToggle: () -> Void
     let isSleepOn: Bool
     let onToggleSleep: () -> Void
-    /// nil on devices where Picture in Picture isn't supported, which hides the
-    /// chevron rather than leaving an inert control on screen.
-    var onPictureInPicture: (() -> Void)? = nil
 
     var body: some View {
         GeometryReader { geometry in
@@ -65,16 +62,6 @@ struct HorizontalLockOverlay: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(isSleepOn ? "Cancel sleep after this video" : "Sleep after this video")
-
-                        if let onPictureInPicture {
-                            Button {
-                                onPictureInPicture()
-                            } label: {
-                                controlIcon("chevron.down", active: false)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Picture in Picture")
-                        }
                     }
                     .padding(.trailing, 16)
                     .padding(.top, geometry.size.height * Self.verticalOffsetFraction)

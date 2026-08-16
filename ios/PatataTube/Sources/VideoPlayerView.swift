@@ -126,8 +126,7 @@ struct VideoPlayerView: View {
                 onToggleSleep: {
                     sleepAfterCurrent.toggle()
                     orientationControlVisibility.reveal()
-                },
-                onPictureInPicture: model.pip.isSupported ? { startPictureInPicture() } : nil
+                }
             )
         }
         // Home indicator off while playing (YouTube-style); the system still
@@ -142,6 +141,8 @@ struct VideoPlayerView: View {
             ])
         }
         .task { await setup() }
+        .onChange(of: currentIndex) { _, _ in armPictureInPictureHandoff() }
+        .onChange(of: sleepAfterCurrent) { _, _ in armPictureInPictureHandoff() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .inactive:
@@ -187,12 +188,13 @@ struct VideoPlayerView: View {
         }
     }
 
-    /// Sends the current video to the floating window. `PiPSession` takes over
-    /// the player, then dismisses this cover once AVKit reports PiP running —
-    /// if it never starts, nothing changes and the player stays full screen.
-    private func startPictureInPicture() {
+    /// PiP is started by AVKit's own button in the transport bar, and AVKit
+    /// gives no warning before it happens — so everything the float will need
+    /// is kept staged in `PiPSession` from the moment a player exists, and
+    /// refreshed whenever the queue moves.
+    private func armPictureInPictureHandoff() {
         guard let player else { return }
-        let started = model.pip.start(
+        model.pip.prepare(
             player: player,
             positionObserver: positionObserver,
             videos: videos,
@@ -202,7 +204,6 @@ struct VideoPlayerView: View {
             randomize: randomize,
             onStart: { dismiss() }
         )
-        if !started { orientationControlVisibility.reveal() }
     }
 
     /// Vertical-only drag; horizontal moves (scrubbing) and taps fall through to AVKit controls.
@@ -299,6 +300,7 @@ struct VideoPlayerView: View {
                                                 duration: duration?.isFinite == true ? duration : nil,
                                                 force: false) }
         }
+        armPictureInPictureHandoff()
         await model.positions.flushPending()
         await loadArtwork(for: player)
     }

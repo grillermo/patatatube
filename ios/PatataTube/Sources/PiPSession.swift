@@ -5,18 +5,16 @@ import SwiftUI
 
 /// Owns Picture in Picture for the whole app.
 ///
-/// AVKit exposes no way to *start* PiP programmatically: `AVPlayerViewController`
-/// has only `allowsPictureInPicturePlayback`, the background-only
-/// `canStartPictureInPictureAutomaticallyFromInline`, and delegate callbacks —
-/// and `AVPictureInPictureController` can only be built from an `AVPlayerLayer`,
-/// which `AVPlayerViewController` never hands out. So the chevron fires AVKit's
-/// own PiP button, which is exactly the path a tap on that button takes. All the
-/// behaviour after that (the float, its controls, its restore and close buttons,
-/// surviving backgrounding) is AVKit's.
+/// PiP is entered through AVKit's own button in the transport bar. There is no
+/// API to start it — an overlay chevron that fired that button by hand was tried
+/// and removed, because it never worked on device — so everything the float does
+/// (its controls, restore and close, surviving backgrounding) is AVKit's.
 ///
-/// This object outlives `VideoPlayerView`. Once PiP starts the SwiftUI cover is
-/// dismissed, and the retained controller and player here are the only things
-/// keeping the float alive.
+/// What is left for us is the handoff, because AVKit can dismiss its own
+/// presentation but not a SwiftUI `fullScreenCover`. So this object outlives
+/// `VideoPlayerView`: it is staged with the player while the cover is up, and
+/// once PiP starts it dismisses that cover, after which its retained controller
+/// and player are the only things keeping the float alive.
 @MainActor
 final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelegate {
     /// True from `didStart` until PiP stops. `VideoPlayerView` reads it on
@@ -44,8 +42,6 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
     /// Called once, on `didStart`, to dismiss the presenting cover.
     private var onStart: (() -> Void)?
 
-    var isSupported: Bool { AVPictureInPictureController.isPictureInPictureSupported() }
-
     /// A fresh player view took over; if one was floating, end it rather than
     /// silently dropping the controller that owns it (which would strand the
     /// old player, still playing, with no delegate left to stop it).
@@ -54,11 +50,11 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         self.controller = controller
     }
 
-    /// Hands over everything the float needs, then fires AVKit's button.
-    /// Returns false — having kept nothing — if PiP can't be started, leaving
-    /// the full-screen player exactly as it was.
-    @discardableResult
-    func start(
+    /// Stages everything the float will need. AVKit gives no warning before PiP
+    /// starts, so this is called as soon as a player exists and again whenever
+    /// the queue moves — by the time `didStart` arrives it is too late to ask
+    /// the cover for anything.
+    func prepare(
         player: AVPlayer,
         positionObserver: Any?,
         videos: [Video],
@@ -67,14 +63,8 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         scope: String?,
         randomize: Bool,
         onStart: @escaping () -> Void
-    ) -> Bool {
-        guard isSupported, let controller,
-              let button = Self.pictureInPictureButton(in: controller.view) else {
-            DevLog.event(.nav, "pip unavailable", [
-                "supported": "\(isSupported)", "controller": "\(self.controller != nil)",
-            ])
-            return false
-        }
+    ) {
+        guard !isActive else { return }  // never restage a live float
         self.player = player
         self.positionObserver = positionObserver
         self.videos = videos
@@ -83,11 +73,6 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         self.scope = scope
         self.randomize = randomize
         self.onStart = onStart
-        DevLog.event(.nav, "pip requested", [
-            "video_id": "\(videos.indices.contains(index) ? videos[index].id : -1)",
-        ])
-        button.sendActions(for: .touchUpInside)
-        return true
     }
 
     /// Ends the float and everything handed over with it. Safe to call twice.
@@ -177,34 +162,4 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         }
     }
 
-    // MARK: - Finding AVKit's button
-
-    /// Breadth-first search for AVKit's PiP button. It is matched by its
-    /// accessibility identifier and, failing that, by its image compared
-    /// against `AVPictureInPictureController.pictureInPictureButtonStartImage`
-    /// — a documented class property, so at least one of the two signals is
-    /// public API.
-    static func pictureInPictureButton(in root: UIView) -> UIControl? {
-        var queue = [root]
-        while !queue.isEmpty {
-            let view = queue.removeFirst()
-            if let control = view as? UIControl, isPictureInPictureButton(control) {
-                return control
-            }
-            queue.append(contentsOf: view.subviews)
-        }
-        return nil
-    }
-
-    static func isPictureInPictureButton(_ control: UIControl) -> Bool {
-        let names = [control.accessibilityIdentifier, control.accessibilityLabel,
-                     String(describing: type(of: control))]
-        if names.compactMap({ $0 }).contains(where: { $0.localizedCaseInsensitiveContains("picture") }) {
-            return true
-        }
-        guard let button = control as? UIButton,
-              let image = button.currentImage ?? button.image(for: .normal) else { return false }
-        let start = AVPictureInPictureController.pictureInPictureButtonStartImage
-        return image === start || image.isEqual(start)
-    }
 }
