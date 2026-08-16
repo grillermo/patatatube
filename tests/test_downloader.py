@@ -385,3 +385,69 @@ def test_unique_group_name_avoids_plex_kinds(downloader_env):
     _db, downloader, _videos_dir = downloader_env
 
     assert downloader._unique_group_name("movies", "Movies") == ("movies-2", "Movies (2)")
+
+
+def _playlist_json():
+    return json.dumps(
+        {
+            "title": "Lo-fi Beats",
+            "entries": [
+                {"id": "dQw4w9WgXcQ", "title": "First"},
+                {"id": "aBcDeFgHiJk", "title": "Second"},
+                {"id": None, "title": "[Deleted video]"},
+                {"title": "No id at all"},
+                {"id": "short", "title": "Bad id"},
+            ],
+        }
+    )
+
+
+def test_fetch_playlist_metadata_parses_entries(monkeypatch, downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout=_playlist_json())
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "YTDLP_BIN", "/opt/homebrew/bin/yt-dlp")
+    monkeypatch.setattr(downloader, "YTDLP_BROWSER", "chrome")
+
+    title, entries = downloader._fetch_playlist_metadata_sync(
+        "https://www.youtube.com/playlist?list=PL123456789"
+    )
+
+    assert title == "Lo-fi Beats"
+    assert entries == [
+        {"id": "dQw4w9WgXcQ", "title": "First"},
+        {"id": "aBcDeFgHiJk", "title": "Second"},
+    ]
+    assert seen["cmd"][0] == "/opt/homebrew/bin/yt-dlp"
+    assert "--flat-playlist" in seen["cmd"]
+    assert "-J" in seen["cmd"]
+    assert seen["cmd"][-1] == "https://www.youtube.com/playlist?list=PL123456789"
+
+
+def test_fetch_playlist_metadata_raises_on_ytdlp_failure(monkeypatch, downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="ERROR: private playlist")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="private playlist"):
+        downloader._fetch_playlist_metadata_sync("https://www.youtube.com/playlist?list=PL123456789")
+
+
+def test_fetch_playlist_metadata_raises_on_bad_json(monkeypatch, downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="not json")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError):
+        downloader._fetch_playlist_metadata_sync("https://www.youtube.com/playlist?list=PL123456789")

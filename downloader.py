@@ -293,6 +293,48 @@ def _resolve_downloaded_path(tmpdir_path: Path) -> Path:
     raise FileNotFoundError("yt-dlp did not produce a downloadable file")
 
 
+PLAYLIST_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+async def _fetch_playlist_metadata(url: str) -> tuple[str, list[dict]]:
+    return await asyncio.to_thread(_fetch_playlist_metadata_sync, url)
+
+
+def _fetch_playlist_metadata_sync(url: str) -> tuple[str, list[dict]]:
+    """(title, entries) for a playlist page.
+
+    `--flat-playlist` keeps this to one cheap request: it lists entries without
+    resolving each video, which is all the import loop needs — every entry is
+    downloaded later through the normal single-video path.
+    """
+    cmd = [
+        YTDLP_BIN,
+        "--cookies-from-browser",
+        YTDLP_BROWSER,
+        "--flat-playlist",
+        "-J",
+        url,
+    ]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    output = proc.stdout or ""
+    if proc.returncode != 0:
+        raise RuntimeError(output.strip() or "yt-dlp failed")
+
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Could not parse yt-dlp playlist JSON: {exc}") from exc
+
+    title = (data.get("title") or "").strip()
+    entries = []
+    for entry in data.get("entries") or []:
+        video_id = (entry or {}).get("id") or ""
+        # Deleted and private entries keep a slot in the list with no usable id.
+        if PLAYLIST_VIDEO_ID_RE.fullmatch(video_id):
+            entries.append({"id": video_id, "title": entry.get("title")})
+    return title, entries
+
+
 PLAYLIST_SLUG_MAX_LEN = 40
 # Guards against a pathological run of pre-existing groups; hitting it means
 # something is wrong, not that the user has 200 identically-named playlists.
