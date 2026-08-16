@@ -393,42 +393,46 @@ async def import_playlist(url: str) -> None:
         logger.warning("Playlist %s has no downloadable entries; no group created", url)
         return
 
-    name, label = _unique_group_name(
-        _slugify_playlist_title(title), title.strip() or PLAYLIST_FALLBACK_LABEL
-    )
-    group = db.create_group(name, label)
-    logger.info("Playlist %s -> group %s (%d entries)", url, name, len(entries))
-
-    # `db.get_all_videos` lists newest position first, and `add_video` hands out
-    # strictly increasing positions in call order. To make the group display in
-    # playlist order despite that, new rows are inserted in *reverse* playlist
-    # order — entry 0 goes in last, so it ends up with the highest position and
-    # therefore sorts first — while everything else (reuse checks, downloads)
-    # still walks the playlist forwards.
-    new_entries = []  # (index, entry) pairs needing a new row, in playlist order
-    video_ids_by_entry: list[int | None] = [None] * len(entries)
-    for index, entry in enumerate(entries):
-        existing = db.get_completed_video_by_source("youtube", entry["id"])
-        if existing:
-            db.set_video_group(existing["id"], group["id"])
-            video_ids_by_entry[index] = existing["id"]
-        else:
-            new_entries.append((index, entry))
-
-    for index, entry in reversed(new_entries):
-        video_ids_by_entry[index] = db.add_video(
-            _youtube_watch_url(entry["id"]),
-            platform="youtube",
-            source_key=entry["id"],
-            title=entry.get("title"),
-            preview_url=_youtube_preview_url(entry["id"]),
-            group_id=group["id"],
+    try:
+        name, label = _unique_group_name(
+            _slugify_playlist_title(title), title.strip() or PLAYLIST_FALLBACK_LABEL
         )
+        group = db.create_group(name, label)
+        logger.info("Playlist %s -> group %s (%d entries)", url, name, len(entries))
 
-    # The group and its rows exist now; flush before the (long) download loop so
-    # the app sees the group immediately. Nothing above was an HTTP write, so
-    # the cache middleware never fired.
-    await cache.clear()
+        # `db.get_all_videos` lists newest position first, and `add_video` hands out
+        # strictly increasing positions in call order. To make the group display in
+        # playlist order despite that, new rows are inserted in *reverse* playlist
+        # order — entry 0 goes in last, so it ends up with the highest position and
+        # therefore sorts first — while everything else (reuse checks, downloads)
+        # still walks the playlist forwards.
+        new_entries = []  # (index, entry) pairs needing a new row, in playlist order
+        video_ids_by_entry: list[int | None] = [None] * len(entries)
+        for index, entry in enumerate(entries):
+            existing = db.get_completed_video_by_source("youtube", entry["id"])
+            if existing:
+                db.set_video_group(existing["id"], group["id"])
+                video_ids_by_entry[index] = existing["id"]
+            else:
+                new_entries.append((index, entry))
+
+        for index, entry in reversed(new_entries):
+            video_ids_by_entry[index] = db.add_video(
+                _youtube_watch_url(entry["id"]),
+                platform="youtube",
+                source_key=entry["id"],
+                title=entry.get("title"),
+                preview_url=_youtube_preview_url(entry["id"]),
+                group_id=group["id"],
+            )
+
+        # The group and its rows exist now; flush before the (long) download loop so
+        # the app sees the group immediately. Nothing above was an HTTP write, so
+        # the cache middleware never fired.
+        await cache.clear()
+    except Exception as exc:
+        logger.warning("Playlist group/row setup failed for %s: %s", url, exc)
+        return
 
     for index, _entry in new_entries:
         video_id = video_ids_by_entry[index]

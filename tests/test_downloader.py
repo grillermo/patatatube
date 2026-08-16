@@ -547,6 +547,41 @@ async def test_import_playlist_reuses_completed_video(playlist_env):
 
 
 @pytest.mark.asyncio
+async def test_import_playlist_mixed_reuse_and_new_entries_sort_order(playlist_env):
+    """Pins today's actual (imperfect) ordering: a reused entry keeps its old
+    position instead of being reinserted at its playlist slot, so it sorts
+    after the new entries rather than being interleaved among them. See
+    downloader.import_playlist's Fix 2 controller ruling — this is documented,
+    not "fixed"."""
+    db, downloader, state = playlist_env
+    existing_id = db.add_video(
+        "https://www.youtube.com/watch?v=aBcDeFgHiJk",
+        platform="youtube",
+        source_key="aBcDeFgHiJk",
+    )
+    db.update_video(existing_id, status="done", filename=f"{existing_id}.mp4")
+    state["entries"] = [
+        {"id": "dQw4w9WgXcQ", "title": "First"},
+        {"id": "aBcDeFgHiJk", "title": "Second (reused)"},
+        {"id": "zZyYxXwWvUt", "title": "Third"},
+    ]
+
+    await downloader.import_playlist("https://www.youtube.com/playlist?list=PL123456789")
+
+    group = db.get_group_by_name("lo-fi-beats")
+    videos = [v for v in db.get_all_videos() if v["group_id"] == group["id"]]
+    # Actual current behavior: the two new entries (First, Third) come out in
+    # correct relative playlist order, but the reused entry (Second) sorts
+    # after both of them instead of between them, because it kept the
+    # position it already had rather than being reassigned one.
+    assert [v["source_key"] for v in videos] == [
+        "dQw4w9WgXcQ",
+        "zZyYxXwWvUt",
+        "aBcDeFgHiJk",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_import_playlist_creates_no_group_when_empty(playlist_env):
     db, downloader, state = playlist_env
     state["entries"] = []
@@ -560,6 +595,7 @@ async def test_import_playlist_creates_no_group_when_empty(playlist_env):
 @pytest.mark.asyncio
 async def test_import_playlist_creates_no_group_when_metadata_fails(monkeypatch, playlist_env):
     db, downloader, _state = playlist_env
+    groups_before = db.list_groups()
 
     async def boom(url):
         raise RuntimeError("private playlist")
@@ -568,7 +604,7 @@ async def test_import_playlist_creates_no_group_when_metadata_fails(monkeypatch,
 
     await downloader.import_playlist("https://www.youtube.com/playlist?list=PL123456789")
 
-    assert db.list_groups() == db.list_groups()  # no exception escaped
+    assert db.list_groups() == groups_before  # no group created as a side effect
     assert db.get_group_by_name("lo-fi-beats") is None
 
 

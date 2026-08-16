@@ -155,7 +155,10 @@ map for the intermittent-playback investigation:
    `yt-dlp --flat-playlist -J` once, creates a **new** group named after the
    playlist title (`name` slugified, suffixed `-2`, `-3`… on collision — an
    existing group is never reused), inserts one row per entry, and downloads
-   them **sequentially**. `watch?v=X&list=Y` is deliberately *not* a playlist:
+   them **sequentially**. An entry that's already a completed `youtube` video
+   elsewhere is *not* re-downloaded — it's moved into the new group via
+   `db.set_video_group`, so a video already in another group can end up moved
+   into this one. `watch?v=X&list=Y` is deliberately *not* a playlist:
    shared links routinely carry a Mix id nobody meant to hand over. The
    response is `202 {"status": "queued", "playlist": "<list_id>"}` — no ids,
    because neither the group nor the rows exist yet; clients poll
