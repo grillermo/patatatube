@@ -44,11 +44,17 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
     /// Called once, on `willStart`, to dismiss the presenting cover.
     private var onStart: (() -> Void)?
 
-    /// A fresh player view took over; if one was floating, end it rather than
+    /// A fresh player view took over. If one was *floating*, end it rather than
     /// silently dropping the controller that owns it (which would strand the
     /// old player, still playing, with no delegate left to stop it).
+    ///
+    /// Only then: a player view stages its handoff (`prepare`) as soon as it has
+    /// a player, but mounts its controller once the item has buffered — either
+    /// order — so releasing unconditionally here threw away the staging of the
+    /// very view registering, `onStart` with it, and nothing dismissed the cover
+    /// when PiP started.
     func register(controller: AVPlayerViewController) {
-        if self.controller !== controller { release() }
+        if isHandingOff, self.controller !== controller { release() }
         self.controller = controller
     }
 

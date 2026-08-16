@@ -39,6 +39,21 @@ struct PiPSessionTests {
         #expect(dismissals == 1)
     }
 
+    /// The player view stages its handoff as soon as it has a player, but mounts
+    /// its controller only once the item has buffered — and either can come
+    /// first. Registering must not discard what the same view just staged.
+    @Test func registeringAControllerKeepsTheStagedHandoff() {
+        var dismissals = 0
+        let sut = PiPSession()
+        staged(sut) { dismissals += 1 }
+
+        sut.register(controller: AVPlayerViewController())
+        sut.playerViewControllerWillStartPictureInPicture(AVPlayerViewController())
+
+        #expect(dismissals == 1)
+        #expect(sut.isHandingOff)
+    }
+
     @Test func restoreRebuildsTheQueueAtTheFloatingVideo() {
         let sut = PiPSession()
         staged(sut, index: 1)
