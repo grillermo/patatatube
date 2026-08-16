@@ -226,7 +226,7 @@ def _extract_youtube_id(raw_url: str) -> str:
 
     if host == "youtu.be":
         video_id = parsed.path.strip("/").split("/")[0]
-    elif host in {"youtube.com", "m.youtube.com"}:
+    elif host in {"youtube.com", "m.youtube.com", "music.youtube.com"}:
         path = parsed.path.rstrip("/")
         query = parse_qs(parsed.query)
         if path == "/watch":

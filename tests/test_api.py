@@ -2126,3 +2126,20 @@ def test_jobs_caps_the_queued_list_at_twenty(client, auth_headers):
 def test_jobs_is_empty_when_nothing_is_pending(client, auth_headers):
     body = client.get("/api/jobs", headers=auth_headers).json()
     assert body == {"running": [], "queued": [], "queued_total": 0}
+
+
+def test_upload_accepts_youtube_music_watch_url(client, monkeypatch):
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: None)
+
+    resp = client.post(
+        "/upload",
+        json={"url": "https://music.youtube.com/watch?v=dQw4w9WgXcQ&si=abc"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.status_code == 202
+    import db
+    video = db.get_video(resp.json()["id"])
+    assert video["platform"] == "youtube"
+    assert video["source_key"] == "dQw4w9WgXcQ"
+    assert video["url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
