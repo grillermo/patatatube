@@ -408,7 +408,7 @@ def test_fetch_playlist_metadata_parses_entries(monkeypatch, downloader_env):
 
     def fake_run(cmd, **kwargs):
         seen["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, 0, stdout=_playlist_json())
+        return subprocess.CompletedProcess(cmd, 0, stdout=_playlist_json(), stderr="")
 
     monkeypatch.setattr(downloader.subprocess, "run", fake_run)
     monkeypatch.setattr(downloader, "YTDLP_BIN", "/opt/homebrew/bin/yt-dlp")
@@ -433,7 +433,7 @@ def test_fetch_playlist_metadata_raises_on_ytdlp_failure(monkeypatch, downloader
     _db, downloader, _videos_dir = downloader_env
 
     def fake_run(cmd, **kwargs):
-        return subprocess.CompletedProcess(cmd, 1, stdout="ERROR: private playlist")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ERROR: private playlist")
 
     monkeypatch.setattr(downloader.subprocess, "run", fake_run)
 
@@ -445,9 +445,32 @@ def test_fetch_playlist_metadata_raises_on_bad_json(monkeypatch, downloader_env)
     _db, downloader, _videos_dir = downloader_env
 
     def fake_run(cmd, **kwargs):
-        return subprocess.CompletedProcess(cmd, 0, stdout="not json")
+        return subprocess.CompletedProcess(cmd, 0, stdout="not json", stderr="")
 
     monkeypatch.setattr(downloader.subprocess, "run", fake_run)
 
     with pytest.raises(RuntimeError):
         downloader._fetch_playlist_metadata_sync("https://www.youtube.com/playlist?list=PL123456789")
+
+
+def test_fetch_playlist_metadata_ignores_stderr_warnings_on_success(monkeypatch, downloader_env):
+    """Verify that warnings in stderr don't corrupt JSON parsing on successful (0) exit."""
+    _db, downloader, _videos_dir = downloader_env
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=_playlist_json(), stderr="WARNING: some deprecation notice\n"
+        )
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "YTDLP_BIN", "/opt/homebrew/bin/yt-dlp")
+    monkeypatch.setattr(downloader, "YTDLP_BROWSER", "chrome")
+
+    # This should succeed despite the warning in stderr
+    title, entries = downloader._fetch_playlist_metadata_sync(
+        "https://www.youtube.com/playlist?list=PL123456789"
+    )
+
+    assert title == "Lo-fi Beats"
+    assert len(entries) == 2
+    assert entries[0]["id"] == "dQw4w9WgXcQ"

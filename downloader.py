@@ -315,13 +315,13 @@ def _fetch_playlist_metadata_sync(url: str) -> tuple[str, list[dict]]:
         "-J",
         url,
     ]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    output = proc.stdout or ""
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(output.strip() or "yt-dlp failed")
+        error_msg = (proc.stderr or proc.stdout or "").strip() or "yt-dlp failed"
+        raise RuntimeError(error_msg)
 
     try:
-        data = json.loads(output)
+        data = json.loads(proc.stdout or "")
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Could not parse yt-dlp playlist JSON: {exc}") from exc
 
