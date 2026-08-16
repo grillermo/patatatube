@@ -28,6 +28,7 @@ struct PlayerViewControllerTests {
     @Test func installedControllerHasExactlyOneNonCancellingSimultaneousTapRecognizer() throws {
         let sut = PlayerViewController(
             player: AVPlayer(),
+            pip: PiPSession(),
             attached: true,
             resumeAfterDetaching: false,
             revealControlsToken: 0,

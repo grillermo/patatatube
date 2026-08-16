@@ -67,6 +67,31 @@ struct HorizontalLockOverlayTests {
         }
     }
 
+    @Test func pictureInPictureChevronAppearsOnlyWhenItHasAHandler() throws {
+        var taps = 0
+        let withPiP = HorizontalLockOverlay(
+            isHorizontal: false, isVisible: true, isBlocked: false,
+            onToggle: {}, isSleepOn: false, onToggleSleep: {},
+            onPictureInPicture: { taps += 1 }
+        )
+        let button = try withPiP.inspect().find(
+            ViewType.Button.self, where: { try $0.accessibilityLabel().string() == "Picture in Picture" }
+        )
+        #expect(try button.find(ViewType.Image.self).actualImage().name() == "chevron.down")
+        try button.tap()
+        #expect(taps == 1)
+
+        let withoutPiP = HorizontalLockOverlay(
+            isHorizontal: false, isVisible: true, isBlocked: false,
+            onToggle: {}, isSleepOn: false, onToggleSleep: {}
+        )
+        #expect(throws: InspectionError.self) {
+            try withoutPiP.inspect().find(
+                ViewType.Button.self, where: { try $0.accessibilityLabel().string() == "Picture in Picture" }
+            )
+        }
+    }
+
     @Test func blockedOverlayContainsNoButton() throws {
         let sut = HorizontalLockOverlay(
             isHorizontal: false, isVisible: true, isBlocked: true,

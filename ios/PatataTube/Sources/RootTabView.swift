@@ -27,6 +27,10 @@ struct RootTabView: View {
                 .tabItem { Label("Movies", systemImage: "film") }
                 .tag(MediaTab.movies)
         }
+        // The restore button on the PiP float re-opens the full-screen player.
+        // It lives at the root rather than in a grid because all three grids
+        // exist at once and only one presentation may answer.
+        .modifier(PictureInPictureRestoreCover(pip: model.pip))
         .onAppear {
             // Launched into the web bridge: stay on the default tab until the
             // bridge is dismissed, so the shortcut doesn't drop the user back
@@ -41,6 +45,22 @@ struct RootTabView: View {
             DevLog.event(.nav, "tab selected", ["tab": newValue.rawValue])
             guard let feed = newValue.feed, store.feed != feed else { return }
             Task { await store.switchFeed(to: feed) }
+        }
+    }
+
+    /// Separate so the session is observed: `AppModel` doesn't republish when
+    /// its `PiPSession` changes, so `RootTabView` alone would never re-render.
+    private struct PictureInPictureRestoreCover: ViewModifier {
+        @ObservedObject var pip: PiPSession
+
+        func body(content: Content) -> some View {
+            content.fullScreenCover(item: $pip.restoreRequest) { request in
+                VideoPlayerView(
+                    videos: request.videos, startIndex: request.startIndex,
+                    sleepMode: request.sleepMode, randomize: pip.restoreRandomize,
+                    startSecs: request.startSecs, autoplayScope: pip.restoreScope
+                )
+            }
         }
     }
 

@@ -101,6 +101,7 @@ struct VideoPlayerView: View {
             if let player, itemReady {
                 PlayerViewController(
                     player: player,
+                    pip: model.pip,
                     attached: attached,
                     resumeAfterDetaching: resumeAfterDetaching,
                     revealControlsToken: revealControlsToken,
@@ -125,7 +126,8 @@ struct VideoPlayerView: View {
                 onToggleSleep: {
                     sleepAfterCurrent.toggle()
                     orientationControlVisibility.reveal()
-                }
+                },
+                onPictureInPicture: model.pip.isSupported ? { startPictureInPicture() } : nil
             )
         }
         // Home indicator off while playing (YouTube-style); the system still
@@ -155,26 +157,52 @@ struct VideoPlayerView: View {
             }
         }
         .onDisappear {
+            // Handing off to PiP dismisses this cover while the video keeps
+            // playing in the float, so the teardown that would kill it —
+            // pausing, the audio session, now-playing, the position observer
+            // (now owned by `PiPSession`) — is skipped.
+            let handingOff = model.pip.isActive
             hasDisappeared = true
             orientationControlVisibility.hide()
             horizontalLock.endPlayerSession()
             reportPosition()
             pauseTransitionObserver?.invalidate()
             pauseTransitionObserver = nil
-            player?.pause()
+            if !handingOff { player?.pause() }
             removePlayToEndObserver()
             readyObserver?.invalidate()
             readyObserver = nil
             readyTimeoutTask?.cancel()
             readyTimeoutTask = nil
-            if let positionObserver { player?.removeTimeObserver(positionObserver) }
+            if !handingOff {
+                if let positionObserver { player?.removeTimeObserver(positionObserver) }
+                nowPlaying.detach()
+                deactivateAudioSession()
+            }
             positionObserver = nil
-            nowPlaying.detach()
-            deactivateAudioSession()
             playbackProbe.detach()
-            DevLog.event(.nav, "player dismissed", ["video_id": "\(video.id)", "inst": instanceID])
+            DevLog.event(.nav, handingOff ? "player handed to pip" : "player dismissed",
+                         ["video_id": "\(video.id)", "inst": instanceID])
             DevLog.flush()
         }
+    }
+
+    /// Sends the current video to the floating window. `PiPSession` takes over
+    /// the player, then dismisses this cover once AVKit reports PiP running —
+    /// if it never starts, nothing changes and the player stays full screen.
+    private func startPictureInPicture() {
+        guard let player else { return }
+        let started = model.pip.start(
+            player: player,
+            positionObserver: positionObserver,
+            videos: videos,
+            index: currentIndex,
+            sleepMode: sleepAfterCurrent,
+            scope: autoplayScope,
+            randomize: randomize,
+            onStart: { dismiss() }
+        )
+        if !started { orientationControlVisibility.reveal() }
     }
 
     /// Vertical-only drag; horizontal moves (scrubbing) and taps fall through to AVKit controls.

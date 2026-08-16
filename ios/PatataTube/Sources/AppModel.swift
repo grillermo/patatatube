@@ -23,6 +23,8 @@ final class AppModel: ObservableObject {
     /// hierarchy (every `fullScreenCover` dismissal). The gate lives here, not
     /// in the view, so exactly one run per launch can apply saved state.
     let restorationGate = RestorationGate()
+    /// Picture in Picture outlives the player cover, so its state lives here.
+    let pip = PiPSession()
     let videoListCache: VideoListCache
     let groups = GroupStore()
     private let downloadSettings: DownloadStreamSettings

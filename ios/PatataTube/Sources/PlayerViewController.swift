@@ -50,6 +50,9 @@ class SceneReportingPlayerViewController: AVPlayerViewController {
 /// player (audio continues) and reattach on foreground.
 struct PlayerViewController: UIViewControllerRepresentable {
     let player: AVPlayer
+    /// Owns PiP once it starts, and is AVKit's delegate for it — the coordinator
+    /// can't be, since it dies with this representable when the cover dismisses.
+    let pip: PiPSession
     let attached: Bool
     let resumeAfterDetaching: Bool
     /// Every change of this value forces the transport controls back on screen.
@@ -75,7 +78,9 @@ struct PlayerViewController: UIViewControllerRepresentable {
     func makePlayerViewController(coordinator: Coordinator) -> SceneReportingPlayerViewController {
         let controller = SceneReportingPlayerViewController()
         controller.player = attached ? player : nil
-        controller.allowsPictureInPicturePlayback = false
+        controller.allowsPictureInPicturePlayback = true
+        controller.delegate = pip
+        pip.register(controller: controller)
         // NowPlayingManager owns the lock screen; stop AVKit competing for it.
         controller.updatesNowPlayingInfoCenter = false
         controller.onSceneAvailable = onSceneAvailable
