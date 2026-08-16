@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.2.2",
+          "buildVersion": "155",
+          "date": "2026-08-16T15:31:52Z",
+          "localizedDescription": "Picture in Picture\n\n• AVKit's Picture in Picture button now floats the video and returns you to the grid\n• The float's restore button reopens the player where you left off",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.2.2/PatataTube-2.2.2.ipa",
+          "size": 4265173,
+          "sha256": "12e09f2216d4705cda5011ba363bdccb65997c882f9329f1d5078064da156d3d",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.2.1",
           "buildVersion": "154",
           "date": "2026-08-16T15:23:26Z",
@@ -1464,11 +1474,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.2.1",
-      "versionDate": "2026-08-16T15:23:26Z",
-      "versionDescription": "[DEVLOG] Picture in Picture from the player\n\n• A chevron below the moon sends the video to a floating window\n• The float's restore button reopens the player where you left off\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.2.1/PatataTube-2.2.1.ipa",
-      "size": 4294061
+      "version": "2.2.2",
+      "versionDate": "2026-08-16T15:31:52Z",
+      "versionDescription": "Picture in Picture\n\n• AVKit's Picture in Picture button now floats the video and returns you to the grid\n• The float's restore button reopens the player where you left off",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.2.2/PatataTube-2.2.2.ipa",
+      "size": 4265173
     }
   ],
   "news": []
