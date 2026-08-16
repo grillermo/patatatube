@@ -162,7 +162,7 @@ struct VideoPlayerView: View {
             // playing in the float, so the teardown that would kill it —
             // pausing, the audio session, now-playing, the position observer
             // (now owned by `PiPSession`) — is skipped.
-            let handingOff = model.pip.isActive
+            let handingOff = model.pip.isHandingOff
             hasDisappeared = true
             orientationControlVisibility.hide()
             horizontalLock.endPlayerSession()

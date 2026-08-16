@@ -17,9 +17,11 @@ import SwiftUI
 /// and player are the only things keeping the float alive.
 @MainActor
 final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelegate {
-    /// True from `didStart` until PiP stops. `VideoPlayerView` reads it on
-    /// dismiss to skip the teardown that would kill the float.
-    @Published private(set) var isActive = false
+    /// True from `willStart` until PiP stops. `VideoPlayerView` reads it on
+    /// dismiss to skip the teardown that would kill the float. It has to be set
+    /// at *will*Start, not `didStart`: the cover is dismissed there, and its
+    /// `onDisappear` would otherwise run before PiP is considered live.
+    @Published private(set) var isHandingOff = false
     /// Set when PiP's restore button is hit; `RootTabView` presents it.
     @Published var restoreRequest: PlaybackQueue?
     /// `PlaybackQueue` carries neither, and the restored presentation needs both.
@@ -39,7 +41,7 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
     private var sleepMode = false
     private var scope: String?
     private var randomize = false
-    /// Called once, on `didStart`, to dismiss the presenting cover.
+    /// Called once, on `willStart`, to dismiss the presenting cover.
     private var onStart: (() -> Void)?
 
     /// A fresh player view took over; if one was floating, end it rather than
@@ -52,7 +54,7 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
 
     /// Stages everything the float will need. AVKit gives no warning before PiP
     /// starts, so this is called as soon as a player exists and again whenever
-    /// the queue moves — by the time `didStart` arrives it is too late to ask
+    /// the queue moves — by the time `willStart` arrives it is too late to ask
     /// the cover for anything.
     func prepare(
         player: AVPlayer,
@@ -64,7 +66,7 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         randomize: Bool,
         onStart: @escaping () -> Void
     ) {
-        guard !isActive else { return }  // never restage a live float
+        guard !isHandingOff else { return }  // never restage a live float
         self.player = player
         self.positionObserver = positionObserver
         self.videos = videos
@@ -84,23 +86,27 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         controller = nil
         videos = []
         onStart = nil
-        isActive = false
+        isHandingOff = false
     }
 
     // MARK: - AVPlayerViewControllerDelegate
 
     /// AVKit can dismiss its own presentation, but not a SwiftUI
-    /// `fullScreenCover`; `didStart` does that instead.
+    /// `fullScreenCover`; `willStart` does that instead.
     nonisolated func playerViewControllerShouldAutomaticallyDismissAtPictureInPictureStart(
         _ playerViewController: AVPlayerViewController
     ) -> Bool { false }
 
-    nonisolated func playerViewControllerDidStartPictureInPicture(
+    /// Dismissing here rather than at `didStart` is what keeps AVKit's
+    /// "Playing in Picture in Picture" placeholder off the screen: that black
+    /// panel is what the player view shows *while it is still presented* and
+    /// the video is elsewhere. Gone before PiP starts, it is never drawn.
+    nonisolated func playerViewControllerWillStartPictureInPicture(
         _ playerViewController: AVPlayerViewController
     ) {
         MainActor.assumeIsolated {
-            isActive = true
-            DevLog.event(.nav, "pip started", [:])
+            isHandingOff = true
+            DevLog.event(.nav, "pip starting", [:])
             onStart?()
             onStart = nil
         }
@@ -112,9 +118,10 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
     ) {
         MainActor.assumeIsolated {
             DevLog.error(error, "pip failed to start")
-            // The cover is still up and still owns the player: drop the
-            // handover without touching playback.
-            release(pausing: false)
+            // The cover is already gone by now (dismissed at `willStart`), so
+            // leaving the player running would mean audio with no video and no
+            // float. Before that point it is still the cover's to run.
+            release(pausing: isHandingOff)
         }
     }
 

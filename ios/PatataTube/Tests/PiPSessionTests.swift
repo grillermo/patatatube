@@ -31,18 +31,18 @@ struct PiPSessionTests {
         let sut = PiPSession()
         staged(sut) { dismissals += 1 }
 
-        sut.playerViewControllerDidStartPictureInPicture(AVPlayerViewController())
-        #expect(sut.isActive)
+        sut.playerViewControllerWillStartPictureInPicture(AVPlayerViewController())
+        #expect(sut.isHandingOff)
         #expect(dismissals == 1)
 
-        sut.playerViewControllerDidStartPictureInPicture(AVPlayerViewController())
+        sut.playerViewControllerWillStartPictureInPicture(AVPlayerViewController())
         #expect(dismissals == 1)
     }
 
     @Test func restoreRebuildsTheQueueAtTheFloatingVideo() {
         let sut = PiPSession()
         staged(sut, index: 1)
-        sut.playerViewControllerDidStartPictureInPicture(AVPlayerViewController())
+        sut.playerViewControllerWillStartPictureInPicture(AVPlayerViewController())
 
         var restored: Bool?
         sut.playerViewController(
@@ -59,7 +59,7 @@ struct PiPSessionTests {
         #expect(sut.restoreRandomize)
         // Released by the restore itself, so the incoming player view's own
         // controller isn't dropped on top of a live one.
-        #expect(!sut.isActive)
+        #expect(!sut.isHandingOff)
     }
 
     @Test func restoreIsRefusedWhenNothingWasStaged() {
@@ -77,11 +77,11 @@ struct PiPSessionTests {
     @Test func closingTheFloatEndsTheSessionWithoutARestore() {
         let sut = PiPSession()
         staged(sut)
-        sut.playerViewControllerDidStartPictureInPicture(AVPlayerViewController())
+        sut.playerViewControllerWillStartPictureInPicture(AVPlayerViewController())
 
         sut.playerViewControllerDidStopPictureInPicture(AVPlayerViewController())
 
-        #expect(!sut.isActive)
+        #expect(!sut.isHandingOff)
         #expect(sut.restoreRequest == nil)
     }
 
@@ -89,7 +89,7 @@ struct PiPSessionTests {
         var dismissals = 0
         let sut = PiPSession()
         staged(sut, index: 1) { dismissals += 1 }
-        sut.playerViewControllerDidStartPictureInPicture(AVPlayerViewController())
+        sut.playerViewControllerWillStartPictureInPicture(AVPlayerViewController())
 
         // A player view mounting behind the float must not steal the handoff.
         staged(sut, index: 0) { dismissals += 1 }
