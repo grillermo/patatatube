@@ -25,7 +25,7 @@ import library
 import plex
 import promote
 import services
-from downloader import download_video, process_uploaded_video
+from downloader import download_video, import_playlist, process_uploaded_video
 from paths import VIDEOS_DIR
 from views.serializers import serialize_video
 from views.render import build_videos_page
@@ -329,6 +329,20 @@ async def check_auth(request: Request):
 @router.post("/upload", status_code=202)
 async def upload(body: UploadRequest, request: Request, background_tasks: BackgroundTasks):
     _check_token(request)
+    try:
+        source = _classify_url(body.url)
+    except HTTPException as exc:
+        if exc.status_code == 400:
+            _print_bad_request_details(request, body)
+        raise
+
+    if source["platform"] == "youtube_playlist":
+        # No row and no group yet: both need the playlist's title, which costs a
+        # yt-dlp round trip. The client polls /api/groups for it to appear.
+        # body.group_id is deliberately ignored — the playlist names the group.
+        background_tasks.add_task(import_playlist, source["normalized_url"])
+        return {"status": "queued", "playlist": source["source_key"]}
+
     group_id = body.group_id
     if group_id is None:
         groups = db.list_groups()
@@ -337,12 +351,6 @@ async def upload(body: UploadRequest, request: Request, background_tasks: Backgr
         group_id = groups[0]["id"]
     elif db.get_group(group_id) is None:
         raise HTTPException(status_code=400, detail="No such group")
-    try:
-        source = _classify_url(body.url)
-    except HTTPException as exc:
-        if exc.status_code == 400:
-            _print_bad_request_details(request, body)
-        raise
 
     if source["platform"] == "youtube":
         existing = db.get_completed_video_by_source("youtube", source["source_key"])

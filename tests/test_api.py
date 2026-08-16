@@ -2191,3 +2191,55 @@ def test_classify_url_rejects_bad_playlist_urls(url):
     with pytest.raises(HTTPException) as exc:
         router._classify_url(url)
     assert exc.value.status_code == 400
+
+
+def test_upload_playlist_schedules_import_and_creates_no_video(client, monkeypatch):
+    import db
+
+    imported = []
+    monkeypatch.setattr("router.import_playlist", lambda *a, **kw: imported.append((a, kw)))
+
+    resp = client.post(
+        "/upload",
+        json={
+            "url": "https://music.youtube.com/playlist?list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa&si=x"
+        },
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.status_code == 202
+    assert resp.json() == {
+        "status": "queued",
+        "playlist": "PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa",
+    }
+    assert imported == [
+        (("https://www.youtube.com/playlist?list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa",), {})
+    ]
+    assert db.get_all_videos() == []
+
+
+def test_upload_playlist_ignores_explicit_group_id(client, monkeypatch):
+    import db
+
+    monkeypatch.setattr("router.import_playlist", lambda *a, **kw: None)
+    group_id = db.get_group_by_name("adults")["id"]
+
+    resp = client.post(
+        "/upload",
+        json={
+            "url": "https://www.youtube.com/playlist?list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa",
+            "group_id": group_id,
+        },
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.status_code == 202
+    assert "id" not in resp.json()
+
+
+def test_upload_playlist_requires_token(client):
+    resp = client.post(
+        "/upload",
+        json={"url": "https://www.youtube.com/playlist?list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa"},
+    )
+    assert resp.status_code == 401

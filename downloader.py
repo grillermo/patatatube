@@ -315,3 +315,11 @@ def _unique_group_name(slug: str, label: str) -> tuple[str, str]:
         if name not in db.PLEX_KINDS and db.get_group_by_name(name) is None:
             return name, candidate_label
     raise RuntimeError(f"Could not find a free group name for {slug!r}")
+
+
+async def import_playlist(url: str) -> None:
+    """Background-task entry point for a playlist upload. Task 5 implements
+    the body (list the playlist via yt-dlp, create the group, download each
+    video into it); router.py schedules it as soon as it classifies a
+    playlist URL, and tests stub it out via monkeypatch until then."""
+    raise NotImplementedError
