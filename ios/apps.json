@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.2.0",
+          "buildVersion": "153",
+          "date": "2026-08-16T14:16:09Z",
+          "localizedDescription": "Force horizontal replaces the old orientation lock\n\n• The player's lock button now forces the video to landscape instead of just freezing whatever way you're holding the phone\n• Turn it on and the video stays landscape through a 180° flip and through auto-advancing to the next video\n• Turn it off to return to normal rotation",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.2.0/PatataTube-2.2.0.ipa",
+          "size": 4252508,
+          "sha256": "0cec5322a7a04e67883aff906acd4ccbc82bd345bc1f7de010440e9d6c9eac8f",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.1.1",
           "buildVersion": "152",
           "date": "2026-08-13T06:45:30Z",
@@ -1444,11 +1454,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.1.1",
-      "versionDate": "2026-08-13T06:45:30Z",
-      "versionDescription": "Search bar stays put while you scroll\n\n• The search field is pinned to the top instead of scrolling out of view",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.1.1/PatataTube-2.1.1.ipa",
-      "size": 4251992
+      "version": "2.2.0",
+      "versionDate": "2026-08-16T14:16:09Z",
+      "versionDescription": "Force horizontal replaces the old orientation lock\n\n• The player's lock button now forces the video to landscape instead of just freezing whatever way you're holding the phone\n• Turn it on and the video stays landscape through a 180° flip and through auto-advancing to the next video\n• Turn it off to return to normal rotation",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.2.0/PatataTube-2.2.0.ipa",
+      "size": 4252508
     }
   ],
   "news": []
