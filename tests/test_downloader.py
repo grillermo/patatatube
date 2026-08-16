@@ -474,3 +474,147 @@ def test_fetch_playlist_metadata_ignores_stderr_warnings_on_success(monkeypatch,
     assert title == "Lo-fi Beats"
     assert len(entries) == 2
     assert entries[0]["id"] == "dQw4w9WgXcQ"
+
+
+@pytest.fixture()
+def playlist_env(monkeypatch, downloader_env):
+    """downloader_env plus stubbed metadata, downloads and cache flush."""
+    db, downloader, videos_dir = downloader_env
+    state = {"downloaded": [], "cache_flushes": 0, "entries": [], "title": "Lo-fi Beats"}
+
+    async def fake_metadata(url):
+        state["metadata_url"] = url
+        return state["title"], state["entries"]
+
+    async def fake_download(video_id):
+        state["downloaded"].append(video_id)
+        db.update_video(video_id, status="done", filename=f"{video_id}.mp4")
+
+    async def fake_clear():
+        state["cache_flushes"] += 1
+
+    monkeypatch.setattr(downloader, "_fetch_playlist_metadata", fake_metadata)
+    monkeypatch.setattr(downloader, "download_video", fake_download)
+    monkeypatch.setattr(downloader.cache, "clear", fake_clear)
+    return db, downloader, state
+
+
+@pytest.mark.asyncio
+async def test_import_playlist_creates_group_and_queues_entries(playlist_env):
+    db, downloader, state = playlist_env
+    state["entries"] = [
+        {"id": "dQw4w9WgXcQ", "title": "First"},
+        {"id": "aBcDeFgHiJk", "title": "Second"},
+    ]
+
+    await downloader.import_playlist("https://www.youtube.com/playlist?list=PL123456789")
+
+    group = db.get_group_by_name("lo-fi-beats")
+    assert group is not None
+    assert group["label"] == "Lo-fi Beats"
+
+    videos = [v for v in db.get_all_videos() if v["group_id"] == group["id"]]
+    assert [v["source_key"] for v in videos] == ["dQw4w9WgXcQ", "aBcDeFgHiJk"]
+    assert [v["url"] for v in videos] == [
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "https://www.youtube.com/watch?v=aBcDeFgHiJk",
+    ]
+    assert [v["preview_url"] for v in videos] == [
+        "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+        "https://i.ytimg.com/vi/aBcDeFgHiJk/hqdefault.jpg",
+    ]
+    assert state["downloaded"] == [v["id"] for v in videos]
+    assert state["cache_flushes"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_import_playlist_reuses_completed_video(playlist_env):
+    db, downloader, state = playlist_env
+    existing_id = db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+    )
+    db.update_video(existing_id, status="done", filename=f"{existing_id}.mp4")
+    state["entries"] = [{"id": "dQw4w9WgXcQ", "title": "First"}]
+
+    await downloader.import_playlist("https://www.youtube.com/playlist?list=PL123456789")
+
+    group = db.get_group_by_name("lo-fi-beats")
+    assert db.get_video(existing_id)["group_id"] == group["id"]
+    assert state["downloaded"] == []
+    assert len(db.get_all_videos()) == 1
+
+
+@pytest.mark.asyncio
+async def test_import_playlist_creates_no_group_when_empty(playlist_env):
+    db, downloader, state = playlist_env
+    state["entries"] = []
+
+    await downloader.import_playlist("https://www.youtube.com/playlist?list=PL123456789")
+
+    assert db.get_group_by_name("lo-fi-beats") is None
+    assert db.get_all_videos() == []
+
+
+@pytest.mark.asyncio
+async def test_import_playlist_creates_no_group_when_metadata_fails(monkeypatch, playlist_env):
+    db, downloader, _state = playlist_env
+
+    async def boom(url):
+        raise RuntimeError("private playlist")
+
+    monkeypatch.setattr(downloader, "_fetch_playlist_metadata", boom)
+
+    await downloader.import_playlist("https://www.youtube.com/playlist?list=PL123456789")
+
+    assert db.list_groups() == db.list_groups()  # no exception escaped
+    assert db.get_group_by_name("lo-fi-beats") is None
+
+
+@pytest.mark.asyncio
+async def test_import_playlist_continues_past_a_failing_entry(monkeypatch, playlist_env):
+    db, downloader, state = playlist_env
+    state["entries"] = [
+        {"id": "dQw4w9WgXcQ", "title": "First"},
+        {"id": "aBcDeFgHiJk", "title": "Second"},
+    ]
+
+    async def flaky_download(video_id):
+        if len(state["downloaded"]) == 0:
+            state["downloaded"].append(video_id)
+            raise RuntimeError("network died")
+        state["downloaded"].append(video_id)
+        db.update_video(video_id, status="done", filename=f"{video_id}.mp4")
+
+    monkeypatch.setattr(downloader, "download_video", flaky_download)
+
+    await downloader.import_playlist("https://www.youtube.com/playlist?list=PL123456789")
+
+    assert len(state["downloaded"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_import_playlist_suffixes_a_taken_group_name(playlist_env):
+    db, downloader, state = playlist_env
+    db.create_group("lo-fi-beats", "Lo-fi Beats")
+    state["entries"] = [{"id": "dQw4w9WgXcQ", "title": "First"}]
+
+    await downloader.import_playlist("https://www.youtube.com/playlist?list=PL123456789")
+
+    group = db.get_group_by_name("lo-fi-beats-2")
+    assert group is not None
+    assert group["label"] == "Lo-fi Beats (2)"
+
+
+@pytest.mark.asyncio
+async def test_import_playlist_falls_back_when_title_is_empty(playlist_env):
+    db, downloader, state = playlist_env
+    state["title"] = ""
+    state["entries"] = [{"id": "dQw4w9WgXcQ", "title": "First"}]
+
+    await downloader.import_playlist("https://www.youtube.com/playlist?list=PL123456789")
+
+    group = db.get_group_by_name("playlist")
+    assert group is not None
+    assert group["label"] == "Playlist"

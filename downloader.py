@@ -11,6 +11,7 @@ from pathlib import Path
 
 from pybalt import download as pybalt_download
 
+import cache
 import db
 from paths import VIDEOS_DIR
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
@@ -359,9 +360,80 @@ def _unique_group_name(slug: str, label: str) -> tuple[str, str]:
     raise RuntimeError(f"Could not find a free group name for {slug!r}")
 
 
+PLAYLIST_FALLBACK_LABEL = "Playlist"
+
+
+def _youtube_watch_url(video_id: str) -> str:
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def _youtube_preview_url(video_id: str) -> str:
+    return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+
 async def import_playlist(url: str) -> None:
-    """Background-task entry point for a playlist upload. Task 5 implements
-    the body (list the playlist via yt-dlp, create the group, download each
-    video into it); router.py schedules it as soon as it classifies a
-    playlist URL, and tests stub it out via monkeypatch until then."""
-    raise NotImplementedError
+    """Expand a YouTube playlist into a new group, then download it.
+
+    Runs as a BackgroundTask: the HTTP response went out before any of this, so
+    there is nowhere to report failures except the log. Nothing is created when
+    the playlist can't be read or has no usable entries — the user simply sees
+    no new group.
+
+    Downloads run one at a time on purpose. Fanning a 200-entry playlist out
+    into 200 concurrent yt-dlp runs is the failure that took the machine down
+    on 2026-07-31 (see docs/superpowers/specs/2026-07-31-ffmpeg-job-queue-design.md).
+    """
+    try:
+        title, entries = await _fetch_playlist_metadata(url)
+    except Exception as exc:
+        logger.warning("Playlist metadata failed for %s: %s", url, exc)
+        return
+
+    if not entries:
+        logger.warning("Playlist %s has no downloadable entries; no group created", url)
+        return
+
+    name, label = _unique_group_name(
+        _slugify_playlist_title(title), title.strip() or PLAYLIST_FALLBACK_LABEL
+    )
+    group = db.create_group(name, label)
+    logger.info("Playlist %s -> group %s (%d entries)", url, name, len(entries))
+
+    # `db.get_all_videos` lists newest position first, and `add_video` hands out
+    # strictly increasing positions in call order. To make the group display in
+    # playlist order despite that, new rows are inserted in *reverse* playlist
+    # order — entry 0 goes in last, so it ends up with the highest position and
+    # therefore sorts first — while everything else (reuse checks, downloads)
+    # still walks the playlist forwards.
+    new_entries = []  # (index, entry) pairs needing a new row, in playlist order
+    video_ids_by_entry: list[int | None] = [None] * len(entries)
+    for index, entry in enumerate(entries):
+        existing = db.get_completed_video_by_source("youtube", entry["id"])
+        if existing:
+            db.set_video_group(existing["id"], group["id"])
+            video_ids_by_entry[index] = existing["id"]
+        else:
+            new_entries.append((index, entry))
+
+    for index, entry in reversed(new_entries):
+        video_ids_by_entry[index] = db.add_video(
+            _youtube_watch_url(entry["id"]),
+            platform="youtube",
+            source_key=entry["id"],
+            title=entry.get("title"),
+            preview_url=_youtube_preview_url(entry["id"]),
+            group_id=group["id"],
+        )
+
+    # The group and its rows exist now; flush before the (long) download loop so
+    # the app sees the group immediately. Nothing above was an HTTP write, so
+    # the cache middleware never fired.
+    await cache.clear()
+
+    for index, _entry in new_entries:
+        video_id = video_ids_by_entry[index]
+        try:
+            await download_video(video_id)
+        except Exception as exc:
+            logger.warning("Playlist entry %s failed: %s", video_id, exc)
+        await cache.clear()
