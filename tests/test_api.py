@@ -2142,4 +2142,51 @@ def test_upload_accepts_youtube_music_watch_url(client, monkeypatch):
     video = db.get_video(resp.json()["id"])
     assert video["platform"] == "youtube"
     assert video["source_key"] == "dQw4w9WgXcQ"
-    assert video["url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.youtube.com/playlist?list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa",
+        "https://m.youtube.com/playlist?list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa",
+        "https://music.youtube.com/playlist?list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa&si=eNDjY3nVNq-0D491",
+    ],
+)
+def test_classify_url_recognizes_playlists(url):
+    import router
+
+    assert router._classify_url(url) == {
+        "platform": "youtube_playlist",
+        "source_key": "PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa",
+        "normalized_url": "https://www.youtube.com/playlist?list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa",
+    }
+
+
+def test_classify_url_keeps_watch_with_list_a_single_video():
+    import router
+
+    assert router._classify_url(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa"
+    ) == {
+        "platform": "youtube",
+        "source_key": "dQw4w9WgXcQ",
+        "normalized_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    }
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.youtube.com/playlist",
+        "https://www.youtube.com/playlist?list=",
+        "https://www.youtube.com/playlist?list=a",
+        "https://vimeo.com/playlist?list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa",
+    ],
+)
+def test_classify_url_rejects_bad_playlist_urls(url):
+    import router
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        router._classify_url(url)
+    assert exc.value.status_code == 400

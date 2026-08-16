@@ -91,6 +91,9 @@ _video_stream_slots = asyncio.Semaphore(VIDEO_STREAM_LIMIT)
 _video_stream_active = 0
 
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+# Playlist ids are not fixed-width like video ids (PL…, OLAK5uy_…, RD…), so
+# this is a charset + minimum-length check, not an exact-length one.
+YOUTUBE_PLAYLIST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,}$")
 # Single-segment YouTube paths that are pages, not video ids.
 YOUTUBE_RESERVED_PATHS = {
     "account",
@@ -258,6 +261,31 @@ def _normalize_youtube_url(raw_url: str) -> tuple[str, str]:
     return normalized_url, video_id
 
 
+def _extract_youtube_playlist_id(raw_url: str) -> str:
+    """The list id of a /playlist page.
+
+    Deliberately narrow: `watch?v=X&list=Y` is *not* a playlist upload. Shared
+    watch links routinely carry a Mix/RD list the sender never meant to hand
+    over, and expanding those would import hundreds of unwanted videos.
+    """
+    parsed = urlparse(raw_url)
+    host = parsed.netloc.lower().removeprefix("www.")
+    if host not in {"youtube.com", "m.youtube.com", "music.youtube.com"}:
+        raise ValueError("Unsupported URL")
+    if parsed.path.rstrip("/") != "/playlist":
+        raise ValueError("Unsupported YouTube URL")
+
+    list_id = parse_qs(parsed.query).get("list", [""])[0]
+    if not YOUTUBE_PLAYLIST_ID_RE.fullmatch(list_id):
+        raise ValueError("Unsupported YouTube playlist URL")
+    return list_id
+
+
+def _normalize_youtube_playlist_url(raw_url: str) -> tuple[str, str]:
+    list_id = _extract_youtube_playlist_id(raw_url)
+    return f"https://www.youtube.com/playlist?list={list_id}", list_id
+
+
 def _youtube_preview_url(video_id: str) -> str:
     return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
@@ -266,6 +294,16 @@ def _classify_url(raw_url: str) -> dict:
     try:
         normalized_url, source_key = _normalize_twitter_url(raw_url)
         return {"platform": "twitter", "source_key": source_key, "normalized_url": normalized_url}
+    except ValueError:
+        pass
+
+    try:
+        normalized_url, list_id = _normalize_youtube_playlist_url(raw_url)
+        return {
+            "platform": "youtube_playlist",
+            "source_key": list_id,
+            "normalized_url": normalized_url,
+        }
     except ValueError:
         pass
 
