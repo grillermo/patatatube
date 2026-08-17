@@ -17,6 +17,7 @@ struct GroupsView: View {
     @State private var saveError: String?
     @State private var editing: EditingGroup?
     @State private var renaming: EditingGroup?
+    @State private var creating = false
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
 
@@ -25,6 +26,7 @@ struct GroupsView: View {
             ForEach(groups.groups) { group in
                 card(for: group).id(group.id)
             }
+            createCard
         }
         .padding()
         .task {
@@ -46,7 +48,13 @@ struct GroupsView: View {
                 renaming = nil
             }
         }
-        .alert("Couldn't save cover", isPresented: .constant(saveError != nil)) {
+        .sheet(isPresented: $creating) {
+            CreateGroupView { label, emoji in
+                create(label: label, emoji: emoji)
+                creating = false
+            }
+        }
+        .alert("Couldn't save", isPresented: .constant(saveError != nil)) {
             Button("OK") { saveError = nil }
         } message: {
             Text(saveError ?? "")
@@ -100,6 +108,41 @@ struct GroupsView: View {
         }
     }
 
+    /// A group is server-owned, so this one isn't optimistic: there is no id to
+    /// mirror until the POST answers with the row. On success the whole list is
+    /// re-fetched rather than appended locally, so `position` matches what the
+    /// other devices will see.
+    private func create(label: String, emoji: String?) {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task {
+            do {
+                _ = try await model.api.createGroup(
+                    name: Self.slug(for: trimmed), label: trimmed,
+                    emoji: Self.firstEmoji(in: emoji ?? "")
+                )
+                if let remote = try? await model.api.groups() {
+                    groups.apply(remote)
+                }
+            } catch {
+                saveError = error.localizedDescription
+            }
+        }
+    }
+
+    /// The `name` the server keys the group by, derived from what the user
+    /// typed: lowercase, runs of anything non-alphanumeric collapsed to a
+    /// single "-". A collision is the server's 400 to report, not something to
+    /// paper over here with a suffix the user never asked for.
+    static func slug(for label: String) -> String {
+        let mapped = label.lowercased().map { ch -> Character in
+            ch.isLetter || ch.isNumber ? ch : "-"
+        }
+        return String(mapped)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+    }
+
     /// One grapheme cluster, so flags, skin-tone modifiers and ZWJ families
     /// (👩‍👩‍👧) each count as a single emoji rather than their parts. Moved here
     /// from the deleted GroupCoverStore.
@@ -136,6 +179,34 @@ struct GroupsView: View {
             Text(group.label)
                 .font(.subheadline).lineLimit(1)
         }
+    }
+
+    /// Last tile in the grid, shaped like the group cards so the row stays
+    /// even. A toolbar button was the alternative; this sits where the user is
+    /// already looking when they notice the group they want is missing.
+    private var createCard: some View {
+        Button { creating = true } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                Rectangle().fill(.clear)
+                    .aspectRatio(2.0/3.0, contentMode: .fit)
+                    .overlay {
+                        Image(systemName: "plus")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(
+                                .secondary.opacity(0.5),
+                                style: StrokeStyle(lineWidth: 2, dash: [6, 5])
+                            )
+                    }
+                Text("New Group")
+                    .font(.subheadline).lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private func menu(for group: VideoGroup) -> some View {
@@ -239,6 +310,67 @@ private struct CoverPickerView: View {
                 }
             }
         }
+    }
+}
+
+/// The "new group" sheet: a name plus an optional cover emoji, both of which
+/// the server takes in one POST. The `name` it is keyed by is derived from the
+/// label (`GroupsView.slug`) rather than asked for — two fields for one concept
+/// is a form nobody fills in twice the same way.
+private struct CreateGroupView: View {
+    let onCreate: (String, String?) -> Void
+
+    @State private var label = ""
+    @State private var emoji = ""
+    @FocusState private var focused: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    private var trimmed: String { label.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Name", text: $label)
+                        .focused($focused)
+                        .onSubmit(create)
+                } footer: {
+                    if !trimmed.isEmpty {
+                        Text(verbatim: GroupsView.slug(for: trimmed))
+                            .font(.footnote.monospaced())
+                    }
+                }
+                Section {
+                    EmojiTextField(
+                        placeholder: "Emoji",
+                        text: $emoji,
+                        font: .systemFont(ofSize: 48),
+                        alignment: .center,
+                        onSubmit: create
+                    )
+                    .frame(height: 60)
+                } footer: {
+                    Text("Optional. One emoji, shown enlarged as this group's cover.")
+                }
+            }
+            .navigationTitle("New Group")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create", action: create)
+                        .disabled(trimmed.isEmpty)
+                }
+            }
+        }
+        .onAppear { focused = true }
+    }
+
+    private func create() {
+        guard !trimmed.isEmpty else { return }
+        onCreate(trimmed, emoji.isEmpty ? nil : emoji)
     }
 }
 
