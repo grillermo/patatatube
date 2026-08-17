@@ -139,6 +139,16 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         catch { throw APIError.decoding(String(describing: error)) }
     }
 
+    /// Separate from `updateGroup`, which always sends `emoji` — patching this
+    /// toggle through it would clear the group's cover.
+    public func setGroupDisplayTitles(id: Int, _ on: Bool) async throws -> VideoGroup {
+        let data = try await authedRequest(
+            "api/groups/\(id)", method: "PATCH", body: ["display_titles": on]
+        )
+        do { return try Self.makeDecoder().decode(VideoGroup.self, from: data) }
+        catch { throw APIError.decoding(String(describing: error)) }
+    }
+
     public func setGroup(id: Int, groupID: Int) async throws -> Bool {
         try await postOK("api/videos/\(id)/group", body: ["group_id": groupID])
     }

@@ -821,7 +821,10 @@ def test_get_groups_lists_the_defaults(client):
     assert resp.status_code == 200
     groups = resp.json()["groups"]
     assert [g["name"] for g in groups] == ["children", "adults", "anabel", "asmr"]
-    assert set(groups[0]) == {"id", "name", "label", "emoji", "position"}
+    assert set(groups[0]) == {
+        "id", "name", "label", "emoji", "position", "display_titles",
+    }
+    assert all(g["display_titles"] is False for g in groups)
 
 
 def test_create_group_requires_a_token(client):
@@ -864,6 +867,36 @@ def test_patch_group_clears_the_emoji_with_null(client, auth_headers):
     client.patch(f"/api/groups/{gid}", json={"emoji": "🧒"}, headers=auth_headers)
     resp = client.patch(f"/api/groups/{gid}", json={"emoji": None}, headers=auth_headers)
     assert resp.json()["emoji"] is None
+
+
+def test_patch_group_toggles_display_titles(client, auth_headers):
+    gid = client.get("/api/groups").json()["groups"][0]["id"]
+    resp = client.patch(
+        f"/api/groups/{gid}", json={"display_titles": True}, headers=auth_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["display_titles"] is True
+    listed = client.get("/api/groups").json()["groups"]
+    assert next(g for g in listed if g["id"] == gid)["display_titles"] is True
+
+    off = client.patch(
+        f"/api/groups/{gid}", json={"display_titles": False}, headers=auth_headers
+    )
+    assert off.json()["display_titles"] is False
+
+
+def test_patch_group_display_titles_keeps_the_emoji(client, auth_headers):
+    """The iOS toggle PATCHes this field alone — it must not clear the cover."""
+    gid = client.get("/api/groups").json()["groups"][0]["id"]
+    client.patch(f"/api/groups/{gid}", json={"emoji": "🧒"}, headers=auth_headers)
+    resp = client.patch(
+        f"/api/groups/{gid}", json={"display_titles": True}, headers=auth_headers
+    )
+    assert resp.json()["emoji"] == "🧒"
+
+
+def test_patch_group_display_titles_requires_a_token(client):
+    assert client.patch("/api/groups/1", json={"display_titles": True}).status_code == 401
 
 
 def test_patch_unknown_group_is_404(client, auth_headers):

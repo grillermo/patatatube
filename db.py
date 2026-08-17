@@ -232,6 +232,17 @@ def init_db():
             );
             """
         )
+        group_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(groups)").fetchall()
+        }
+        # Per-group display setting: overlay each video's title on its player in
+        # that group's view. Off for every existing group, which is what the
+        # clients rendered before the column existed.
+        if "display_titles" not in group_columns:
+            _add_column(
+                conn,
+                "ALTER TABLE groups ADD COLUMN display_titles INTEGER NOT NULL DEFAULT 0",
+            )
         _seed_default_groups(conn)
         _migrate_classifications_to_groups(conn)
         version_columns = {
@@ -726,6 +737,7 @@ def update_group(
     emoji: str | None = None,
     clear_emoji: bool = False,
     position: int | None = None,
+    display_titles: bool | None = None,
 ) -> dict | None:
     """Partial update. `clear_emoji` is how a caller sets the emoji to NULL —
     `emoji=None` means "leave it alone", since that is what an omitted JSON
@@ -743,6 +755,9 @@ def update_group(
     if position is not None:
         sets.append("position = ?")
         params.append(position)
+    if display_titles is not None:
+        sets.append("display_titles = ?")
+        params.append(1 if display_titles else 0)
     with _conn() as conn:
         if not conn.execute("SELECT 1 FROM groups WHERE id = ?", (group_id,)).fetchone():
             return None

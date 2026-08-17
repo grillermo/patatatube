@@ -116,6 +116,33 @@ def test_plex_card_does_not_offer_group_or_promote_actions():
     assert "/promote" not in html
 
 
+def test_title_overlay_is_absent_when_the_group_has_it_off():
+    html = build_videos_page([_video(platform="youtube", title="My Clip")], GROUPS, 1, None)
+
+    assert "title-overlay" not in html
+
+
+def test_title_overlay_renders_for_a_group_with_display_titles_on():
+    groups = [dict(GROUPS[0], display_titles=1), GROUPS[1]]
+
+    html = build_videos_page(
+        [_video(platform="youtube", title="My Clip")], groups, 1, None
+    )
+
+    assert '<div class="title-overlay">My Clip</div>' in html
+
+
+def test_title_overlay_is_absent_on_a_plex_feed():
+    """Plex kinds are not groups, so no group's setting applies to them."""
+    groups = [dict(GROUPS[0], display_titles=1), GROUPS[1]]
+
+    html = build_videos_page(
+        [_video(group_id=None, plex_kind="tv", title="Some Show")], groups, None, "tv"
+    )
+
+    assert "title-overlay" not in html
+
+
 def test_app_asset_route_serves_css_and_js(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "t.db"))
     monkeypatch.setenv("UPLOAD_TOKEN", "secret")

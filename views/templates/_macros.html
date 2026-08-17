@@ -38,7 +38,7 @@
 </details>
 {%- endmacro %}
 
-{% macro card(v, groups, current_group_id, upload_token) -%}
+{% macro card(v, groups, current_group_id, upload_token, show_titles=False) -%}
 <div class="card">
 {% if not v.plex_kind -%}
 {{ group_menu(v, groups, current_group_id) }}
@@ -46,6 +46,9 @@
 {% if v.status == "done" -%}
 <div class="video-wrap">
   <div class="name-overlay">{{ v | display_name }}</div>
+  {% if show_titles -%}
+  <div class="title-overlay">{{ v | display_name }}</div>
+  {%- endif %}
   {% set p = v | preview_src -%}
   <video id="v{{ v.id }}" controls playsinline webkit-playsinline preload="none"
          onloadedmetadata="this.currentTime=0"{% if p %} data-preview-src="{{ p }}"{% endif %}>

@@ -120,6 +120,26 @@ video {
 .video-wrap.is-playing .name-overlay {
   display: none
 }
+/* The per-group "display titles" caption. Transparent, and pointer-events:none
+   so taps still reach the player (and .name-overlay) underneath. */
+.title-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  font-size: 1.1em;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 2px #000;
+  word-break: break-word;
+  pointer-events: none
+}
+.video-wrap.is-playing .title-overlay {
+  display: none
+}
 .card-actions {
   display: flex;
   gap: 8px;

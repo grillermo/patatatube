@@ -186,6 +186,7 @@ class GroupUpdateRequest(BaseModel):
     label: str | None = None
     emoji: str | None = None
     position: int | None = None
+    display_titles: bool | None = None
 
 
 class PrepareRequest(BaseModel):
@@ -912,6 +913,7 @@ def serialize_group(group: dict) -> dict:
         "label": group["label"],
         "emoji": group["emoji"],
         "position": group["position"],
+        "display_titles": bool(group["display_titles"]),
     }
 
 
@@ -951,6 +953,7 @@ async def api_update_group(group_id: int, body: GroupUpdateRequest, request: Req
         # An explicit `"emoji": null` clears it; an omitted key leaves it alone.
         clear_emoji="emoji" in fields and not emoji,
         position=body.position,
+        display_titles=body.display_titles,
     )
     if group is None:
         raise HTTPException(status_code=404, detail="No such group")

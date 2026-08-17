@@ -217,6 +217,19 @@ The `groups` table is the source of truth for video groups. `db.PLEX_KINDS` cove
 
 Adding a group is `POST /api/groups`; there is deliberately no UI for it, and no delete endpoint.
 
+**Per-group display settings live on the group row, not in a client's
+UserDefaults.** `groups.display_titles` (added by an idempotent `ALTER TABLE`
+guard, default 0) overlays each video's title on its player in that group's
+view — white with a small black shadow — and both clients read it: the iOS grid
+via `VideoGroup.displayTitles`, the web page via a `.title-overlay` div in the
+`card` macro (`pointer-events: none`, hidden while the video plays). Only iOS
+can *set* it, through the `⋯` menu's "Display titles" toggle, which PATCHes
+`display_titles` **alone** — `APIClient.updateGroup` always sends `emoji`, so
+reusing it here would clear the group's cover. `VideoGroup` decodes the field
+with `decodeIfPresent ?? false` because `GroupStore`'s UserDefaults mirror holds
+blobs written before it existed. A Plex kind is not a group, so TV/Movies never
+overlay titles and never show the toggle.
+
 ### The response cache invalidates on writes, not on time
 
 `middleware.RedisCacheMiddleware` caches **every** 200 GET (`cache.py`, keyed by

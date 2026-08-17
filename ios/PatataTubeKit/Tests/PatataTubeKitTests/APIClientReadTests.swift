@@ -65,6 +65,24 @@ struct APIClientTests {
             #expect(groups[0].emoji == "🧒")
         }
 
+        @Test func groupsDecodesDisplayTitles() async throws {
+            MockURLProtocol.handler = { req in
+                let body = #"{"groups":[{"id":1,"name":"children","label":"Children","emoji":null,"position":0,"display_titles":true}]}"#.data(using: .utf8)!
+                return (jsonResponse(req.url!), body)
+            }
+            #expect(try await makeClient().groups()[0].displayTitles)
+        }
+
+        /// A server that predates the column — and the UserDefaults mirror
+        /// written by an older build — both omit the key.
+        @Test func groupsDefaultDisplayTitlesToOffWhenTheKeyIsMissing() async throws {
+            MockURLProtocol.handler = { req in
+                let body = #"{"groups":[{"id":1,"name":"children","label":"Children","emoji":null,"position":0}]}"#.data(using: .utf8)!
+                return (jsonResponse(req.url!), body)
+            }
+            #expect(try await makeClient().groups()[0].displayTitles == false)
+        }
+
         @Test func groupsDoesNotRequireOrSendAToken() async throws {
             MockURLProtocol.handler = { req in
                 #expect(req.url?.path == "/api/groups")
@@ -137,6 +155,22 @@ struct APIClientTests {
                 return (jsonResponse(req.url!), #"{"id":1,"name":"children","label":"Children","emoji":null,"position":0}"#.data(using: .utf8)!)
             }
             _ = try await makeClient().updateGroup(id: 1, label: nil, emoji: nil)
+        }
+
+        /// Must not go through `updateGroup`, which always sends `emoji` and
+        /// would clear a group's cover as a side effect of this toggle.
+        @Test func setDisplayTitlesSendsThatFieldAlone() async throws {
+            MockURLProtocol.handler = { req in
+                #expect(req.url?.path == "/api/groups/1")
+                #expect(req.httpMethod == "PATCH")
+                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: Any]
+                #expect(Array(json.keys) == ["display_titles"])
+                #expect(json["display_titles"] as? Bool == true)
+                return (jsonResponse(req.url!), #"{"id":1,"name":"children","label":"Children","emoji":"🧒","position":0,"display_titles":true}"#.data(using: .utf8)!)
+            }
+            let group = try await makeClient().setGroupDisplayTitles(id: 1, true)
+            #expect(group.displayTitles)
+            #expect(group.emoji == "🧒")
         }
 
         @Test func promotePostsTheKind() async throws {

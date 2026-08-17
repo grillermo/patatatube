@@ -49,9 +49,12 @@
 </script>
 <h2 style="text-align:center;margin-bottom:12px;font-size:1.1em;max-width:900px;margin-left:auto;margin-right:auto">Patata Videos</h2>
 {{ m.nav(groups, current_group_id, current_plex_kind) }}
+{# "Display titles" is a per-group setting, so a Plex feed never has one. #}
+{% set current_group = (groups | selectattr("id", "equalto", current_group_id) | list | first) if current_group_id else None -%}
+{% set show_titles = current_group and current_group.get("display_titles") -%}
 <div class="grid">
 {% for v in videos -%}
-{{ m.card(v, groups, current_group_id, upload_token) }}
+{{ m.card(v, groups, current_group_id, upload_token, show_titles) }}
 {% else -%}
 <p style="color:#aaa;text-align:center">No videos yet.</p>
 {% endfor -%}

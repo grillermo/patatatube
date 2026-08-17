@@ -61,7 +61,8 @@ struct GroupsView: View {
         let previous = groups.groups
         groups.apply(groups.groups.map {
             $0.id == group.id
-                ? VideoGroup(id: $0.id, name: $0.name, label: $0.label, emoji: emoji, position: $0.position)
+                ? VideoGroup(id: $0.id, name: $0.name, label: $0.label, emoji: emoji,
+                             position: $0.position, displayTitles: $0.displayTitles)
                 : $0
         })
         Task {
@@ -82,7 +83,8 @@ struct GroupsView: View {
         let previous = groups.groups
         groups.apply(groups.groups.map {
             $0.id == group.id
-                ? VideoGroup(id: $0.id, name: $0.name, label: trimmed, emoji: $0.emoji, position: $0.position)
+                ? VideoGroup(id: $0.id, name: $0.name, label: trimmed, emoji: $0.emoji,
+                             position: $0.position, displayTitles: $0.displayTitles)
                 : $0
         })
         Task {

@@ -81,6 +81,47 @@ private struct OptionsMenuHeader: View {
             Toggle(isOn: model.randomizeBinding(for: scope)) {
                 Label("Randomize", systemImage: "shuffle")
             }
+
+            // A group setting, so only a group feed has one — the TV, Movies,
+            // episode and movie-detail menus share this header and get nothing.
+            if case .feed(.group(let id)) = scope {
+                DisplayTitlesToggle(groups: model.groups, api: model.api, groupID: id)
+            }
+        }
+    }
+}
+
+/// The per-group "Display titles" switch. Its own view (rather than a `Toggle`
+/// inline in the header) because it has to observe `GroupStore` — `AppModel`
+/// holds that store as a plain `let`, so a change inside it doesn't republish
+/// through `@EnvironmentObject`.
+struct DisplayTitlesToggle: View {
+    @ObservedObject var groups: GroupStore
+    let api: APIClient
+    let groupID: Int
+
+    var body: some View {
+        if let group = groups.group(id: groupID) {
+            Toggle(isOn: Binding(
+                get: { group.displayTitles },
+                set: { set($0) }
+            )) {
+                Label("Display titles", systemImage: "textformat")
+            }
+        }
+    }
+
+    /// Optimistic like every other group write here: the grid redraws at once
+    /// and a failed PATCH puts the switch back rather than leaving this device
+    /// showing a setting the others never got.
+    private func set(_ on: Bool) {
+        groups.setDisplayTitles(id: groupID, on)
+        Task {
+            do {
+                _ = try await api.setGroupDisplayTitles(id: groupID, on)
+            } catch {
+                await MainActor.run { groups.setDisplayTitles(id: groupID, !on) }
+            }
         }
     }
 }

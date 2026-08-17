@@ -140,6 +140,23 @@ def test_update_group_clears_the_emoji(fresh_db):
     assert fresh_db.update_group(gid, clear_emoji=True)["emoji"] is None
 
 
+def test_groups_start_with_display_titles_off(fresh_db):
+    assert all(g["display_titles"] == 0 for g in fresh_db.list_groups())
+    assert fresh_db.create_group("cooking", "Cooking")["display_titles"] == 0
+
+
+def test_update_group_toggles_display_titles(fresh_db):
+    gid = fresh_db.get_group_by_name("children")["id"]
+    assert fresh_db.update_group(gid, display_titles=True)["display_titles"] == 1
+    assert fresh_db.update_group(gid, display_titles=False)["display_titles"] == 0
+
+
+def test_update_group_display_titles_leaves_the_emoji_alone(fresh_db):
+    gid = fresh_db.get_group_by_name("children")["id"]
+    fresh_db.update_group(gid, emoji="🧒")
+    assert fresh_db.update_group(gid, display_titles=True)["emoji"] == "🧒"
+
+
 def test_update_group_returns_none_for_an_unknown_id(fresh_db):
     assert fresh_db.update_group(9999, label="x") is None
 
@@ -252,6 +269,36 @@ def _by_url(db_module):
             r["url"]: dict(r)
             for r in conn.execute("SELECT * FROM videos").fetchall()
         }
+
+
+def test_migration_adds_display_titles_to_an_existing_groups_table(tmp_path, monkeypatch):
+    """A groups table created before the column exists gets it, defaulted off."""
+    path = tmp_path / "pre-display-titles.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            label TEXT NOT NULL,
+            emoji TEXT,
+            position INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO groups (name, label, position) VALUES ('children', 'Children', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("DB_PATH", str(path))
+    import db as db_module
+
+    importlib.reload(db_module)
+    db_module.init_db()
+
+    assert db_module.get_group_by_name("children")["display_titles"] == 0
 
 
 def test_migration_backfills_group_id_from_classification(legacy_db):

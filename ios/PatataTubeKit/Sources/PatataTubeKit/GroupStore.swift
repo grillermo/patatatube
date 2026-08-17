@@ -28,6 +28,20 @@ public final class GroupStore: ObservableObject, @unchecked Sendable {
     /// elsewhere propagates.
     public func apply(_ remote: [VideoGroup]) {
         groups = remote.sorted { $0.position < $1.position }
+        persist()
+    }
+
+    /// Optimistic local flip of one group's "display titles". The server is
+    /// still the owner — the caller PATCHes and calls this again to revert if
+    /// that fails — but the grid redraws without waiting for the round trip.
+    public func setDisplayTitles(id: Int, _ on: Bool) {
+        guard let index = groups.firstIndex(where: { $0.id == id }),
+              groups[index].displayTitles != on else { return }
+        groups[index] = groups[index].withDisplayTitles(on)
+        persist()
+    }
+
+    private func persist() {
         if let data = try? JSONEncoder().encode(groups) {
             defaults.set(data, forKey: Self.defaultsKey)
         }

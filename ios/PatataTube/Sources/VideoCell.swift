@@ -15,6 +15,8 @@ struct VideoCell: View {
     var onPreviewLoaded: ((Data) -> Void)? = nil
     /// Local file URL of the cached MP4 (may not exist on disk yet).
     var localFileURL: URL? = nil
+    /// The group's "Display titles" setting: overlay the title on the poster.
+    var showsTitle: Bool = false
     let groups: [VideoGroup]
     let onPlay: () -> Void
     /// Children-only corner button: play this one video, then sleep-lock.
@@ -69,8 +71,22 @@ struct VideoCell: View {
                         Text(video.status).font(.caption).padding(4)
                             .background(.thinMaterial).cornerRadius(4)
                     }
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 40)).foregroundStyle(.white.opacity(0.9))
+                    VStack(spacing: 6) {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 40)).foregroundStyle(.white.opacity(0.9))
+                        // The group's "Display titles" caption. Not hit-testable
+                        // so it never steals the play tap it sits on top of.
+                        if showsTitle {
+                            Text(video.title ?? video.url)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                                .padding(.horizontal, 12)
+                                .allowsHitTesting(false)
+                        }
+                    }
                 }
                 .aspectRatio(16.0/9.0, contentMode: .fit)
                 .clipped()
