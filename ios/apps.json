@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.4.1",
+          "buildVersion": "160",
+          "date": "2026-08-17T13:54:57Z",
+          "localizedDescription": "Maintenance rebuild of 2.4.0\n\n• Same features as 2.4.0, rebuilt and republished",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.4.1/PatataTube-2.4.1.ipa",
+          "size": 4277698,
+          "sha256": "d044dc5ccf1bfc6ad79b6ba6419660a51a542c24706a6b2a4a9f3763e18ab79f",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.4.0",
           "buildVersion": "159",
           "date": "2026-08-17T13:50:29Z",
@@ -1514,11 +1524,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.4.0",
-      "versionDate": "2026-08-17T13:50:29Z",
-      "versionDescription": "Create groups on the iPad\n\n• A New Group tile at the end of the Videos tab makes a group, with an optional emoji cover",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.4.0/PatataTube-2.4.0.ipa",
-      "size": 4277690
+      "version": "2.4.1",
+      "versionDate": "2026-08-17T13:54:57Z",
+      "versionDescription": "Maintenance rebuild of 2.4.0\n\n• Same features as 2.4.0, rebuilt and republished",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.4.1/PatataTube-2.4.1.ipa",
+      "size": 4277698
     }
   ],
   "news": []
