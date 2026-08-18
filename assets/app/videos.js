@@ -200,6 +200,47 @@ function applyPreview(video, url){
     .catch(function(_err){});
 }
 
+function cinemaActiveCard(){
+  return document.querySelector('.card.cinema-active');
+}
+
+function setCinema(card, on){
+  var btn = card.querySelector('.cinema-btn');
+  card.classList.toggle('cinema-active', on);
+  document.body.classList.toggle('cinema-mode', on);
+  if(btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  var video = card.querySelector('video');
+  if(on){
+    // The native fullscreen a play() would trigger fights with cinema mode, so
+    // step out of it and let the fixed card be the expanded view. The body class
+    // is already set above, so the play handler below won't re-enter it either.
+    exitFullscreen(video);
+    if(video && video.paused){
+      var p = video.play();
+      if(p && typeof p.catch === 'function') p.catch(function(){});
+    }
+  } else {
+    try { card.scrollIntoView({block: 'center'}); } catch(_err) {}
+  }
+}
+
+document.querySelectorAll('.cinema-btn').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var card = btn.closest('.card');
+    if(!card) return;
+    var on = !card.classList.contains('cinema-active');
+    var current = cinemaActiveCard();
+    if(current && current !== card) setCinema(current, false);
+    setCinema(card, on);
+  });
+});
+
+document.addEventListener('keydown', function(e){
+  if(e.key !== 'Escape') return;
+  var card = cinemaActiveCard();
+  if(card) setCinema(card, false);
+});
+
 document.querySelectorAll('video[id]').forEach(function(v){
   var wrap = v.closest('.video-wrap');
   var previewSrc = v.getAttribute('data-preview-src');
@@ -217,7 +258,7 @@ document.querySelectorAll('video[id]').forEach(function(v){
     if(wrap) wrap.classList.add('is-playing');
     pauseOtherVideos(v);
     preloadEntireVideo(v);
-    enterFullscreen(v);
+    if(!document.body.classList.contains('cinema-mode')) enterFullscreen(v);
   });
   v.addEventListener('pause', function(){
     if(wrap) wrap.classList.remove('is-playing');
