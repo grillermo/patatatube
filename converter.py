@@ -47,7 +47,11 @@ def _handle_convert(job: dict, on_progress) -> None:
 
 def _handle_hls(job: dict, on_progress) -> None:
     payload = job.get("payload") or {}
-    hls.prepare(job["video_id"], payload["source_path"], raise_errors=True, on_progress=on_progress)
+    hls.prepare(
+        job["video_id"], payload["source_path"],
+        subtitle_source=payload.get("subtitle_source_path"),
+        raise_errors=True, on_progress=on_progress,
+    )
 
 
 def _handle_normalize(job: dict, on_progress) -> dict:

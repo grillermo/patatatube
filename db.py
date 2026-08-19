@@ -253,7 +253,7 @@ def init_db():
         if "converted_langs" not in version_columns:
             _add_column(conn, "ALTER TABLE video_versions ADD COLUMN converted_langs TEXT")
         # JSON list of {language, name, default, forced}, filled once at scan
-        # time by library.py's _probe_missing_subtitle_langs (mirrors
+        # time by library.py's _probe_missing_track_langs (mirrors
         # audio_langs). NULL means "not probed yet", not "no subtitles" — an
         # empty JSON array `[]` means the latter.
         if "subtitle_langs" not in version_columns:
@@ -266,6 +266,44 @@ def init_db():
         _backfill_library_added_at(conn)
         _backfill_video_versions(conn)
         _delete_error_videos(conn)
+        _run_one_shot_backfills(conn)
+
+
+# Bumped only for a data backfill that is NOT naturally idempotent — one that
+# would corrupt or discard good data if it ran twice. `PRAGMA user_version`
+# records the last one applied. Schema changes still go in init_db as
+# condition-guarded `ALTER TABLE`s; this is not a migrations framework.
+SCHEMA_VERSION = 3
+
+
+def _run_one_shot_backfills(conn: sqlite3.Connection) -> None:
+    applied = conn.execute("PRAGMA user_version").fetchone()[0]
+    if applied >= SCHEMA_VERSION:
+        return
+
+    # v1: subtitle discovery gained embedded container tracks. Every cached
+    #     subtitle_langs predated that, so an mkv carrying its subtitles inside
+    #     was cached as `[]` — no picker, no HLS renditions, while Plex showed
+    #     them.
+    # v2: discovery then learned to skip macOS AppleDouble `._` twins and to
+    #     ship one track per language, so the lists written between v1 and v2
+    #     hold duplicates (and a binary `._` blob as the default English).
+    # v3: a server still running v1/v2 code re-probed rows after the v2 clear,
+    #     refilling them from the old logic. Clearing again from the *new*
+    #     binary's startup is what closes that race — and the re-probe now also
+    #     invalidates any HLS package whose renditions disagree
+    #     (`library._invalidate_stale_hls`), which is what finally rebuilds the
+    #     playlists that shipped with no subtitles at all.
+    #
+    # Every one of these needs the same thing: NULL means "not probed yet", so
+    # clearing the column makes the next /api/library/scan re-probe every
+    # version. Not idempotent — re-running it on each startup would discard
+    # that scan's result every time, which is what the user_version guard is
+    # for.
+    if applied < 3:
+        conn.execute("UPDATE video_versions SET subtitle_langs = NULL")
+
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def _backfill_positions(conn: sqlite3.Connection) -> int:

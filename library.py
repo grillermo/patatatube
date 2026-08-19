@@ -271,33 +271,44 @@ def _heal_missing_conversions(video_id: int) -> None:
             db.clear_missing_conversion(version["id"])
 
 
-def _probe_missing_audio_langs(video_id: int) -> None:
-    """Fill missing per-version audio metadata without aborting a library scan."""
-    for version in db.get_video_versions(video_id):
-        if version.get("audio_langs") is not None:
-            continue
-        try:
-            probe = probe_source(Path(version["source_path"]))
-        except Exception:  # noqa: BLE001 - scan must survive a bad file
-            continue
-        db.set_version_audio_langs(version["id"], json.dumps(audio_track_list(probe)))
+def _probe_missing_track_langs(video_id: int) -> None:
+    """Fill missing per-version audio and subtitle metadata for one video.
 
-
-def _probe_missing_subtitle_langs(video_id: int) -> None:
-    """Fill missing per-version subtitle metadata without aborting a library scan.
+    Both are filled from a single ffprobe pass per version — subtitle
+    discovery needs the same stream list the audio track list comes from, and
+    a scan of a mounted library is slow enough that probing each file twice
+    is worth avoiding.
 
     This is the only writer of `video_versions.subtitle_langs` — there is no
     per-request probe. A row's subtitle_langs stays NULL (picker shows no
-    tracks) until this runs, so on a fresh deploy of sidecar-subtitle support,
+    tracks) until this runs, so on a fresh deploy of subtitle support,
     existing library rows need one `POST /api/library/scan` before they'll
     report subtitle tracks.
+
+    The probe is what surfaces subtitles embedded in the container; a file
+    with neither sidecars nor embedded text tracks caches `[]` and is not
+    probed for subtitles again. A probe failure leaves both columns NULL so
+    the next scan retries, and never aborts the scan.
     """
     for version in db.get_video_versions(video_id):
-        if version.get("subtitle_langs") is not None:
+        needs_audio = version.get("audio_langs") is None
+        needs_subtitles = version.get("subtitle_langs") is None
+        if not (needs_audio or needs_subtitles):
+            continue
+        source = Path(version["source_path"])
+        try:
+            probe = probe_source(source)
+        except Exception:  # noqa: BLE001 - scan must survive a bad file
+            continue
+
+        if needs_audio:
+            db.set_version_audio_langs(version["id"], json.dumps(audio_track_list(probe)))
+
+        if not needs_subtitles:
             continue
         try:
-            tracks = discover_subtitles(Path(version["source_path"]))
-        except Exception:  # noqa: BLE001 - scan must survive a bad file
+            tracks = discover_subtitles(source, probe)
+        except Exception:  # noqa: BLE001 - a bad sidecar must not cost the audio write
             continue
         db.set_version_subtitle_langs(version["id"], json.dumps([
             {
@@ -308,6 +319,23 @@ def _probe_missing_subtitle_langs(video_id: int) -> None:
             }
             for track in tracks
         ]))
+        _invalidate_stale_hls(video_id, {track.language for track in tracks})
+
+
+def _invalidate_stale_hls(video_id: int, languages: set[str]) -> None:
+    """Drop a packaged HLS tree whose subtitle renditions no longer match.
+
+    Nothing else rebuilds a package once it exists, so one built before a
+    track list was known keeps serving that list forever — the app's picker
+    reads the fresh DB, the player reads the stale master.m3u8, and the two
+    disagree permanently. Imported lazily because hls imports this module.
+    """
+    import hls  # noqa: PLC0415 - circular at module scope; hls imports library
+
+    packaged = hls.packaged_subtitle_languages(video_id)
+    if packaged is None or packaged == languages:
+        return
+    hls.invalidate(video_id)
 
 
 def scan_library() -> dict:
@@ -361,8 +389,7 @@ def scan_library() -> dict:
         else:  # tombstoned
             skipped += 1
             continue
-        _probe_missing_audio_langs(video_id)
-        _probe_missing_subtitle_langs(video_id)
+        _probe_missing_track_langs(video_id)
         _heal_missing_conversions(video_id)
     removed = db.tombstone_missing_library_videos(seen_rating_keys)
     return {"added": added, "updated": updated, "skipped": skipped, "removed": removed}

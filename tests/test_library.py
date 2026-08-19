@@ -551,9 +551,9 @@ def test_scan_probes_missing_subtitle_langs(fresh_db, tmp_path, monkeypatch):
     calls = []
     real_discover = library.discover_subtitles
 
-    def counting_discover(path):
+    def counting_discover(path, probe=None):
         calls.append(str(path))
-        return real_discover(path)
+        return real_discover(path, probe)
 
     monkeypatch.setattr(library, "discover_subtitles", counting_discover)
 
@@ -569,6 +569,113 @@ def test_scan_probes_missing_subtitle_langs(fresh_db, tmp_path, monkeypatch):
     assert calls == [str(src)]
 
 
+def test_scan_records_embedded_subtitle_tracks(fresh_db, tmp_path, monkeypatch):
+    """An mkv with no sidecars still reports its embedded text track.
+
+    This is the Breathless case: Plex showed the embedded SRT, we showed
+    nothing, because discovery only ever looked at the filesystem.
+    """
+    import db
+    import json
+    import plex
+
+    src = tmp_path / "Breathless.1960.Criterion.mkv"
+    src.write_bytes(b"x")
+    item = {"source_path": str(src), "title": "Breathless", "plex_kind": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "a", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+    monkeypatch.setattr(library, "probe_source", lambda p: {"format": {}, "streams": [
+        {"index": 0, "codec_type": "video", "codec_name": "hevc"},
+        {"index": 1, "codec_type": "audio", "codec_name": "aac", "tags": {"language": "fre"}},
+        {"index": 3, "codec_type": "subtitle", "codec_name": "hdmv_pgs_subtitle",
+         "tags": {"language": "eng", "title": "PGS"}},
+        {"index": 4, "codec_type": "subtitle", "codec_name": "subrip",
+         "tags": {"language": "eng", "title": "SRT"}},
+    ]})
+
+    library.scan_library()
+
+    movie = db.get_all_videos(plex_kind="movies")[0]
+    version = db.get_video_versions(movie["id"])[0]
+    tracks = json.loads(version["subtitle_langs"])
+    # The bitmap PGS track is not offered; the text one is.
+    assert [t["language"] for t in tracks] == ["en"]
+    assert tracks[0]["default"] is True
+
+
+def test_scan_invalidates_hls_when_the_subtitle_list_changed(fresh_db, tmp_path, monkeypatch):
+    """A package built before the tracks were known must not keep serving.
+
+    Nothing else ever rebuilds it, so the app's picker (fresh from the DB) and
+    the player's (from master.m3u8) drift apart permanently.
+    """
+    import db
+    import hls
+    import plex
+
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    (tmp_path / "a.eng.srt").write_bytes(b"1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+    item = {"source_path": str(src), "title": "a", "plex_kind": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "a", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+    monkeypatch.setattr(library, "probe_source", lambda p: {"streams": [], "format": {}})
+
+    invalidated = []
+    monkeypatch.setattr(hls, "invalidate", lambda vid: invalidated.append(vid))
+    # A package that offers no subtitles, while discovery now finds English.
+    monkeypatch.setattr(hls, "packaged_subtitle_languages", lambda vid: set())
+
+    library.scan_library()
+    movie = db.get_all_videos(plex_kind="movies")[0]
+    assert invalidated == [movie["id"]]
+
+
+def test_scan_leaves_a_matching_hls_package_alone(fresh_db, tmp_path, monkeypatch):
+    import db
+    import hls
+    import plex
+
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    (tmp_path / "a.eng.srt").write_bytes(b"1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+    item = {"source_path": str(src), "title": "a", "plex_kind": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "a", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+    monkeypatch.setattr(library, "probe_source", lambda p: {"streams": [], "format": {}})
+
+    invalidated = []
+    monkeypatch.setattr(hls, "invalidate", lambda vid: invalidated.append(vid))
+    monkeypatch.setattr(hls, "packaged_subtitle_languages", lambda vid: {"en"})
+
+    library.scan_library()
+    assert invalidated == []
+
+
+def test_scan_does_not_invalidate_an_unpackaged_video(fresh_db, tmp_path, monkeypatch):
+    """Nothing on disk means nothing stale -- and no wasted rebuild."""
+    import hls
+    import plex
+
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"x")
+    item = {"source_path": str(src), "title": "a", "plex_kind": "movies",
+            "show_title": None, "season": None, "episode": None, "summary": None,
+            "plex_rating_key": "a", "show_rating_key": None}
+    monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
+    monkeypatch.setattr(library, "probe_source", lambda p: {"streams": [], "format": {}})
+
+    invalidated = []
+    monkeypatch.setattr(hls, "invalidate", lambda vid: invalidated.append(vid))
+    monkeypatch.setattr(hls, "packaged_subtitle_languages", lambda vid: None)
+
+    library.scan_library()
+    assert invalidated == []
+
+
 def test_scan_survives_subtitle_probe_failure(fresh_db, tmp_path, monkeypatch):
     import db
     import plex
@@ -581,7 +688,7 @@ def test_scan_survives_subtitle_probe_failure(fresh_db, tmp_path, monkeypatch):
     monkeypatch.setattr(plex, "fetch_library_items", lambda: [item])
     monkeypatch.setattr(library, "probe_source", lambda p: {"streams": [], "format": {}})
 
-    def boom(path):
+    def boom(path, probe=None):
         raise RuntimeError("fs error")
 
     monkeypatch.setattr(library, "discover_subtitles", boom)

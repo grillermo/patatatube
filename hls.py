@@ -10,6 +10,7 @@ All output for a video is constrained under ``HLS_DIR / str(video_id)``.
 
 import math
 import os
+import re
 import shutil
 import traceback
 from dataclasses import dataclass, field
@@ -41,6 +42,33 @@ class HlsPackage:
 
 def hls_dir_for(video_id, output_root: Path | None = None) -> Path:
     return (output_root or HLS_DIR) / str(video_id)
+
+
+_MEDIA_LANGUAGE_RE = re.compile(r'LANGUAGE="([^"]*)"')
+
+
+def packaged_subtitle_languages(video_id, output_root: Path | None = None) -> set[str] | None:
+    """Languages the packaged ``master.m3u8`` actually offers as subtitles.
+
+    ``None`` when nothing is packaged yet, which is deliberately distinct from
+    an empty set (a package that offers no subtitles at all). Callers use the
+    difference against the current metadata to spot a package built before the
+    track list changed — a stale one keeps serving its old rendition set
+    forever, since nothing else ever rebuilds it.
+    """
+    master = hls_dir_for(video_id, output_root) / "master.m3u8"
+    try:
+        text = master.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    languages: set[str] = set()
+    for line in text.splitlines():
+        if not line.startswith("#EXT-X-MEDIA:") or "TYPE=SUBTITLES" not in line:
+            continue
+        match = _MEDIA_LANGUAGE_RE.search(line)
+        if match:
+            languages.add(match.group(1))
+    return languages
 
 
 def invalidate(video_id) -> None:
@@ -186,6 +214,26 @@ def _master_playlist(probe: dict, tracks: list[SubtitleTrack], keys: list[str]) 
     return "\n".join(lines) + "\n"
 
 
+def _discover_for_package(source: Path, probe: dict, subtitle_source) -> list[SubtitleTrack]:
+    """Find the subtitle tracks to package alongside ``source``.
+
+    ``source`` is what gets segmented, and for a library row that is usually
+    our own converted mp4 — which has no subtitle streams at all, because
+    `library.convert_library_video` passes ``-sn``. So when the caller names a
+    separate ``subtitle_source`` (the original file), that is what gets
+    searched, both for sidecars and for embedded tracks. Its probe costs an
+    extra ffprobe; a failure there costs subtitles, never the package.
+    """
+    subtitle_source = Path(subtitle_source) if subtitle_source else source
+    if subtitle_source == source:
+        return discover_subtitles(source, probe)
+    try:
+        return discover_subtitles(subtitle_source, probe_source(subtitle_source))
+    except Exception:  # noqa: BLE001 - an unreadable original must not fail packaging
+        traceback.print_exc()
+        return []
+
+
 def build_hls_package(
     video_id: int,
     source_path,
@@ -193,6 +241,7 @@ def build_hls_package(
     *,
     probe: dict | None = None,
     subtitles: list[SubtitleTrack] | None = None,
+    subtitle_source=None,
     run_ffmpeg=ffmpeg_progress.run_ffmpeg,
     audio_lang: str | None = None,
     on_progress=None,
@@ -217,7 +266,10 @@ def build_hls_package(
         on_progress=on_progress,
     )
 
-    discovered = subtitles if subtitles is not None else discover_subtitles(source)
+    discovered = (
+        subtitles if subtitles is not None
+        else _discover_for_package(source, probe, subtitle_source)
+    )
     duration = _duration(probe)
     fps = _frame_rate(probe) or 24.0
 
@@ -259,7 +311,14 @@ def safe_asset_path(video_id, asset_path: str, output_root: Path | None = None) 
     return target
 
 
-def prepare(video_id: int, source_path, *, raise_errors: bool = False, on_progress=None) -> None:
+def prepare(
+    video_id: int,
+    source_path,
+    *,
+    subtitle_source=None,
+    raise_errors: bool = False,
+    on_progress=None,
+) -> None:
     """Background task: build the HLS package and record readiness in the DB.
 
     Runs synchronously (FastAPI runs sync background tasks on a thread). On
@@ -271,7 +330,8 @@ def prepare(video_id: int, source_path, *, raise_errors: bool = False, on_progre
     try:
         video = db.get_video(video_id)
         audio_lang = video.get("audio_lang") if video else None
-        build_hls_package(video_id, source_path, audio_lang=audio_lang, on_progress=on_progress)
+        build_hls_package(video_id, source_path, audio_lang=audio_lang,
+                          subtitle_source=subtitle_source, on_progress=on_progress)
         db.set_hls_status(video_id, "done")
     except Exception:  # noqa: BLE001 - persist state before optional re-raise
         traceback.print_exc()

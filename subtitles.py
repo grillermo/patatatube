@@ -1,14 +1,27 @@
-"""Sidecar subtitle discovery and WebVTT normalization.
+"""Subtitle discovery and WebVTT normalization.
 
-Only text subtitle formats are supported: SRT, WebVTT, and text ``.sub``
-(SubViewer/timestamp and MicroDVD frame-based). Image-based VobSub (an
-``.idx`` + binary ``.sub`` pair) is rejected because it is not text.
+Subtitles reach a library row two ways: as sidecar files next to the media, or
+as tracks embedded in the container itself. Both are discovered here.
+
+Only text subtitle formats are supported: SRT, WebVTT, text ``.sub``
+(SubViewer/timestamp and MicroDVD frame-based), and the text codecs listed in
+``_TEXT_SUBTITLE_CODECS``. Image-based tracks are rejected because they are
+not text and would need OCR — sidecar VobSub (an ``.idx`` + binary ``.sub``
+pair) and embedded PGS/DVD/DVB streams alike.
+
+Embedded tracks are read from an ffprobe dict the caller supplies; this module
+never shells out to ffprobe itself, so ``discover_subtitles`` without a
+``probe`` stays a pure filesystem walk. Extraction to WebVTT does shell out to
+ffmpeg, at package time only.
 
 Sidecars only exist for library rows (real filesystem media). Real scene
 releases scatter subtitles several ways, all handled here:
 
 * Same-directory siblings: ``Movie.2025.1080p...srt`` next to the video, or
   ``Movie.srt`` next to ``Movie-subtitled.m4v``.
+Several files can describe the same language (SDH, Forced, region variants).
+Only one track per language ships — see ``_one_per_language``.
+
 * A ``Subs/`` (or ``Subtitles/``) folder holding one file per language, named
   by ISO-639-2/B code (``ger.srt``, ``jpn.srt``), full name (``English.srt``),
   or ``Descriptor.code`` (``Latin American.spa.srt``, ``SDH.eng.HI.srt``,
@@ -22,10 +35,22 @@ Download rows (``videos/{id}.mp4``) never have sidecars, so discovery is ``[]``.
 
 import os
 import re
+import subprocess
+import tempfile
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 SUBTITLE_EXTENSIONS = {".srt", ".vtt", ".sub"}
+
+FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
+
+# Embedded subtitle codecs that carry text and can be remuxed to WebVTT.
+# Everything else ffprobe reports (hdmv_pgs_subtitle, dvd_subtitle, dvb_subtitle)
+# is a bitmap and needs OCR, which we do not do.
+_TEXT_SUBTITLE_CODECS = {
+    "subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text", "subviewer",
+}
 
 # Folder names that hold subtitles beside a video.
 _SUBTITLE_DIR_NAMES = {"subs", "subtitles"}
@@ -88,6 +113,9 @@ _SUBVIEWER_RE = re.compile(
 _SRT_TS_RE = re.compile(
     r"(\d{2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}),(\d{3})"
 )
+# A WebVTT cue timestamp, with the hours field optional — ffmpeg's webvtt
+# muxer omits it below one hour. Anchored so it only matches whole tokens.
+_VTT_TS_RE = re.compile(r"(?<![\d:.])(?:(\d+):)?(\d{1,2}):(\d{2})\.(\d{3})(?![\d:.])")
 
 
 class UnsupportedSubtitleError(ValueError):
@@ -96,12 +124,20 @@ class UnsupportedSubtitleError(ValueError):
 
 @dataclass
 class SubtitleTrack:
+    """One selectable subtitle track.
+
+    ``stream_index`` is ``None`` for a sidecar file (``source_path`` is the
+    subtitle itself) and the absolute ffprobe stream index for an embedded
+    track (``source_path`` is the media file it lives in).
+    """
+
     source_path: Path
     language: str
     name: str
     format: str
     default: bool = False
     forced: bool = False
+    stream_index: int | None = None
 
 
 def _language_name(tag: str) -> str:
@@ -116,8 +152,19 @@ def _is_vobsub(sub_path: Path) -> bool:
 _TOKEN_SPLIT = re.compile(r"[.\-_\s()\[\]]+")
 
 
+def _fold(text: str) -> str:
+    """Lowercase and NFC-normalize a filename token for table lookups.
+
+    macOS hands back decomposed (NFD) filenames, so "Fran\u00e7ais.fre.srt" arrives
+    as "Franc\u0327ais.fre.srt" — a `c` plus a combining cedilla. The tables here
+    are written in NFC, so without this the language word silently misses and
+    gets mistaken for a descriptor.
+    """
+    return unicodedata.normalize("NFC", text).lower()
+
+
 def _tokenize(stem: str) -> list[str]:
-    return [t for t in _TOKEN_SPLIT.split(stem) if t]
+    return [t for t in _TOKEN_SPLIT.split(unicodedata.normalize("NFC", stem)) if t]
 
 
 def _describe_from_name(stem: str) -> tuple[str, str, bool]:
@@ -129,7 +176,7 @@ def _describe_from_name(stem: str) -> tuple[str, str, bool]:
     (e.g. "Spanish (Latin American)" vs "Spanish (European)").
     """
     tokens = _tokenize(stem)
-    lower = [t.lower() for t in tokens]
+    lower = [_fold(t) for t in tokens]
     forced = any(t == "forced" for t in lower)
 
     tag = "und"
@@ -169,14 +216,22 @@ def _sibling_tag(video_stem: str, sub_stem: str):
         if longer.startswith(shorter) and len(longer) > len(shorter):
             rest = longer[len(shorter):]
             if rest[0] in "._- ":
-                token = rest.lstrip("._- ").split(".")[0].lower()
+                token = _fold(rest.lstrip("._- ").split(".")[0])
                 return _ISO_CODES.get(token, (None,))[0] or _NAME_CODES.get(token) or "und"
     return None
 
 
 def _list_files(directory: Path):
+    """Visible files in ``directory``. Hidden ones are never subtitles.
+
+    This is what keeps macOS AppleDouble twins out: writing to a non-HFS
+    volume leaves a binary `._X` resource fork beside every `X`, so a release
+    folder carries `._English.eng.srt` next to `English.eng.srt`. Both match
+    the .srt extension, both parse as "English", and `._` sorts first — so the
+    junk twin doubled every track and won the DEFAULT rendition.
+    """
     try:
-        return [e for e in directory.iterdir() if e.is_file()]
+        return [e for e in directory.iterdir() if e.is_file() and not e.name.startswith(".")]
     except OSError:
         return []
 
@@ -203,13 +258,50 @@ def _subtitle_files(video_dir: Path, video_stem: str):
                 yield from _list_files(nested)
 
 
-def discover_subtitles(video_path) -> list[SubtitleTrack]:
+def discover_embedded_subtitles(video_path, probe: dict) -> list[SubtitleTrack]:
+    """Return the text subtitle streams inside ``video_path`` per ``probe``.
+
+    ``probe`` is an ffprobe ``-show_streams`` dict (see ``library.probe_source``).
+    Bitmap codecs are skipped. A stream's ``title`` tag is folded into the
+    display name so several tracks of one language stay distinguishable
+    ("English (SDH)" vs "English (Full)"), matching how sidecar variants read.
+    """
+    video_path = Path(video_path)
+    tracks: list[SubtitleTrack] = []
+    for stream in probe.get("streams") or []:
+        if stream.get("codec_type") != "subtitle":
+            continue
+        codec = (stream.get("codec_name") or "").lower()
+        if codec not in _TEXT_SUBTITLE_CODECS:
+            continue
+        index = stream.get("index")
+        if index is None:
+            continue
+        tags = stream.get("tags") or {}
+        raw_lang = (tags.get("language") or "").strip().lower()
+        tag = _ISO_CODES.get(raw_lang, (None,))[0] or _NAME_CODES.get(raw_lang) or "und"
+        base = _language_name(tag)
+        title = (tags.get("title") or "").strip()
+        name = f"{base} ({title})" if title and title.lower() != base.lower() else base
+        forced = bool((stream.get("disposition") or {}).get("forced"))
+        tracks.append(SubtitleTrack(
+            video_path, tag, name, codec, forced=forced, stream_index=int(index),
+        ))
+    return tracks
+
+
+def discover_subtitles(video_path, probe: dict | None = None) -> list[SubtitleTrack]:
     """Return supported text subtitle tracks for ``video_path``.
 
     Searches same-directory siblings and adjacent ``Subs``/``Subtitles``
     folders (see module docstring). VobSub and unsupported extensions are
     ignored. Tracks are ordered by ``(tag, name)``; English (else the first
     non-forced track) is marked ``default``.
+
+    Embedded container tracks are included **only** when ``probe`` is given —
+    this function never runs ffprobe on its own, so a caller without a probe
+    dict gets sidecars alone. A sidecar outranks an embedded track of the same
+    language: it was put there deliberately, and it needs no extraction.
     """
     video_path = Path(video_path)
     video_dir = video_path.parent
@@ -241,9 +333,44 @@ def discover_subtitles(video_path) -> list[SubtitleTrack]:
         tag, name, forced = _describe_from_name(entry.name[: -len(entry.suffix)])
         add(entry, tag, name, forced)
 
-    tracks.sort(key=lambda t: (t.language, t.name, t.source_path.name))
+    if probe is not None:
+        sidecar_langs = {t.language for t in tracks}
+        tracks += [
+            t for t in discover_embedded_subtitles(video_path, probe)
+            if t.language not in sidecar_langs
+        ]
+
+    tracks.sort(key=lambda t: (t.language, t.name, t.source_path.name,
+                               t.stream_index if t.stream_index is not None else -1))
+    tracks = _one_per_language(tracks)
     _mark_default(tracks)
     return tracks
+
+
+def _variant_rank(track: SubtitleTrack) -> tuple:
+    """Sort key picking the most general-audience track of a language."""
+    plain = track.name == _language_name(track.language)
+    return (track.forced, not plain, track.stream_index is not None)
+
+
+def _one_per_language(tracks: list[SubtitleTrack]) -> list[SubtitleTrack]:
+    """Collapse same-language variants down to a single track.
+
+    Subtitle selection is language-keyed the whole way through — `videos.
+    subtitle_lang`, `POST /api/videos/{id}/subtitle`, the picker's tag — and
+    AVKit's own in-player list groups HLS renditions by LANGUAGE too. Shipping
+    several renditions per language therefore produced two lists that could
+    not agree: ours showed one row per track, the player showed one per
+    language. So SDH and Forced variants collapse into the plain track. A
+    language is never dropped: if its only track is an SDH or Forced one, that
+    is what ships.
+    """
+    best: dict[str, SubtitleTrack] = {}
+    for track in tracks:
+        current = best.get(track.language)
+        if current is None or _variant_rank(track) < _variant_rank(current):
+            best[track.language] = track
+    return sorted(best.values(), key=lambda t: (t.language, t.name))
 
 
 def _mark_default(tracks: list[SubtitleTrack]) -> None:
@@ -342,6 +469,51 @@ def _detect_sub_kind(text: str) -> str:
     return "unknown"
 
 
+def _normalize_vtt_timestamps(body: str) -> str:
+    """Rewrite cue timestamps to the full ``hh:mm:ss.mmm`` form.
+
+    Only lines carrying a cue arrow are touched, so dialogue that happens to
+    read like a timestamp ("Meet me at 10:50.000") is left alone. Anything
+    trailing the timestamps on that line (cue settings such as ``line:90%``)
+    is preserved verbatim.
+    """
+    def expand(match: re.Match) -> str:
+        hours, minutes, seconds, millis = match.groups()
+        return f"{int(hours or 0):02d}:{int(minutes):02d}:{seconds}.{millis}"
+
+    return "\n".join(
+        _VTT_TS_RE.sub(expand, line) if "-->" in line else line
+        for line in body.split("\n")
+    )
+
+
+def _extract_embedded_text(track: SubtitleTrack) -> str:
+    """Remux one embedded subtitle stream out of its container as WebVTT text.
+
+    Mapped by absolute stream index, which is what ffprobe reports and what
+    ``discover_embedded_subtitles`` stores — not the subtitle-relative
+    ``0:s:N`` form. A non-zero exit means the stream would not convert (an
+    unexpected bitmap, a corrupt track); that is a skippable track, not a
+    packaging failure, so it surfaces as UnsupportedSubtitleError.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out = Path(tmpdir) / "track.vtt"
+        cmd = [
+            FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(track.source_path),
+            "-map", f"0:{track.stream_index}",
+            "-c:s", "webvtt", "-f", "webvtt",
+            str(out),
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if proc.returncode != 0 or not out.exists():
+            raise UnsupportedSubtitleError(
+                f"could not extract stream {track.stream_index} from "
+                f"{track.source_path}: {(proc.stderr or '').strip()}"
+            )
+        return out.read_text(encoding="utf-8", errors="replace")
+
+
 def convert_to_webvtt(track: SubtitleTrack, output_path, fps: float | None = None) -> Path:
     """Write ``track`` as a normalized WebVTT file at ``output_path``.
 
@@ -350,19 +522,25 @@ def convert_to_webvtt(track: SubtitleTrack, output_path, fps: float | None = Non
     media timeline. The write is atomic (temp file + rename in the same dir).
     """
     output_path = Path(output_path)
-    raw = _is_vobsub(track.source_path)
-    if raw:
-        raise UnsupportedSubtitleError(f"VobSub is not a text subtitle: {track.source_path}")
-
-    text = track.source_path.read_text(encoding="utf-8", errors="replace")
-    fmt = track.format.lower()
+    if track.stream_index is not None:
+        # Embedded: ffmpeg remuxes the stream to WebVTT, then it takes the same
+        # re-normalization path as an on-disk .vtt so the header is canonical.
+        text = _extract_embedded_text(track)
+        fmt = "vtt"
+    else:
+        if _is_vobsub(track.source_path):
+            raise UnsupportedSubtitleError(
+                f"VobSub is not a text subtitle: {track.source_path}"
+            )
+        text = track.source_path.read_text(encoding="utf-8", errors="replace")
+        fmt = track.format.lower()
 
     if fmt == "vtt":
         body = text.replace("\r\n", "\n").replace("\r", "\n")
         # Strip any pre-existing header; we re-emit a canonical one below.
         body = re.sub(r"^\s*WEBVTT[^\n]*\n?", "", body, count=1)
         body = re.sub(r"^X-TIMESTAMP-MAP[^\n]*\n?", "", body, count=1)
-        body = body.strip("\n")
+        body = _normalize_vtt_timestamps(body).strip("\n")
     elif fmt == "srt":
         body = _srt_body_to_vtt(text)
     elif fmt == "sub":

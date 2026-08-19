@@ -234,3 +234,107 @@ def test_prepare_failure_resets_status_without_raising_by_default(fresh_db, monk
     hls.prepare(video_id, "/tmp/movie.mp4")
 
     assert db.get_video(video_id)["hls_status"] == "none"
+
+
+def test_subtitles_read_from_original_when_streaming_a_converted_file(tmp_path):
+    """The streamed mp4 is our own conversion, which carries no subtitles.
+
+    library.convert_library_video passes -sn, so the converted sibling has no
+    subtitle streams at all. Packaging must search the original source for
+    them or an mkv's embedded tracks vanish at exactly the point they would
+    have shipped.
+    """
+    original = tmp_path / "movie.mkv"
+    original.write_bytes(b"x")
+    converted = tmp_path / "movie.mp4"
+    converted.write_bytes(b"x")
+
+    original_probe = {
+        "format": {"duration": "12.0"},
+        "streams": [
+            {"index": 0, "codec_type": "video", "codec_name": "hevc"},
+            {"index": 2, "codec_type": "subtitle", "codec_name": "subrip",
+             "tags": {"language": "eng"}},
+        ],
+    }
+
+    extracted = []
+
+    def fake_probe_source(path):
+        assert Path(path) == original
+        return original_probe
+
+    def fake_convert(track, output_path, fps=None):
+        extracted.append((Path(track.source_path), track.stream_index))
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_text("WEBVTT\n", encoding="utf-8")
+        return Path(output_path)
+
+    original_probe_source = hls.probe_source
+    original_convert = hls.convert_to_webvtt
+    hls.probe_source = fake_probe_source
+    hls.convert_to_webvtt = fake_convert
+    try:
+        pkg = hls.build_hls_package(
+            11, converted, tmp_path / "hls",
+            probe=COMPAT_PROBE,           # the converted file: no subtitle streams
+            subtitle_source=original,
+            run_ffmpeg=_capture([]),
+        )
+    finally:
+        hls.probe_source = original_probe_source
+        hls.convert_to_webvtt = original_convert
+
+    assert extracted == [(original, 2)]
+    assert [t.language for t in pkg.tracks] == ["en"]
+    assert 'LANGUAGE="en"' in pkg.master_path.read_text(encoding="utf-8")
+
+
+def test_packaging_survives_an_unprobeable_subtitle_source(tmp_path):
+    """A missing original costs subtitles, never the whole package."""
+    converted = tmp_path / "movie.mp4"
+    converted.write_bytes(b"x")
+
+    def boom(path):
+        raise RuntimeError("ffprobe failed")
+
+    original_probe_source = hls.probe_source
+    hls.probe_source = boom
+    try:
+        pkg = hls.build_hls_package(
+            12, converted, tmp_path / "hls",
+            probe=COMPAT_PROBE,
+            subtitle_source=tmp_path / "gone.mkv",
+            run_ffmpeg=_capture([]),
+        )
+    finally:
+        hls.probe_source = original_probe_source
+
+    assert pkg.tracks == []
+    assert pkg.master_path.exists()
+
+
+def test_packaged_subtitle_languages_reads_the_master(tmp_path):
+    out = tmp_path / "hls" / "5"
+    out.mkdir(parents=True)
+    (out / "master.m3u8").write_text(
+        '#EXTM3U\n'
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",LANGUAGE="en",NAME="English",'
+        'DEFAULT=YES,AUTOSELECT=YES,FORCED=NO,URI="subtitles/en.m3u8"\n'
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",LANGUAGE="de",NAME="German"\n'
+        '#EXT-X-STREAM-INF:BANDWIDTH=1\nvideo.m3u8\n',
+        encoding="utf-8")
+
+    # Only SUBTITLES renditions count -- an audio LANGUAGE must not leak in.
+    assert hls.packaged_subtitle_languages(5, tmp_path / "hls") == {"en"}
+
+
+def test_packaged_subtitle_languages_is_none_without_a_package(tmp_path):
+    """None means "nothing packaged" -- distinct from a package with no subtitles."""
+    assert hls.packaged_subtitle_languages(6, tmp_path / "hls") is None
+
+    out = tmp_path / "hls" / "7"
+    out.mkdir(parents=True)
+    (out / "master.m3u8").write_text("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nvideo.m3u8\n",
+                                     encoding="utf-8")
+    assert hls.packaged_subtitle_languages(7, tmp_path / "hls") == set()

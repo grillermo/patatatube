@@ -751,6 +751,24 @@ def _resolve_hls_source(video: dict, request: Request) -> Path:
     return VIDEOS_DIR / video["filename"]
 
 
+def _resolve_subtitle_source(video: dict, request: Request) -> Path | None:
+    """The file to search for subtitles, when it differs from what we stream.
+
+    A library row streams its converted mp4, which carries no subtitle streams
+    (`-sn` at conversion). Its original still does, so packaging searches that.
+    Download rows stream the only file they have, so there is nothing to name.
+    """
+    if video.get("source") != "library":
+        return None
+    requested_version = request.query_params.get("version_id")
+    try:
+        version_id = int(requested_version) if requested_version else None
+    except ValueError:
+        return None
+    version = db.get_video_version(video["id"], version_id)
+    return Path(version["source_path"]) if version else None
+
+
 @router.get("/videos/{video_id}/hls/{asset_path:path}")
 async def hls_asset(
     video_id: int, asset_path: str, request: Request
@@ -778,9 +796,12 @@ async def hls_asset(
     if asset_path == "master.m3u8":
         if video.get("hls_status") != "converting":
             db.set_hls_status(video_id, "converting")
+        subtitle_source = _resolve_subtitle_source(video, request)
+        payload = {"source_path": str(source)}
+        if subtitle_source is not None and subtitle_source != source:
+            payload["subtitle_source_path"] = str(subtitle_source)
         db.enqueue_job(
-            "hls", video_id, priority=db.PRIORITY_INTERACTIVE,
-            payload={"source_path": str(source)},
+            "hls", video_id, priority=db.PRIORITY_INTERACTIVE, payload=payload,
         )
         return JSONResponse({"detail": "HLS preparing"}, status_code=409)
 

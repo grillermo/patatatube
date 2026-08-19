@@ -34,9 +34,10 @@ def _subtitle_tracks(version: dict) -> list[dict]:
     """Parse the scan-time-cached subtitle track list for one version.
 
     A listed track isn't guaranteed to be in the packaged HLS playlist: a
-    sidecar that fails `convert_to_webvtt` at `hls.build_hls_package` time is
-    silently dropped from `master.m3u8` but stays in this scan-time cache, so
-    a picker entry can be a no-op.
+    track that fails `convert_to_webvtt` at `hls.build_hls_package` time (a
+    malformed sidecar, an embedded stream ffmpeg will not remux) is silently
+    dropped from `master.m3u8` but stays in this scan-time cache, so a picker
+    entry can be a no-op.
     """
     try:
         return json.loads(version.get("subtitle_langs") or "[]")

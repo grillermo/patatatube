@@ -558,3 +558,92 @@ def test_version_subtitle_langs_roundtrip(fresh_db, tmp_path):
     assert version["subtitle_langs"] == (
         '[{"language": "en", "name": "English", "default": true, "forced": false}]'
     )
+
+
+# --- one-shot subtitle re-probe backfill ------------------------------------
+
+
+def _versions_row(db, video_id):
+    return db.get_video_versions(video_id)[0]
+
+
+def test_subtitle_reprobe_backfill_clears_cached_langs_once(fresh_db, tmp_path):
+    """Cached subtitle_langs predate embedded-track discovery, so clear them.
+
+    Every value written before embedded discovery existed was sidecar-only.
+    Setting them NULL makes the next library scan re-probe. It must run
+    exactly once: repeating it on every startup would drop a good scan result
+    on each restart.
+    """
+    import db
+    import os
+    import sqlite3
+
+    def _set_user_version(value):
+        conn = sqlite3.connect(os.getenv("DB_PATH"))
+        try:
+            conn.execute(f"PRAGMA user_version = {value}")
+        finally:
+            conn.close()
+
+    db.upsert_library_video({
+        "source_path": str(tmp_path / "a.mkv"), "title": "a", "plex_kind": "movies",
+        "show_title": None, "season": None, "episode": None, "summary": None,
+        "plex_rating_key": "rk-a", "show_rating_key": None,
+    })
+    movie = db.get_all_videos(plex_kind="movies")[0]
+    version = _versions_row(db, movie["id"])
+    db.set_version_subtitle_langs(version["id"], "[]")
+
+    # Rewind to a DB that predates the backfill (fresh_db already stamped it).
+    _set_user_version(0)
+    db.init_db()  # the backfill runs here
+    assert _versions_row(db, movie["id"])["subtitle_langs"] is None
+
+    # A later scan result must survive every subsequent startup.
+    db.set_version_subtitle_langs(version["id"], '[{"language": "en"}]')
+    db.init_db()
+    db.init_db()
+    assert _versions_row(db, movie["id"])["subtitle_langs"] == '[{"language": "en"}]'
+
+
+def test_subtitle_reprobe_backfill_stamps_schema_version(fresh_db):
+    import db
+    import sqlite3
+    import os
+    conn = sqlite3.connect(os.getenv("DB_PATH"))
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] >= db.SCHEMA_VERSION
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("stamped", [1, 2])
+def test_subtitle_reprobe_backfill_reruns_for_an_older_stamp(fresh_db, tmp_path, stamped):
+    """A DB stamped at an earlier version still needs the later clear.
+
+    v1 shipped embedded-track discovery; v2 dropped AppleDouble duplicates;
+    v3 re-clears rows a still-running older server refilled after v2. Each
+    leaves cached lists the next version considers wrong.
+    """
+    import db
+    import os
+    import sqlite3
+
+    db.upsert_library_video({
+        "source_path": str(tmp_path / "a.mkv"), "title": "a", "plex_kind": "movies",
+        "show_title": None, "season": None, "episode": None, "summary": None,
+        "plex_rating_key": "rk-a", "show_rating_key": None,
+    })
+    movie = db.get_all_videos(plex_kind="movies")[0]
+    version = db.get_video_versions(movie["id"])[0]
+    db.set_version_subtitle_langs(version["id"], '[{"language": "en"}]')
+
+    conn = sqlite3.connect(os.getenv("DB_PATH"))
+    try:
+        conn.execute(f"PRAGMA user_version = {stamped}")
+    finally:
+        conn.close()
+
+    db.init_db()
+    assert db.get_video_versions(movie["id"])[0]["subtitle_langs"] is None
