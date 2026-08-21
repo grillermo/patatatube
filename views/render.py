@@ -95,6 +95,22 @@ _env.filters["display_name"] = _display_name
 _env.filters["download_name"] = _download_name
 
 
+_APP_ASSETS = Path(__file__).resolve().parent.parent / "assets" / "app"
+
+
+def _asset_version(name: str) -> str:
+    """Cache-buster for /assets/app/*.
+
+    Those files ship with `Cache-Control: public, max-age=3600`, so without a
+    changing query a CSS/JS edit stays invisible in an already-open browser for
+    an hour — the page HTML updates, the behaviour behind it does not.
+    """
+    try:
+        return str(int((_APP_ASSETS / name).stat().st_mtime))
+    except OSError:
+        return "0"
+
+
 def build_videos_page(
     videos: list[dict],
     groups: list[dict],
@@ -109,4 +125,6 @@ def build_videos_page(
         current_plex_kind=current_plex_kind,
         upload_token=os.getenv("UPLOAD_TOKEN", ""),
         splash_images=SPLASH_STARTUP_IMAGES,
+        css_version=_asset_version("videos.css"),
+        js_version=_asset_version("videos.js"),
     )

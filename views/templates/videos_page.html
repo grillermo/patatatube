@@ -14,7 +14,7 @@
 {{ m.splash_links(splash_images) }}
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="/assets/vendor/nprogress.css">
-<link rel="stylesheet" href="/assets/app/videos.css">
+<link rel="stylesheet" href="/assets/app/videos.css?v={{ css_version }}">
 </head>
 <body>
 <script src="/assets/vendor/nprogress.js"></script>
@@ -60,6 +60,6 @@
 {% endfor -%}
 </div>
 <script>window.UPLOAD_TOKEN = {{ upload_token | tojson }};</script>
-<script src="/assets/app/videos.js"></script>
+<script src="/assets/app/videos.js?v={{ js_version }}"></script>
 </body>
 </html>
