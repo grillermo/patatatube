@@ -168,3 +168,28 @@ def test_app_asset_route_serves_css_and_js(tmp_path, monkeypatch):
     assert js.status_code == 200
     assert "text/javascript" in js.headers["content-type"]
     assert missing.status_code == 404
+
+
+def test_done_card_offers_a_replay_forever_toggle():
+    html = build_videos_page([_video()], GROUPS, 1, None)
+
+    assert 'class="loop-btn" data-video-id="1"' in html
+    assert 'aria-label="Replay forever"' in html
+
+
+def test_unfinished_card_has_no_replay_forever_toggle():
+    html = build_videos_page([_video(status="queued")], GROUPS, 1, None)
+
+    assert "loop-btn" not in html
+
+
+def test_app_assets_are_cache_busted_by_mtime():
+    """Assets ship with max-age=3600, so an edit needs a changing URL."""
+    import re as _re
+
+    html = build_videos_page([], GROUPS, None, None)
+
+    for asset in ("videos.css", "videos.js"):
+        match = _re.search(rf"/assets/app/{asset}\?v=(\d+)", html)
+        assert match, f"{asset} is not cache-busted"
+        assert int(match.group(1)) > 0

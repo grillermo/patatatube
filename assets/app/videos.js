@@ -200,6 +200,59 @@ function applyPreview(video, url){
     .catch(function(_err){});
 }
 
+// Replay forever: a per-video loop toggle that outlives a reload. Setting
+// `loop` is the primary mechanism; it also suppresses `ended`, so a looping
+// video never hands off to autoplay. The `ended` handler below restarts the
+// video anyway, for players that fire `ended` despite `loop` (iOS's native
+// fullscreen player is the one that does).
+var LOOP_KEY = 'patatatube:loop';
+
+function loopedIds(){
+  try {
+    var raw = localStorage.getItem(LOOP_KEY);
+    var ids = raw ? JSON.parse(raw) : [];
+    return Array.isArray(ids) ? ids.map(String) : [];
+  } catch(_err) { return []; }
+}
+
+function isLooping(video){
+  if(!video) return false;
+  return video.loop || loopedIds().indexOf(String(video.id).slice(1)) !== -1;
+}
+
+function setLooped(id, on){
+  var ids = loopedIds().filter(function(x){ return x !== id; });
+  if(on) ids.push(id);
+  try { localStorage.setItem(LOOP_KEY, JSON.stringify(ids)); } catch(_err) {}
+}
+
+function restartVideo(video){
+  try { video.currentTime = 0; } catch(_err) {}
+  var p = video.play();
+  if(p && typeof p.catch === 'function') p.catch(function(){});
+}
+
+document.querySelectorAll('.loop-btn').forEach(function(btn){
+  var id = btn.getAttribute('data-video-id');
+  var video = document.getElementById('v' + id);
+
+  function apply(on){
+    if(video) video.loop = on;
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+
+  apply(loopedIds().indexOf(id) !== -1);
+
+  btn.addEventListener('click', function(){
+    var on = btn.getAttribute('aria-pressed') !== 'true';
+    setLooped(id, on);
+    apply(on);
+    // Toggling it on at the very end of a finished video should replay now,
+    // not on some future end that already happened.
+    if(on && video && video.ended) restartVideo(video);
+  });
+});
+
 function cinemaActiveCard(){
   return document.querySelector('.card.cinema-active');
 }
@@ -270,6 +323,11 @@ document.querySelectorAll('video[id]').forEach(function(v){
     if(wrap) wrap.classList.remove('is-playing');
     if(activePreloadVideoId === v.id) {
       stopAllPreloads();
+    }
+    // Replay forever outranks both leaving fullscreen and autoplay-next.
+    if(isLooping(v)){
+      restartVideo(v);
+      return;
     }
     exitFullscreen(v);
     if(autoplayEnabled()) playNextVideo(v);

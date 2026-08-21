@@ -291,7 +291,8 @@ dialog#upload-dialog select {
   background: #4a9eff
 }
 
-.cinema-btn {
+.cinema-btn,
+.loop-btn {
   background: #2a2a2a;
   color: #eee;
   border: 1px solid #3a3a3a;
@@ -301,15 +302,18 @@ dialog#upload-dialog select {
   display: inline-flex;
   align-items: center
 }
-.cinema-btn:active {
+.cinema-btn:active,
+.loop-btn:active {
   background: #3a3a3a
 }
-.cinema-btn svg {
+.cinema-btn svg,
+.loop-btn svg {
   display: block;
   width: 20px;
   height: 20px
 }
-.cinema-btn[aria-pressed="true"] {
+.cinema-btn[aria-pressed="true"],
+.loop-btn[aria-pressed="true"] {
   background: #4a9eff;
   border-color: #4a9eff;
   color: #fff
