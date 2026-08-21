@@ -127,6 +127,88 @@ def test_youtube_download_uses_browser_cookies(monkeypatch, downloader_env):
     path.unlink()
 
 
+COOKIE_FAILURE_OUTPUT = (
+    "WARNING: failed to decrypt cookie (AES-CBC) because UTF-8 decoding failed. "
+    "Possibly the key is wrong?\n"
+    "ERROR: unable to download video data: HTTP Error 403: Forbidden\n"
+)
+
+
+def test_youtube_download_retries_without_cookies_after_cookie_failure(
+    monkeypatch, downloader_env
+):
+    _db, downloader, _videos_dir = downloader_env
+    calls = []
+
+    def fake_run(cmd, stdout, stderr, text):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(cmd, 1, stdout=COOKIE_FAILURE_OUTPUT)
+        outtmpl = Path(cmd[cmd.index("-o") + 1])
+        media_path = Path(str(outtmpl).replace("%(id)s", "dQw4w9WgXcQ").replace("%(ext)s", "mp4"))
+        media_path.write_bytes(b"video")
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=f"TW2WL_FILE:{media_path}\nTW2WL_TITLE:Title\n"
+        )
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "YTDLP_BIN", "/opt/homebrew/bin/yt-dlp")
+    monkeypatch.setattr(downloader, "YTDLP_BROWSER", "chrome")
+
+    path, title = downloader._download_youtube_media_sync(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
+
+    assert len(calls) == 2
+    assert "--cookies-from-browser" in calls[0]
+    assert "--cookies-from-browser" not in calls[1]
+    assert title == "Title"
+    path.unlink()
+
+
+def test_youtube_download_does_not_retry_on_unrelated_failure(monkeypatch, downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+    calls = []
+
+    def fake_run(cmd, stdout, stderr, text):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 1, stdout="ERROR: Video unavailable\n")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="Video unavailable"):
+        downloader._download_youtube_media_sync("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+    assert len(calls) == 1
+
+
+def test_playlist_metadata_retries_without_cookies_after_cookie_failure(
+    monkeypatch, downloader_env
+):
+    _db, downloader, _videos_dir = downloader_env
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=COOKIE_FAILURE_OUTPUT)
+        return subprocess.CompletedProcess(cmd, 0, stdout=_playlist_json(), stderr="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "YTDLP_BIN", "/opt/homebrew/bin/yt-dlp")
+    monkeypatch.setattr(downloader, "YTDLP_BROWSER", "chrome")
+
+    title, entries = downloader._fetch_playlist_metadata_sync(
+        "https://www.youtube.com/playlist?list=PL123456789"
+    )
+
+    assert len(calls) == 2
+    assert "--cookies-from-browser" in calls[0]
+    assert "--cookies-from-browser" not in calls[1]
+    assert title == "Lo-fi Beats"
+    assert len(entries) == 2
+
+
 def test_ios_normalization_reencodes_unsupported_streams(monkeypatch, downloader_env, tmp_path):
     _db, downloader, _videos_dir = downloader_env
     source_file = tmp_path / "source.mp4"

@@ -230,6 +230,27 @@ def _audio_codec_args(stream: dict | None) -> list[str]:
     return ["-c:a", "aac", "-b:a", "128k", "-ac", "2"]
 
 
+# Chrome rotates its cookie encryption key (and locks the DB) often enough that
+# a browser-cookie run fails on a video that downloads fine anonymously. Every
+# yt-dlp call retries once with cookies dropped when it sees one of these.
+_COOKIE_FAILURE_RE = re.compile(
+    r"failed to decrypt cookie"
+    r"|could not copy \S+ cookie database"
+    r"|could not find \S+ cookies database"
+    r"|unable to (?:open|read|decrypt) .*cookie"
+    r"|cookies? database",
+    re.IGNORECASE,
+)
+
+
+def _ytdlp_cookie_args(use_cookies: bool) -> list[str]:
+    return ["--cookies-from-browser", YTDLP_BROWSER] if use_cookies else []
+
+
+def _is_cookie_failure(output: str) -> bool:
+    return bool(_COOKIE_FAILURE_RE.search(output or ""))
+
+
 async def _download_youtube_media(url: str) -> tuple[Path, str | None]:
     return await asyncio.to_thread(_download_youtube_media_sync, url)
 
@@ -238,26 +259,35 @@ def _download_youtube_media_sync(url: str) -> tuple[Path, str | None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         outtmpl = str(tmpdir_path / "%(id)s.%(ext)s")
-        cmd = [
-            YTDLP_BIN,
-            "--cookies-from-browser",
-            YTDLP_BROWSER,
-            "-f",
-            YTDLP_FORMAT,
-            "--merge-output-format",
-            "mp4",
-            "--no-playlist",
-            "-o",
-            outtmpl,
-            "--print",
-            "after_move:TW2WL_FILE:%(filepath)s",
-            "--print",
-            "after_move:TW2WL_TITLE:%(title)s",
-            "--newline",
-            url,
-        ]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+        def run(use_cookies: bool) -> subprocess.CompletedProcess:
+            cmd = [
+                YTDLP_BIN,
+                *_ytdlp_cookie_args(use_cookies),
+                "-f",
+                YTDLP_FORMAT,
+                "--merge-output-format",
+                "mp4",
+                "--no-playlist",
+                "-o",
+                outtmpl,
+                "--print",
+                "after_move:TW2WL_FILE:%(filepath)s",
+                "--print",
+                "after_move:TW2WL_TITLE:%(title)s",
+                "--newline",
+                url,
+            ]
+            return subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+
+        proc = run(True)
         output = proc.stdout or ""
+        if proc.returncode != 0 and _is_cookie_failure(output):
+            logger.warning("yt-dlp cookies unusable; retrying without them: %s", url)
+            proc = run(False)
+            output = proc.stdout or ""
         if proc.returncode != 0:
             raise RuntimeError(output.strip() or "yt-dlp failed")
 
@@ -308,15 +338,20 @@ def _fetch_playlist_metadata_sync(url: str) -> tuple[str, list[dict]]:
     resolving each video, which is all the import loop needs — every entry is
     downloaded later through the normal single-video path.
     """
-    cmd = [
-        YTDLP_BIN,
-        "--cookies-from-browser",
-        YTDLP_BROWSER,
-        "--flat-playlist",
-        "-J",
-        url,
-    ]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    def run(use_cookies: bool) -> subprocess.CompletedProcess:
+        cmd = [
+            YTDLP_BIN,
+            *_ytdlp_cookie_args(use_cookies),
+            "--flat-playlist",
+            "-J",
+            url,
+        ]
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    proc = run(True)
+    if proc.returncode != 0 and _is_cookie_failure((proc.stderr or "") + (proc.stdout or "")):
+        logger.warning("yt-dlp cookies unusable; retrying playlist without them: %s", url)
+        proc = run(False)
     if proc.returncode != 0:
         error_msg = (proc.stderr or proc.stdout or "").strip() or "yt-dlp failed"
         raise RuntimeError(error_msg)
