@@ -250,6 +250,23 @@ same flush; new live-state endpoints belong in that set.
 
 Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` compared with `secrets.compare_digest`. If `UPLOAD_TOKEN` is unset the server returns 503 (upload disabled). The SSR endpoints are `/videos/{id}/group` and `/videos/{id}/promote`; the group endpoint is **not** token-gated, matching the old behavior.
 
+**The web page authenticates with a cookie, the iOS app with a Bearer header.**
+`POST /login` (a single form field) sets an HttpOnly `upload_token` cookie
+holding the raw `UPLOAD_TOKEN`; `GET /` and `/videos` 303 to `/login?next=…`
+without it, and `GET /logout` clears it. `_check_token_or_query` accepts the
+cookie alongside Bearer and `?token=`, so nothing in the rendered HTML carries
+a token in its URL any more — but Caddy serves downloaded MP4s and HLS segments
+off disk and runs the same check itself, so `@ptunauth` in
+`~/c/server/Caddyfile` carries the matching `not header Cookie
+*upload_token={env.UPLOAD_TOKEN}*` line. **Changing `UPLOAD_TOKEN` to include
+characters outside `[A-Za-z0-9._~-]` makes Starlette quote the cookie value and
+that Caddy matcher stops matching.** Write endpoints stay Bearer-only, and the
+page still gets its own token from the server-rendered `window.UPLOAD_TOKEN` —
+this gates access to the page, it does not hide the token from someone already
+logged in. `middleware.cache_key_for` scopes cached responses by a hash of the
+cookie, because the cache answers before the endpoint runs and would otherwise
+hand an anonymous visitor a cached authenticated page.
+
 ### iOS
 
 - `ios/PatataTubeKit/` — a local SwiftPM package holding all logic (`APIClient`, `CacheManager`, `VideoStore`, `Video`, `CredentialStore`). This is the testable core; build/isolate bugs here with `swift build`.
