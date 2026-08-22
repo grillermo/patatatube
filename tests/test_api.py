@@ -1711,7 +1711,8 @@ def test_ssr_page_appends_stream_token(client, tmp_path):
     vid, f = make_done_download_video(tmp_path)
     try:
         html = client.get("/videos").text
-        assert f"/videos/{vid}/stream?token=test-secret" in html
+        assert f"/videos/{vid}/stream" in html
+        assert "?token=" not in html
     finally:
         f.unlink(missing_ok=True)
 

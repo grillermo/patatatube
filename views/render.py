@@ -63,12 +63,9 @@ SPLASH_STARTUP_IMAGES = (
 
 
 def _preview_src(video: dict) -> str | None:
-    """Return a poster URL, adding upload token only for local endpoints."""
-    url = preview_url_for(video)
-    if url and url.startswith("/videos/"):
-        sep = "&" if "?" in url else "?"
-        url = f"{url}{sep}token={os.getenv('UPLOAD_TOKEN', '')}"
-    return url
+    """Poster URL. Local /videos/* posters authenticate with the login cookie
+    (see router._check_token_or_query); external ones need nothing."""
+    return preview_url_for(video)
 
 
 def _display_name(video: dict) -> str:

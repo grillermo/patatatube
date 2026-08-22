@@ -54,7 +54,7 @@
 {% set show_titles = current_group and current_group.get("display_titles") -%}
 <div class="grid">
 {% for v in videos -%}
-{{ m.card(v, groups, current_group_id, upload_token, show_titles) }}
+{{ m.card(v, groups, current_group_id, show_titles) }}
 {% else -%}
 <p style="color:#aaa;text-align:center">No videos yet.</p>
 {% endfor -%}

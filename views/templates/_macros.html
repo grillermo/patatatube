@@ -48,7 +48,7 @@
 <svg height="24" viewBox="0 0 24 24" width="24" aria-hidden="true" focusable="false"><path d="M7 7h10v2.79c0 .45.54.67.85.35l3.79-3.79c.2-.2.2-.51 0-.71l-3.79-3.79a.5.5 0 0 0-.85.36V5H6a2 2 0 0 0-2 2v4a1 1 0 0 0 2 0V7Zm10 10H7v-2.79c0-.45-.54-.67-.85-.35l-3.79 3.79a.5.5 0 0 0 0 .71l3.79 3.79c.31.31.85.09.85-.36V19h11a2 2 0 0 0 2-2v-4a1 1 0 0 0-2 0v4Z" fill="currentColor"></path></svg>
 {%- endmacro %}
 
-{% macro card(v, groups, current_group_id, upload_token, show_titles=False) -%}
+{% macro card(v, groups, current_group_id, show_titles=False) -%}
 <div class="card">
 {% if not v.plex_kind -%}
 {{ group_menu(v, groups, current_group_id) }}
@@ -62,7 +62,7 @@
   {% set p = v | preview_src -%}
   <video id="v{{ v.id }}" controls playsinline webkit-playsinline preload="none"
          onloadedmetadata="this.currentTime=0"{% if p %} data-preview-src="{{ p }}"{% endif %}>
-    <source src="/videos/{{ v.id }}/stream?token={{ upload_token }}" type="video/mp4">
+    <source src="/videos/{{ v.id }}/stream" type="video/mp4">
   </video>
 </div>
 {% elif v.status == "error" -%}
@@ -72,7 +72,7 @@
 {%- endif %}
 <div class="card-actions">
   {% if v.status == "done" -%}
-  <a class="download-btn" href="/videos/{{ v.id }}/stream?token={{ upload_token }}" download="{{ v | download_name }}.mp4" aria-label="Download video">&#8681;</a>
+  <a class="download-btn" href="/videos/{{ v.id }}/stream" download="{{ v | download_name }}.mp4" aria-label="Download video">&#8681;</a>
   <button type="button" class="loop-btn" data-video-id="{{ v.id }}" aria-label="Replay forever" title="Replay forever" aria-pressed="false">{{ loop_icon() }}</button>
   <button type="button" class="cinema-btn" aria-label="Cinema mode" aria-pressed="false">{{ cinema_icon() }}</button>
   {%- endif %}

@@ -234,3 +234,28 @@ def test_login_page_never_contains_the_token():
         os.environ.pop("UPLOAD_TOKEN", None)
 
     assert "super-secret-value" not in html
+
+
+def test_media_urls_carry_no_token_query():
+    html = build_videos_page([_video()], GROUPS, 1, None)
+
+    assert "/videos/1/stream" in html
+    assert "?token=" not in html
+
+
+def test_the_page_still_exposes_the_token_to_its_own_js():
+    html = build_videos_page([_video()], GROUPS, 1, None)
+
+    assert "window.UPLOAD_TOKEN" in html
+
+
+def test_local_previews_carry_no_token_query():
+    html = build_videos_page(
+        [_video(source="library", plex_kind="movies", group_id=None, preview_url="/videos/1/preview")],
+        GROUPS,
+        None,
+        "movies",
+    )
+
+    assert "?token=" not in html
+    assert "&token=" not in html
