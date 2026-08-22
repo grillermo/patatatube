@@ -20,6 +20,8 @@ def client(monkeypatch, tmp_path):
     importlib.reload(main)
     # Use context manager so lifespan runs (calls db.init_db())
     with TestClient(main.app) as c:
+        # Set login cookie so tests can access the videos page
+        c.cookies.set("upload_token", "test-secret")
         yield c
 
 
@@ -1661,6 +1663,8 @@ def test_stream_requires_token(client, tmp_path):
 def test_stream_rejects_wrong_bearer_token(client, tmp_path):
     vid, f = make_done_download_video(tmp_path)
     try:
+        # Clear the cookie to test that wrong bearer token is actually rejected
+        del client.cookies["upload_token"]
         resp = client.get(f"/videos/{vid}/stream", headers={"Authorization": "Bearer wrong-token"})
         assert resp.status_code == 401
     finally:
@@ -1724,7 +1728,11 @@ def test_preview_proxies_and_caches(client, tmp_path, monkeypatch):
     monkeypatch.setattr(plex, "fetch_thumb", fake_thumb)
     monkeypatch.setattr("router.PREVIEWS_DIR", tmp_path / "previews")
 
+    # Clear the cookie to test that access without auth is rejected
+    del client.cookies["upload_token"]
     assert client.get(f"/videos/{vid}/preview").status_code == 401
+    # Re-set the cookie for the authenticated requests
+    client.cookies.set("upload_token", "test-secret")
 
     resp = client.get(f"/videos/{vid}/preview", headers=AUTH)
     assert resp.status_code == 200
@@ -1829,6 +1837,8 @@ def _fake_build(video_id, source_path, *a, **k):
 
 
 def test_hls_master_requires_auth(client):
+    # Clear the cookie to test that access without auth is rejected
+    del client.cookies["upload_token"]
     resp = client.get("/videos/1/hls/master.m3u8")
     assert resp.status_code == 401
 
@@ -2293,10 +2303,14 @@ def test_check_auth_rejects_a_wrong_login_cookie(client):
 def test_check_auth_still_accepts_bearer_and_query_token(client):
     assert client.get("/check-auth", headers={"Authorization": "Bearer test-secret"}).status_code == 200
     assert client.get("/check-auth?token=test-secret").status_code == 200
+    # Clear the cookie to test that auth fails without any credentials
+    del client.cookies["upload_token"]
     assert client.get("/check-auth").status_code == 401
 
 
 def test_login_page_is_reachable_without_credentials(client):
+    # Clear the cookie to test that the login page is reachable without auth
+    del client.cookies["upload_token"]
     resp = client.get("/login")
     assert resp.status_code == 200
     assert 'name="token"' in resp.text
@@ -2373,3 +2387,26 @@ def test_cached_pages_are_scoped_to_the_login_cookie(client):
     assert anon != authed
     assert authed != other
     assert "test-secret" not in authed
+
+
+def test_page_redirects_to_login_without_a_cookie(client):
+    # Clear the cookie that the fixture sets, to test anonymous access
+    del client.cookies["upload_token"]
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login?next=%2F"
+
+
+def test_page_redirect_preserves_the_query_string(client):
+    # Clear the cookie that the fixture sets, to test anonymous access
+    del client.cookies["upload_token"]
+    resp = client.get("/videos?group_id=2", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login?next=%2Fvideos%3Fgroup_id%3D2"
+
+
+def test_page_renders_with_a_valid_cookie(client):
+    client.cookies.set("upload_token", "test-secret")
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "window.UPLOAD_TOKEN" in resp.text

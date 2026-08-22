@@ -1347,7 +1347,16 @@ async def logout():
 
 @router.get("/", response_class=HTMLResponse)
 @router.get("/videos", response_class=HTMLResponse)
-async def videos_page(group_id: int | None = None, plex_kind: str | None = None):
+async def videos_page(
+    request: Request,
+    group_id: int | None = None,
+    plex_kind: str | None = None,
+):
+    if not _cookie_token_valid(request):
+        target = request.url.path
+        if request.url.query:
+            target += "?" + request.url.query
+        return RedirectResponse(url=f"/login?next={quote(target, safe='')}", status_code=303)
     if plex_kind is not None and plex_kind not in db.PLEX_KINDS:
         plex_kind = None
     videos = db.get_all_videos(group_id=group_id, plex_kind=plex_kind)
