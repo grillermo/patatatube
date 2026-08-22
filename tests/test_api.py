@@ -687,7 +687,7 @@ def test_videos_page_shows_youtube_video_directly(client):
     resp = client.get("/videos")
     assert resp.status_code == 200
     assert f'<video id="v{vid_id}" controls playsinline webkit-playsinline preload="none"' in resp.text
-    assert f'<source src="/videos/{vid_id}/stream?token=test-secret" type="video/mp4">' in resp.text
+    assert f'<source src="/videos/{vid_id}/stream" type="video/mp4">' in resp.text
     assert 'class="preview-button"' not in resp.text
 
 
