@@ -128,3 +128,10 @@ def build_videos_page(
         css_version=_asset_version("videos.css"),
         js_version=_asset_version("videos.js"),
     )
+
+
+def build_login_page(next_url: str = "/", error: bool = False) -> str:
+    """The token form. Deliberately self-contained: it must render for someone
+    who has no credentials, so it links no token-gated asset and embeds its CSS."""
+    template = _env.get_template("login.html")
+    return template.render(next_url=next_url, error=error)

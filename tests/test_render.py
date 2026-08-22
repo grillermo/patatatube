@@ -193,3 +193,44 @@ def test_app_assets_are_cache_busted_by_mtime():
         match = _re.search(rf"/assets/app/{asset}\?v=(\d+)", html)
         assert match, f"{asset} is not cache-busted"
         assert int(match.group(1)) > 0
+
+
+def test_login_page_renders_the_form():
+    from views.render import build_login_page
+
+    html = build_login_page()
+
+    assert '<form method="post" action="/login">' in html
+    assert 'name="token"' in html
+    assert 'value="/"' in html
+    assert "Wrong token" not in html
+
+
+def test_login_page_carries_the_next_target():
+    from views.render import build_login_page
+
+    html = build_login_page(next_url="/videos?group_id=2")
+
+    assert 'name="next" value="/videos?group_id=2"' in html
+
+
+def test_login_page_shows_an_error_when_asked():
+    from views.render import build_login_page
+
+    html = build_login_page(error=True)
+
+    assert "Wrong token" in html
+
+
+def test_login_page_never_contains_the_token():
+    import os
+
+    from views.render import build_login_page
+
+    os.environ["UPLOAD_TOKEN"] = "super-secret-value"
+    try:
+        html = build_login_page()
+    finally:
+        os.environ.pop("UPLOAD_TOKEN", None)
+
+    assert "super-secret-value" not in html

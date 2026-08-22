@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Patata Videos</title>
+<meta name="theme-color" content="#111111">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0 }
+body {
+  background: #111;
+  color: #eee;
+  font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+form { width: 100%; max-width: 320px; display: flex; flex-direction: column; gap: 12px }
+h1 { font-size: 1.1em; text-align: center; font-weight: 600 }
+input {
+  background: #1c1c1c;
+  border: 1px solid #333;
+  border-radius: 8px;
+  color: #eee;
+  font-size: 1em;
+  padding: 12px;
+}
+button {
+  background: #2c6cf0;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 1em;
+  padding: 12px;
+}
+p.error { color: #f66; font-size: 0.85em; text-align: center }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>Patata Videos</h1>
+  {% if error -%}
+  <p class="error">Wrong token.</p>
+  {%- endif %}
+  <input type="password" name="token" autocomplete="current-password" autofocus required
+         aria-label="Access token" placeholder="Access token">
+  <input type="hidden" name="next" value="{{ next_url }}">
+  <button type="submit">Enter</button>
+</form>
+</body>
+</html>
