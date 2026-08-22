@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from email.utils import formatdate
 
@@ -1330,7 +1330,7 @@ async def login_submit(request: Request, token: str = Form(""), next: str = Form
         max_age=LOGIN_COOKIE_MAX_AGE,
         path="/",
         httponly=True,
-        samesite="lax",
+        samesite="strict",
         # The dev server answers plain HTTP on :3050; a Secure cookie would
         # never be stored there.
         secure=request.url.scheme == "https",
@@ -1354,8 +1354,13 @@ async def videos_page(
 ):
     if not _cookie_token_valid(request):
         target = request.url.path
-        if request.url.query:
-            target += "?" + request.url.query
+        safe_params = [
+            (key, value)
+            for key, value in request.query_params.multi_items()
+            if key != "token"
+        ]
+        if safe_params:
+            target += "?" + urlencode(safe_params, doseq=True)
         return RedirectResponse(url=f"/login?next={quote(target, safe='')}", status_code=303)
     if plex_kind is not None and plex_kind not in db.PLEX_KINDS:
         plex_kind = None

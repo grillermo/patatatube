@@ -1652,6 +1652,7 @@ def make_done_download_video(tmp_path):
 def test_stream_requires_token(client, tmp_path):
     vid, f = make_done_download_video(tmp_path)
     try:
+        del client.cookies["upload_token"]
         assert client.get(f"/videos/{vid}/stream").status_code == 401
         assert client.get(f"/videos/{vid}/stream", headers=AUTH).status_code == 200
         assert client.get(f"/videos/{vid}/stream?token=test-secret").status_code == 200
@@ -2021,6 +2022,7 @@ def test_preview_grabs_frame_for_download_without_thumbnail(client, tmp_path, mo
     monkeypatch.setattr(router, "_grab_frame", fake_grab)
     vid, f = make_done_download_video(tmp_path)
     try:
+        del client.cookies["upload_token"]
         assert client.get(f"/videos/{vid}/preview").status_code == 401
 
         resp = client.get(f"/videos/{vid}/preview", headers=AUTH)
@@ -2328,7 +2330,7 @@ def test_login_with_the_right_token_sets_the_cookie_and_redirects(client):
     cookie = resp.headers["set-cookie"]
     assert "upload_token=test-secret" in cookie
     assert "HttpOnly" in cookie
-    assert "samesite=lax" in cookie.lower()
+    assert "samesite=strict" in cookie.lower()
 
 
 def test_login_with_a_wrong_token_sets_nothing(client):
@@ -2404,6 +2406,17 @@ def test_page_redirect_preserves_the_query_string(client):
     resp = client.get("/videos?group_id=2", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/login?next=%2Fvideos%3Fgroup_id%3D2"
+
+
+def test_page_redirect_strips_a_token_query_param(client):
+    # Clear the cookie that the fixture sets, to test anonymous access
+    del client.cookies["upload_token"]
+    resp = client.get("/videos?token=test-secret&group_id=2", follow_redirects=False)
+    assert resp.status_code == 303
+    location = resp.headers["location"]
+    assert location == "/login?next=%2Fvideos%3Fgroup_id%3D2"
+    assert "test-secret" not in location
+    assert "token=" not in location
 
 
 def test_page_renders_with_a_valid_cookie(client):

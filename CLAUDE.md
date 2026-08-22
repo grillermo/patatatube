@@ -18,6 +18,7 @@ python -m pytest tests/test_api.py::test_upload_success   # one test
 ```
 
 - No `pytest.ini`/`pyproject.toml`. Async tests are marked individually with `@pytest.mark.asyncio` (no global asyncio mode), so new async tests must carry that marker.
+- Run the suite with `MEDIA_ROOT=.` if `.env` points `MEDIA_ROOT` elsewhere: a handful of tests 404 for an unrelated fixture mismatch under an external `MEDIA_ROOT` and can mask a real regression behind that same-looking failure.
 - The venv is `python_env/` (gitignored, not checked in). `./serve` hardcodes `python3.13 python_env/bin/uvicorn`. Create it and `pip install -r requirements.txt` before first run.
 - `.env` holds `UPLOAD_TOKEN` (see `.env.example`). Loaded via `python-dotenv`.
 - **Debugging: read `log/backend.log`.** `./serve` mirrors every labeled stream (`dev`/`web`/`caddy`/`access`/`app`/`convert`) to it, uncolored, alongside the terminal output. Same interleaved view, persisted. Override path with `LOG_FILE=...` (dir is gitignored).
