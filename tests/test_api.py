@@ -2276,3 +2276,21 @@ def test_upload_playlist_requires_token(client):
         json={"url": "https://www.youtube.com/playlist?list=PLVixkqSccxTvtXpNTlQPi7fSc3kzZ5EJa"},
     )
     assert resp.status_code == 401
+
+
+def test_check_auth_accepts_the_login_cookie(client):
+    client.cookies.set("upload_token", "test-secret")
+    resp = client.get("/check-auth")
+    assert resp.status_code == 200
+
+
+def test_check_auth_rejects_a_wrong_login_cookie(client):
+    client.cookies.set("upload_token", "nope")
+    resp = client.get("/check-auth")
+    assert resp.status_code == 401
+
+
+def test_check_auth_still_accepts_bearer_and_query_token(client):
+    assert client.get("/check-auth", headers={"Authorization": "Bearer test-secret"}).status_code == 200
+    assert client.get("/check-auth?token=test-secret").status_code == 200
+    assert client.get("/check-auth").status_code == 401

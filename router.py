@@ -74,6 +74,13 @@ ROOT_STATIC_ASSETS = {
 _static_asset_cache: dict[str, bytes] = {}
 
 
+# The web page authenticates with a cookie holding the raw UPLOAD_TOKEN, set by
+# POST /login. It is HttpOnly: the page's own JS gets the token from the
+# server-rendered window.UPLOAD_TOKEN instead, so nothing needs to read it back.
+LOGIN_COOKIE = "upload_token"
+LOGIN_COOKIE_MAX_AGE = 31536000  # one year
+
+
 def _positive_int_env(name: str, default: int) -> int:
     try:
         return max(1, int(os.getenv(name, str(default))))
@@ -113,25 +120,40 @@ YOUTUBE_RESERVED_PATHS = {
 }
 
 
+def _tokens_match(candidate: str, expected: str) -> bool:
+    """compare_digest on bytes: its str overload raises TypeError on non-ASCII,
+    which a login form can receive from anyone."""
+    return secrets.compare_digest(candidate.encode(), expected.encode())
+
+
+def _cookie_token_valid(request: Request) -> bool:
+    expected = os.getenv("UPLOAD_TOKEN", "")
+    candidate = request.cookies.get(LOGIN_COOKIE, "")
+    return bool(expected) and bool(candidate) and _tokens_match(candidate, expected)
+
+
 def _check_token(request: Request):
     token = os.getenv("UPLOAD_TOKEN", "")
     if not token:
         raise HTTPException(status_code=503, detail="Upload not configured")
     auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer ") or not secrets.compare_digest(auth[7:], token):
+    if not auth.startswith("Bearer ") or not _tokens_match(auth[7:], token):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def _check_token_or_query(request: Request):
-    """Bearer auth with a ?token= fallback for HTML <video> tags, which can't send headers."""
+    """Bearer auth, with a ?token= fallback for HTML <video> tags (which can't
+    send headers) and a login-cookie fallback for the browser session."""
     token = os.getenv("UPLOAD_TOKEN", "")
     if not token:
         raise HTTPException(status_code=503, detail="Upload not configured")
     auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer ") and secrets.compare_digest(auth[7:], token):
+    if auth.startswith("Bearer ") and _tokens_match(auth[7:], token):
         return
     query_token = request.query_params.get("token", "")
-    if query_token and secrets.compare_digest(query_token, token):
+    if query_token and _tokens_match(query_token, token):
+        return
+    if _cookie_token_valid(request):
         return
     raise HTTPException(status_code=401, detail="Unauthorized")
 
