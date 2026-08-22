@@ -28,9 +28,6 @@ def auth_headers():
     return {"Authorization": "Bearer test-secret"}
 
 
-AUTH = {"Authorization": "Bearer test-secret"}
-
-
 def test_upload_missing_token(client):
     resp = client.post("/upload", json={"url": "https://twitter.com/x/status/1"})
     assert resp.status_code == 401
@@ -994,6 +991,8 @@ def test_api_delete_removes_row_and_file(client):
     assert db.get_video(vid) is None
     assert not path.exists()
 
+
+AUTH = {"Authorization": "Bearer test-secret"}
 
 LIB_ITEM_API = {
     "source_path": None,  # filled per-test with tmp file
