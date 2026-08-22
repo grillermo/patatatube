@@ -16,6 +16,40 @@ _STRIPPED_HEADERS = {"content-length", "date", "server"}
 # snapshot, leaving the download button spinning on a job that finished.
 _NEVER_CACHED_PATHS = {"/api/jobs"}
 
+# The web page's session cookie. Hardcoded rather than imported from router:
+# middleware is imported by main *before* the router, and this is a wire-format
+# constant, not shared logic.
+_LOGIN_COOKIE = "upload_token"
+
+
+def cache_key_for(request) -> str | None:
+    """Cache key for a GET, or None when the request must not be cached.
+
+    Bearer requests are scoped by a hash of the token so two tokens never share
+    a response. Cookie-bearing requests get the same treatment for a different
+    reason: this middleware answers from the cache *before* the endpoint runs,
+    so an unscoped key would serve a cached authenticated page to a visitor with
+    no cookie at all.
+    """
+    key = request.url.path
+    if request.url.query:
+        key += "?" + request.url.query
+
+    auth = request.headers.get("authorization")
+    if auth:
+        scheme, _, token = auth.partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            return None
+        fingerprint = hashlib.sha256(token.encode()).hexdigest()
+        return f"auth:{fingerprint}:{key}"
+
+    session = request.cookies.get(_LOGIN_COOKIE)
+    if session:
+        fingerprint = hashlib.sha256(session.encode()).hexdigest()
+        return f"cookie:{fingerprint}:{key}"
+
+    return key
+
 
 class RedisCacheMiddleware(BaseHTTPMiddleware):
     """FIFO Redis cache for GET responses, keyed by URL path + query string.
@@ -40,17 +74,9 @@ class RedisCacheMiddleware(BaseHTTPMiddleware):
         if request.url.path in _NEVER_CACHED_PATHS:
             return await call_next(request)
 
-        key = request.url.path
-        if request.url.query:
-            key += "?" + request.url.query
-
-        auth = request.headers.get("authorization")
-        if auth:
-            scheme, _, token = auth.partition(" ")
-            if scheme.lower() != "bearer" or not token:
-                return await call_next(request)
-            fingerprint = hashlib.sha256(token.encode()).hexdigest()
-            key = f"auth:{fingerprint}:{key}"
+        key = cache_key_for(request)
+        if key is None:
+            return await call_next(request)
 
         hit = await cache.get(key)
         if hit is not None:

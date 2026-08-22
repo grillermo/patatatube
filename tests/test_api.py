@@ -28,6 +28,9 @@ def auth_headers():
     return {"Authorization": "Bearer test-secret"}
 
 
+AUTH = {"Authorization": "Bearer test-secret"}
+
+
 def test_upload_missing_token(client):
     resp = client.post("/upload", json={"url": "https://twitter.com/x/status/1"})
     assert resp.status_code == 401
@@ -991,8 +994,6 @@ def test_api_delete_removes_row_and_file(client):
     assert db.get_video(vid) is None
     assert not path.exists()
 
-
-AUTH = {"Authorization": "Bearer test-secret"}
 
 LIB_ITEM_API = {
     "source_path": None,  # filled per-test with tmp file
@@ -2347,3 +2348,29 @@ def test_logout_clears_the_cookie(client):
     assert resp.headers["location"] == "/login"
     assert "upload_token=" in resp.headers["set-cookie"]
     assert 'upload_token="";' in resp.headers["set-cookie"] or "upload_token=;" in resp.headers["set-cookie"]
+
+
+def test_cached_pages_are_scoped_to_the_login_cookie(client):
+    import middleware
+
+    # The key derivation is what matters, and it is not otherwise observable,
+    # so assert on it directly through a request-shaped stub.
+    class _Req:
+        def __init__(self, cookies, headers=None):
+            self.method = "GET"
+            self.cookies = cookies
+            self.headers = headers or {}
+
+            class _URL:
+                path = "/"
+                query = ""
+
+            self.url = _URL()
+
+    anon = middleware.cache_key_for(_Req({}))
+    authed = middleware.cache_key_for(_Req({"upload_token": "test-secret"}))
+    other = middleware.cache_key_for(_Req({"upload_token": "different"}))
+
+    assert anon != authed
+    assert authed != other
+    assert "test-secret" not in authed
