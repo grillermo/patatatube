@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from email.utils import formatdate
 
@@ -28,7 +28,7 @@ import services
 from downloader import download_video, import_playlist, process_uploaded_video
 from paths import VIDEOS_DIR
 from views.serializers import serialize_video
-from views.render import build_videos_page
+from views.render import build_login_page, build_videos_page
 
 router = APIRouter()
 
@@ -1297,6 +1297,52 @@ async def api_jobs(request: Request):
     """Active ffmpeg work, for the iOS conversion spinners and Downloads list."""
     _check_token(request)
     return db.active_jobs(queued_limit=JOBS_QUEUED_LIMIT)
+
+
+def _safe_next(raw: str | None) -> str:
+    """Same-site paths only. '//evil.example.com/' is a protocol-relative URL:
+    it starts with '/' but browsers treat it as an absolute offsite address."""
+    if not raw or not raw.startswith("/") or raw.startswith("//"):
+        return "/"
+    return raw
+
+
+@router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, next: str | None = None):
+    target = _safe_next(next)
+    if _cookie_token_valid(request):
+        return RedirectResponse(url=target, status_code=303)
+    return HTMLResponse(build_login_page(next_url=target))
+
+
+@router.post("/login")
+async def login_submit(request: Request, token: str = Form(""), next: str = Form("/")):
+    expected = os.getenv("UPLOAD_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Upload not configured")
+    target = _safe_next(next)
+    if not _tokens_match(token, expected):
+        return HTMLResponse(build_login_page(next_url=target, error=True), status_code=401)
+    response = RedirectResponse(url=target, status_code=303)
+    response.set_cookie(
+        LOGIN_COOKIE,
+        expected,
+        max_age=LOGIN_COOKIE_MAX_AGE,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        # The dev server answers plain HTTP on :3050; a Secure cookie would
+        # never be stored there.
+        secure=request.url.scheme == "https",
+    )
+    return response
+
+
+@router.get("/logout")
+async def logout():
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(LOGIN_COOKIE, path="/")
+    return response
 
 
 @router.get("/", response_class=HTMLResponse)

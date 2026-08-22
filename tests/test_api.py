@@ -2294,3 +2294,56 @@ def test_check_auth_still_accepts_bearer_and_query_token(client):
     assert client.get("/check-auth", headers={"Authorization": "Bearer test-secret"}).status_code == 200
     assert client.get("/check-auth?token=test-secret").status_code == 200
     assert client.get("/check-auth").status_code == 401
+
+
+def test_login_page_is_reachable_without_credentials(client):
+    resp = client.get("/login")
+    assert resp.status_code == 200
+    assert 'name="token"' in resp.text
+
+
+def test_login_with_the_right_token_sets_the_cookie_and_redirects(client):
+    resp = client.post(
+        "/login",
+        data={"token": "test-secret", "next": "/videos?group_id=2"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/videos?group_id=2"
+    cookie = resp.headers["set-cookie"]
+    assert "upload_token=test-secret" in cookie
+    assert "HttpOnly" in cookie
+    assert "samesite=lax" in cookie.lower()
+
+
+def test_login_with_a_wrong_token_sets_nothing(client):
+    resp = client.post("/login", data={"token": "nope", "next": "/"}, follow_redirects=False)
+    assert resp.status_code == 401
+    assert "Wrong token" in resp.text
+    assert "set-cookie" not in resp.headers
+
+
+def test_login_refuses_an_offsite_next(client):
+    resp = client.post(
+        "/login",
+        data={"token": "test-secret", "next": "//evil.example.com/"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/"
+
+
+def test_login_page_redirects_when_already_authenticated(client):
+    client.cookies.set("upload_token", "test-secret")
+    resp = client.get("/login?next=/videos", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/videos"
+
+
+def test_logout_clears_the_cookie(client):
+    client.cookies.set("upload_token", "test-secret")
+    resp = client.get("/logout", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login"
+    assert "upload_token=" in resp.headers["set-cookie"]
+    assert 'upload_token="";' in resp.headers["set-cookie"] or "upload_token=;" in resp.headers["set-cookie"]
