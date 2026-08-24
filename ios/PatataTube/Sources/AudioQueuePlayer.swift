@@ -1,0 +1,215 @@
+// ios/PatataTube/Sources/AudioQueuePlayer.swift
+import AVFoundation
+import Combine
+import PatataTubeKit
+import UIKit
+
+/// Audio-only queue playback for the group-detail list: the same assets the
+/// full-screen player uses, with nothing displaying them.
+///
+/// Lives on `AppModel` (like `pip`) because playback has to survive switching to
+/// grid, navigating back, changing tabs, and backgrounding — the list row that
+/// started it is gone from the hierarchy long before the queue ends. An
+/// `AVPlayer` over a video asset simply renders no frames when no layer is
+/// attached, so there is no audio-only asset to build.
+///
+/// Positions are deliberately not involved: audio always starts at 0 and never
+/// writes to `PlaybackPositionReporter`.
+@MainActor
+final class AudioQueuePlayer: ObservableObject {
+    /// The video whose audio is loaded, or nil when nothing is playing.
+    @Published private(set) var currentID: Int?
+    @Published private(set) var isPlaying: Bool = false
+    /// A tap whose source isn't resolved yet (`/prepare`, conversion). Keyed by
+    /// id rather than a flag, so a second tap elsewhere moves the spinner.
+    @Published private(set) var loadingID: Int?
+
+    private var player: AVPlayer?
+    private var navigator: QueueNavigator?
+    private var scope: String?
+    private var sleepAfterCurrent = false
+    private weak var model: AppModel?
+    private let nowPlaying = NowPlayingManager()
+    private var playToEndObserver: NSObjectProtocol?
+    private var rateObservation: NSKeyValueObservation?
+
+    /// How a given row should draw itself.
+    func state(for videoID: Int) -> RowAudioState {
+        if loadingID == videoID { return .loading }
+        guard currentID == videoID else { return .idle }
+        return isPlaying ? .playing : .paused
+    }
+
+    /// Marks a row as waiting on `ensureReady`. Pass nil to clear.
+    func markLoading(id: Int?) { loadingID = id }
+
+    /// Start (or restart) the queue at `startIndex`. Any previous audio and any
+    /// pending loading marker are dropped first.
+    func start(videos: [Video], startIndex: Int, scope: String?,
+               sleepMode: Bool, model: AppModel) {
+        stop()
+        guard videos.indices.contains(startIndex) else { return }
+        self.model = model
+        self.scope = scope
+        self.sleepAfterCurrent = sleepMode
+        navigator = QueueNavigator(
+            videos: videos, startIndex: startIndex, randomize: model.randomize(for: scope),
+            isPlayable: { [weak model] video in
+                guard let model else { return false }
+                return PlaybackSource.isPlayable(video, model: model)
+            }
+        )
+        DevLog.event(.play, "audio start", [
+            "video_id": "\(videos[startIndex].id)",
+            "count": "\(videos.count)",
+            "scope": scope ?? "-",
+            "sleep": "\(sleepMode)",
+        ])
+        Task {
+            await model.streamProxy.ensureRunning()
+            guard let video = navigator?.currentVideo,
+                  let (item, source) = PlaybackSource.item(for: video, model: model) else {
+                DevLog.event(.play, "audio start found no source", [:])
+                stop()
+                return
+            }
+            activateAudioSession()
+            let player = AVPlayer(playerItem: item)
+            player.allowsExternalPlayback = true
+            self.player = player
+            currentID = video.id
+            loadingID = nil
+            observe(player: player)
+            bindPlayToEnd()
+            nowPlaying.onNext = { [weak self] in self?.advance(by: 1) }
+            nowPlaying.onPrevious = { [weak self] in self?.handlePrevious() }
+            nowPlaying.attach(player: player, title: video.title ?? video.url)
+            nowPlaying.setNextEnabled(navigator?.peekHasNext() ?? false)
+            DevLog.event(.play, "audio source -> \(source)", ["video_id": "\(video.id)"])
+            player.play()
+        }
+    }
+
+    /// Row tap on the current item, and the lock screen's play/pause.
+    func toggle() {
+        guard let player else { return }
+        if player.timeControlStatus == .paused { player.play() } else { player.pause() }
+    }
+
+    /// Tear everything down: pause, drop observers, clear Now Playing, release
+    /// the audio session so other apps resume.
+    func stop() {
+        if let playToEndObserver {
+            NotificationCenter.default.removeObserver(playToEndObserver)
+            self.playToEndObserver = nil
+        }
+        rateObservation = nil
+        player?.pause()
+        player = nil
+        navigator = nil
+        currentID = nil
+        loadingID = nil
+        isPlaying = false
+        sleepAfterCurrent = false
+        nowPlaying.detach()
+        deactivateAudioSession()
+    }
+
+    private func observe(player: AVPlayer) {
+        rateObservation = player.observe(\.timeControlStatus) { [weak self] observed, _ in
+            Task { @MainActor in
+                guard let self, self.player === observed else { return }
+                self.isPlaying = observed.timeControlStatus != .paused
+            }
+        }
+        isPlaying = player.timeControlStatus != .paused
+    }
+
+    /// `model.autoplay` is read at fire time — a closure-captured copy would go
+    /// stale the moment the user flips the toolbar switch mid-queue.
+    private func bindPlayToEnd() {
+        if let playToEndObserver {
+            NotificationCenter.default.removeObserver(playToEndObserver)
+        }
+        playToEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: player?.currentItem, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let model = self.model else { return }
+                switch playbackEndAction(
+                    autoplay: model.autoplay(for: self.scope),
+                    isForeground: UIApplication.shared.applicationState == .active,
+                    sleepMode: self.sleepAfterCurrent
+                ) {
+                case .advance:
+                    self.advance(by: 1)
+                case .sleep:
+                    self.stop()
+                    self.runBlackScreenShortcut()
+                // Nothing is presented, so there is nothing to dismiss: both
+                // non-advancing outcomes end playback where it is.
+                case .dismiss, .stop:
+                    self.stop()
+                }
+            }
+        }
+    }
+
+    private func advance(by direction: Int) {
+        guard let player, let model, navigator != nil else { return }
+        guard let nextIndex = navigator?.step(direction: direction),
+              let video = navigator?.currentVideo,
+              let (item, source) = PlaybackSource.item(for: video, model: model) else {
+            DevLog.event(.play, "audio advance found nothing playable", [
+                "direction": "\(direction)",
+            ])
+            stop()
+            return
+        }
+        _ = nextIndex
+        currentID = video.id
+        player.replaceCurrentItem(with: item)
+        bindPlayToEnd()
+        nowPlaying.updateTitle(video.title ?? video.url)
+        nowPlaying.setNextEnabled(navigator?.peekHasNext() ?? false)
+        DevLog.event(.play, "audio advance -> \(source)", ["video_id": "\(video.id)"])
+        player.play()
+    }
+
+    /// iOS convention: >3s in (or already at the queue start) restarts the
+    /// current item; otherwise go back one.
+    private func handlePrevious() {
+        guard let player else { return }
+        if player.currentTime().seconds > 3 || navigator?.isAtQueueStart != false {
+            player.seek(to: .zero)
+        } else {
+            advance(by: -1)
+        }
+    }
+
+    /// Sleep end-action: hand off to the user's "black-screen" iOS Shortcut,
+    /// the same URL the full-screen player opens.
+    private func runBlackScreenShortcut() {
+        guard let url = URL(string: "shortcuts://run-shortcut?name=black-screen") else { return }
+        UIApplication.shared.open(url)
+    }
+
+    private func activateAudioSession() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setActive(true)
+        } catch {
+            // Non-fatal — leave local playback running.
+        }
+    }
+
+    private func deactivateAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance()
+                .setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            // Non-fatal.
+        }
+    }
+}

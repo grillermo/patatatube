@@ -25,6 +25,9 @@ final class AppModel: ObservableObject {
     let restorationGate = RestorationGate()
     /// Picture in Picture outlives the player cover, so its state lives here.
     let pip = PiPSession()
+    /// Audio-only playback for the group-detail list. Lives here, like `pip`,
+    /// because it must survive the list view that started it.
+    let audio = AudioQueuePlayer()
     let videoListCache: VideoListCache
     let groups = GroupStore()
     private let downloadSettings: DownloadStreamSettings
