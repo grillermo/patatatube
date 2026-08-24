@@ -33,6 +33,9 @@
     commit message, and keep going. Leave anything genuinely undecidable for
     the final report rather than blocking on it.
 - **New app-target files must be picked up by XcodeGen.** `ios/PatataTube/project.yml` globs `Sources/`, so no project.yml edit is needed, but `xcodegen generate` must be re-run before an Xcode build.
+- **Commits are unsigned in this project:** no `Co-Authored-By: Claude` trailer,
+  no other attribution trailer. Plain subject line, body only when it explains
+  something. (Nothing here uses GPG signing either — every commit reads `N`.)
 - **DevLog only:** never `print`. `DevLog.event` / `DevLog.error`, ids and statuses only — never tokens or response bodies.
 
 ## File Structure
@@ -1236,7 +1239,8 @@ to be consulted. Concretely:
   against real behavior (Task 1 Step 4's single-entry pool, Task 6 Step 2's
   environment injection), pick what compiles and behaves correctly, and record
   the decision in the commit message.
-- **Commit per task**, so an interrupted run leaves a clean history.
+- **Commit per task** (unsigned — no attribution trailer), so an interrupted
+  run leaves a clean history.
 - **Report at the end**, not during: what landed, what the two simulator runs
   said, and anything left undone with the reason.
 
