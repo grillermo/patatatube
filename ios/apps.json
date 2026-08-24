@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.0",
+          "buildVersion": "161",
+          "date": "2026-08-24T12:24:23Z",
+          "localizedDescription": "Play audio only from a group's list view\n\n• In a group's list view, tapping a video now plays just its audio — no full-screen player, so you can keep browsing\n• Autoplay and shuffle work the same as before, and lock-screen controls (play/pause, next, previous, title) work while audio plays\n• Tapping a card in grid view still plays video as normal, and starting a video always stops any playing audio\n• Fixed a rare double-audio glitch when switching between Picture-in-Picture and list playback",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.0/PatataTube-2.5.0.ipa",
+          "size": 4295343,
+          "sha256": "4d1a36bac36ad0d7301ec9332cc3c2931806195e8ff8454c8c45f4a08c726a0d",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.4.1",
           "buildVersion": "160",
           "date": "2026-08-17T13:54:57Z",
@@ -1524,11 +1534,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.4.1",
-      "versionDate": "2026-08-17T13:54:57Z",
-      "versionDescription": "Maintenance rebuild of 2.4.0\n\n• Same features as 2.4.0, rebuilt and republished",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.4.1/PatataTube-2.4.1.ipa",
-      "size": 4277698
+      "version": "2.5.0",
+      "versionDate": "2026-08-24T12:24:23Z",
+      "versionDescription": "Play audio only from a group's list view\n\n• In a group's list view, tapping a video now plays just its audio — no full-screen player, so you can keep browsing\n• Autoplay and shuffle work the same as before, and lock-screen controls (play/pause, next, previous, title) work while audio plays\n• Tapping a card in grid view still plays video as normal, and starting a video always stops any playing audio\n• Fixed a rare double-audio glitch when switching between Picture-in-Picture and list playback",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.0/PatataTube-2.5.0.ipa",
+      "size": 4295343
     }
   ],
   "news": []
