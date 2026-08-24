@@ -32,6 +32,11 @@ final class AudioQueuePlayer: ObservableObject {
     private let nowPlaying = NowPlayingManager()
     private var playToEndObserver: NSObjectProtocol?
     private var rateObservation: NSKeyValueObservation?
+    /// Bumped by every `start()`/`stop()` call. `start()`'s unstructured `Task`
+    /// captures the value at launch and checks it after each `await`, so a
+    /// stale continuation from a superseded call can never clobber state a
+    /// newer call has already written — it just bails out silently instead.
+    private var startGeneration = 0
 
     /// How a given row should draw itself.
     func state(for videoID: Int) -> RowAudioState {
@@ -65,8 +70,14 @@ final class AudioQueuePlayer: ObservableObject {
             "scope": scope ?? "-",
             "sleep": "\(sleepMode)",
         ])
+        startGeneration += 1
+        let generation = startGeneration
         Task {
             await model.streamProxy.ensureRunning()
+            // A newer start()/stop() ran while we were awaiting — that call
+            // owns state and cleanup now, so bail out without touching
+            // anything (in particular: never call stop() here).
+            guard self.startGeneration == generation else { return }
             guard let video = navigator?.currentVideo,
                   let (item, source) = PlaybackSource.item(for: video, model: model) else {
                 DevLog.event(.play, "audio start found no source", [:])
@@ -99,6 +110,7 @@ final class AudioQueuePlayer: ObservableObject {
     /// Tear everything down: pause, drop observers, clear Now Playing, release
     /// the audio session so other apps resume.
     func stop() {
+        startGeneration += 1
         if let playToEndObserver {
             NotificationCenter.default.removeObserver(playToEndObserver)
             self.playToEndObserver = nil
