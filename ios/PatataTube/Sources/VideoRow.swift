@@ -19,6 +19,11 @@ struct VideoRow: View {
     var onPreviewLoaded: ((Data) -> Void)? = nil
     var localFileURL: URL? = nil
     let groups: [VideoGroup]
+
+    /// Audio-only playback status for this row. `.idle` everywhere except the
+    /// group-detail list, whose rows play audio instead of presenting a player.
+    var audioState: RowAudioState = .idle
+
     let onPlay: () -> Void
     let onPlaySleep: () -> Void
     let onDownload: () async -> Bool
@@ -75,6 +80,8 @@ struct VideoRow: View {
 
     /// Fixed 78x44 box for both aspect ratios, so titles line up across feeds.
     /// Plex posters are 2:3 and letterbox inside it rather than centre-cropping.
+    /// In audio mode the thumbnail keeps rendering and takes a dimmed overlay
+    /// carrying the play/pause glyph — the row's only playback control.
     private var thumbnail: some View {
         ZStack {
             Rectangle().fill(.black)
@@ -87,10 +94,27 @@ struct VideoRow: View {
                     }
                     .clipped()
             }
+            audioOverlay
         }
         .frame(width: Self.thumbWidth, height: Self.thumbHeight)
         .clipped()
         .cornerRadius(4)
+    }
+
+    @ViewBuilder private var audioOverlay: some View {
+        switch audioState {
+        case .idle:
+            EmptyView()
+        case .loading:
+            Color.black.opacity(0.45)
+            ProgressView().tint(.white).scaleEffect(0.7)
+        case .playing, .paused:
+            Color.black.opacity(0.45)
+            Image(systemName: audioState.overlaySystemImage ?? "play.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white)
+                .shadow(radius: 2)
+        }
     }
 
     private var menu: some View {
