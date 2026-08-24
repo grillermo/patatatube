@@ -48,6 +48,11 @@ final class AudioQueuePlayer: ObservableObject {
     /// Marks a row as waiting on `ensureReady`. Pass nil to clear.
     func markLoading(id: Int?) { loadingID = id }
 
+    /// The scope the current queue's autoplay/randomize settings are keyed
+    /// under (`AppModel.autoplayBinding(for:)`/`randomizeBinding(for:)`), for
+    /// the mini-player bar's toggles. Nil only when nothing is playing.
+    var currentScope: String? { scope }
+
     /// Start (or restart) the queue at `startIndex`. Any previous audio and any
     /// pending loading marker are dropped first.
     func start(videos: [Video], startIndex: Int, scope: String?,
@@ -112,6 +117,11 @@ final class AudioQueuePlayer: ObservableObject {
         guard let player else { return }
         if player.timeControlStatus == .paused { player.play() } else { player.pause() }
     }
+
+    /// The mini-player bar's next/previous buttons — same moves as the lock
+    /// screen's, exposed for a caller with no `MPRemoteCommand` involved.
+    func skipForward() { advance(by: 1) }
+    func skipBackward() { handlePrevious() }
 
     /// Tear everything down: pause, drop observers, clear Now Playing, release
     /// the audio session so other apps resume.

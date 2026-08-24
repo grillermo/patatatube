@@ -27,6 +27,12 @@ struct RootTabView: View {
                 .tabItem { Label("Movies", systemImage: "film") }
                 .tag(MediaTab.movies)
         }
+        // Docked above the tab bar for as long as audio plays, on any tab —
+        // matches the audio session's own lifetime, which already outlives
+        // whichever list view started it.
+        .safeAreaInset(edge: .bottom) {
+            AudioMiniPlayerBar(audio: model.audio)
+        }
         // The restore button on the PiP float re-opens the full-screen player.
         // It lives at the root rather than in a grid because all three grids
         // exist at once and only one presentation may answer.
