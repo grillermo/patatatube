@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.3",
+          "buildVersion": "164",
+          "date": "2026-08-24T13:35:09Z",
+          "localizedDescription": "Fixes a crash when going back to audio-only playback\n\n• Starting audio on a list row no longer crashes after you open a video full screen and dismiss it",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.3/PatataTube-2.5.3.ipa",
+          "size": 4302987,
+          "sha256": "118e09baa9b6990d12066e00d9f4fb2a14aae3be95cf0706a0fa2f6fc46840d1",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.5.2",
           "buildVersion": "163",
           "date": "2026-08-24T13:16:07Z",
@@ -1554,11 +1564,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.5.2",
-      "versionDate": "2026-08-24T13:16:07Z",
-      "versionDescription": "Mini-player bar fixes and full-screen handoff\n\n• The audio mini-player bar no longer overlaps the Videos/TV/Movies tab icons\n• Tap the bar's thumbnail or title to switch from audio-only to full-screen video, picking up right where audio left off",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.2/PatataTube-2.5.2.ipa",
-      "size": 4302674
+      "version": "2.5.3",
+      "versionDate": "2026-08-24T13:35:09Z",
+      "versionDescription": "Fixes a crash when going back to audio-only playback\n\n• Starting audio on a list row no longer crashes after you open a video full screen and dismiss it",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.3/PatataTube-2.5.3.ipa",
+      "size": 4302987
     }
   ],
   "news": []
