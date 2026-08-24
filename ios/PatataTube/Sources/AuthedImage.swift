@@ -22,6 +22,8 @@ struct AuthedImage: View {
     var maxPixelSize: CGFloat = 1024
     @EnvironmentObject var model: AppModel
     @State private var image: UIImage?
+    @State private var loadedPath: String?
+    @State private var loadedLocalURL: URL?
 
     var body: some View {
         ZStack {
@@ -40,7 +42,10 @@ struct AuthedImage: View {
     private func loadImage() async {
         // .task(id:) re-fires every time a lazy container brings the cell back
         // on screen; without these guards each scroll re-hits the server.
-        if image != nil { return }
+        if image != nil && loadedPath == path && loadedLocalURL == localFileURL { return }
+        image = nil
+        loadedPath = path
+        loadedLocalURL = localFileURL
         let maxPixel = maxPixelSize
 
         // Memory-cached raw bytes: still downsample (off the main actor) rather

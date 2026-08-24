@@ -19,6 +19,7 @@ import UIKit
 final class AudioQueuePlayer: ObservableObject {
     /// The video whose audio is loaded, or nil when nothing is playing.
     @Published private(set) var currentID: Int?
+    @Published private(set) var currentVideo: Video?
     @Published private(set) var isPlaying: Bool = false
     /// A tap whose source isn't resolved yet (`/prepare`, conversion). Keyed by
     /// id rather than a flag, so a second tap elsewhere moves the spinner.
@@ -106,6 +107,7 @@ final class AudioQueuePlayer: ObservableObject {
             player.allowsExternalPlayback = true
             self.player = player
             currentID = video.id
+            currentVideo = video
             loadingID = nil
             observe(player: player)
             bindPlayToEnd()
@@ -157,6 +159,7 @@ final class AudioQueuePlayer: ObservableObject {
         self.player = player
         player.allowsExternalPlayback = true
         currentID = video.id
+        currentVideo = video
         loadingID = nil
         observe(player: player)
         bindPlayToEnd()
@@ -247,6 +250,7 @@ final class AudioQueuePlayer: ObservableObject {
         player = nil
         navigator = nil
         currentID = nil
+        currentVideo = nil
         loadingID = nil
         isPlaying = false
         sleepAfterCurrent = false
@@ -317,6 +321,7 @@ final class AudioQueuePlayer: ObservableObject {
         }
         _ = nextIndex
         currentID = video.id
+        currentVideo = video
         player.replaceCurrentItem(with: item)
         bindPlayToEnd()
         nowPlaying.updateTitle(video.title ?? video.url)

@@ -13,6 +13,7 @@ struct AudioMiniPlayerBar: View {
     @EnvironmentObject var store: VideoStore
 
     private var video: Video? {
+        if let current = audio.currentVideo { return current }
         guard let id = audio.currentID else { return nil }
         return store.videos.first(where: { $0.id == id })
     }
@@ -73,6 +74,7 @@ struct AudioMiniPlayerBar: View {
             Rectangle().fill(.black)
             if video.previewUrl != nil {
                 AuthedImage(path: video.previewUrl, fill: !video.isPlexItem)
+                    .id(video.id)
             }
         }
         .frame(width: 44, height: 44)
