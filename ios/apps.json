@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.2",
+          "buildVersion": "163",
+          "date": "2026-08-24T13:16:07Z",
+          "localizedDescription": "Mini-player bar fixes and full-screen handoff\n\n• The audio mini-player bar no longer overlaps the Videos/TV/Movies tab icons\n• Tap the bar's thumbnail or title to switch from audio-only to full-screen video, picking up right where audio left off",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.2/PatataTube-2.5.2.ipa",
+          "size": 4302674,
+          "sha256": "778ab844de96beec3462597a3084559e088b1e346e14b657ba6a24025bcbc7fd",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.5.1",
           "buildVersion": "162",
           "date": "2026-08-24T13:01:12Z",
@@ -1544,11 +1554,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.5.1",
-      "versionDate": "2026-08-24T13:01:12Z",
-      "versionDescription": "Audio-only playback gets on-screen controls\n\n• A mini-player bar now shows the playing track's title and art, docked above the tab bar on any screen while audio plays\n• Skip back/forward and play/pause from the bar, without returning to the list\n• Autoplay and randomize can be toggled right from the bar",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.1/PatataTube-2.5.1.ipa",
-      "size": 4301662
+      "version": "2.5.2",
+      "versionDate": "2026-08-24T13:16:07Z",
+      "versionDescription": "Mini-player bar fixes and full-screen handoff\n\n• The audio mini-player bar no longer overlaps the Videos/TV/Movies tab icons\n• Tap the bar's thumbnail or title to switch from audio-only to full-screen video, picking up right where audio left off",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.2/PatataTube-2.5.2.ipa",
+      "size": 4302674
     }
   ],
   "news": []
