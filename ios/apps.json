@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.5",
+          "buildVersion": "166",
+          "date": "2026-08-24T14:05:57Z",
+          "localizedDescription": "Closing full screen puts you back in the mini player\n\n• Opening full screen from the mini player and then closing it returns to audio on the same track, at the same second, instead of ending playback\n• If the video was paused when you closed it, audio comes back paused; a track that already finished won't restart",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.5/PatataTube-2.5.5.ipa",
+          "size": 4307076,
+          "sha256": "45939272b8c9d32400cbf0bd270a17e76573cd2d449956a71a9f2de2aa0b5af3",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.5.4",
           "buildVersion": "165",
           "date": "2026-08-24T13:46:14Z",
@@ -1574,11 +1584,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.5.4",
-      "versionDate": "2026-08-24T13:46:14Z",
-      "versionDescription": "Shuffle now works while audio is playing\n\n• Turning shuffle on in the mini player randomizes the next track immediately, instead of only applying to queues started after the toggle\n• Turning it off mid-queue resumes playing in list order from the current track",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.4/PatataTube-2.5.4.ipa",
-      "size": 4303066
+      "version": "2.5.5",
+      "versionDate": "2026-08-24T14:05:57Z",
+      "versionDescription": "Closing full screen puts you back in the mini player\n\n• Opening full screen from the mini player and then closing it returns to audio on the same track, at the same second, instead of ending playback\n• If the video was paused when you closed it, audio comes back paused; a track that already finished won't restart",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.5/PatataTube-2.5.5.ipa",
+      "size": 4307076
     }
   ],
   "news": []
