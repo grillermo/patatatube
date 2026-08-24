@@ -85,7 +85,8 @@ struct RootTabView: View {
                     VideoPlayerView(
                         videos: request.videos, startIndex: request.startIndex,
                         sleepMode: request.sleepMode, randomize: pip.restoreRandomize,
-                        startSecs: request.startSecs, autoplayScope: pip.restoreScope
+                        startSecs: request.startSecs, autoplayScope: pip.restoreScope,
+                        returnsToAudio: pip.restoreCameFromAudio
                     )
                 }
         }

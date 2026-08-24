@@ -55,8 +55,15 @@ final class AudioQueuePlayer: ObservableObject {
 
     /// Start (or restart) the queue at `startIndex`. Any previous audio and any
     /// pending loading marker are dropped first.
+    ///
+    /// `startSecs`/`startPaused` exist for one caller: the full-screen player
+    /// handing playback back on dismiss (`shouldReturnToAudio`), which resumes
+    /// the same item at the same second and stays paused if the video was. A
+    /// list tap passes neither and still starts at 0 — audio remains a thing
+    /// that never *reports* a position, it just accepts one on the way in.
     func start(videos: [Video], startIndex: Int, scope: String?,
-               sleepMode: Bool, model: AppModel) {
+               sleepMode: Bool, model: AppModel,
+               startSecs: Double = 0, startPaused: Bool = false) {
         stop()
         // Same "one audio source at a time" invariant as the full-screen
         // player's `model.audio.stop()`, from the opposite direction: a
@@ -80,6 +87,8 @@ final class AudioQueuePlayer: ObservableObject {
             "count": "\(videos.count)",
             "scope": scope ?? "-",
             "sleep": "\(sleepMode)",
+            "secs": "\(Int(startSecs))",
+            "paused": "\(startPaused)",
         ])
         startGeneration += 1
         let generation = startGeneration
@@ -98,6 +107,12 @@ final class AudioQueuePlayer: ObservableObject {
             activateAudioSession()
             let player = AVPlayer(playerItem: item)
             player.allowsExternalPlayback = true
+            // Same "under a second isn't worth a seek" rule the full-screen
+            // player resumes by, from the one implementation of it.
+            if startSecs.isFinite, let target = VideoPlayerView.seekTarget(startSecs: startSecs) {
+                await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+                guard self.startGeneration == generation else { return }
+            }
             self.player = player
             currentID = video.id
             loadingID = nil
@@ -108,7 +123,13 @@ final class AudioQueuePlayer: ObservableObject {
             nowPlaying.attach(player: player, title: video.title ?? video.url)
             nowPlaying.setNextEnabled(navigator?.peekHasNext() ?? false)
             DevLog.event(.play, "audio source -> \(source)", ["video_id": "\(video.id)"])
-            player.play()
+            if startPaused {
+                // `observe(player:)` seeded `isPlaying` from a player that has
+                // not been told to play, so the bar already draws paused.
+                self.isPlaying = false
+            } else {
+                player.play()
+            }
         }
     }
 

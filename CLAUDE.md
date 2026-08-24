@@ -301,8 +301,13 @@ hand an anonymous visitor a cached authenticated page.
   list — grid switch, back, tab change and backgrounding all keep it running;
   only pause, an exhausted queue, or a full-screen player starting stops it
   (`startPlayback` calls `audio.stop()` first). Autoplay and randomize read the
-  same per-scope toggles as the video player. **Audio never touches resume
-  positions** — always starts at 0, never reports. The row's thumbnail carries
+  same per-scope toggles as the video player, and both are read live — the
+  mini-player bar's shuffle toggle flips the running queue's order through
+  `QueueNavigator.setRandomize`, the same way `bindPlayToEnd` re-reads autoplay
+  at fire time, because a value snapshotted in `start()` ignores a toggle the
+  bar shows as on. **Audio never *reports* resume positions** — it starts at 0
+  and never writes one; the only start position it accepts is the one the
+  full-screen player hands back on dismiss (below). The row's thumbnail carries
   the transport (dimmed overlay, `play.fill`/`pause.fill`); a download in
   flight is still only visible in the row's menu. There is deliberately no way
   to reach video from list mode — "Play and sleep" is audio too — so watching
@@ -310,6 +315,20 @@ hand an anonymous visitor a cached authenticated page.
   `QueueNavigator` (PatataTubeKit) and source selection via `PlaybackSource`;
   both were extracted out of `VideoPlayerView` for exactly that reason, so a
   new playback fallback belongs in `PlaybackSource`, not in one of the callers.
+- **A full-screen player opened from the mini player hands playback back when
+  it closes.** The bar's thumbnail tap goes through `PiPSession.restoreFullScreen`
+  (which stops the audio queue), so the resulting cover carries
+  `returnsToAudio: true` — passed per presentation, never read off `PiPSession`
+  at dismiss time, or a later grid tap would inherit an old audio tap's flag.
+  On dismiss `VideoPlayerView` consults `shouldReturnToAudio`
+  (PatataTubeKit) and restarts `AppModel.audio` with the same queue snapshot,
+  the index the player is on *now* (autoplay may have moved it), the player's
+  current second, and `startPaused` mirroring the video's state. It deliberately
+  does **not** hand back when PiP is taking the player (the float keeps
+  playing) or when the item played to its end (`reachedEnd` — an autoplay-off
+  self-dismiss, sleep, or a dry queue), which would otherwise restart a
+  finished track in the bar. The call sits last in `onDisappear`, after the
+  teardown that deactivates the audio session, since `start` takes its own.
 - **Downloads can be paused, and a pause outlives the process.** Each row in
   the Downloads view carries a three-dot menu holding Cancel plus Pause (or
   Resume). `CacheManager.pause` is deliberately not `cancel`: cancel wipes

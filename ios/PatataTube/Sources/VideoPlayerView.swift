@@ -21,6 +21,12 @@ struct VideoPlayerView: View {
     let startPaused: Bool
     /// Feed/show scope this queue came from, used for its autoplay setting.
     let autoplayScope: String?
+    /// True when the audio-only mini player opened this cover. Dismissing then
+    /// hands playback back to `AudioQueuePlayer` — same item, same second —
+    /// instead of ending the session the user only meant to look at. Carried
+    /// per presentation rather than read off `PiPSession` at dismiss time, so a
+    /// later grid tap can't inherit an earlier audio tap's flag.
+    let returnsToAudio: Bool
     @State private var currentIndex: Int
     /// Queue stepping (sequential/random, playable-only). Seeded in `setup()`
     /// so `playerItem` is available for its playability probe.
@@ -30,7 +36,7 @@ struct VideoPlayerView: View {
 
     init(videos: [Video], startIndex: Int, sleepMode: Bool = false,
          randomize: Bool = false, startSecs: Double = 0, startPaused: Bool = false,
-         autoplayScope: String? = nil) {
+         autoplayScope: String? = nil, returnsToAudio: Bool = false) {
         self.videos = videos
         self.startIndex = startIndex
         self.sleepMode = sleepMode
@@ -38,6 +44,7 @@ struct VideoPlayerView: View {
         self.startSecs = startSecs
         self.startPaused = startPaused
         self.autoplayScope = autoplayScope
+        self.returnsToAudio = returnsToAudio
         _currentIndex = State(initialValue: startIndex)
         _sleepAfterCurrent = State(initialValue: sleepMode)
         _suppressAutoplayOnce = State(initialValue: startPaused)
@@ -92,6 +99,10 @@ struct VideoPlayerView: View {
     /// this presentation's content; a fresh id means a genuinely new
     /// presentation. That is the discriminator for the re-presenting-player bug.
     @State private var instanceID = String(UUID().uuidString.prefix(8))
+    /// The current item played to its end and nothing advanced past it. Only
+    /// consulted by the audio handback (`shouldReturnToAudio`), which must not
+    /// restart a finished track in the mini player.
+    @State private var reachedEnd = false
 
     var body: some View {
         ZStack {
@@ -161,6 +172,10 @@ struct VideoPlayerView: View {
             // pausing, the audio session, now-playing, the position observer
             // (now owned by `PiPSession`) — is skipped.
             let handingOff = model.pip.isHandingOff
+            // Captured before the teardown pauses the player, or a handback
+            // would always come back paused.
+            let wasPlaying = player?.timeControlStatus != .paused
+            let secs = player?.currentTime().seconds ?? 0
             hasDisappeared = true
             orientationControlVisibility.hide()
             horizontalLock.endPlayerSession()
@@ -186,8 +201,30 @@ struct VideoPlayerView: View {
             playbackProbe.detach()
             DevLog.event(.nav, handingOff ? "player handed to pip" : "player dismissed",
                          ["video_id": "\(video.id)", "inst": instanceID])
+            // Last, after the teardown above has released the audio session:
+            // `AudioQueuePlayer.start` takes its own, and a deactivation
+            // running behind it would silence the queue it just started.
+            if shouldReturnToAudio(cameFromAudio: returnsToAudio,
+                                   isHandingOff: handingOff, reachedEnd: reachedEnd) {
+                handBackToAudio(atSecs: secs, playing: wasPlaying)
+            }
             DevLog.flush()
         }
+    }
+
+    /// Resume the audio-only queue where the video left off: same queue
+    /// snapshot, the index the player is on now (autoplay may have moved it),
+    /// the same second, and paused if the video was paused.
+    private func handBackToAudio(atSecs secs: Double, playing wasPlaying: Bool) {
+        DevLog.event(.play, "player handed back to audio", [
+            "video_id": "\(video.id)", "secs": "\(Int(secs.isFinite ? secs : 0))",
+            "playing": "\(wasPlaying)",
+        ])
+        model.audio.start(
+            videos: videos, startIndex: currentIndex, scope: autoplayScope,
+            sleepMode: sleepAfterCurrent, model: model,
+            startSecs: secs.isFinite ? secs : 0, startPaused: !wasPlaying
+        )
     }
 
     /// PiP is started by AVKit's own button in the transport bar, and AVKit
@@ -492,10 +529,13 @@ struct VideoPlayerView: View {
                 case .advance:
                     advance(by: 1)
                 case .dismiss:
+                    reachedEnd = true
                     dismiss()
                 case .stop:
+                    reachedEnd = true
                     player?.pause()
                 case .sleep:
+                    reachedEnd = true
                     player?.pause()
                     runBlackScreenShortcut()
                 }
@@ -512,10 +552,12 @@ struct VideoPlayerView: View {
         let nextIndex = navigator?.step(direction: direction)
         guard let nextIndex, let (item, source) = playerItemWithSource(for: videos[nextIndex]) else {
             DevLog.event(.play, "advance found nothing playable", ["direction": "\(direction)"])
+            reachedEnd = true
             player.pause()
             if UIApplication.shared.applicationState == .active { dismiss() }
             return
         }
+        reachedEnd = false
         currentIndex = nextIndex
         player.replaceCurrentItem(with: item)
         bindPauseTransitions(player: player, item: item, videoID: videos[nextIndex].id)

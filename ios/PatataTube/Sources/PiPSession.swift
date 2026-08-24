@@ -27,6 +27,12 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
     /// `PlaybackQueue` carries neither, and the restored presentation needs both.
     private(set) var restoreScope: String?
     private(set) var restoreRandomize = false
+    /// Whether the presentation `restoreRequest` asks for was opened *by* the
+    /// audio mini player. `VideoPlayerView` reads it on dismiss to decide
+    /// whether to hand playback back to `AudioQueuePlayer` (see
+    /// `shouldReturnToAudio`). Every restore path sets it, so a PiP restore
+    /// can never inherit an audio tap's flag.
+    private(set) var restoreCameFromAudio = false
 
     /// Retained across the cover's dismissal — SwiftUI drops both.
     private var controller: AVPlayerViewController?
@@ -94,6 +100,7 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
     ) {
         restoreScope = scope
         restoreRandomize = randomize
+        restoreCameFromAudio = true
         restoreRequest = PlaybackQueue(
             video: video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, startSecs: startSecs
         )
@@ -196,6 +203,7 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
             let secs = player.currentTime().seconds
             restoreScope = scope
             restoreRandomize = randomize
+            restoreCameFromAudio = false
             restoreRequest = PlaybackQueue(
                 video: videos[index], queueSnapshot: videos, sleepMode: sleepMode,
                 startSecs: secs.isFinite ? secs : 0
