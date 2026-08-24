@@ -38,21 +38,27 @@ struct AudioMiniPlayerBar: View {
                     Spacer()
                     Button(action: audio.skipBackward) {
                         Image(systemName: "backward.fill")
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     Spacer()
                     Button(action: audio.toggle) {
                         Image(systemName: audio.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.title2)
+                            .font(.system(size: 36))
+                            .frame(minWidth: 48, minHeight: 48)
+                            .contentShape(Rectangle())
                     }
                     Spacer()
                     Button(action: audio.skipForward) {
                         Image(systemName: "forward.fill")
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     Spacer()
                     toggleButton(systemImage: "play.circle", filledSystemImage: "play.circle.fill",
                                  isOn: model.autoplayBinding(for: scope))
                 }
-                .font(.body)
+                .font(.system(size: 26))
                 .buttonStyle(.plain)
             }
             .padding(12)
@@ -84,18 +90,22 @@ struct AudioMiniPlayerBar: View {
         return Button {
             isOn.wrappedValue.toggle()
         } label: {
-            if let filledSystemImage {
-                Image(systemName: on ? filledSystemImage : systemImage)
-                    .foregroundStyle(on ? Color.accentColor : Color.secondary)
-            } else {
-                Image(systemName: systemImage)
-                    .foregroundStyle(on ? Color.white : Color.secondary)
-                    .background {
-                        if on {
-                            Circle().fill(Color.accentColor).frame(width: 26, height: 26)
+            Group {
+                if let filledSystemImage {
+                    Image(systemName: on ? filledSystemImage : systemImage)
+                        .foregroundStyle(on ? Color.accentColor : Color.secondary)
+                } else {
+                    Image(systemName: systemImage)
+                        .foregroundStyle(on ? Color.white : Color.secondary)
+                        .background {
+                            if on {
+                                Circle().fill(Color.accentColor).frame(width: 40, height: 40)
+                            }
                         }
-                    }
+                }
             }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
         }
     }
 }

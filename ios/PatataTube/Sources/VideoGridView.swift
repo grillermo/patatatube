@@ -593,6 +593,9 @@ struct VideoGridView: View {
             }
         }
         .padding()
+        // Extra bottom space so the last video row/card isn't covered by
+        // AudioMiniPlayerBar when docked above the tab bar.
+        .padding(.bottom, 200)
     }
 
     /// The same trailing bar for the tab root and for a pushed group, so the

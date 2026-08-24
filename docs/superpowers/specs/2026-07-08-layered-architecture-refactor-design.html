@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Layered Architecture Refactor — Design</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171a23;
+    --panel-2: #1d212c;
+    --border: #2a2f3c;
+    --text: #d7dce5;
+    --muted: #8b94a7;
+    --accent: #f4b942;   /* potato yellow */
+    --accent-2: #6ea8fe;
+    --code-bg: #12151d;
+    --green: #5bd6a0;
+    --red: #f2726f;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --panel-2: #f0f2f5;
+      --border: #e2e5ea;
+      --text: #23262d;
+      --muted: #5c6472;
+      --accent: #c8871a;
+      --accent-2: #2f6fed;
+      --code-bg: #f3f4f7;
+      --green: #1f9d63;
+      --red: #cf3c38;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 48px 24px 96px; }
+  header.hero {
+    border: 1px solid var(--border);
+    background: linear-gradient(135deg, var(--panel), var(--panel-2));
+    border-radius: 16px;
+    padding: 36px 32px;
+    margin-bottom: 40px;
+  }
+  .eyebrow {
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: 34px;
+    line-height: 1.15;
+    margin: 0 0 12px;
+    letter-spacing: -.02em;
+  }
+  .meta { color: var(--muted); font-size: 14px; display: flex; gap: 18px; flex-wrap: wrap; }
+  .meta .pill {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px;
+    color: var(--text);
+  }
+  h2 {
+    font-size: 22px;
+    margin: 44px 0 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    letter-spacing: -.01em;
+  }
+  h2:first-of-type { border-top: none; }
+  h3 {
+    font-size: 16px;
+    margin: 26px 0 8px;
+    color: var(--accent-2);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  p { margin: 12px 0; }
+  ul { margin: 12px 0; padding-left: 22px; }
+  li { margin: 6px 0; }
+  a { color: var(--accent-2); }
+  strong { color: var(--text); font-weight: 700; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .88em;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; font-size: 13.5px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 15px;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--panel-2);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+  }
+  tr:last-child td { border-bottom: none; }
+  table { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .callout {
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    background: var(--panel);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 18px 0;
+  }
+  .callout.risk { border-left-color: var(--red); }
+  .callout.ok { border-left-color: var(--green); }
+  .section { }
+  footer {
+    margin-top: 56px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow">PatataTube · Design Spec</p>
+    <h1>Layered Architecture Refactor</h1>
+    <div class="meta">
+      <span class="pill">2026-07-08</span>
+      <span class="pill">Behavior-preserving</span>
+      <span class="pill">SQLModel + Alembic</span>
+    </div>
+  </header>
+
+  <section class="section">
+    <h2>Goal</h2>
+    <p>Restructure the PatataTube FastAPI backend from its current flat module layout into an explicit layered architecture (controllers / models / schemas / services / data access), migrating the hand-rolled SQLite layer to <strong>SQLModel</strong> with <strong>Alembic</strong> migrations. This is a <strong>behavior-preserving</strong> refactor: same routes, same JSON API shape, same on-disk DB file, same SSR HTML. The iOS app is untouched because the API contract does not change.</p>
+  </section>
+
+  <section class="section">
+    <h2>Non-goals</h2>
+    <ul>
+      <li>No new features.</li>
+      <li>No async DB engine (stays synchronous, matching current blocking behavior).</li>
+      <li>No behavior changes. Known warts (blocking DB calls inside async handlers, the <code>DB_PATH</code> default mismatch between <code>.db</code> and <code>.sqlite</code> in <code>db.py</code>) are <strong>preserved as-is</strong>, not fixed here.</li>
+      <li>No changes to <code>ios/</code>.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <h2>Locked decisions</h2>
+    <table>
+      <thead><tr><th>Decision</th><th>Choice</th></tr></thead>
+      <tbody>
+        <tr><td>ORM</td><td>SQLModel</td></tr>
+        <tr><td>Migrations</td><td>Alembic (baseline revision matching current schema; existing prod DB <code>alembic stamp</code>ed)</td></tr>
+        <tr><td>Data-access layer</td><td>Dedicated <code>repositories/</code> package</td></tr>
+        <tr><td>Row shape</td><td>Return SQLModel <strong>model instances</strong> (not dicts)</td></tr>
+        <tr><td>DB engine</td><td>Synchronous (<code>create_engine</code> + <code>Session</code>)</td></tr>
+        <tr><td>Tests</td><td>Rewritten to new import paths / dependency overrides</td></tr>
+        <tr><td>Scope</td><td>Pure restructure, behavior-preserving</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>Target structure</h2>
+<pre><code>app/
+├── main.py                 # app init, lifespan, middleware, router mounting only
+├── config.py               # pydantic-settings: UPLOAD_TOKEN, paths, ffmpeg bins,
+│                           #   stream limit, ALLOWED_HOSTS, CLASSIFICATIONS home
+├── database.py             # SQLModel engine + Session factory; WAL + busy_timeout pragmas
+├── api/
+│   ├── dependencies.py     # get_session; require_token (Bearer); require_token_or_query
+│   └── v1/
+│       ├── videos.py       # /api/videos*, delete, prepare, /api/classifications
+│       ├── library.py      # /api/library/scan
+│       ├── streaming.py    # /videos/{id}/stream, /preview, /hls/*  (byte-range + HLS)
+│       ├── pages.py        # SSR GET / and /videos + form endpoints (move/classify/version)
+│       └── assets.py       # favicon, apple-touch-icon, splash, manifest.webmanifest
+├── models/                 # SQLModel tables: Video, VideoVersion (+ relationship)
+├── schemas/                # request/response Pydantic: Upload/Move/Classify/Version, VideoOut
+├── repositories/
+│   └── videos.py           # all queries + version-sync logic from db.py
+└── services/
+    ├── videos.py           # apply_move, apply_classification, choose_version, delete, prepare
+    ├── downloader.py       # download_video + ffmpeg normalize (from downloader.py)
+    ├── library.py          # scan_library, convert_library_video, plan_conversion
+    ├── hls.py              # (from hls.py)
+    ├── subtitles.py        # (from subtitles.py)
+    ├── plex.py             # (from plex.py)
+    └── url_classifier.py   # _classify_url, _normalize_twitter_url, _extract_youtube_id
+alembic/
+├── env.py                  # wired to SQLModel metadata + DB_PATH env
+└── versions/
+    └── &lt;baseline&gt;.py       # matches current schema exactly
+alembic.ini</code></pre>
+    <p><code>views/templates.py</code> (SSR HTML + PWA splash) stays as-is, consumed by <code>api/v1/pages.py</code>. <code>version_namer.py</code> and <code>relabel_versions.py</code> remain utility modules (referenced by <code>services/library.py</code>); place under <code>services/</code> or a <code>utils/</code> module — final home decided in the plan, no logic change.</p>
+  </section>
+
+  <section class="section">
+    <h2>Layer responsibilities</h2>
+
+    <h3>models/</h3>
+    <p>Two SQLModel table classes mirroring the <strong>current</strong> schema exactly (every column in <code>db.init_db</code>):</p>
+    <ul>
+      <li><code>Video</code> — <code>id, url, platform, source_key, title, filename, status, error_msg, created_at, preview_url, position, classification, source, source_path, converted_path, show_title, season, episode, summary, plex_rating_key, show_rating_key, deleted_at, chosen_version_id, hls_status</code>. Relationship: <code>versions: list[VideoVersion]</code>.</li>
+      <li><code>VideoVersion</code> — <code>id, video_id, source_path, label, status, converted_path, error_msg, position, created_at</code>; <code>UNIQUE(video_id, source_path)</code>.</li>
+    </ul>
+    <p><code>CLASSIFICATIONS</code> (<code>children, adults, education, tv, movies</code>) moves to a single home (<code>config.py</code> or <code>models/</code>) and is imported everywhere validation happens.</p>
+
+    <h3>repositories/videos.py</h3>
+    <p>Every <code>db.py</code> function becomes a repository function taking a <code>Session</code> and returning model instances (or <code>None</code>/<code>bool</code>/scalars as today). The non-trivial internals move here verbatim in behavior:</p>
+    <ul>
+      <li><code>add_video</code>, <code>get_video</code>, <code>get_all_videos</code>, <code>delete_video</code>, <code>update_video</code></li>
+      <li><code>get_completed_video_by_source</code>, <code>move_video</code>, <code>set_video_classification</code>, <code>set_hls_status</code></li>
+      <li>Version logic: <code>get_video_versions</code>, <code>get_video_version</code>, <code>set_chosen_version</code>, <code>get_version_labels</code>, <code>_ensure_chosen_version</code>, <code>_sync_video_from_chosen</code>, <code>_sync_versions</code>, <code>_incoming_versions</code></li>
+      <li>Library: <code>upsert_library_video</code>, <code>tombstone_video</code>, <code>get_converted_paths</code>, <code>set_library_state</code></li>
+    </ul>
+    <p><code>_sync_video_from_chosen</code>'s denormalization of the chosen version onto the video row is preserved (still needed so <code>/stream</code> and serializers read consistent state).</p>
+
+    <h3>Backfills + init</h3>
+    <p>The Python-side data backfills are <strong>data fixes, not schema</strong>, so they do not become Alembic migrations. They run at startup in <code>lifespan</code> after Alembic has brought the schema current: <code>_backfill_positions</code>, <code>_backfill_youtube_preview_urls</code>, <code>_backfill_library_added_at</code>, <code>_backfill_video_versions</code>, <code>_delete_error_videos</code>. Idempotency guards (<code>_ADDED_AT_POSITION_FLOOR</code>, existence checks) are preserved. This keeps current boot behavior identical.</p>
+    <p>WAL + <code>busy_timeout=30000</code> pragmas move to <code>database.py</code> engine construction (via a <code>connect</code>/<code>PRAGMA</code> event on the engine) so every connection still gets them, preserving multi-worker read/write concurrency.</p>
+
+    <h3>schemas/</h3>
+    <ul>
+      <li>Request models (from <code>main.py</code>): <code>UploadRequest</code>, <code>MoveRequest</code>, <code>ClassifyRequest</code>, <code>VersionRequest</code>.</li>
+      <li>Response: <code>VideoOut</code> replaces <code>serialize_video</code>. A <code>from_model(video, *, subtitle_tracks=None)</code> builder produces the exact current JSON, including:
+        <ul>
+          <li><code>stream_path</code>, <code>hls_path</code> (gated by the <code>_hls_ready</code> logic, moved here),</li>
+          <li>library <code>url</code> redaction to <code>""</code> and <code>preview_url</code>/<code>show_preview_url</code> rewrites,</li>
+          <li>the <code>versions</code> array with <strong><code>is_chosen</code> computed</strong> from <code>video.chosen_version_id</code> (no longer a stored/attached key),</li>
+          <li><code>subtitle_tracks</code> supplied by the caller (detail endpoint), default <code>[]</code>.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>api/</h3>
+    <p>Routers split by concern and mounted in <code>main.py</code>. Endpoints keep identical paths, methods, status codes, and bodies. <code>api/dependencies.py</code>:</p>
+    <ul>
+      <li><code>get_session()</code> — yields a <code>Session</code> from the factory (used by every endpoint that touches the DB).</li>
+      <li><code>require_token</code> — Bearer check (today's <code>_check_token</code>), as a dependency.</li>
+      <li><code>require_token_or_query</code> — Bearer-or-<code>?token=</code> (today's <code>_check_token_or_query</code>), as a dependency.</li>
+    </ul>
+    <p>The SSR form endpoints (<code>/videos/{id}/move</code>, <code>/classify</code>, <code>/version</code>) stay <strong>un-gated</strong> exactly as today; the <code>/api/*</code> equivalents keep <code>require_token</code>.</p>
+    <p>Byte-range helpers (<code>_parse_byte_range</code>, <code>_iter_file_range</code>, <code>_range_not_satisfiable</code>), the streaming semaphore, static-asset caching, and mime guessing move into <code>api/v1/streaming.py</code> / <code>api/v1/assets.py</code> (or small helper modules they own). No logic change.</p>
+
+    <h3>services/</h3>
+    <p>Thin orchestration over repositories; each service function receives a <code>Session</code> (or opens one via the factory for background tasks). <code>services/videos.py</code> mirrors today's <code>services.py</code> plus the delete/prepare orchestration currently inline in <code>main.py</code>. <code>downloader</code>, <code>library</code>, <code>hls</code>, <code>subtitles</code>, <code>plex</code> move with import-path updates only. <code>url_classifier</code> holds the URL normalization logic extracted from <code>main.py</code>.</p>
+    <p>Background tasks (<code>download_video</code>, <code>convert_library_video</code>, <code>hls.prepare</code>) still run via FastAPI <code>BackgroundTasks</code> on threads and manage their own <code>Session</code> (they outlive the request, so they cannot use the request-scoped <code>get_session</code> dependency).</p>
+  </section>
+
+  <section class="section">
+    <h2>Alembic strategy</h2>
+    <ol>
+      <li>Add <code>alembic/</code> + <code>alembic.ini</code>; <code>env.py</code> reads <code>DB_PATH</code> (same env var) and targets <code>SQLModel.metadata</code>.</li>
+      <li>Author one <strong>baseline</strong> revision whose <code>upgrade()</code> produces the exact current schema (both tables, all columns, the two indexes, defaults).</li>
+      <li>Existing prod DB (<code>data/watch_later.sqlite</code>) is brought in with <code>alembic stamp &lt;baseline&gt;</code> (documented in README / a make step) so the baseline never runs against it.</li>
+      <li>Fresh installs run <code>alembic upgrade head</code> (invoked at startup or documented in <code>./serve</code> setup) to create the schema, then backfills run.</li>
+    </ol>
+    <div class="callout">
+      <strong>Startup order in <code>lifespan</code>:</strong> set process name → ensure dirs → <code>alembic upgrade head</code> (or <code>create_all</code> fallback for tests) → run backfills → load static cache. The exact "who runs upgrade" (lifespan vs. explicit command) is settled in the plan; the constraint is that tests and fresh installs get a schema without a manual step.
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Testing strategy</h2>
+    <ul>
+      <li>Tests rewritten to import from the new packages. The current <code>reload(db); reload(main)</code> pattern (needed because modules read env at import) is replaced by: a fresh engine per test bound to a temp <code>DB_PATH</code>, and FastAPI <code>dependency_overrides[get_session]</code> where useful.</li>
+      <li>Every existing test's assertions are preserved — same inputs, same expected outputs. Test files map: <code>test_db.py</code> → repository tests; <code>test_services.py</code> → service tests; <code>test_serializers.py</code> → schema (<code>VideoOut</code>) tests; <code>test_api.py</code> → API tests against the mounted routers; <code>test_downloader/library/hls/plex/subtitles/version_namer</code> → service tests with updated imports.</li>
+      <li>New async tests keep the per-test <code>@pytest.mark.asyncio</code> marker (no global asyncio mode), per existing convention.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <h2>Verification</h2>
+    <div class="callout ok">
+      <ul style="margin:0;">
+        <li><code>python -m pytest tests/</code> fully green is the completion bar.</li>
+        <li>Manual smoke: boot server against a <strong>copy</strong> of the prod DB, confirm <code>/</code>, <code>/videos</code>, <code>/api/videos</code>, a stream request with <code>Range</code>, and a library <code>/preview</code> all behave as before.</li>
+        <li>Diff the <code>/api/videos</code> JSON for a representative row before/after to prove the shape is byte-identical.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Risks</h2>
+    <div class="callout risk"><strong>Model-instance ripple</strong> — every consumer of the old dicts (<code>serialize_video</code>, <code>downloader</code>, <code>library</code>, tests) changes to attribute access. Highest-churn part; mitigated by preserving computed fields in <code>VideoOut</code> and porting logic verbatim.</div>
+    <div class="callout risk"><strong>Alembic against live data</strong> — a mis-authored baseline that runs instead of stamps would attempt to recreate existing tables. Mitigated by the explicit <code>stamp</code> step and testing the baseline only against a fresh DB.</div>
+    <div class="callout risk"><strong>Startup races</strong> — multiple uvicorn workers running <code>alembic upgrade</code> concurrently. Baseline is idempotent (<code>CREATE TABLE IF NOT EXISTS</code>-equivalent / Alembic version table guards); backfills keep their existing idempotency guards.</div>
+    <div class="callout risk"><strong>Behavior drift</strong> — the safety net is the preserved test suite plus the before/after JSON diff.</div>
+  </section>
+
+  <footer>
+    PatataTube · Layered Architecture Refactor · design spec · 2026-07-08
+  </footer>
+
+</div>
+</body>
+</html>
