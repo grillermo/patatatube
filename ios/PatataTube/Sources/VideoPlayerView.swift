@@ -22,11 +22,9 @@ struct VideoPlayerView: View {
     /// Feed/show scope this queue came from, used for its autoplay setting.
     let autoplayScope: String?
     @State private var currentIndex: Int
-    /// Random-mode only: cursor state over a shuffled permutation of
-    /// `videos.indices`, grown with a fresh shuffle whenever it's exhausted
-    /// going forward. Unused (stays empty) when `randomize` is false.
-    @State private var playbackOrder: [Int] = []
-    @State private var orderPosition: Int = 0
+    /// Queue stepping (sequential/random, playable-only). Seeded in `setup()`
+    /// so `playerItem` is available for its playability probe.
+    @State private var navigator: QueueNavigator?
     @StateObject private var horizontalLock: HorizontalLockCoordinator
     @StateObject private var orientationControlVisibility = OrientationControlVisibility()
 
@@ -239,12 +237,10 @@ struct VideoPlayerView: View {
             dismiss()
             return
         }
-        if randomize {
-            let playable = playableVideoIndices
-            let order = shuffledPlaybackOrder(count: playable.count, pinFirst: playable.firstIndex(of: currentIndex))
-            playbackOrder = order.map { playable[$0] }
-            orderPosition = 0
-        }
+        navigator = QueueNavigator(
+            videos: videos, startIndex: currentIndex, randomize: randomize,
+            isPlayable: { playerItem(for: $0) != nil }
+        )
         activateAudioSession()
         // Before the URL is built, not after it fails: a dead proxy makes
         // `offlineHLSURL` hand out an address nothing answers on, and AVPlayer
@@ -280,7 +276,7 @@ struct VideoPlayerView: View {
         nowPlaying.onNext = { advance(by: 1) }
         nowPlaying.onPrevious = { handlePrevious() }
         nowPlaying.attach(player: player, title: title(of: video))
-        nowPlaying.setNextEnabled(randomize ? hasAnyPlayableVideo : playableIndex(from: currentIndex, direction: 1) != nil)
+        nowPlaying.setNextEnabled(navigator?.peekHasNext() ?? false)
         bindPlayToEnd()
         guard Self.canContinueSetup(
             taskIsCancelled: Task.isCancelled, hasDisappeared: hasDisappeared
@@ -601,69 +597,13 @@ struct VideoPlayerView: View {
         }
     }
 
-    /// Nearest queue index in `direction` with a playable source, or nil.
-    private func playableIndex(from index: Int, direction: Int) -> Int? {
-        var i = index + direction
-        while videos.indices.contains(i) {
-            if playerItem(for: videos[i]) != nil { return i }
-            i += direction
-        }
-        return nil
-    }
-
-    /// Whether at least one video in the queue currently has a playable
-    /// source — used to decide the lock-screen "next" enabled state in
-    /// random mode, where a literal end-of-list peek doesn't apply (the
-    /// order reshuffles forever).
-    private var hasAnyPlayableVideo: Bool {
-        videos.contains { playerItem(for: $0) != nil }
-    }
-
-    /// Indices of videos that currently have a playable source — the pool
-    /// `playbackOrder` is drawn from and reshuffled over in random mode.
-    /// Excluding unplayable entries here (rather than skipping them during
-    /// stepping) keeps `orderPosition == 0` an accurate "nothing before me"
-    /// check, the same guarantee sequential mode gets from `playableIndex`.
-    private var playableVideoIndices: [Int] {
-        videos.indices.filter { playerItem(for: videos[$0]) != nil }
-    }
-
-    /// Random-mode step: walks `playbackOrder`'s cursor in `direction`.
-    /// Forward, grows the order with a fresh reshuffle over the currently
-    /// playable pool (excluding the wrap point, so autoplay's loop never
-    /// repeats a video back-to-back) whenever the step runs off the end.
-    /// Returns the resulting `videos` index, or nil if no playable video
-    /// exists to grow into. Advancing forward commits the step (mutates
-    /// `orderPosition`/`playbackOrder`); this must only be called when the
-    /// caller intends to actually move, never as a peek.
-    private func randomStep(direction: Int) -> Int? {
-        if direction > 0 {
-            let nextPosition = orderPosition + 1
-            if nextPosition >= playbackOrder.count {
-                let playable = playableVideoIndices
-                guard !playable.isEmpty else { return nil }
-                let avoidPosition = playbackOrder.last.flatMap { playable.firstIndex(of: $0) }
-                playbackOrder += shuffledPlaybackOrder(count: playable.count, avoidFirst: avoidPosition).map { playable[$0] }
-            }
-            guard nextPosition < playbackOrder.count else { return nil }
-            orderPosition = nextPosition
-            return playbackOrder[nextPosition]
-        } else {
-            guard orderPosition > 0 else { return nil }
-            orderPosition -= 1
-            return playbackOrder[orderPosition]
-        }
-    }
-
     /// Switch to the nearest playable video in `direction`; stop at queue
     /// ends (sequential mode) or when nothing playable remains at all
     /// (random mode — otherwise it loops forever via reshuffling).
     private func advance(by direction: Int) {
         reportPosition()
         guard let player else { return }
-        let nextIndex = randomize
-            ? randomStep(direction: direction)
-            : playableIndex(from: currentIndex, direction: direction)
+        let nextIndex = navigator?.step(direction: direction)
         guard let nextIndex, let (item, source) = playerItemWithSource(for: videos[nextIndex]) else {
             DevLog.event(.play, "advance found nothing playable", ["direction": "\(direction)"])
             player.pause()
@@ -679,7 +619,7 @@ struct VideoPlayerView: View {
         bindPlayToEnd()
         playWhenReady(item: item, on: player)
         nowPlaying.updateTitle(title(of: video))
-        nowPlaying.setNextEnabled(randomize ? hasAnyPlayableVideo : playableIndex(from: currentIndex, direction: 1) != nil)
+        nowPlaying.setNextEnabled(navigator?.peekHasNext() ?? false)
         Task { await loadArtwork(for: player) }
     }
 
@@ -688,7 +628,7 @@ struct VideoPlayerView: View {
     /// start" means the cursor is at position 0 of `playbackOrder`.
     private func handlePrevious() {
         guard let player else { return }
-        let atQueueStart = randomize ? orderPosition == 0 : playableIndex(from: currentIndex, direction: -1) == nil
+        let atQueueStart = navigator?.isAtQueueStart ?? true
         if player.currentTime().seconds > 3 || atQueueStart {
             player.seek(to: .zero)
         } else {
