@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.1",
+          "buildVersion": "162",
+          "date": "2026-08-24T13:01:12Z",
+          "localizedDescription": "Audio-only playback gets on-screen controls\n\n• A mini-player bar now shows the playing track's title and art, docked above the tab bar on any screen while audio plays\n• Skip back/forward and play/pause from the bar, without returning to the list\n• Autoplay and randomize can be toggled right from the bar",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.1/PatataTube-2.5.1.ipa",
+          "size": 4301662,
+          "sha256": "0550d9c7f49dc49369c7f69586ee0abf8bbfe3f28d3cc941f2123480a4900da9",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.5.0",
           "buildVersion": "161",
           "date": "2026-08-24T12:24:23Z",
@@ -1534,11 +1544,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.5.0",
-      "versionDate": "2026-08-24T12:24:23Z",
-      "versionDescription": "Play audio only from a group's list view\n\n• In a group's list view, tapping a video now plays just its audio — no full-screen player, so you can keep browsing\n• Autoplay and shuffle work the same as before, and lock-screen controls (play/pause, next, previous, title) work while audio plays\n• Tapping a card in grid view still plays video as normal, and starting a video always stops any playing audio\n• Fixed a rare double-audio glitch when switching between Picture-in-Picture and list playback",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.0/PatataTube-2.5.0.ipa",
-      "size": 4295343
+      "version": "2.5.1",
+      "versionDate": "2026-08-24T13:01:12Z",
+      "versionDescription": "Audio-only playback gets on-screen controls\n\n• A mini-player bar now shows the playing track's title and art, docked above the tab bar on any screen while audio plays\n• Skip back/forward and play/pause from the bar, without returning to the list\n• Autoplay and randomize can be toggled right from the bar",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.1/PatataTube-2.5.1.ipa",
+      "size": 4301662
     }
   ],
   "news": []
