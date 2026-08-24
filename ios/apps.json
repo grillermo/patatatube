@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.9",
+          "buildVersion": "170",
+          "date": "2026-08-24T21:12:42Z",
+          "localizedDescription": "What's new in 2.5.9:\n\n• Fix mini player preview thumbnail update on track changes\n• Fix mini player look",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.9/PatataTube-2.5.9.ipa",
+          "size": 4312895,
+          "sha256": "8a44238aff81a06594ffba95786df77ea8276961a4cb1d808768ff8700c29a95",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.5.8",
           "buildVersion": "169",
           "date": "2026-08-24T20:04:01Z",
@@ -1614,11 +1624,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.5.8",
-      "versionDate": "2026-08-24T20:04:01Z",
-      "versionDescription": "What's new in 2.5.8:\n\n• Fix mini player look",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.8/PatataTube-2.5.8.ipa",
-      "size": 4308195
+      "version": "2.5.9",
+      "versionDate": "2026-08-24T21:12:42Z",
+      "versionDescription": "What's new in 2.5.9:\n\n• Fix mini player preview thumbnail update on track changes\n• Fix mini player look",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.9/PatataTube-2.5.9.ipa",
+      "size": 4312895
     }
   ],
   "news": []
