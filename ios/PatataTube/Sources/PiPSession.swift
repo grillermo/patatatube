@@ -83,6 +83,17 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         self.onStart = onStart
     }
 
+    /// Tears down an active float from the outside — the audio-only queue calls
+    /// this before it starts, since starting audio and a floating PiP video are
+    /// the same "one audio source at a time" invariant from the other
+    /// direction. A no-op when nothing is floating: `player` is only non-nil
+    /// between `willStart` and `release()`.
+    func stopFloating() {
+        guard player != nil else { return }
+        release()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
     /// Ends the float and everything handed over with it. Safe to call twice.
     private func release(pausing: Bool = true) {
         if let positionObserver { player?.removeTimeObserver(positionObserver) }

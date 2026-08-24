@@ -30,7 +30,7 @@ struct RootTabView: View {
         // The restore button on the PiP float re-opens the full-screen player.
         // It lives at the root rather than in a grid because all three grids
         // exist at once and only one presentation may answer.
-        .modifier(PictureInPictureRestoreCover(pip: model.pip))
+        .modifier(PictureInPictureRestoreCover(pip: model.pip, audio: model.audio))
         .onAppear {
             // Launched into the web bridge: stay on the default tab until the
             // bridge is dismissed, so the shortcut doesn't drop the user back
@@ -52,15 +52,25 @@ struct RootTabView: View {
     /// its `PiPSession` changes, so `RootTabView` alone would never re-render.
     private struct PictureInPictureRestoreCover: ViewModifier {
         @ObservedObject var pip: PiPSession
+        let audio: AudioQueuePlayer
 
         func body(content: Content) -> some View {
-            content.fullScreenCover(item: $pip.restoreRequest) { request in
-                VideoPlayerView(
-                    videos: request.videos, startIndex: request.startIndex,
-                    sleepMode: request.sleepMode, randomize: pip.restoreRandomize,
-                    startSecs: request.startSecs, autoplayScope: pip.restoreScope
-                )
-            }
+            content
+                // A second full-screen-player presentation site (Task 6 only
+                // covered the grid's own `startPlayback`), so the "one audio
+                // source at a time" constraint has to be enforced here too:
+                // list audio may have started while the PiP float was up.
+                .onChange(of: pip.restoreRequest) { _, newValue in
+                    guard newValue != nil else { return }
+                    audio.stop()
+                }
+                .fullScreenCover(item: $pip.restoreRequest) { request in
+                    VideoPlayerView(
+                        videos: request.videos, startIndex: request.startIndex,
+                        sleepMode: request.sleepMode, randomize: pip.restoreRandomize,
+                        startSecs: request.startSecs, autoplayScope: pip.restoreScope
+                    )
+                }
         }
     }
 

@@ -53,6 +53,12 @@ final class AudioQueuePlayer: ObservableObject {
     func start(videos: [Video], startIndex: Int, scope: String?,
                sleepMode: Bool, model: AppModel) {
         stop()
+        // Same "one audio source at a time" invariant as the full-screen
+        // player's `model.audio.stop()`, from the opposite direction: a
+        // floating PiP video is still audio, so starting the list queue has to
+        // silence it too, or the two players' `NowPlayingManager`s stomp each
+        // other's lock-screen info.
+        model.pip.stopFloating()
         guard videos.indices.contains(startIndex) else { return }
         self.model = model
         self.scope = scope
