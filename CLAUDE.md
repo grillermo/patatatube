@@ -321,14 +321,24 @@ hand an anonymous visitor a cached authenticated page.
   `returnsToAudio: true` — passed per presentation, never read off `PiPSession`
   at dismiss time, or a later grid tap would inherit an old audio tap's flag.
   On dismiss `VideoPlayerView` consults `shouldReturnToAudio`
-  (PatataTubeKit) and restarts `AppModel.audio` with the same queue snapshot,
-  the index the player is on *now* (autoplay may have moved it), the player's
-  current second, and `startPaused` mirroring the video's state. It deliberately
-  does **not** hand back when PiP is taking the player (the float keeps
-  playing) or when the item played to its end (`reachedEnd` — an autoplay-off
-  self-dismiss, sleep, or a dry queue), which would otherwise restart a
-  finished track in the bar. The call sits last in `onDisappear`, after the
-  teardown that deactivates the audio session, since `start` takes its own.
+  (PatataTubeKit) and hands **the running `AVPlayer` itself** to
+  `AudioQueuePlayer.adopt` — not a rebuilt one. Rebuilding (fresh
+  `AVPlayerItem`, audio session dropped and retaken, seek, re-buffer) was
+  audible as a gap right where the sound should carry on, so the handback is an
+  ownership transfer instead: the same queue snapshot, the index the player is
+  on *now* (autoplay may have moved it), and the second and play/pause state
+  for free because it is the same player. That makes the dismissal an
+  exemption from teardown exactly like the PiP handoff — `onDisappear` skips
+  the pause and the audio-session deactivation, and `PiPSession.releaseController`
+  takes the player out of the departing `AVPlayerViewController` (the same
+  detach backgrounding does through `attached`). `NowPlayingManager` *is*
+  detached either way, since the audio queue attaches its own to the same
+  player and two of them would both answer the shared `MPRemoteCommandCenter`.
+  It deliberately does **not** hand back when PiP is taking the player (the
+  float keeps playing) or when the item played to its end (`reachedEnd` — an
+  autoplay-off self-dismiss, sleep, or a dry queue), which would otherwise
+  restart a finished track in the bar. `AudioQueuePlayer.start` stays the
+  from-scratch path (a list tap) and still always starts at 0.
 - **Downloads can be paused, and a pause outlives the process.** Each row in
   the Downloads view carries a three-dot menu holding Cancel plus Pause (or
   Resume). `CacheManager.pause` is deliberately not `cancel`: cancel wipes

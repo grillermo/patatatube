@@ -172,17 +172,22 @@ struct VideoPlayerView: View {
             // pausing, the audio session, now-playing, the position observer
             // (now owned by `PiPSession`) — is skipped.
             let handingOff = model.pip.isHandingOff
-            // Captured before the teardown pauses the player, or a handback
-            // would always come back paused.
-            let wasPlaying = player?.timeControlStatus != .paused
-            let secs = player?.currentTime().seconds ?? 0
+            // The audio mini player keeps this same player running past the
+            // dismissal (`handBackToAudio`), so it needs the same exemption
+            // from the teardown that PiP gets: pausing it, releasing the audio
+            // session out from under it, or handing its observers away would
+            // each put a hole in the sound the handback exists to avoid.
+            let returningToAudio = shouldReturnToAudio(
+                cameFromAudio: returnsToAudio, isHandingOff: handingOff, reachedEnd: reachedEnd
+            )
+            let keepsPlaying = handingOff || returningToAudio
             hasDisappeared = true
             orientationControlVisibility.hide()
             horizontalLock.endPlayerSession()
             reportPosition()
             pauseTransitionObserver?.invalidate()
             pauseTransitionObserver = nil
-            if !handingOff { player?.pause() }
+            if !keepsPlaying { player?.pause() }
             removePlayToEndObserver()
             readyObserver?.invalidate()
             readyObserver = nil
@@ -194,36 +199,46 @@ struct VideoPlayerView: View {
                 // an observer this teardown just removed; leaving it would let
                 // `stopFloating()` remove it again and throw.
                 if let player { model.pip.cancelStaging(for: player) }
+                // Detached either way: `AudioQueuePlayer` attaches its own
+                // manager to the same player, and two of them registering
+                // targets on the shared `MPRemoteCommandCenter` would both
+                // answer the lock screen. Silent — it only rewrites now-playing
+                // info — so the sound carries on across it.
                 nowPlaying.detach()
-                deactivateAudioSession()
+                // The player itself is handed over live, so the controller it
+                // was mounted in must let go of it — the same detach the
+                // backgrounding path does through `attached`.
+                if returningToAudio, let player { model.pip.releaseController(for: player) }
+                if !returningToAudio { deactivateAudioSession() }
             }
             positionObserver = nil
             playbackProbe.detach()
             DevLog.event(.nav, handingOff ? "player handed to pip" : "player dismissed",
                          ["video_id": "\(video.id)", "inst": instanceID])
-            // Last, after the teardown above has released the audio session:
-            // `AudioQueuePlayer.start` takes its own, and a deactivation
-            // running behind it would silence the queue it just started.
-            if shouldReturnToAudio(cameFromAudio: returnsToAudio,
-                                   isHandingOff: handingOff, reachedEnd: reachedEnd) {
-                handBackToAudio(atSecs: secs, playing: wasPlaying)
-            }
+            // Last, after the teardown above has let go of the player without
+            // stopping it.
+            if returningToAudio, let player { handBackToAudio(player) }
             DevLog.flush()
         }
     }
 
-    /// Resume the audio-only queue where the video left off: same queue
-    /// snapshot, the index the player is on now (autoplay may have moved it),
-    /// the same second, and paused if the video was paused.
-    private func handBackToAudio(atSecs secs: Double, playing wasPlaying: Bool) {
+    /// Resume the audio-only queue where the video left off — by handing it
+    /// the running `AVPlayer` rather than rebuilding one.
+    ///
+    /// Same queue snapshot and the index the player is on now (autoplay may
+    /// have moved it); the second and the play/pause state come for free,
+    /// because it is the same player. Rebuilding here meant a fresh item, a
+    /// seek and a re-buffer, all of it audible as a gap between the cover
+    /// closing and the mini player picking up.
+    private func handBackToAudio(_ player: AVPlayer) {
+        let secs = player.currentTime().seconds
         DevLog.event(.play, "player handed back to audio", [
             "video_id": "\(video.id)", "secs": "\(Int(secs.isFinite ? secs : 0))",
-            "playing": "\(wasPlaying)",
+            "playing": "\(player.timeControlStatus != .paused)",
         ])
-        model.audio.start(
-            videos: videos, startIndex: currentIndex, scope: autoplayScope,
-            sleepMode: sleepAfterCurrent, model: model,
-            startSecs: secs.isFinite ? secs : 0, startPaused: !wasPlaying
+        model.audio.adopt(
+            player: player, videos: videos, startIndex: currentIndex,
+            scope: autoplayScope, sleepMode: sleepAfterCurrent, model: model
         )
     }
 

@@ -123,6 +123,22 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         onStart = nil
     }
 
+    /// Hands a player out of the controller it was mounted in, for the one
+    /// dismissal that keeps it playing: the audio mini player adopting the
+    /// full-screen player's `AVPlayer` (`shouldReturnToAudio`). The departing
+    /// `AVPlayerViewController` — retained here until the next `register` —
+    /// must not be left owning a player that is now the audio queue's, which
+    /// is the same detach the backgrounding path performs through `attached`.
+    ///
+    /// Scoped by identity, and refused while a float is live: there the
+    /// controller *is* the playback surface, and clearing its player would
+    /// close the float.
+    func releaseController(for player: AVPlayer) {
+        guard !isHandingOff, controller?.player === player else { return }
+        controller?.player = nil
+        controller = nil
+    }
+
     /// Tears down an active float from the outside — the audio-only queue calls
     /// this before it starts, since starting audio and a floating PiP video are
     /// the same "one audio source at a time" invariant from the other

@@ -53,17 +53,16 @@ final class AudioQueuePlayer: ObservableObject {
     /// the mini-player bar's toggles. Nil only when nothing is playing.
     var currentScope: String? { scope }
 
-    /// Start (or restart) the queue at `startIndex`. Any previous audio and any
-    /// pending loading marker are dropped first.
+    /// Start (or restart) the queue at `startIndex`, from the beginning of the
+    /// item. Any previous audio and any pending loading marker are dropped
+    /// first.
     ///
-    /// `startSecs`/`startPaused` exist for one caller: the full-screen player
-    /// handing playback back on dismiss (`shouldReturnToAudio`), which resumes
-    /// the same item at the same second and stays paused if the video was. A
-    /// list tap passes neither and still starts at 0 — audio remains a thing
-    /// that never *reports* a position, it just accepts one on the way in.
+    /// Positions stay out of it in both directions: this builds a fresh item at
+    /// 0, and the one case that resumes mid-item — the full-screen player
+    /// handing playback back on dismiss — goes through `adopt` with the running
+    /// player instead, so there is nothing to seek to.
     func start(videos: [Video], startIndex: Int, scope: String?,
-               sleepMode: Bool, model: AppModel,
-               startSecs: Double = 0, startPaused: Bool = false) {
+               sleepMode: Bool, model: AppModel) {
         stop()
         // Same "one audio source at a time" invariant as the full-screen
         // player's `model.audio.stop()`, from the opposite direction: a
@@ -87,8 +86,6 @@ final class AudioQueuePlayer: ObservableObject {
             "count": "\(videos.count)",
             "scope": scope ?? "-",
             "sleep": "\(sleepMode)",
-            "secs": "\(Int(startSecs))",
-            "paused": "\(startPaused)",
         ])
         startGeneration += 1
         let generation = startGeneration
@@ -107,12 +104,6 @@ final class AudioQueuePlayer: ObservableObject {
             activateAudioSession()
             let player = AVPlayer(playerItem: item)
             player.allowsExternalPlayback = true
-            // Same "under a second isn't worth a seek" rule the full-screen
-            // player resumes by, from the one implementation of it.
-            if startSecs.isFinite, let target = VideoPlayerView.seekTarget(startSecs: startSecs) {
-                await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
-                guard self.startGeneration == generation else { return }
-            }
             self.player = player
             currentID = video.id
             loadingID = nil
@@ -123,14 +114,64 @@ final class AudioQueuePlayer: ObservableObject {
             nowPlaying.attach(player: player, title: video.title ?? video.url)
             nowPlaying.setNextEnabled(navigator?.peekHasNext() ?? false)
             DevLog.event(.play, "audio source -> \(source)", ["video_id": "\(video.id)"])
-            if startPaused {
-                // `observe(player:)` seeded `isPlaying` from a player that has
-                // not been told to play, so the bar already draws paused.
-                self.isPlaying = false
-            } else {
-                player.play()
-            }
+            player.play()
         }
+    }
+
+    /// Take over the full-screen player's live `AVPlayer` on dismiss, without
+    /// rebuilding anything.
+    ///
+    /// The rebuild this replaces was audible: `start()` drops the audio
+    /// session, builds a fresh `AVPlayerItem`, activates the session again,
+    /// seeks and waits for the new item to buffer — a gap of anywhere from a
+    /// fraction of a second to several, right where the user expects the sound
+    /// to carry on. Nothing about the item actually changes when the video
+    /// layer goes away (an `AVPlayer` with no layer simply renders no frames,
+    /// which is this whole class's premise), so the already-buffered,
+    /// already-playing player is carried straight across instead.
+    ///
+    /// The caller keeps the audio session active and leaves the player's rate
+    /// alone: `observe(player:)` seeds `isPlaying` from whatever it is, so a
+    /// video paused at dismiss hands back a paused bar. Unlike `start()` this
+    /// never calls `pip.stopFloating()` — a float *is* the handoff that
+    /// `shouldReturnToAudio` refuses, so there can be none here, and
+    /// deactivating a session on its behalf would silence the very player
+    /// being adopted.
+    func adopt(player: AVPlayer, videos: [Video], startIndex: Int, scope: String?,
+               sleepMode: Bool, model: AppModel) {
+        // Drops any previous queue and cancels an in-flight `start()`, but
+        // must not touch the audio session the incoming player is using.
+        stop(deactivatingSession: false)
+        guard videos.indices.contains(startIndex) else { return }
+        let video = videos[startIndex]
+        self.model = model
+        self.scope = scope
+        self.sleepAfterCurrent = sleepMode
+        navigator = QueueNavigator(
+            videos: videos, startIndex: startIndex, randomize: model.randomize(for: scope),
+            isPlayable: { [weak model] video in
+                guard let model else { return false }
+                return PlaybackSource.isPlayable(video, model: model)
+            }
+        )
+        self.player = player
+        player.allowsExternalPlayback = true
+        currentID = video.id
+        loadingID = nil
+        observe(player: player)
+        bindPlayToEnd()
+        nowPlaying.onNext = { [weak self] in self?.advance(by: 1) }
+        nowPlaying.onPrevious = { [weak self] in self?.handlePrevious() }
+        nowPlaying.attach(player: player, title: video.title ?? video.url)
+        nowPlaying.setNextEnabled(navigator?.peekHasNext() ?? false)
+        DevLog.event(.play, "audio adopted player", [
+            "video_id": "\(video.id)",
+            "count": "\(videos.count)",
+            "scope": scope ?? "-",
+            "sleep": "\(sleepMode)",
+            "secs": "\(Int(player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0))",
+            "playing": "\(player.timeControlStatus != .paused)",
+        ])
     }
 
     /// Row tap on the current item, and the lock screen's play/pause.
@@ -159,7 +200,11 @@ final class AudioQueuePlayer: ObservableObject {
 
     /// Tear everything down: pause, drop observers, clear Now Playing, release
     /// the audio session so other apps resume.
-    func stop() {
+    ///
+    /// `deactivatingSession: false` is for `adopt`, the one caller that is
+    /// clearing this queue in order to keep playing through another player on
+    /// the same, still-active session.
+    func stop(deactivatingSession: Bool = true) {
         startGeneration += 1
         if let playToEndObserver {
             NotificationCenter.default.removeObserver(playToEndObserver)
@@ -174,7 +219,7 @@ final class AudioQueuePlayer: ObservableObject {
         isPlaying = false
         sleepAfterCurrent = false
         nowPlaying.detach()
-        deactivateAudioSession()
+        if deactivatingSession { deactivateAudioSession() }
     }
 
     private func observe(player: AVPlayer) {
