@@ -15,23 +15,34 @@ struct RootTabView: View {
     @State private var selection: MediaTab = .videos
     @State private var activation: MediaTab?
 
+    /// Standard iPhone tab-bar content height, independent of the safe-area
+    /// (home-indicator) inset that a bottom-aligned `ZStack` child already
+    /// respects on its own.
+    ///
+    /// Not `.safeAreaInset(edge: .bottom)` on the `TabView`: that only
+    /// reserves room correctly when the inset view is present at the
+    /// `TabView`'s first layout pass. The bar starts absent (no audio yet)
+    /// and appears later once playback starts, and SwiftUI's native
+    /// UITabBar-backed chrome doesn't re-layout for that late arrival — the
+    /// bar rendered on top of, not above, the tab icons instead of pushing
+    /// them up.
+    private static let tabBarHeight: CGFloat = 49
+
     var body: some View {
-        TabView(selection: selectionBinding) {
-            VideoGridView(tab: .videos, groups: model.groups, api: model.api, selectedTab: selection, activation: activation)
-                .tabItem { Label("Videos", systemImage: "play.rectangle.on.rectangle") }
-                .tag(MediaTab.videos)
-            VideoGridView(tab: .tv, groups: model.groups, api: model.api, selectedTab: selection, activation: activation)
-                .tabItem { Label("TV", systemImage: "tv") }
-                .tag(MediaTab.tv)
-            VideoGridView(tab: .movies, groups: model.groups, api: model.api, selectedTab: selection, activation: activation)
-                .tabItem { Label("Movies", systemImage: "film") }
-                .tag(MediaTab.movies)
-        }
-        // Docked above the tab bar for as long as audio plays, on any tab —
-        // matches the audio session's own lifetime, which already outlives
-        // whichever list view started it.
-        .safeAreaInset(edge: .bottom) {
+        ZStack(alignment: .bottom) {
+            TabView(selection: selectionBinding) {
+                VideoGridView(tab: .videos, groups: model.groups, api: model.api, selectedTab: selection, activation: activation)
+                    .tabItem { Label("Videos", systemImage: "play.rectangle.on.rectangle") }
+                    .tag(MediaTab.videos)
+                VideoGridView(tab: .tv, groups: model.groups, api: model.api, selectedTab: selection, activation: activation)
+                    .tabItem { Label("TV", systemImage: "tv") }
+                    .tag(MediaTab.tv)
+                VideoGridView(tab: .movies, groups: model.groups, api: model.api, selectedTab: selection, activation: activation)
+                    .tabItem { Label("Movies", systemImage: "film") }
+                    .tag(MediaTab.movies)
+            }
             AudioMiniPlayerBar(audio: model.audio)
+                .padding(.bottom, Self.tabBarHeight)
         }
         // The restore button on the PiP float re-opens the full-screen player.
         // It lives at the root rather than in a grid because all three grids

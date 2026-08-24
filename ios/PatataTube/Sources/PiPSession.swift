@@ -83,6 +83,22 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         self.onStart = onStart
     }
 
+    /// External restore request: the audio-only mini-player's thumbnail/title
+    /// tap hands its current item to the full-screen player the same way the
+    /// floating PiP button's own restore does, reusing the one presentation
+    /// site `RootTabView` already wires to `restoreRequest` (whose `onChange`
+    /// stops the audio-only queue for us — no float here to release).
+    func restoreFullScreen(
+        video: Video, queueSnapshot: [Video], sleepMode: Bool,
+        startSecs: Double, scope: String?, randomize: Bool
+    ) {
+        restoreScope = scope
+        restoreRandomize = randomize
+        restoreRequest = PlaybackQueue(
+            video: video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, startSecs: startSecs
+        )
+    }
+
     /// Tears down an active float from the outside — the audio-only queue calls
     /// this before it starts, since starting audio and a floating PiP video are
     /// the same "one audio source at a time" invariant from the other

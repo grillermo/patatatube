@@ -123,6 +123,19 @@ final class AudioQueuePlayer: ObservableObject {
     func skipForward() { advance(by: 1) }
     func skipBackward() { handlePrevious() }
 
+    /// The mini-player bar's thumbnail/title tap: hand the current item to
+    /// the full-screen player at the same position audio was at, via the same
+    /// restore mechanism the floating PiP button's own restore uses. `model`
+    /// is nil only if nothing is playing, which the bar already guards for.
+    func openFullScreen() {
+        guard let model, let video = navigator?.currentVideo else { return }
+        let secs = player?.currentTime().seconds ?? 0
+        model.pip.restoreFullScreen(
+            video: video, queueSnapshot: navigator?.videos ?? [video], sleepMode: sleepAfterCurrent,
+            startSecs: secs.isFinite ? secs : 0, scope: scope, randomize: model.randomize(for: scope)
+        )
+    }
+
     /// Tear everything down: pause, drop observers, clear Now Playing, release
     /// the audio session so other apps resume.
     func stop() {

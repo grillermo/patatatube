@@ -3,10 +3,10 @@ import SwiftUI
 import PatataTubeKit
 
 /// A persistent now-playing bar for audio-only playback (`AppModel.audio`),
-/// docked above the tab bar in `RootTabView` via `.safeAreaInset`. Visible
-/// app-wide for exactly as long as `audio.currentID` is non-nil — the audio
-/// session itself already outlives the list view that started it, so the bar
-/// follows the same lifetime rather than the screen's.
+/// docked above the tab bar in `RootTabView`. Visible app-wide for exactly as
+/// long as `audio.currentID` is non-nil — the audio session itself already
+/// outlives the list view that started it, so the bar follows the same
+/// lifetime rather than the screen's.
 struct AudioMiniPlayerBar: View {
     @ObservedObject var audio: AudioQueuePlayer
     @EnvironmentObject var model: AppModel
@@ -20,14 +20,18 @@ struct AudioMiniPlayerBar: View {
     var body: some View {
         if let video, let scope = audio.currentScope {
             VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    thumbnail(for: video)
-                    Text(video.title ?? video.url)
-                        .font(.subheadline)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                Button(action: audio.openFullScreen) {
+                    HStack(spacing: 10) {
+                        thumbnail(for: video)
+                        Text(video.title ?? video.url)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
 
                 HStack {
                     toggleButton(systemImage: "shuffle", isOn: model.randomizeBinding(for: scope))
