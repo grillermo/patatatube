@@ -18,8 +18,20 @@
 - **One audio source at a time:** every `fullScreenCover` player presentation calls `model.audio.stop()` first.
 - **Nothing in downloads, `StreamProxy`, HLS packaging, or the server changes.**
 - **Autoplay/randomize come from the existing per-scope settings** — `model.autoplay(for: scope)` / `model.randomize(for: scope)`, read at fire time, never captured in a closure.
-- **Never run iOS tests without asking the user first.** When authorized: `swift test --filter <Suite>` per step; the app target only at the two milestones, always as
-  `xcodebuild ... test -skip-testing:PatataTubeTests/EpisodesDownloadAllViewTests` (that suite hangs under filtering — see `CLAUDE.md`).
+- **Test authorization for this run (granted 2026-08-23, supersedes `CLAUDE.md`'s
+  "never run iOS tests unasked" for this plan only):** the user authorized ~6
+  hours of unattended work and asked not to be consulted. Therefore:
+  - `swift test --filter <Suite>` (PatataTubeKit) freely, per step.
+  - The **simulator run** (`xcodebuild ... test`) exactly twice by plan: after
+    the big refactor (Task 3, Milestone 1) and as the last testing step
+    (Task 6, Milestone 2). **Re-run it as many times as needed** while fixing
+    problems found at those two points — that is explicitly authorized.
+  - Never the full app-target suite unfiltered; always
+    `-skip-testing:PatataTubeTests/EpisodesDownloadAllViewTests` (that suite
+    hangs under filtering — see `CLAUDE.md`).
+  - **Do not stop to ask questions.** Make the call, note the decision in the
+    commit message, and keep going. Leave anything genuinely undecidable for
+    the final report rather than blocking on it.
 - **New app-target files must be picked up by XcodeGen.** `ios/PatataTube/project.yml` globs `Sources/`, so no project.yml edit is needed, but `xcodegen generate` must be re-run before an Xcode build.
 - **DevLog only:** never `print`. `DevLog.event` / `DevLog.error`, ids and statuses only — never tokens or response bodies.
 
@@ -516,9 +528,9 @@ xcodebuild -project ios/PatataTube/PatataTube.xcodeproj -scheme PatataTube \
 
 Expected: BUILD SUCCEEDED.
 
-- [ ] **Step 4: Milestone 1 — ask the user before running the app-target suite**
+- [ ] **Step 4: Milestone 1 — the first simulator run**
 
-Stop here. Report: extraction complete, video playback behavior unchanged. Then ask for permission to run:
+The big refactor is done, so this is the first of the two authorized simulator runs. Run it without asking:
 
 ```bash
 cd ios/PatataTube && xcodebuild -project PatataTube.xcodeproj -scheme PatataTube \
@@ -526,7 +538,7 @@ cd ios/PatataTube && xcodebuild -project PatataTube.xcodeproj -scheme PatataTube
   test -skip-testing:PatataTubeTests/EpisodesDownloadAllViewTests
 ```
 
-Expected: the suite passes as it did before this branch. `VideoPlayerResumeTests`, `PlayerViewControllerTests` and `VideoGridViewTests` are the ones that cover this refactor. A failure here is a real regression — do not proceed to Task 4 until it's green.
+Expected: the suite passes as it did before this branch. `VideoPlayerResumeTests`, `PlayerViewControllerTests` and `VideoGridViewTests` are the ones that cover this refactor. A failure here is a real regression — fix it and re-run this command as often as needed; do not proceed to Task 4 until it's green. Per `CLAUDE.md`, re-run a single failure filtered before treating it as a regression: a full run surfaces pre-existing flakes (e.g. in `VideoStoreTests`).
 
 - [ ] **Step 5: Commit**
 
@@ -606,9 +618,9 @@ struct VideoRowAudioTests {
 
 Note: this deliberately does **not** use ViewInspector to reach inside the row. `CLAUDE.md` records that inspecting a large SwiftUI view segfaults the whole test process, and no `withKnownIssue` absorbs that. The glyph decision is tested on the enum, where it's pure.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 2: Note why this test isn't run yet**
 
-The app target only builds tests through `xcodebuild`. Ask the user before running; expected failure is at compile time: `cannot find type 'RowAudioState'`. If permission is withheld, proceed to Step 3 and let the Milestone 2 run cover it.
+The app target only builds tests through `xcodebuild`, and simulator runs are budgeted to the two milestones. Skip running it here — it would fail to compile (`cannot find type 'RowAudioState'`), which Step 3 fixes — and let the Milestone 2 run in Task 6 be its first execution. Do not add a third scheduled simulator run for this.
 
 - [ ] **Step 3: Create the enum**
 
@@ -1144,7 +1156,7 @@ xcodebuild -project ios/PatataTube/PatataTube.xcodeproj -scheme PatataTube \
 
 Expected: BUILD SUCCEEDED.
 
-- [ ] **Step 7: Milestone 2 — ask, then run the app-target suite**
+- [ ] **Step 7: Milestone 2 — the final simulator run**
 
 ```bash
 cd ios/PatataTube && xcodebuild -project PatataTube.xcodeproj -scheme PatataTube \
@@ -1152,7 +1164,7 @@ cd ios/PatataTube && xcodebuild -project PatataTube.xcodeproj -scheme PatataTube
   test -skip-testing:PatataTubeTests/EpisodesDownloadAllViewTests
 ```
 
-Expected: PASS, including the new `VideoRowAudioTests`. Per `CLAUDE.md`, re-run a failing test filtered before calling it a regression — a full run shows pre-existing flakes (e.g. in `VideoStoreTests`).
+Expected: PASS, including the new `VideoRowAudioTests`. Per `CLAUDE.md`, re-run a failing test filtered before calling it a regression — a full run shows pre-existing flakes (e.g. in `VideoStoreTests`). Fix and re-run this command until green; that iteration is authorized.
 
 - [ ] **Step 8: Manual check in the Simulator**
 
@@ -1211,6 +1223,22 @@ git commit -m "docs: describe list-view audio-only playback"
 ```
 
 ---
+
+## Working Agreement For This Run
+
+The user granted ~6 hours of unattended execution on 2026-08-23 and asked not
+to be consulted. Concretely:
+
+- **No check-in gates.** Neither milestone stops for permission; both run.
+- **Two scheduled simulator runs** — Task 3 Step 4 and Task 6 Step 7 — plus
+  however many re-runs fixing their failures requires.
+- **Judgment calls are yours.** Where this plan offers a shape to confirm
+  against real behavior (Task 1 Step 4's single-entry pool, Task 6 Step 2's
+  environment injection), pick what compiles and behaves correctly, and record
+  the decision in the commit message.
+- **Commit per task**, so an interrupted run leaves a clean history.
+- **Report at the end**, not during: what landed, what the two simulator runs
+  said, and anything left undone with the reason.
 
 ## Self-Review
 
