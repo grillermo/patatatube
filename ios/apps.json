@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.6",
+          "buildVersion": "167",
+          "date": "2026-08-24T17:32:01Z",
+          "localizedDescription": "What's new in 2.5.6:\n\n• Rebuild audio handoff\n• Return to the audio mini player when a full-screen player opened from it is dismissed\n• Apply the shuffle toggle to an already-playing audio queue\n• Fix crash when starting audio playback after dismissing the full-screen player\n• Fix mini-player/tab-bar overlap; tap bar to open full screen\n• Add mini-player bar for audio-only playback\n• fix: stop the other audio source on both PiP/list-audio crossings\n• docs: describe list-view audio-only playback",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.6/PatataTube-2.5.6.ipa",
+          "size": 4305570,
+          "sha256": "17c30dc787d2f1c246128d4abab121b7107925e1d45a04256b73a0298ad65f6c",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.5.5",
           "buildVersion": "166",
           "date": "2026-08-24T14:05:57Z",
@@ -1584,11 +1594,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.5.5",
-      "versionDate": "2026-08-24T14:05:57Z",
-      "versionDescription": "Closing full screen puts you back in the mini player\n\n• Opening full screen from the mini player and then closing it returns to audio on the same track, at the same second, instead of ending playback\n• If the video was paused when you closed it, audio comes back paused; a track that already finished won't restart",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.5/PatataTube-2.5.5.ipa",
-      "size": 4307076
+      "version": "2.5.6",
+      "versionDate": "2026-08-24T17:32:01Z",
+      "versionDescription": "What's new in 2.5.6:\n\n• Rebuild audio handoff\n• Return to the audio mini player when a full-screen player opened from it is dismissed\n• Apply the shuffle toggle to an already-playing audio queue\n• Fix crash when starting audio playback after dismissing the full-screen player\n• Fix mini-player/tab-bar overlap; tap bar to open full screen\n• Add mini-player bar for audio-only playback\n• fix: stop the other audio source on both PiP/list-audio crossings\n• docs: describe list-view audio-only playback",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.6/PatataTube-2.5.6.ipa",
+      "size": 4305570
     }
   ],
   "news": []
