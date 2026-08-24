@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.4",
+          "buildVersion": "165",
+          "date": "2026-08-24T13:46:14Z",
+          "localizedDescription": "Shuffle now works while audio is playing\n\n• Turning shuffle on in the mini player randomizes the next track immediately, instead of only applying to queues started after the toggle\n• Turning it off mid-queue resumes playing in list order from the current track",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.4/PatataTube-2.5.4.ipa",
+          "size": 4303066,
+          "sha256": "4481c09dd4e078d5373ae05f104a54308b1441b276a38cca41ee7f870df0a391",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.5.3",
           "buildVersion": "164",
           "date": "2026-08-24T13:35:09Z",
@@ -1564,11 +1574,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.5.3",
-      "versionDate": "2026-08-24T13:35:09Z",
-      "versionDescription": "Fixes a crash when going back to audio-only playback\n\n• Starting audio on a list row no longer crashes after you open a video full screen and dismiss it",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.3/PatataTube-2.5.3.ipa",
-      "size": 4302987
+      "version": "2.5.4",
+      "versionDate": "2026-08-24T13:46:14Z",
+      "versionDescription": "Shuffle now works while audio is playing\n\n• Turning shuffle on in the mini player randomizes the next track immediately, instead of only applying to queues started after the toggle\n• Turning it off mid-queue resumes playing in list order from the current track",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.4/PatataTube-2.5.4.ipa",
+      "size": 4303066
     }
   ],
   "news": []
