@@ -168,6 +168,9 @@ struct VideoGridView: View {
 
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
+    /// Injected separately from `model` because nested ObservableObjects don't
+    /// republish through their parent — same reason `model.store` is.
+    @EnvironmentObject private var audio: AudioQueuePlayer
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var groups: GroupStore
 
@@ -541,8 +544,15 @@ struct VideoGridView: View {
                             },
                             localFileURL: cache.localURL(for: videoId, versionId: versionId),
                             groups: groups.groups,
-                            onPlay: { play(video, caller: "grid-row") },
-                            onPlaySleep: { play(video, sleepMode: true, caller: "grid-row-sleep") },
+                            audioState: audioOnlyMode ? audio.state(for: videoId) : .idle,
+                            onPlay: {
+                                if audioOnlyMode { toggleAudio(video) }
+                                else { play(video, caller: "grid-row") }
+                            },
+                            onPlaySleep: {
+                                if audioOnlyMode { startAudio(video, sleepMode: true) }
+                                else { play(video, sleepMode: true, caller: "grid-row-sleep") }
+                            },
                             onDownload: { await download(video) },
                             onCancel: { cache.cancel(id: videoId, versionId: versionId) },
                             onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
@@ -881,6 +891,13 @@ struct VideoGridView: View {
         return id
     }
 
+    /// Group detail in list mode plays audio only: the row is the transport,
+    /// and no player is presented. Deliberately no video escape hatch — leave
+    /// list mode to watch something.
+    private var audioOnlyMode: Bool {
+        currentGroupID != nil && displayMode == .list
+    }
+
     /// The open group's "Display titles" setting. A group setting, so the
     /// tv/movies tabs (no `currentGroupID`) never overlay titles.
     private var showsTitles: Bool {
@@ -979,6 +996,55 @@ struct VideoGridView: View {
         }
     }
 
+    /// Row tap in audio mode: the current item toggles, anything else starts.
+    private func toggleAudio(_ video: Video) {
+        if model.audio.currentID == video.id {
+            model.audio.toggle()
+        } else {
+            startAudio(video)
+        }
+    }
+
+    /// Start audio for `video` with the on-screen list as its queue. Mirrors
+    /// `play`'s readiness handling — a library row that isn't converted still
+    /// needs `/prepare` first — but ends in audio instead of a presentation.
+    private func startAudio(_ video: Video, sleepMode: Bool = false) {
+        let queueSnapshot = filteredVideos
+        DevLog.event(.nav, "audio requested", ["video_id": "\(video.id)"])
+        let begin: (Video) -> Void = { ready in
+            let index = queueSnapshot.firstIndex(where: { $0.id == ready.id }) ?? 0
+            let queue = queueSnapshot.isEmpty ? [ready] : queueSnapshot
+            model.audio.start(videos: queue, startIndex: index, scope: playbackScope,
+                              sleepMode: sleepMode, model: model)
+        }
+        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached
+            || !(video.isLibrary && video.status != "done") {
+            begin(video)
+            return
+        }
+        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached {
+            pendingAutoDownloads.add(video.id)
+        }
+        model.audio.markLoading(id: video.id)
+        Task {
+            do {
+                guard let readyVideo = try await preparationTracker.trackIfIdle(
+                    videoID: video.id,
+                    operation: { try await store.ensureReady(id: video.id) }
+                ) else {
+                    model.audio.markLoading(id: nil)
+                    return
+                }
+                autoDownloadIfPending(readyVideo)
+                begin(readyVideo)
+            } catch {
+                pendingAutoDownloads.remove(video.id)
+                model.audio.markLoading(id: nil)
+                store.errorText = String(describing: error)
+            }
+        }
+    }
+
     /// Downloads a converted video this device had asked to convert, once.
     /// Claiming the pending entry before starting is what keeps a second caller
     /// (another tab's watcher, a re-fired poll) from downloading it twice.
@@ -1009,6 +1075,7 @@ struct VideoGridView: View {
     /// ensureReady-updated copy, so it replaces its stale row in the snapshot.
     /// tv/movies rows with real progress stop here and ask first.
     private func startPlayback(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false, caller: String = "?") {
+        model.audio.stop()
         let secs = model.resumeStore.resolved(server: video.resumeSecs, for: video.id)
         switch ResumeDecision.decide(resumeSecs: secs, plexKind: video.plexKind) {
         case .ask(let secs):

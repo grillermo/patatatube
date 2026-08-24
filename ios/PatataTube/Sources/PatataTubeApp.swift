@@ -86,6 +86,7 @@ struct PatataTubeApp: App {
             RootView()
                 .environmentObject(model)
                 .environmentObject(model.store)
+                .environmentObject(model.audio)
                 .onChange(of: scenePhase) { _, phase in
                     DevLog.event(.lifecycle, "scenePhase -> \(phase)")
                     // Downloads use a foreground session, so they stall when the
