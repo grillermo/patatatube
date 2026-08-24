@@ -19,11 +19,12 @@ private func livePlayer() -> AVPlayer {
     AVPlayer(playerItem: AVPlayerItem(url: URL(fileURLWithPath: "/dev/null/never.mp4")))
 }
 
-/// Dismissing a full-screen player that was opened from the audio mini player
-/// hands playback *back* to the mini player. The point of the handover is that
-/// the sound never stops, so what is asserted throughout is that the running
-/// `AVPlayer` is carried across — not rebuilt, not paused, not re-sought.
-@Suite("Audio handover on dismiss", .serialized)
+/// The audio mini player and the full-screen cover pass one `AVPlayer` back and
+/// forth: the bar's thumbnail tap hands its player to the cover, and dismissing
+/// that cover hands it back. The point of both is that the sound never stops,
+/// so what is asserted throughout is that the *same* running player is carried
+/// across — not rebuilt, not paused, not re-sought.
+@Suite("Audio player handover", .serialized)
 @MainActor
 struct AudioHandoverTests {
     @Test func adoptingAPlayingPlayerLeavesItPlaying() {
@@ -81,6 +82,85 @@ struct AudioHandoverTests {
 
         #expect(model.audio.currentID == nil)
         #expect(!model.audio.isPlaying)
+    }
+
+    // MARK: - Opening full screen from the bar
+
+    /// The other half of the round trip: the bar's thumbnail tap gives the
+    /// cover the player it is already using, so opening full screen doesn't
+    /// rebuild the item either.
+    @Test func openingFullScreenHandsTheLivePlayerToThePresentation() {
+        let model = AppModel()
+        let player = livePlayer()
+        player.play()
+        model.audio.adopt(player: player, videos: [video(1), video(2)], startIndex: 0,
+                          scope: "group:7", sleepMode: false, model: model)
+
+        model.audio.openFullScreen()
+
+        #expect(model.pip.restoreAdoptedPlayer === player)
+        #expect(model.pip.restoreCameFromAudio)
+        #expect(model.pip.restoreRequest?.id == 1)
+        #expect(model.pip.restoreRequest?.videos.count == 2)
+        // Handed over, not stopped: this is the whole point.
+        #expect(player.timeControlStatus != .paused)
+        // ...and the queue has let go, so the bar drops away with nothing to stop.
+        #expect(model.audio.currentID == nil)
+        #expect(!model.audio.isPlaying)
+        model.pip.restoreRequest = nil
+        _ = model.pip.takeAdoptedPlayer()
+        player.pause()
+    }
+
+    /// `RootTabView` stops the audio queue on every restore request. After a
+    /// handover there is nothing left to stop — and nothing to release, since
+    /// the audio session now belongs to the cover that is opening.
+    @Test func stoppingAnAlreadyHandedOverQueueLeavesThePlayerAlone() {
+        let model = AppModel()
+        let player = livePlayer()
+        player.play()
+        model.audio.adopt(player: player, videos: [video(1)], startIndex: 0,
+                          scope: nil, sleepMode: false, model: model)
+        let handedOver = model.audio.relinquishPlayer()
+
+        model.audio.stop()
+
+        #expect(handedOver === player)
+        #expect(player.timeControlStatus != .paused)
+        handedOver?.pause()
+    }
+
+    @Test func relinquishingAnIdleQueueHandsOverNothing() {
+        let model = AppModel()
+        #expect(model.audio.relinquishPlayer() == nil)
+    }
+
+    @Test func takingTheHandedOverPlayerIsConsuming() {
+        let sut = PiPSession()
+        let player = livePlayer()
+        sut.restoreFullScreen(video: video(1), queueSnapshot: [video(1)], sleepMode: false,
+                              startSecs: 0, scope: nil, randomize: false, adoptedPlayer: player)
+
+        #expect(sut.takeAdoptedPlayer() === player)
+        #expect(sut.takeAdoptedPlayer() == nil)
+        #expect(sut.restoreAdoptedPlayer == nil)
+    }
+
+    /// A handover nothing adopted is still playing. Dropping the reference
+    /// without pausing would leave sound coming out of an object no screen can
+    /// reach — so the next restore pauses it on its way past.
+    @Test func anUnclaimedHandoverIsPausedByTheNextRestore() {
+        let sut = PiPSession()
+        let stranded = livePlayer()
+        stranded.play()
+        sut.restoreFullScreen(video: video(1), queueSnapshot: [video(1)], sleepMode: false,
+                              startSecs: 0, scope: nil, randomize: false, adoptedPlayer: stranded)
+
+        sut.restoreFullScreen(video: video(2), queueSnapshot: [video(2)], sleepMode: false,
+                              startSecs: 0, scope: nil, randomize: false)
+
+        #expect(stranded.timeControlStatus == .paused)
+        #expect(sut.restoreAdoptedPlayer == nil)
     }
 
     /// The departing `AVPlayerViewController` is retained by `PiPSession` until

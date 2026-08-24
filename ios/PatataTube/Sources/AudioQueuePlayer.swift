@@ -141,7 +141,7 @@ final class AudioQueuePlayer: ObservableObject {
                sleepMode: Bool, model: AppModel) {
         // Drops any previous queue and cancels an in-flight `start()`, but
         // must not touch the audio session the incoming player is using.
-        stop(deactivatingSession: false)
+        teardown(pausing: true, deactivatingSession: false)
         guard videos.indices.contains(startIndex) else { return }
         let video = videos[startIndex]
         self.model = model
@@ -192,26 +192,58 @@ final class AudioQueuePlayer: ObservableObject {
     func openFullScreen() {
         guard let model, let video = navigator?.currentVideo else { return }
         let secs = player?.currentTime().seconds ?? 0
+        let queue = navigator?.videos ?? [video]
+        let sleep = sleepAfterCurrent
+        let queueScope = scope
+        // Read before `relinquishPlayer` clears this queue's state, and handed
+        // over still playing: the cover adopts it instead of building a second
+        // player over the same item. `startSecs` rides along regardless — it is
+        // what the fallback path seeks to if the cover can't adopt.
+        let handedOver = relinquishPlayer()
         model.pip.restoreFullScreen(
-            video: video, queueSnapshot: navigator?.videos ?? [video], sleepMode: sleepAfterCurrent,
-            startSecs: secs.isFinite ? secs : 0, scope: scope, randomize: model.randomize(for: scope)
+            video: video, queueSnapshot: queue, sleepMode: sleep,
+            startSecs: secs.isFinite ? secs : 0, scope: queueScope,
+            randomize: model.randomize(for: queueScope), adoptedPlayer: handedOver
         )
+    }
+
+    /// Hand the running player to the full-screen cover, still playing.
+    ///
+    /// The mirror image of `adopt`, and for the same reason: rebuilding the
+    /// item on the way *in* to full screen is as audible as rebuilding it on
+    /// the way out. Everything this queue attached to the player is removed —
+    /// observers, Now Playing, the navigator — but the player is neither
+    /// paused nor stripped of its audio session, because the cover about to
+    /// mount it needs both exactly as they are.
+    ///
+    /// Returns nil when nothing is playing, in which case the caller opens the
+    /// cover the ordinary way.
+    func relinquishPlayer() -> AVPlayer? {
+        guard let player else { return nil }
+        teardown(pausing: false, deactivatingSession: false)
+        return player
     }
 
     /// Tear everything down: pause, drop observers, clear Now Playing, release
     /// the audio session so other apps resume.
     ///
-    /// `deactivatingSession: false` is for `adopt`, the one caller that is
-    /// clearing this queue in order to keep playing through another player on
-    /// the same, still-active session.
-    func stop(deactivatingSession: Bool = true) {
+    /// The session is released only if this queue actually had a player. A
+    /// `stop()` over nothing is a caller enforcing "one audio source at a
+    /// time" against a queue that isn't running — after `relinquishPlayer`,
+    /// that is exactly the case, and deactivating there would punch a hole in
+    /// the playback someone else has just taken over.
+    func stop() {
+        teardown(pausing: true, deactivatingSession: player != nil)
+    }
+
+    private func teardown(pausing: Bool, deactivatingSession: Bool) {
         startGeneration += 1
         if let playToEndObserver {
             NotificationCenter.default.removeObserver(playToEndObserver)
             self.playToEndObserver = nil
         }
         rateObservation = nil
-        player?.pause()
+        if pausing { player?.pause() }
         player = nil
         navigator = nil
         currentID = nil

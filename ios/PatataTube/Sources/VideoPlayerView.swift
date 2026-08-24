@@ -27,6 +27,12 @@ struct VideoPlayerView: View {
     /// per presentation rather than read off `PiPSession` at dismiss time, so a
     /// later grid tap can't inherit an earlier audio tap's flag.
     let returnsToAudio: Bool
+    /// The audio mini player's running `AVPlayer`, handed over by its
+    /// thumbnail tap. Adopted by `setup` instead of building a second player
+    /// over the same item — the item is already loaded, buffered and at the
+    /// right second, so the sound carries straight into the cover. Nil for
+    /// every other way of opening a player, which build their own.
+    let adoptedPlayer: AVPlayer?
     @State private var currentIndex: Int
     /// Queue stepping (sequential/random, playable-only). Seeded in `setup()`
     /// so `playerItem` is available for its playability probe.
@@ -36,7 +42,8 @@ struct VideoPlayerView: View {
 
     init(videos: [Video], startIndex: Int, sleepMode: Bool = false,
          randomize: Bool = false, startSecs: Double = 0, startPaused: Bool = false,
-         autoplayScope: String? = nil, returnsToAudio: Bool = false) {
+         autoplayScope: String? = nil, returnsToAudio: Bool = false,
+         adoptedPlayer: AVPlayer? = nil) {
         self.videos = videos
         self.startIndex = startIndex
         self.sleepMode = sleepMode
@@ -45,6 +52,7 @@ struct VideoPlayerView: View {
         self.startPaused = startPaused
         self.autoplayScope = autoplayScope
         self.returnsToAudio = returnsToAudio
+        self.adoptedPlayer = adoptedPlayer
         _currentIndex = State(initialValue: startIndex)
         _sleepAfterCurrent = State(initialValue: sleepMode)
         _suppressAutoplayOnce = State(initialValue: startPaused)
@@ -217,7 +225,12 @@ struct VideoPlayerView: View {
                          ["video_id": "\(video.id)", "inst": instanceID])
             // Last, after the teardown above has let go of the player without
             // stopping it.
-            if returningToAudio, let player { handBackToAudio(player) }
+            // `takeAdoptedPlayer` is the dismissed-before-`setup`-ran case:
+            // the bar handed a player over, no view ever adopted it, and it is
+            // still playing with nothing owning it.
+            if returningToAudio, let live = player ?? model.pip.takeAdoptedPlayer() {
+                handBackToAudio(live)
+            }
             DevLog.flush()
         }
     }
@@ -298,6 +311,30 @@ struct VideoPlayerView: View {
             isPlayable: { playerItem(for: $0) != nil }
         )
         activateAudioSession()
+        // Adopting the mini player's live player, if it handed one over. This
+        // runs before the first `await`, so the player is in place before
+        // anything — including `onDisappear` — can observe this view without
+        // one, and the item mounts with no rebuild, no seek and no re-buffer.
+        if let adopted = adoptedPlayer {
+            // Ours now — the session must not keep a reference it would later
+            // pause on the next restore.
+            _ = model.pip.takeAdoptedPlayer()
+            if let item = adopted.currentItem {
+                DevLog.event(.play, "player adopted from audio", [
+                    "video_id": "\(video.id)", "inst": instanceID,
+                    "secs": "\(Int(max(0, adopted.currentTime().seconds.isFinite ? adopted.currentTime().seconds : 0)))",
+                ])
+                adopted.allowsExternalPlayback = true
+                adopted.usesExternalPlaybackWhileExternalScreenIsActive = true
+                player = adopted
+                await finishSetup(player: adopted, item: item, source: "adopted_audio")
+                return
+            }
+            // Handed a player with nothing loaded: unusable, and nothing else
+            // owns it. Fall through and build one the ordinary way, seeking to
+            // the second the bar sent along.
+            adopted.pause()
+        }
         // Before the URL is built, not after it fails: a dead proxy makes
         // `offlineHLSURL` hand out an address nothing answers on, and AVPlayer
         // reports that as a 12s buffer followed by -1004.
@@ -325,6 +362,12 @@ struct VideoPlayerView: View {
             abandonSetup(player: player)
             return
         }
+        await finishSetup(player: player, item: item, source: source)
+    }
+
+    /// Everything a mounted player needs, whichever way it got here: built by
+    /// `setup` over a fresh item, or adopted live from the audio mini player.
+    private func finishSetup(player: AVPlayer, item: AVPlayerItem, source: String) async {
         playbackProbe.attach(item: item, player: player, video: video, source: source)
         playWhenReady(item: item, on: player)
         Task { await applyAudioSelection(item: item, lang: video.audioLang) }

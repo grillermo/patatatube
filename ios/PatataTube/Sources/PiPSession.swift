@@ -33,6 +33,12 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
     /// `shouldReturnToAudio`). Every restore path sets it, so a PiP restore
     /// can never inherit an audio tap's flag.
     private(set) var restoreCameFromAudio = false
+    /// The live `AVPlayer` the audio mini player handed over for
+    /// `restoreRequest` to adopt, still playing. Read (without consuming) by
+    /// the presentation site, taken by `VideoPlayerView.setup` — non-nil only
+    /// between the bar's tap and that adoption, so a restore reached any other
+    /// way finds nothing here.
+    private(set) var restoreAdoptedPlayer: AVPlayer?
 
     /// Retained across the cover's dismissal — SwiftUI drops both.
     private var controller: AVPlayerViewController?
@@ -96,11 +102,14 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
     /// stops the audio-only queue for us — no float here to release).
     func restoreFullScreen(
         video: Video, queueSnapshot: [Video], sleepMode: Bool,
-        startSecs: Double, scope: String?, randomize: Bool
+        startSecs: Double, scope: String?, randomize: Bool,
+        adoptedPlayer: AVPlayer? = nil
     ) {
         restoreScope = scope
         restoreRandomize = randomize
         restoreCameFromAudio = true
+        clearAdoptedPlayer()
+        restoreAdoptedPlayer = adoptedPlayer
         restoreRequest = PlaybackQueue(
             video: video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, startSecs: startSecs
         )
@@ -121,6 +130,21 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         positionObserver = nil
         videos = []
         onStart = nil
+    }
+
+    /// Takes the handed-over player for the presentation that is adopting it.
+    /// Consuming, so exactly one owner ends up with it.
+    func takeAdoptedPlayer() -> AVPlayer? {
+        defer { restoreAdoptedPlayer = nil }
+        return restoreAdoptedPlayer
+    }
+
+    /// Drops a handed-over player nothing adopted. Pausing is the point: it is
+    /// still playing, and letting go of the last reference to it without that
+    /// would leave sound coming out of an object no screen can control.
+    private func clearAdoptedPlayer() {
+        restoreAdoptedPlayer?.pause()
+        restoreAdoptedPlayer = nil
     }
 
     /// Hands a player out of the controller it was mounted in, for the one
@@ -220,6 +244,7 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
             restoreScope = scope
             restoreRandomize = randomize
             restoreCameFromAudio = false
+            clearAdoptedPlayer()
             restoreRequest = PlaybackQueue(
                 video: videos[index], queueSnapshot: videos, sleepMode: sleepMode,
                 startSecs: secs.isFinite ? secs : 0

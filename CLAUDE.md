@@ -320,6 +320,21 @@ hand an anonymous visitor a cached authenticated page.
   (which stops the audio queue), so the resulting cover carries
   `returnsToAudio: true` — passed per presentation, never read off `PiPSession`
   at dismiss time, or a later grid tap would inherit an old audio tap's flag.
+  **The player itself goes with it, still playing.**
+  `AudioQueuePlayer.relinquishPlayer` drops the queue's observers, Now Playing
+  and navigator without pausing the player or releasing the audio session, and
+  `PiPSession.restoreAdoptedPlayer` carries it to the presentation, where
+  `VideoPlayerView.setup` adopts it (`finishSetup`) instead of building a
+  second player over the same item — so there is no fresh `AVPlayerItem`, no
+  seek and no re-buffer on the way in either. The presentation site *reads*
+  that property (its closure can run twice for one presentation; handing the
+  view nil the second time would strand a playing player) and `setup`
+  *consumes* it, exactly once. A handover nothing adopts is paused by the next
+  restore, and a cover dismissed before `setup` ran takes it back through
+  `takeAdoptedPlayer` and hands it to the bar. `RootTabView`'s
+  `audio.stop()` on every restore request is then a no-op for this path —
+  `stop()` releases the audio session only if the queue actually still had a
+  player.
   On dismiss `VideoPlayerView` consults `shouldReturnToAudio`
   (PatataTubeKit) and hands **the running `AVPlayer` itself** to
   `AudioQueuePlayer.adopt` — not a rebuilt one. Rebuilding (fresh

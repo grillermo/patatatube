@@ -77,6 +77,12 @@ struct RootTabView: View {
                 // covered the grid's own `startPlayback`), so the "one audio
                 // source at a time" constraint has to be enforced here too:
                 // list audio may have started while the PiP float was up.
+                // The audio-only queue has already let go by the time it asks
+                // for a cover (`relinquishPlayer`), so this stops nothing in
+                // that case — and `stop()` knows not to release an audio
+                // session it no longer owns. It still matters for the PiP
+                // float's restore, where list audio may have started
+                // underneath it.
                 .onChange(of: pip.restoreRequest) { _, newValue in
                     guard newValue != nil else { return }
                     audio.stop()
@@ -86,7 +92,12 @@ struct RootTabView: View {
                         videos: request.videos, startIndex: request.startIndex,
                         sleepMode: request.sleepMode, randomize: pip.restoreRandomize,
                         startSecs: request.startSecs, autoplayScope: pip.restoreScope,
-                        returnsToAudio: pip.restoreCameFromAudio
+                        returnsToAudio: pip.restoreCameFromAudio,
+                        // Read, not taken: this closure can run more than once
+                        // for one presentation, and a second pass handing the
+                        // view nil would strand a playing player. `setup`
+                        // consumes it, exactly once.
+                        adoptedPlayer: pip.restoreAdoptedPlayer
                     )
                 }
         }
