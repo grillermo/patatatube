@@ -175,6 +175,10 @@ struct VideoPlayerView: View {
             readyTimeoutTask = nil
             if !handingOff {
                 if let positionObserver { player?.removeTimeObserver(positionObserver) }
+                // The staging armed for a PiP that never started now points at
+                // an observer this teardown just removed; leaving it would let
+                // `stopFloating()` remove it again and throw.
+                if let player { model.pip.cancelStaging(for: player) }
                 nowPlaying.detach()
                 deactivateAudioSession()
             }
@@ -372,6 +376,7 @@ struct VideoPlayerView: View {
         pauseTransitionObserver = nil
         if let positionObserver { expectedPlayer.removeTimeObserver(positionObserver) }
         positionObserver = nil
+        model.pip.cancelStaging(for: expectedPlayer)
         nowPlaying.detach()
         playbackProbe.detach()
         if player === expectedPlayer { player = nil }

@@ -99,13 +99,31 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
         )
     }
 
+    /// Drops staging that never became a float. `prepare` runs as soon as a
+    /// player exists, so a player view that is dismissed without PiP ever
+    /// starting leaves us holding its player *and* the periodic observer it
+    /// has already removed on its way out. Left in place, the next
+    /// `stopFloating()` removes that observer a second time and AVPlayer
+    /// throws `NSInvalidArgumentException` (PATATATUBE-K). Scoped by identity
+    /// so a newer view's staging is never dropped by an older view's teardown,
+    /// and refused outright while a float is live — there the handoff, not the
+    /// departing cover, owns the player.
+    func cancelStaging(for player: AVPlayer) {
+        guard !isHandingOff, self.player === player else { return }
+        self.player = nil
+        positionObserver = nil
+        videos = []
+        onStart = nil
+    }
+
     /// Tears down an active float from the outside — the audio-only queue calls
     /// this before it starts, since starting audio and a floating PiP video are
     /// the same "one audio source at a time" invariant from the other
-    /// direction. A no-op when nothing is floating: `player` is only non-nil
-    /// between `willStart` and `release()`.
+    /// direction. A no-op when nothing is floating: staged-but-not-floating
+    /// state belongs to a live player view, whose observers are its own to
+    /// remove, so `isHandingOff` — not `player` — is what says a float exists.
     func stopFloating() {
-        guard player != nil else { return }
+        guard isHandingOff else { return }
         release()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }

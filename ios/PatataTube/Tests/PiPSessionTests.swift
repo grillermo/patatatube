@@ -18,12 +18,17 @@ private func video(_ id: Int) -> Video {
 @Suite("Picture in Picture handoff")
 @MainActor
 struct PiPSessionTests {
-    private func staged(_ sut: PiPSession, index: Int = 1, onStart: @escaping () -> Void = {}) {
+    @discardableResult
+    private func staged(
+        _ sut: PiPSession, index: Int = 1, player: AVPlayer = AVPlayer(),
+        onStart: @escaping () -> Void = {}
+    ) -> AVPlayer {
         sut.prepare(
-            player: AVPlayer(), positionObserver: nil, videos: [video(1), video(2)],
+            player: player, positionObserver: nil, videos: [video(1), video(2)],
             index: index, sleepMode: false, scope: "plex:movies", randomize: true,
             onStart: onStart
         )
+        return player
     }
 
     @Test func startingPipDismissesTheCoverExactlyOnce() {
@@ -98,6 +103,52 @@ struct PiPSessionTests {
 
         #expect(!sut.isHandingOff)
         #expect(sut.restoreRequest == nil)
+    }
+
+    /// The crash in PATATATUBE-K: a cover dismissed without PiP ever starting
+    /// left its player and its already-removed periodic observer staged, and
+    /// the next audio-only tap called `stopFloating()` on them.
+    @Test func aDismissedCoverTakesItsStagingWithIt() {
+        var dismissals = 0
+        let sut = PiPSession()
+        let player = staged(sut) { dismissals += 1 }
+
+        sut.cancelStaging(for: player)
+        sut.stopFloating()
+        sut.playerViewControllerWillStartPictureInPicture(AVPlayerViewController())
+
+        #expect(!sut.isHandingOff)
+        #expect(dismissals == 0)
+    }
+
+    /// Staging and mounting race, so an older view's teardown can land after a
+    /// newer view has staged. Identity is what keeps it from stealing it.
+    @Test func cancellingStagingIgnoresAnotherViewsPlayer() {
+        var dismissals = 0
+        let sut = PiPSession()
+        staged(sut) { dismissals += 1 }
+
+        sut.cancelStaging(for: AVPlayer())
+        sut.playerViewControllerWillStartPictureInPicture(AVPlayerViewController())
+
+        #expect(sut.isHandingOff)
+        #expect(dismissals == 1)
+    }
+
+    /// The cover's `onDisappear` runs during a handoff too — there the float
+    /// owns the player, and dropping the staging would strand it.
+    @Test func cancellingStagingIsRefusedWhileFloating() {
+        let sut = PiPSession()
+        let player = staged(sut, index: 1)
+        sut.playerViewControllerWillStartPictureInPicture(AVPlayerViewController())
+
+        sut.cancelStaging(for: player)
+        sut.playerViewController(
+            AVPlayerViewController(),
+            restoreUserInterfaceForPictureInPictureStopWithCompletionHandler: { _ in }
+        )
+
+        #expect(sut.restoreRequest?.id == 2)
     }
 
     @Test func aLiveFloatIsNeverRestagedByThePlayerUnderneath() {
