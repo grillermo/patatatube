@@ -11,7 +11,10 @@ import Foundation
 /// Not `Sendable`: it stores `isPlayable`. Callers are `@MainActor`.
 public struct QueueNavigator {
     public let videos: [Video]
-    public let randomize: Bool
+    /// Live, not a snapshot: the audio mini-player's shuffle toggle flips this
+    /// mid-queue via `setRandomize`, exactly like autoplay is re-read at
+    /// end-of-item rather than captured when the queue started.
+    public private(set) var randomize: Bool
     private let isPlayable: (Video) -> Bool
     public private(set) var currentIndex: Int
     /// Random mode only: cursor state over a shuffled permutation of the
@@ -30,6 +33,25 @@ public struct QueueNavigator {
         let playable = playableVideoIndices
         let order = shuffledPlaybackOrder(count: playable.count,
                                           pinFirst: playable.firstIndex(of: startIndex))
+        playbackOrder = order.map { playable[$0] }
+        orderPosition = 0
+    }
+
+    /// Switch modes mid-queue, keeping the current item put. Turning it on
+    /// builds a fresh order pinned at the current video (so "next" draws from
+    /// the shuffle immediately); turning it off drops the order and hands
+    /// stepping back to `currentIndex`, which both modes keep up to date.
+    public mutating func setRandomize(_ on: Bool) {
+        guard on != randomize else { return }
+        randomize = on
+        guard on else {
+            playbackOrder = []
+            orderPosition = 0
+            return
+        }
+        let playable = playableVideoIndices
+        let order = shuffledPlaybackOrder(count: playable.count,
+                                          pinFirst: playable.firstIndex(of: currentIndex))
         playbackOrder = order.map { playable[$0] }
         orderPosition = 0
     }

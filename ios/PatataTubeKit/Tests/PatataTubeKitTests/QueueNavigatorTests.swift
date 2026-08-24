@@ -44,6 +44,42 @@ final class QueueNavigatorTests: XCTestCase {
         XCTAssertNil(nav.step(direction: -1))
     }
 
+    func testRandomizeTurnedOnMidQueueTakesEffectOnTheNextStep() {
+        // The audio mini-player's shuffle toggle flips this while the queue is
+        // already running; a snapshot taken at start() left "next" sequential.
+        var nav = navigator(ids: [1, 2, 3, 4], startIndex: 0, randomize: false)
+        XCTAssertEqual(nav.step(direction: 1), 1)
+        nav.setRandomize(true)
+        XCTAssertTrue(nav.randomize)
+        XCTAssertEqual(nav.currentVideo?.id, 2, "enabling must not move the current item")
+        var seen = [2]
+        for _ in 0..<3 {
+            guard let next = nav.step(direction: 1) else { return XCTFail("random step ran dry") }
+            seen.append(nav.videos[next].id)
+        }
+        XCTAssertEqual(Set(seen), [1, 2, 3, 4], "the shuffle covers the pool from the current item")
+    }
+
+    func testRandomizeTurnedOffMidQueueResumesSequentiallyFromTheCurrentItem() {
+        var nav = navigator(ids: [1, 2, 3, 4], startIndex: 2, randomize: true)
+        _ = nav.step(direction: 1)
+        let index = nav.currentIndex
+        nav.setRandomize(false)
+        XCTAssertFalse(nav.randomize)
+        XCTAssertEqual(nav.currentIndex, index, "disabling must not move the current item")
+        let expected: Int? = index + 1 < 4 ? index + 1 : nil
+        XCTAssertEqual(nav.step(direction: 1), expected, "sequential stepping resumes from there")
+    }
+
+    func testRandomizeSetToItsCurrentValueKeepsTheExistingOrder() {
+        var nav = navigator(ids: [1, 2, 3, 4], startIndex: 0, randomize: true)
+        _ = nav.step(direction: 1)
+        _ = nav.step(direction: 1)
+        XCTAssertFalse(nav.isAtQueueStart)
+        nav.setRandomize(true)
+        XCTAssertFalse(nav.isAtQueueStart, "a no-op set must not reseed the order")
+    }
+
     func testRandomStartsAtTheTappedVideoAndVisitsEveryPlayableOneBeforeRepeating() {
         var nav = navigator(ids: [1, 2, 3, 4], startIndex: 2, randomize: true)
         XCTAssertEqual(nav.currentVideo?.id, 3, "the tapped video plays first")

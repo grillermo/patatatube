@@ -196,8 +196,18 @@ final class AudioQueuePlayer: ObservableObject {
         }
     }
 
+    /// The mini-player bar's shuffle toggle writes `model.randomizeByFeed`
+    /// while the queue is already running, so the navigator's mode is synced at
+    /// step time rather than captured in `start()` — same reason
+    /// `bindPlayToEnd` reads `model.autoplay(for:)` at fire time.
+    private func syncRandomize() {
+        guard let model else { return }
+        navigator?.setRandomize(model.randomize(for: scope))
+    }
+
     private func advance(by direction: Int) {
         guard let player, let model, navigator != nil else { return }
+        syncRandomize()
         guard let nextIndex = navigator?.step(direction: direction),
               let video = navigator?.currentVideo,
               let (item, source) = PlaybackSource.item(for: video, model: model) else {
@@ -221,6 +231,7 @@ final class AudioQueuePlayer: ObservableObject {
     /// current item; otherwise go back one.
     private func handlePrevious() {
         guard let player else { return }
+        syncRandomize()
         if player.currentTime().seconds > 3 || navigator?.isAtQueueStart != false {
             player.seek(to: .zero)
         } else {
