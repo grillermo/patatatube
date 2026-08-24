@@ -293,6 +293,23 @@ hand an anonymous visitor a cached authenticated page.
   Download-all in `EpisodesView` shares its `onDownload` closure with
   individual per-episode taps and deliberately does not, so it enqueues at
   interactive (non-bulk) priority.
+- **The group-detail list plays audio, not video.** In a pushed group
+  (`currentGroupID != nil`) at list size (`GridDisplayMode.list`), tapping a row
+  starts `AppModel.audio` (`AudioQueuePlayer`) instead of presenting
+  `VideoPlayerView`: one `AVPlayer` with nothing displaying it, so only sound
+  comes out. It lives on `AppModel` like `pip` because playback outlives the
+  list — grid switch, back, tab change and backgrounding all keep it running;
+  only pause, an exhausted queue, or a full-screen player starting stops it
+  (`startPlayback` calls `audio.stop()` first). Autoplay and randomize read the
+  same per-scope toggles as the video player. **Audio never touches resume
+  positions** — always starts at 0, never reports. The row's thumbnail carries
+  the transport (dimmed overlay, `play.fill`/`pause.fill`); a download in
+  flight is still only visible in the row's menu. There is deliberately no way
+  to reach video from list mode — "Play and sleep" is audio too — so watching
+  means leaving list mode. Queue stepping is shared with the video player via
+  `QueueNavigator` (PatataTubeKit) and source selection via `PlaybackSource`;
+  both were extracted out of `VideoPlayerView` for exactly that reason, so a
+  new playback fallback belongs in `PlaybackSource`, not in one of the callers.
 - **Downloads can be paused, and a pause outlives the process.** Each row in
   the Downloads view carries a three-dot menu holding Cancel plus Pause (or
   Resume). `CacheManager.pause` is deliberately not `cancel`: cancel wipes
