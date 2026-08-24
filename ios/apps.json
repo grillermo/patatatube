@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.8",
+          "buildVersion": "169",
+          "date": "2026-08-24T20:04:01Z",
+          "localizedDescription": "What's new in 2.5.8:\n\n• Fix mini player look",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.8/PatataTube-2.5.8.ipa",
+          "size": 4308195,
+          "sha256": "7b43063f59aa4eab8937c523bb58badac66b0bc5f96ae8ba3c2b1b3b23c92c81",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.5.7",
           "buildVersion": "168",
           "date": "2026-08-24T17:48:39Z",
@@ -1604,11 +1614,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.5.7",
-      "versionDate": "2026-08-24T17:48:39Z",
-      "versionDescription": "What's new in 2.5.7:\n\n• Rebuild video handoff\n• Rebuild audio handoff\n• Return to the audio mini player when a full-screen player opened from it is dismissed\n• Apply the shuffle toggle to an already-playing audio queue\n• Fix crash when starting audio playback after dismissing the full-screen player\n• Fix mini-player/tab-bar overlap; tap bar to open full screen\n• Add mini-player bar for audio-only playback\n• fix: stop the other audio source on both PiP/list-audio crossings",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.7/PatataTube-2.5.7.ipa",
-      "size": 4306271
+      "version": "2.5.8",
+      "versionDate": "2026-08-24T20:04:01Z",
+      "versionDescription": "What's new in 2.5.8:\n\n• Fix mini player look",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.8/PatataTube-2.5.8.ipa",
+      "size": 4308195
     }
   ],
   "news": []
