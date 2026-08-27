@@ -369,3 +369,14 @@ body.cinema-mode .card:not(.cinema-active) {
 .card.cinema-active .download-btn {
   margin-right: 0
 }
+
+.sync-btn { position: relative; background: none; border: none; color: #ddd;
+  cursor: pointer; padding: 4px; font-size: 1.1em; line-height: 1; }
+.sync-btn[data-sync-state="downloaded"] .sync-glyph { color: #4caf50; }
+.sync-btn[data-sync-state="downloaded"] .sync-glyph::after { content: "\2713"; }
+.sync-btn[data-sync-state="downloading"] { color: #4fa3ff; }
+.sync-ring { position: absolute; inset: 0; border-radius: 50%;
+  border: 2px solid transparent; pointer-events: none; }
+.sync-btn[data-sync-state="downloading"] .sync-ring {
+  border-top-color: #4fa3ff;
+  transform: rotate(calc(var(--sync-progress, 0) * 360deg)); }

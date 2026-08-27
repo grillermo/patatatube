@@ -60,6 +60,17 @@
 {% endfor -%}
 </div>
 <script>window.UPLOAD_TOKEN = {{ upload_token | tojson }};</script>
+<script src="/assets/app/idb.js?v={{ idb_version }}"></script>
 <script src="/assets/app/videos.js?v={{ js_version }}"></script>
+<script src="/assets/app/offline.js?v={{ offline_version }}"></script>
+<script>
+if('serviceWorker' in navigator){
+  window.addEventListener('load', function(){
+    // sw_version busts the SW cache so a new shell list ships on deploy.
+    navigator.serviceWorker.register('/sw.js?v={{ sw_version }}', {scope: '/'})
+      .catch(function(err){ console.warn('SW registration failed', err); });
+  });
+}
+</script>
 </body>
 </html>
