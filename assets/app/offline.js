@@ -255,6 +255,32 @@
     });
   }
 
+  function beginDownload(btn, id){
+    renderState(btn, 'downloading', 0);
+    api.start(id, function(p){ renderState(btn, 'downloading', p); }, function(err){
+      if(err){ renderState(btn, 'missing'); return; }
+      renderState(btn, 'downloaded');
+      useOfflineSource(id);
+    });
+  }
+
+  // A download interrupted by page-close is left as syncState 'downloading'
+  // with partial chunks on disk; nothing restarts it. Re-enqueue each such row
+  // through the same path a tap uses, so the engine resumes it (206 Range) and
+  // the button reflects live progress. api.start's active[id] guard makes a
+  // double call for an already-running id a no-op.
+  function resumeInterrupted(){
+    return window.PtIDB.getAll('videos').then(function(rows){
+      if(!rows) return;
+      rows.forEach(function(row){
+        if(row && row.syncState === 'downloading'){
+          var btn = document.querySelector('.sync-btn[data-video-id="' + row.id + '"]');
+          if(btn) beginDownload(btn, row.id);
+        }
+      });
+    }).catch(function(){});
+  }
+
   function wireButton(btn){
     var id = parseInt(btn.getAttribute('data-video-id'), 10);
 
@@ -266,12 +292,7 @@
     btn.addEventListener('click', function(){
       var state = btn.getAttribute('data-sync-state');
       if(state === 'missing'){
-        renderState(btn, 'downloading', 0);
-        api.start(id, function(p){ renderState(btn, 'downloading', p); }, function(err){
-          if(err){ renderState(btn, 'missing'); return; }
-          renderState(btn, 'downloaded');
-          useOfflineSource(id);
-        });
+        beginDownload(btn, id);
       } else if(state === 'downloading'){
         api.cancel(id).then(function(){ renderState(btn, 'missing'); });
       } else if(state === 'downloaded'){
@@ -288,6 +309,7 @@
     }
     mirrorMetadata();
     document.querySelectorAll('.sync-btn').forEach(wireButton);
+    resumeInterrupted();
   }
 
   if(document.readyState === 'loading'){
