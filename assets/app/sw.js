@@ -46,8 +46,11 @@ self.addEventListener('fetch', function(e){
   if(req.mode === 'navigate'){
     e.respondWith(
       fetch(req).then(function(resp){
-        var copy = resp.clone();
-        caches.open(CACHE).then(function(c){ c.put('/shell', copy); });
+        // Only cache a good same-origin shell — never a 500 or a login redirect.
+        if(resp && resp.ok && resp.type === 'basic'){
+          var copy = resp.clone();
+          caches.open(CACHE).then(function(c){ c.put('/shell', copy); });
+        }
         return resp;
       }).catch(function(){
         return caches.match('/shell').then(function(cached){
