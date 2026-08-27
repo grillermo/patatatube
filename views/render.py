@@ -124,6 +124,9 @@ def build_videos_page(
         splash_images=SPLASH_STARTUP_IMAGES,
         css_version=_asset_version("videos.css"),
         js_version=_asset_version("videos.js"),
+        idb_version=_asset_version("idb.js"),
+        offline_version=_asset_version("offline.js"),
+        sw_version=_asset_version("sw.js"),
     )
 
 
