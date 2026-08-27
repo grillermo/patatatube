@@ -10,3 +10,6 @@ python_env/
 .worktrees/
 watch_later.sqlite
 log/
+
+# git worktrees
+.worktrees/
