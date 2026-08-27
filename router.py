@@ -886,6 +886,23 @@ async def app_asset(filename: str):
     return FileResponse(target, media_type=media_type)
 
 
+@router.get("/sw.js", include_in_schema=False)
+async def service_worker():
+    target = APP_DIR / "sw.js"
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(
+        target,
+        media_type="application/javascript",
+        headers={
+            # Root scope is otherwise refused by the browser.
+            "Service-Worker-Allowed": "/",
+            # The SW file itself must never be stale, or updates never ship.
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
 @router.get("/manifest.webmanifest", include_in_schema=False)
 async def manifest():
     return JSONResponse(

@@ -776,6 +776,17 @@ def test_vendor_asset_rejects_path_traversal(client):
     assert resp.status_code == 404
 
 
+def test_service_worker_served_at_root(client):
+    resp = client.get("/sw.js")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/javascript")
+    # Root scope requires this header, else the browser rejects registration.
+    assert resp.headers["service-worker-allowed"] == "/"
+    # Must not be cached long-term or SW updates never ship.
+    assert "no-cache" in resp.headers["cache-control"].lower()
+    assert "addEventListener" in resp.text  # it's the real SW file
+
+
 def test_api_videos_returns_serialized_list(client):
     import db
     vid = db.add_video(
