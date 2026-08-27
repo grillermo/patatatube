@@ -49,7 +49,11 @@
 {%- endmacro %}
 
 {% macro card(v, groups, current_group_id, show_titles=False) -%}
-<div class="card">
+<div class="card" data-video-id="{{ v.id }}"
+     data-title="{{ v | display_name }}"
+     data-group-id="{{ v.group_id or '' }}"
+     data-plex-kind="{{ v.plex_kind or '' }}"
+     data-status="{{ v.status }}">
 {% if not v.plex_kind -%}
 {{ group_menu(v, groups, current_group_id) }}
 {%- endif %}
@@ -73,6 +77,12 @@
 <div class="card-actions">
   {% if v.status == "done" -%}
   <a class="download-btn" href="/videos/{{ v.id }}/stream" download="{{ v | download_name }}.mp4" aria-label="Download video">&#8681;</a>
+  <button type="button" class="sync-btn" data-video-id="{{ v.id }}"
+          data-sync-state="missing" aria-label="Save for offline"
+          title="Save for offline" aria-pressed="false">
+    <span class="sync-ring"></span>
+    <span class="sync-glyph">&#9729;</span>
+  </button>
   <button type="button" class="loop-btn" data-video-id="{{ v.id }}" aria-label="Replay forever" title="Replay forever" aria-pressed="false">{{ loop_icon() }}</button>
   <button type="button" class="cinema-btn" aria-label="Cinema mode" aria-pressed="false">{{ cinema_icon() }}</button>
   {%- endif %}

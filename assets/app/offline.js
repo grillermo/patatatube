@@ -200,3 +200,97 @@
     _active: active
   };
 })();
+
+(function(){
+  var api = window.PtOffline;
+  if(!api) return;
+
+  function mirrorMetadata(){
+    if(!navigator.onLine) return Promise.resolve();
+    return Promise.all([
+      fetch('/api/videos', {credentials: 'same-origin'}).then(function(r){ return r.ok ? r.json() : null; }),
+      fetch('/api/groups', {credentials: 'same-origin'}).then(function(r){ return r.ok ? r.json() : null; })
+    ]).then(function(res){
+      var videos = res[0], groups = res[1];
+      var chain = Promise.resolve();
+      // /api/groups returns {"groups": [...]}.
+      var groupList = groups && Array.isArray(groups.groups) ? groups.groups : null;
+      if(groupList){
+        groupList.forEach(function(g){ chain = chain.then(function(){ return window.PtIDB.put('groups', g); }); });
+      }
+      // /api/videos returns a bare list [...].
+      if(Array.isArray(videos)){
+        videos.forEach(function(v){
+          chain = chain.then(function(){
+            return api._loadRow(v.id).then(function(row){
+              // Merge server metadata without clobbering local sync/chunk fields.
+              var next = row || {id: v.id, syncState: 'missing'};
+              next.title = v.title; next.group_id = v.group_id;
+              next.plex_kind = v.plex_kind; next.status = v.status;
+              return window.PtIDB.put('videos', next);
+            });
+          });
+        });
+      }
+      return chain;
+    }).catch(function(){ /* offline: use whatever is already mirrored */ });
+  }
+
+  function renderState(btn, state, progress){
+    btn.setAttribute('data-sync-state', state);
+    btn.setAttribute('aria-pressed', state === 'downloaded' ? 'true' : 'false');
+    if(typeof progress === 'number'){ btn.style.setProperty('--sync-progress', progress.toFixed(3)); }
+  }
+
+  // Swap a downloaded video's <source> for its offline Blob URL.
+  function useOfflineSource(id){
+    return api.blobUrl(id).then(function(url){
+      if(!url) return;
+      var video = document.getElementById('v' + id);
+      if(!video) return;
+      var source = video.querySelector('source');
+      if(source){ source.setAttribute('src', url); }
+      video.setAttribute('data-offline', '1');
+      try { video.load(); } catch(_e){}
+    });
+  }
+
+  function wireButton(btn){
+    var id = parseInt(btn.getAttribute('data-video-id'), 10);
+
+    api.stateOf(id).then(function(state){
+      renderState(btn, state);
+      if(state === 'downloaded') useOfflineSource(id);
+    });
+
+    btn.addEventListener('click', function(){
+      var state = btn.getAttribute('data-sync-state');
+      if(state === 'missing'){
+        renderState(btn, 'downloading', 0);
+        api.start(id, function(p){ renderState(btn, 'downloading', p); }, function(err){
+          if(err){ renderState(btn, 'missing'); return; }
+          renderState(btn, 'downloaded');
+          useOfflineSource(id);
+        });
+      } else if(state === 'downloading'){
+        api.cancel(id).then(function(){ renderState(btn, 'missing'); });
+      } else if(state === 'downloaded'){
+        if(window.confirm('Remove offline copy?')){
+          api.remove(id).then(function(){ renderState(btn, 'missing'); });
+        }
+      }
+    });
+  }
+
+  function init(){
+    if(navigator.storage && navigator.storage.persist){
+      navigator.storage.persist().catch(function(){});
+    }
+    mirrorMetadata();
+    document.querySelectorAll('.sync-btn').forEach(wireButton);
+  }
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init);
+  } else { init(); }
+})();
