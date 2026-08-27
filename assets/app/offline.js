@@ -136,9 +136,67 @@
     return Math.floor(bytes / CHUNK_SIZE);
   }
 
-  window.PtOffline = window.PtOffline || {};
-  window.PtOffline._runDownload = runDownload;
-  window.PtOffline._setState = setState;
-  window.PtOffline._loadRow = loadRow;
-  window.PtOffline._active = active;
+  function pumpQueue(){
+    while(runningCount < MAX_CONCURRENT && queue.length){
+      var job = queue.shift();
+      runningCount++;
+      runDownload(job.id, job.onProgress)
+        .then(function(){ if(job.onDone) job.onDone(null); })
+        .catch(function(err){
+          if(err && err.name === 'AbortError'){ if(job.onDone) job.onDone('aborted'); return; }
+          setState(job.id, {syncState: 'missing'});
+          if(job.onDone) job.onDone(err);
+        })
+        .then(function(){ runningCount--; delete active[job.id]; pumpQueue(); });
+    }
+  }
+
+  function start(id, onProgress, onDone){
+    if(active[id]) return;                    // already downloading
+    queue.push({id: id, onProgress: onProgress, onDone: onDone});
+    setState(id, {syncState: 'downloading'});
+    pumpQueue();
+  }
+
+  // Cancel wipes partial state so a re-tap starts clean (mirrors iOS cancel).
+  function cancel(id){
+    var a = active[id];
+    if(a){ try { a.controller.abort(); } catch(_e){} delete active[id]; }
+    queue = queue.filter(function(j){ return j.id !== id; });
+    return idb.deleteChunksFor(id).then(function(){
+      return setState(id, {syncState: 'missing', receivedBytes: 0, chunkCount: 0, byteLength: 0});
+    });
+  }
+
+  function remove(id){ return cancel(id); }   // evict a completed download
+
+  function stateOf(id){
+    return loadRow(id).then(function(row){
+      return row && row.syncState ? row.syncState : 'missing';
+    });
+  }
+
+  // Reassemble stored chunks into one Blob URL for offline playback.
+  function blobUrl(id){
+    return idb.getChunksFor(id).then(function(rows){
+      if(!rows.length) return null;
+      return loadRow(id).then(function(row){
+        var parts = rows.map(function(r){ return r.data; });
+        var blob = new Blob(parts, {type: (row && row.mime) || 'video/mp4'});
+        return URL.createObjectURL(blob);
+      });
+    });
+  }
+
+  window.PtOffline = {
+    start: start,
+    cancel: cancel,
+    remove: remove,
+    stateOf: stateOf,
+    blobUrl: blobUrl,
+    _runDownload: runDownload,
+    _setState: setState,
+    _loadRow: loadRow,
+    _active: active
+  };
 })();
