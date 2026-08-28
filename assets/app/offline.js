@@ -242,17 +242,103 @@
     if(typeof progress === 'number'){ btn.style.setProperty('--sync-progress', progress.toFixed(3)); }
   }
 
-  // Swap a downloaded video's <source> for its offline Blob URL.
-  function useOfflineSource(id){
-    return api.blobUrl(id).then(function(url){
-      if(!url) return;
-      var video = document.getElementById('v' + id);
-      if(!video) return;
-      var source = video.querySelector('source');
-      if(source){ source.setAttribute('src', url); }
-      video.setAttribute('data-offline', '1');
-      try { video.load(); } catch(_e){}
+  // Blob URLs handed to a <video>, by video id. Every entry here pins its
+  // video's bytes for as long as it lives, so nothing goes in without a
+  // matching releaseOffline().
+  var objectUrls = {};
+  var preparing = {};
+
+  function videoEl(id){ return document.getElementById('v' + id); }
+  function networkSrc(id){ return '/videos/' + id + '/stream'; }
+
+  // Build the offline Blob URL, once, on demand.
+  //
+  // This is deliberately NOT done for every downloaded video at page load:
+  // api.blobUrl reads all of a video's chunks out of IndexedDB into
+  // ArrayBuffers and copies them into a Blob, so arming the whole library
+  // eagerly pulled every synced byte (twice) into memory before the user had
+  // touched anything.
+  function prepareOffline(id){
+    if(objectUrls[id]) return Promise.resolve(objectUrls[id]);
+    if(preparing[id]) return preparing[id];
+    preparing[id] = api.blobUrl(id).then(function(url){
+      delete preparing[id];
+      if(url) objectUrls[id] = url;
+      return url;
+    }, function(err){
+      delete preparing[id];
+      throw err;
     });
+    return preparing[id];
+  }
+
+  function swapToOffline(id, url){
+    var video = videoEl(id);
+    if(!video || !url) return false;
+    if(video.getAttribute('data-offline') === '1') return true;
+    var source = video.querySelector('source');
+    if(source){ source.setAttribute('src', url); }
+    video.setAttribute('data-offline', '1');
+    try { video.load(); } catch(_e){}
+    return true;
+  }
+
+  // Give the bytes back: revoke the URL and put the network source back, so a
+  // re-tap (or an eviction) doesn't leave the element pointing at a dead blob.
+  function releaseOffline(id){
+    var url = objectUrls[id];
+    if(!url) return;
+    delete objectUrls[id];
+    var video = videoEl(id);
+    if(video){
+      var source = video.querySelector('source');
+      if(source && source.getAttribute('src') === url){
+        source.setAttribute('src', networkSrc(id));
+        try { video.load(); } catch(_e){}
+      }
+      video.removeAttribute('data-offline');
+    }
+    try { URL.revokeObjectURL(url); } catch(_e){}
+  }
+
+  function releaseAll(){
+    Object.keys(objectUrls).forEach(releaseOffline);
+  }
+
+  // Mark a downloaded video as offline-capable without reading a single byte.
+  // The Blob is built on intent (pointerdown), so the swap inside the `play`
+  // handler stays synchronous — an async swap there would lose the user
+  // gesture and Safari would refuse to resume.
+  function armOffline(id){
+    var video = videoEl(id);
+    if(!video || video.getAttribute('data-offline-armed') === '1') return;
+    video.setAttribute('data-offline-armed', '1');
+
+    video.addEventListener('pointerdown', function(){
+      prepareOffline(id).catch(function(){});
+    });
+
+    video.addEventListener('play', function(){
+      if(video.getAttribute('data-offline') === '1') return;
+      var url = objectUrls[id];
+      if(!url) return;              // not ready yet: keep streaming, don't stall
+      video.pause();
+      swapToOffline(id, url);
+      var p = video.play();
+      if(p && typeof p.catch === 'function') p.catch(function(){});
+    });
+
+    // Offline, or a stream that failed: nothing warmed the Blob, so build it
+    // now. `capture` because a <source> failure targets the <source>, which
+    // does not bubble.
+    video.addEventListener('error', function(){
+      if(video.getAttribute('data-offline') === '1') return;
+      prepareOffline(id).then(function(url){
+        if(!swapToOffline(id, url)) return;
+        var p = video.play();
+        if(p && typeof p.catch === 'function') p.catch(function(){});
+      }).catch(function(){});
+    }, true);
   }
 
   function beginDownload(btn, id){
@@ -260,7 +346,7 @@
     api.start(id, function(p){ renderState(btn, 'downloading', p); }, function(err){
       if(err){ renderState(btn, 'missing'); return; }
       renderState(btn, 'downloaded');
-      useOfflineSource(id);
+      armOffline(id);
     });
   }
 
@@ -286,7 +372,7 @@
 
     api.stateOf(id).then(function(state){
       renderState(btn, state);
-      if(state === 'downloaded') useOfflineSource(id);
+      if(state === 'downloaded') armOffline(id);
     });
 
     btn.addEventListener('click', function(){
@@ -294,10 +380,10 @@
       if(state === 'missing'){
         beginDownload(btn, id);
       } else if(state === 'downloading'){
-        api.cancel(id).then(function(){ renderState(btn, 'missing'); });
+        api.cancel(id).then(function(){ releaseOffline(id); renderState(btn, 'missing'); });
       } else if(state === 'downloaded'){
         if(window.confirm('Remove offline copy?')){
-          api.remove(id).then(function(){ renderState(btn, 'missing'); });
+          api.remove(id).then(function(){ releaseOffline(id); renderState(btn, 'missing'); });
         }
       }
     });
@@ -310,6 +396,7 @@
     mirrorMetadata();
     document.querySelectorAll('.sync-btn').forEach(wireButton);
     resumeInterrupted();
+    window.addEventListener('pagehide', releaseAll);
   }
 
   if(document.readyState === 'loading'){
