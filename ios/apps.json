@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.10",
+          "buildVersion": "171",
+          "date": "2026-08-29T18:05:36Z",
+          "localizedDescription": "The audio mini player can now be dismissed\n\n• Flick the now-playing bar down to close it\n• Or tap the small X in its top-right corner",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.10/PatataTube-2.5.10.ipa",
+          "size": 4316691,
+          "sha256": "ef8a87e960377b765f7a546d83ed91380d702708276a58a7202f5a305b91f60a",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.5.9",
           "buildVersion": "170",
           "date": "2026-08-24T21:12:42Z",
@@ -1624,11 +1634,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.5.9",
-      "versionDate": "2026-08-24T21:12:42Z",
-      "versionDescription": "What's new in 2.5.9:\n\n• Fix mini player preview thumbnail update on track changes\n• Fix mini player look",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.9/PatataTube-2.5.9.ipa",
-      "size": 4312895
+      "version": "2.5.10",
+      "versionDate": "2026-08-29T18:05:36Z",
+      "versionDescription": "The audio mini player can now be dismissed\n\n• Flick the now-playing bar down to close it\n• Or tap the small X in its top-right corner",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.10/PatataTube-2.5.10.ipa",
+      "size": 4316691
     }
   ],
   "news": []
