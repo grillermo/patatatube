@@ -68,8 +68,6 @@ APP_MIME_TYPES = {".css": "text/css", ".js": "text/javascript"}
 ROOT_STATIC_ASSETS = {
     "favicon.ico": ("favicon.ico", "image/x-icon"),
     "apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
-    "apple-splash.png": ("apple-splash.png", "image/png"),
-    "apple-splash-optimized.jpg": ("apple-splash-optimized.jpg", "image/jpeg"),
 }
 _static_asset_cache: dict[str, bytes] = {}
 
@@ -838,16 +836,6 @@ async def favicon():
 @router.get("/apple-touch-icon.png", include_in_schema=False)
 async def apple_touch_icon():
     return _static_asset_response("apple-touch-icon.png")
-
-
-@router.get("/apple-splash.png", include_in_schema=False)
-async def apple_splash():
-    return _static_asset_response("apple-splash.png")
-
-
-@router.get("/apple-splash-optimized.jpg", include_in_schema=False)
-async def apple_splash_optimized():
-    return _static_asset_response("apple-splash-optimized.jpg")
 
 
 @router.get("/assets/splash/{filename}", include_in_schema=False)

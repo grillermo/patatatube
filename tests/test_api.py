@@ -701,36 +701,23 @@ def test_videos_page_uses_inline_ios_playback_recovery(client):
     assert "webkit-playsinline" in resp.text
 
 
-def test_videos_page_references_all_splash_startup_assets(client):
-    from pathlib import Path
-    import main
-    import router
-    from views.render import SPLASH_STARTUP_IMAGES
-
-    splash_files = {
-        p.name
-        for p in Path("assets/splash").iterdir()
-        if p.is_file() and p.suffix.lower() in router.SPLASH_MIME_TYPES
-    }
-    startup_files = {image[0] for image in SPLASH_STARTUP_IMAGES}
-
-    assert splash_files == startup_files | {router.SPLASH_ICON}
-
+def test_videos_page_declares_no_startup_images(client):
+    """iOS picked these by media query and got it wrong: on an iPad Mini 6 in
+    landscape it matched the *portrait* entry and stretched it. With no
+    apple-touch-startup-image at all, iOS composes the splash itself from the
+    manifest's icon and background_color, correctly at any size or orientation."""
     resp = client.get("/videos")
     assert resp.status_code == 200
-    for filename in startup_files:
-        assert f'href="/assets/splash/{filename}"' in resp.text
+    assert "apple-touch-startup-image" not in resp.text
 
-    assert (
-        'media="(device-width: 440px) and (device-height: 956px) '
-        'and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" '
-        'href="/assets/splash/iPhone_17_Pro_Max__iPhone_16_Pro_Max_portrait.png"'
-    ) in resp.text
-    assert (
-        'media="(device-width: 440px) and (device-height: 956px) '
-        'and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)" '
-        'href="/assets/splash/iPhone_17_Pro_Max__iPhone_16_Pro_Max_landscape.png"'
-    ) in resp.text
+
+def test_splash_dir_holds_only_the_manifest_icon(client):
+    from pathlib import Path
+    import router
+
+    assert {p.name for p in Path("assets/splash").iterdir() if p.is_file()} == {
+        router.SPLASH_ICON
+    }
 
 
 def test_manifest_references_splash_icon(client):
@@ -749,7 +736,7 @@ def test_manifest_references_splash_icon(client):
 
 
 def test_splash_asset_serves_png_files(client):
-    resp = client.get("/assets/splash/iPhone_17_Pro_Max__iPhone_16_Pro_Max_portrait.png")
+    resp = client.get("/assets/splash/icon.png")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "image/png"
 

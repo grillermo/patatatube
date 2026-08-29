@@ -212,7 +212,18 @@ down on 2026-07-31; see `docs/superpowers/specs/2026-07-31-ffmpeg-job-queue-desi
 - `db.py` — the only SQLite layer. Single `videos` table. `init_db()` is an **idempotent migration runner**: it does `CREATE TABLE IF NOT EXISTS`, then additive `ALTER TABLE` guards for each newer column, then backfills (`_backfill_positions`, `_backfill_youtube_preview_urls`) and cleanup. Schema changes go here as new idempotent guards, not a migrations framework.
 - `services.py` — mutation logic (`set_group`, `promote`) called by **both** the HTML form endpoints and the JSON API endpoints in `main.py`. Put shared write logic here.
 - `views/serializers.py` — `serialize_video` is the canonical video-to-dict presenter for the JSON API. Keep the API shape here.
-- `views/render.py` + `views/templates/*.html` — the server-rendered HTML page + PWA splash images.
+- `views/render.py` + `views/templates/*.html` — the server-rendered HTML page.
+
+**The PWA declares no `apple-touch-startup-image`, deliberately.** It used to
+ship ~50 per-device splash PNGs selected by `(device-width) and (device-height)
+and (-webkit-device-pixel-ratio) and (orientation)` media queries — the
+canonical markup every generator emits — and iOS still got it wrong: on an iPad
+Mini 6 in landscape it matched the *portrait* entry (744×1133) and stretched it
+to 1133×744, squashing the logo. Safari neither swapped the device dimensions
+nor evaluated `orientation` as landscape, so no arrangement of those queries
+fixes it. With no startup image at all, iOS composes the splash itself from the
+manifest's `background_color` (`#111111`) and 512px icon, correctly at every
+size and orientation. Don't reintroduce the per-device list.
 
 The `groups` table is the source of truth for video groups. `db.PLEX_KINDS` covers the separate Plex axis. The iOS Videos tab renders `GET /api/groups` and no longer hardcodes anything, so there is no list to keep in sync.
 
