@@ -12,6 +12,15 @@ struct AudioMiniPlayerBar: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: VideoStore
 
+    /// How far the bar has been dragged down, in points. Only downward drags
+    /// move it — dragging up would uncover the tab bar it is docked over.
+    @State private var dragOffset: CGFloat = 0
+
+    /// A downward flick past this distance dismisses; anything shorter
+    /// springs back. A fast flick counts even when short, via the gesture's
+    /// predicted end translation.
+    private static let dismissDistance: CGFloat = 60
+
     private var video: Video? {
         if let current = audio.currentVideo { return current }
         guard let id = audio.currentID else { return nil }
@@ -21,18 +30,22 @@ struct AudioMiniPlayerBar: View {
     var body: some View {
         if let video, let scope = audio.currentScope {
             VStack(spacing: 10) {
-                Button(action: audio.openFullScreen) {
-                    HStack(spacing: 10) {
-                        thumbnail(for: video)
-                        Text(video.title ?? video.url)
-                            .font(.subheadline)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 10) {
+                    Button(action: audio.openFullScreen) {
+                        HStack(spacing: 10) {
+                            thumbnail(for: video)
+                            Text(video.title ?? video.url)
+                                .font(.subheadline)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+
+                    closeButton
                 }
-                .buttonStyle(.plain)
 
                 HStack {
                     toggleButton(systemImage: "shuffle", isOn: model.randomizeBinding(for: scope))
@@ -66,7 +79,53 @@ struct AudioMiniPlayerBar: View {
             .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .padding(.horizontal, 12)
             .padding(.bottom, 6)
+            .offset(y: dragOffset)
+            .gesture(dismissDrag)
         }
+    }
+
+    /// Flick-down-to-dismiss. `minimumDistance` keeps a tap on any of the
+    /// buttons underneath from being read as a drag, and the offset is
+    /// clamped at 0 so only downward movement tracks the finger.
+    private var dismissDrag: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                dragOffset = max(0, value.translation.height)
+            }
+            .onEnded { value in
+                let travelled = max(value.translation.height, value.predictedEndTranslation.height)
+                if travelled > Self.dismissDistance {
+                    dismiss(reason: "flick")
+                } else {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { dragOffset = 0 }
+                }
+            }
+    }
+
+    /// Deliberately smaller than the transport controls below it: dismissing
+    /// is the one action here you never want to hit by accident while
+    /// reaching for play/pause.
+    private var closeButton: some View {
+        Button {
+            dismiss(reason: "button")
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close mini player")
+    }
+
+    /// Stopping the queue is what removes the bar — it renders only while
+    /// `audio.currentID` is non-nil — so the offset has to be reset here or
+    /// the next track's bar would appear already dragged away.
+    private func dismiss(reason: String) {
+        DevLog.event(.tap, "audio bar dismissed", ["reason": reason])
+        audio.stop()
+        dragOffset = 0
     }
 
     private func thumbnail(for video: Video) -> some View {
