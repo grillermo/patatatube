@@ -151,8 +151,12 @@ final class AppModel: ObservableObject {
     func cellSize(for feed: Feed) -> Double { cellSizeByFeed[feed.storageKey] ?? legacyCellSize }
 
     func setCellSize(_ value: Double, for feed: Feed) {
+        let wasGrid = GridDisplayMode.forCellSize(cellSize(for: feed)) != .list
         cellSizeByFeed[feed.storageKey] = value
         UserDefaults.standard.set(cellSizeByFeed, forKey: Self.cellSizeDefaultsKey)
+        if wasGrid, GridDisplayMode.forCellSize(value) == .list {
+            autoplayByFeed[feed.storageKey] = true
+        }
     }
 
     private var legacyCellSize: Double {
