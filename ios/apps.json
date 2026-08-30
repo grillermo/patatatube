@@ -15,12 +15,12 @@
       "versions": [
         {
           "version": "2.5.11",
-          "buildVersion": "172",
-          "date": "2026-08-30T13:41:15Z",
+          "buildVersion": "173",
+          "date": "2026-08-30T13:42:12Z",
           "localizedDescription": "List view now autoplays\n\n• Switching from grid to list view automatically turns on autoplay",
           "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.11/PatataTube-2.5.11.ipa",
-          "size": 4316729,
-          "sha256": "d9af0083e8aa6a57989117479f2f99611b007453fa64ffaa36119a4b9519845b",
+          "size": 4316724,
+          "sha256": "eeab5288b33b52bf25c374b106e39bebb662644dfc180a6388d1a5099e2b7f1e",
           "minOSVersion": "18.0"
         },
         {
@@ -1645,10 +1645,10 @@
         }
       ],
       "version": "2.5.11",
-      "versionDate": "2026-08-30T13:41:15Z",
+      "versionDate": "2026-08-30T13:42:12Z",
       "versionDescription": "List view now autoplays\n\n• Switching from grid to list view automatically turns on autoplay",
       "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.11/PatataTube-2.5.11.ipa",
-      "size": 4316729
+      "size": 4316724
     }
   ],
   "news": []
