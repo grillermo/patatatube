@@ -202,6 +202,9 @@ struct VideoInfoView: View {
                     row("Title", video.title)
                     row("URL", video.url)
                     row("Platform", video.platform)
+                    // Only YouTube downloads carry one, and `row` hides an
+                    // empty value, so uploads simply show no Channel line.
+                    row("Channel", video.channel)
                     row("Source", video.source)
                     row("Source key", video.sourceKey)
                     row("Source filename", video.sourceFilename)
