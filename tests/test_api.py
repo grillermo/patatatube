@@ -2422,3 +2422,23 @@ def test_page_renders_with_a_valid_cookie(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "window.UPLOAD_TOKEN" in resp.text
+
+
+def test_backfill_channels_requires_a_token(client):
+    assert client.post("/api/videos/backfill-channels").status_code == 401
+
+
+def test_backfill_channels_queues_the_walk(client, monkeypatch):
+    import router
+    started = []
+
+    async def fake_backfill():
+        started.append(True)
+        return 0
+
+    monkeypatch.setattr(router, "backfill_channels", fake_backfill)
+    resp = client.post("/api/videos/backfill-channels", headers=AUTH)
+
+    assert resp.status_code == 202
+    assert resp.json() == {"status": "queued"}
+    assert started == [True]

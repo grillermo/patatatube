@@ -31,9 +31,9 @@ async def test_download_youtube_success_persists_title(monkeypatch, downloader_e
 
     async def fake_download(url):
         assert url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-        return source_file, "Downloaded Title"
+        return source_file, "Downloaded Title", "Veritasium"
 
-    async def fake_normalize(path, video_id):
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
         return Path(path)
 
     monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
@@ -82,7 +82,7 @@ async def test_download_twitter_uses_pybalt(monkeypatch, downloader_env, tmp_pat
         assert url == "https://twitter.com/user/status/123"
         return str(source_file)
 
-    async def fake_normalize(path, video_id):
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
         return Path(path)
 
     monkeypatch.setattr(downloader, "pybalt_download", fake_pybalt)
@@ -116,7 +116,9 @@ def test_youtube_download_uses_browser_cookies(monkeypatch, downloader_env):
     monkeypatch.setattr(downloader, "YTDLP_BIN", "/opt/homebrew/bin/yt-dlp")
     monkeypatch.setattr(downloader, "YTDLP_BROWSER", "chrome")
 
-    path, title = downloader._download_youtube_media_sync("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    path, title, _channel = downloader._download_youtube_media_sync(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
 
     assert captured["cmd"][:3] == ["/opt/homebrew/bin/yt-dlp", "--cookies-from-browser", "chrome"]
     ytdlp_format = captured["cmd"][captured["cmd"].index("-f") + 1]
@@ -155,7 +157,7 @@ def test_youtube_download_retries_without_cookies_after_cookie_failure(
     monkeypatch.setattr(downloader, "YTDLP_BIN", "/opt/homebrew/bin/yt-dlp")
     monkeypatch.setattr(downloader, "YTDLP_BROWSER", "chrome")
 
-    path, title = downloader._download_youtube_media_sync(
+    path, title, _channel = downloader._download_youtube_media_sync(
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     )
 
@@ -342,7 +344,7 @@ async def test_process_uploaded_video_success(monkeypatch, downloader_env, tmp_p
     tmp_upload.write_bytes(b"uploaded-bytes")
     video_id = db.add_video(str(tmp_upload), platform="upload", title="My Video")
 
-    async def fake_normalize(path, video_id):
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
         return Path(path)
 
     monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
@@ -363,7 +365,7 @@ async def test_process_uploaded_video_failure_deletes_row_and_tmpfile(monkeypatc
     tmp_upload.write_bytes(b"not-a-real-video")
     video_id = db.add_video(str(tmp_upload), platform="upload", title="Bad Video")
 
-    async def fake_normalize(path, video_id):
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
         raise RuntimeError("ffmpeg failed while normalizing video")
 
     monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
@@ -391,7 +393,9 @@ async def test_normalize_enqueues_and_awaits_the_job(monkeypatch, downloader_env
 
     spawned = []
     monkeypatch.setattr(
-        downloader, "_normalize_media_for_ios_sync", lambda p: spawned.append(p)
+        downloader,
+        "_normalize_media_for_ios_sync",
+        lambda p, channel=None: spawned.append(p),
     )
 
     async def finish_the_job_out_of_band():
@@ -736,3 +740,388 @@ async def test_import_playlist_falls_back_when_title_is_empty(playlist_env):
     group = db.get_group_by_name("playlist")
     assert group is not None
     assert group["label"] == "Playlist"
+
+
+# --- YouTube channel capture -------------------------------------------------
+
+
+def test_youtube_download_captures_the_channel(monkeypatch, downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+    captured = {}
+
+    def fake_run(cmd, stdout, stderr, text):
+        captured["cmd"] = cmd
+        outtmpl = Path(cmd[cmd.index("-o") + 1])
+        media_path = Path(str(outtmpl).replace("%(id)s", "dQw4w9WgXcQ").replace("%(ext)s", "mp4"))
+        media_path.write_bytes(b"video")
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=(
+                f"TW2WL_FILE:{media_path}\n"
+                "TW2WL_TITLE:Title\n"
+                "TW2WL_CHANNEL:Veritasium\n"
+            ),
+        )
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    path, title, channel = downloader._download_youtube_media_sync(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
+
+    # `channel` is the display name; `uploader` is the fallback for the rare
+    # video that has no channel field, and an empty default keeps the line
+    # printed (and therefore parseable) when neither exists.
+    assert "after_move:TW2WL_CHANNEL:%(channel,uploader|)s" in captured["cmd"]
+    assert title == "Title"
+    assert channel == "Veritasium"
+    path.unlink()
+
+
+def test_youtube_download_tolerates_a_missing_channel(monkeypatch, downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+
+    def fake_run(cmd, stdout, stderr, text):
+        outtmpl = Path(cmd[cmd.index("-o") + 1])
+        media_path = Path(str(outtmpl).replace("%(id)s", "dQw4w9WgXcQ").replace("%(ext)s", "mp4"))
+        media_path.write_bytes(b"video")
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=f"TW2WL_FILE:{media_path}\nTW2WL_TITLE:Title\nTW2WL_CHANNEL:\n"
+        )
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    path, _title, channel = downloader._download_youtube_media_sync(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
+
+    assert channel is None
+    path.unlink()
+
+
+@pytest.mark.asyncio
+async def test_download_youtube_persists_the_channel(monkeypatch, downloader_env, tmp_path):
+    db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"youtube-bytes")
+
+    async def fake_download(url):
+        return source_file, "Downloaded Title", "Veritasium"
+
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
+        return Path(path)
+
+    monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    video_id = db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+    )
+    await downloader.download_video(video_id)
+
+    video = db.get_video(video_id)
+    assert video["status"] == "done"
+    assert video["channel"] == "Veritasium"
+
+
+@pytest.mark.asyncio
+async def test_download_youtube_passes_the_channel_to_normalization(
+    monkeypatch, downloader_env, tmp_path
+):
+    """The tag is written by the ffmpeg step, so the channel has to reach it."""
+    db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"youtube-bytes")
+    seen = {}
+
+    async def fake_download(url):
+        return source_file, "Downloaded Title", "Veritasium"
+
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
+        seen["channel"] = channel
+        return Path(path)
+
+    monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    video_id = db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ", platform="youtube", source_key="x"
+    )
+    await downloader.download_video(video_id)
+
+    assert seen["channel"] == "Veritasium"
+
+
+def test_ios_normalization_tags_the_channel_as_artist(monkeypatch, downloader_env, tmp_path):
+    _db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"source")
+    commands = []
+
+    def fake_run(cmd, stdout, stderr, text):
+        commands.append(cmd)
+        if cmd[0] == "ffprobe-test":
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "streams": [
+                            {"codec_type": "video", "codec_name": "h264", "pix_fmt": "yuv420p"},
+                            {"codec_type": "audio", "codec_name": "aac", "channels": 2},
+                        ]
+                    }
+                ),
+            )
+        Path(cmd[-1]).write_bytes(b"tagged")
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "FFMPEG_BIN", "ffmpeg-test")
+    monkeypatch.setattr(downloader, "FFPROBE_BIN", "ffprobe-test")
+
+    output_path = downloader._normalize_media_for_ios_sync(source_file, channel="Veritasium")
+
+    try:
+        ffmpeg_cmd = commands[1]
+        assert ffmpeg_cmd[ffmpeg_cmd.index("-metadata") + 1] == "artist=Veritasium"
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
+def test_ios_normalization_writes_no_metadata_without_a_channel(
+    monkeypatch, downloader_env, tmp_path
+):
+    _db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"source")
+    commands = []
+
+    def fake_run(cmd, stdout, stderr, text):
+        commands.append(cmd)
+        if cmd[0] == "ffprobe-test":
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {"streams": [{"codec_type": "video", "codec_name": "h264", "pix_fmt": "yuv420p"}]}
+                ),
+            )
+        Path(cmd[-1]).write_bytes(b"untagged")
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "FFMPEG_BIN", "ffmpeg-test")
+    monkeypatch.setattr(downloader, "FFPROBE_BIN", "ffprobe-test")
+
+    output_path = downloader._normalize_media_for_ios_sync(source_file)
+
+    try:
+        assert "-metadata" not in commands[1]
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_normalize_job_payload_carries_the_channel(downloader_env, tmp_path):
+    db, downloader, _videos_dir = downloader_env
+    source = tmp_path / "in.mkv"
+    source.write_bytes(b"")
+    output = tmp_path / "out.mp4"
+
+    async def finish_the_job_out_of_band():
+        await asyncio.sleep(0)
+        job = db.claim_job()
+        assert job["payload"]["channel"] == "Veritasium"
+        db.finish_job(job["id"], "done", result={"output_path": str(output)})
+
+    result, _ = await asyncio.gather(
+        downloader._normalize_media_for_ios(source, video_id=42, channel="Veritasium"),
+        finish_the_job_out_of_band(),
+    )
+
+    assert result == output
+
+
+# --- Backfilling channels onto pre-existing rows -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_backfill_channels_fills_only_missing_youtube_rows(
+    monkeypatch, downloader_env
+):
+    db, downloader, _videos_dir = downloader_env
+    queried = []
+
+    def fake_run(cmd, **kwargs):
+        queried.append(cmd[-1])
+        return subprocess.CompletedProcess(cmd, 0, stdout="Veritasium\n", stderr="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    missing = db.add_video("https://www.youtube.com/watch?v=aaaaaaaaaaa",
+                           platform="youtube", source_key="aaaaaaaaaaa")
+    db.update_video(missing, status="done", filename=f"{missing}.mp4")
+    already = db.add_video("https://www.youtube.com/watch?v=bbbbbbbbbbb",
+                           platform="youtube", source_key="bbbbbbbbbbb")
+    db.update_video(already, status="done", filename=f"{already}.mp4", channel="Kurzgesagt")
+    tweet = db.add_video("https://twitter.com/user/status/123", platform="twitter")
+    db.update_video(tweet, status="done", filename=f"{tweet}.mp4")
+
+    filled = await downloader.backfill_channels()
+
+    assert filled == 1
+    assert queried == ["https://www.youtube.com/watch?v=aaaaaaaaaaa"]
+    assert db.get_video(missing)["channel"] == "Veritasium"
+    assert db.get_video(already)["channel"] == "Kurzgesagt"
+    assert db.get_video(tweet)["channel"] is None
+
+
+@pytest.mark.asyncio
+async def test_backfill_channels_survives_an_unavailable_video(monkeypatch, downloader_env):
+    """A deleted or private video must not abort the rest of the walk."""
+    db, downloader, _videos_dir = downloader_env
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd[-1])
+        if cmd[-1].endswith("aaaaaaaaaaa"):
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ERROR: Video unavailable")
+        return subprocess.CompletedProcess(cmd, 0, stdout="Kurzgesagt\n", stderr="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    dead = db.add_video("https://www.youtube.com/watch?v=aaaaaaaaaaa",
+                        platform="youtube", source_key="aaaaaaaaaaa")
+    db.update_video(dead, status="done", filename=f"{dead}.mp4")
+    alive = db.add_video("https://www.youtube.com/watch?v=bbbbbbbbbbb",
+                         platform="youtube", source_key="bbbbbbbbbbb")
+    db.update_video(alive, status="done", filename=f"{alive}.mp4")
+
+    filled = await downloader.backfill_channels()
+
+    assert filled == 1
+    assert len(calls) == 2
+    assert db.get_video(dead)["channel"] is None
+    assert db.get_video(alive)["channel"] == "Kurzgesagt"
+
+
+# --- YouTube id in the container ---------------------------------------------
+
+
+def test_ios_normalization_tags_the_youtube_id_as_comment(monkeypatch, downloader_env, tmp_path):
+    _db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"source")
+    commands = []
+
+    def fake_run(cmd, stdout, stderr, text):
+        commands.append(cmd)
+        if cmd[0] == "ffprobe-test":
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {"streams": [{"codec_type": "video", "codec_name": "h264", "pix_fmt": "yuv420p"}]}
+                ),
+            )
+        Path(cmd[-1]).write_bytes(b"tagged")
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader, "FFMPEG_BIN", "ffmpeg-test")
+    monkeypatch.setattr(downloader, "FFPROBE_BIN", "ffprobe-test")
+
+    output_path = downloader._normalize_media_for_ios_sync(
+        source_file, channel="Veritasium", source_key="dQw4w9WgXcQ"
+    )
+
+    try:
+        ffmpeg_cmd = commands[1]
+        tags = [
+            ffmpeg_cmd[i + 1] for i, arg in enumerate(ffmpeg_cmd) if arg == "-metadata"
+        ]
+        assert tags == ["artist=Veritasium", "comment=dQw4w9WgXcQ"]
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_normalize_job_payload_carries_the_youtube_id(downloader_env, tmp_path):
+    db, downloader, _videos_dir = downloader_env
+    source = tmp_path / "in.mkv"
+    source.write_bytes(b"")
+    output = tmp_path / "out.mp4"
+
+    async def finish_the_job_out_of_band():
+        await asyncio.sleep(0)
+        job = db.claim_job()
+        assert job["payload"]["source_key"] == "dQw4w9WgXcQ"
+        db.finish_job(job["id"], "done", result={"output_path": str(output)})
+
+    result, _ = await asyncio.gather(
+        downloader._normalize_media_for_ios(source, video_id=42, source_key="dQw4w9WgXcQ"),
+        finish_the_job_out_of_band(),
+    )
+
+    assert result == output
+
+
+@pytest.mark.asyncio
+async def test_download_youtube_passes_the_id_to_normalization(
+    monkeypatch, downloader_env, tmp_path
+):
+    db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"youtube-bytes")
+    seen = {}
+
+    async def fake_download(url):
+        return source_file, "Downloaded Title", "Veritasium"
+
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
+        seen["source_key"] = source_key
+        return Path(path)
+
+    monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    video_id = db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+    )
+    await downloader.download_video(video_id)
+
+    assert seen["source_key"] == "dQw4w9WgXcQ"
+
+
+@pytest.mark.asyncio
+async def test_twitter_downloads_are_not_tagged_with_a_source_key(
+    monkeypatch, downloader_env, tmp_path
+):
+    """`comment` is the YouTube id specifically; a tweet id is not one."""
+    db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "tweet.mp4"
+    source_file.write_bytes(b"tweet-bytes")
+    seen = {}
+
+    async def fake_pybalt(url):
+        return str(source_file)
+
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
+        seen["source_key"] = source_key
+        seen["channel"] = channel
+        return Path(path)
+
+    monkeypatch.setattr(downloader, "pybalt_download", fake_pybalt)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    video_id = db.add_video("https://twitter.com/user/status/123",
+                            platform="twitter", source_key="123")
+    await downloader.download_video(video_id)
+
+    assert seen == {"source_key": None, "channel": None}

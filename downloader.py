@@ -35,8 +35,12 @@ async def download_video(video_id: int):
     db.update_video(video_id, status="downloading")
     try:
         if video["platform"] == "youtube":
-            dest_name, title = await _download_youtube(video_id, video["url"])
-            db.update_video(video_id, status="done", filename=dest_name, title=title)
+            dest_name, title, channel = await _download_youtube(
+                video_id, video["url"], source_key=video["source_key"]
+            )
+            db.update_video(
+                video_id, status="done", filename=dest_name, title=title, channel=channel
+            )
             return
 
         if video["platform"] in (None, "twitter"):
@@ -73,14 +77,25 @@ async def _download_twitter(video_id: int, url: str) -> str:
     return await _store_ios_compatible_video(video_id, downloaded_path)
 
 
-async def _download_youtube(video_id: int, url: str) -> tuple[str, str | None]:
-    downloaded_path, title = await _download_youtube_media(url)
-    dest_name = await _store_ios_compatible_video(video_id, downloaded_path)
-    return dest_name, title
+async def _download_youtube(
+    video_id: int, url: str, source_key: str | None = None
+) -> tuple[str, str | None, str | None]:
+    downloaded_path, title, channel = await _download_youtube_media(url)
+    dest_name = await _store_ios_compatible_video(
+        video_id, downloaded_path, channel=channel, source_key=source_key
+    )
+    return dest_name, title, channel
 
 
-async def _store_ios_compatible_video(video_id: int, downloaded_path: Path) -> str:
-    normalized_path = await _normalize_media_for_ios(downloaded_path, video_id)
+async def _store_ios_compatible_video(
+    video_id: int,
+    downloaded_path: Path,
+    channel: str | None = None,
+    source_key: str | None = None,
+) -> str:
+    normalized_path = await _normalize_media_for_ios(
+        downloaded_path, video_id, channel=channel, source_key=source_key
+    )
     dest = VIDEOS_DIR / f"{video_id}.mp4"
     VIDEOS_DIR.mkdir(exist_ok=True)
     shutil.move(str(normalized_path), str(dest))
@@ -95,14 +110,26 @@ async def _store_ios_compatible_video(video_id: int, downloaded_path: Path) -> s
 NORMALIZE_POLL_SECONDS = 1.0
 
 
-async def _normalize_media_for_ios(input_path: Path, video_id: int) -> Path:
+async def _normalize_media_for_ios(
+    input_path: Path,
+    video_id: int,
+    channel: str | None = None,
+    source_key: str | None = None,
+) -> Path:
     """Hand the ffmpeg work to converter.py and wait for it.
 
     Polling rather than to_thread: this runs as a BackgroundTask on the event
     loop, so waiting costs no thread, and converter.py is the only process
-    allowed to spawn ffmpeg.
+    allowed to spawn ffmpeg. `channel` and `source_key` ride in the payload
+    because the tags they become can only be written by the process that runs
+    ffmpeg.
     """
-    job_id = db.enqueue_job("normalize", video_id, payload={"input_path": str(input_path)})
+    payload = {"input_path": str(input_path)}
+    if channel:
+        payload["channel"] = channel
+    if source_key:
+        payload["source_key"] = source_key
+    job_id = db.enqueue_job("normalize", video_id, payload=payload)
     if job_id is None:
         raise RuntimeError(f"A normalize job for video {video_id} is already pending")
 
@@ -115,7 +142,9 @@ async def _normalize_media_for_ios(input_path: Path, video_id: int) -> Path:
         await asyncio.sleep(NORMALIZE_POLL_SECONDS)
 
 
-def _normalize_media_for_ios_sync(input_path: Path) -> Path:
+def _normalize_media_for_ios_sync(
+    input_path: Path, channel: str | None = None, source_key: str | None = None
+) -> Path:
     input_path = Path(input_path)
     probe = _probe_media(input_path)
     video_stream = _first_stream(probe, "video")
@@ -142,6 +171,13 @@ def _normalize_media_for_ios_sync(input_path: Path) -> Path:
         "-dn",
         *_video_codec_args(video_stream),
         *_audio_codec_args(audio_stream),
+        # `artist` is the tag QuickTime, Finder's Get Info and Plex all read,
+        # so the channel is visible in the file itself and not only in our DB.
+        *(["-metadata", f"artist={channel}"] if channel else []),
+        # mp4 has no atom meaning "where this came from", and `comment` is the
+        # free-text one every tool shows. Deliberately not searchable: the id
+        # is already `videos.source_key`, and nobody types one into a filter.
+        *(["-metadata", f"comment={source_key}"] if source_key else []),
         "-movflags",
         "+faststart",
         str(output_path),
@@ -251,11 +287,15 @@ def _is_cookie_failure(output: str) -> bool:
     return bool(_COOKIE_FAILURE_RE.search(output or ""))
 
 
-async def _download_youtube_media(url: str) -> tuple[Path, str | None]:
+CHANNEL_FIELD_TEMPLATE = "%(channel,uploader|)s"
+CHANNEL_PRINT_TEMPLATE = f"after_move:TW2WL_CHANNEL:{CHANNEL_FIELD_TEMPLATE}"
+
+
+async def _download_youtube_media(url: str) -> tuple[Path, str | None, str | None]:
     return await asyncio.to_thread(_download_youtube_media_sync, url)
 
 
-def _download_youtube_media_sync(url: str) -> tuple[Path, str | None]:
+def _download_youtube_media_sync(url: str) -> tuple[Path, str | None, str | None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         outtmpl = str(tmpdir_path / "%(id)s.%(ext)s")
@@ -275,6 +315,11 @@ def _download_youtube_media_sync(url: str) -> tuple[Path, str | None]:
                 "after_move:TW2WL_FILE:%(filepath)s",
                 "--print",
                 "after_move:TW2WL_TITLE:%(title)s",
+                # `channel` is the display name shown on the watch page;
+                # `uploader` covers the odd video that carries only that, and
+                # the empty default keeps the line printed either way.
+                "--print",
+                CHANNEL_PRINT_TEMPLATE,
                 "--newline",
                 url,
             ]
@@ -293,13 +338,14 @@ def _download_youtube_media_sync(url: str) -> tuple[Path, str | None]:
 
         downloaded_path = _parse_ytdlp_path(output)
         title = _parse_ytdlp_title(output)
+        channel = _parse_ytdlp_channel(output)
         if not downloaded_path:
             downloaded_path = _resolve_downloaded_path(tmpdir_path)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=downloaded_path.suffix) as tmpfile:
             stable_path = Path(tmpfile.name)
         shutil.copy2(downloaded_path, stable_path)
-        return stable_path, title
+        return stable_path, title, channel
 
 
 def _parse_ytdlp_path(output: str) -> Path | None:
@@ -313,6 +359,15 @@ def _parse_ytdlp_title(output: str) -> str | None:
     for line in output.splitlines():
         if line.startswith("TW2WL_TITLE:"):
             return line.removeprefix("TW2WL_TITLE:")
+    return None
+
+
+def _parse_ytdlp_channel(output: str) -> str | None:
+    """The channel line, or None — an empty one means yt-dlp knew neither
+    `channel` nor `uploader`, which is indistinguishable from not knowing."""
+    for line in output.splitlines():
+        if line.startswith("TW2WL_CHANNEL:"):
+            return line.removeprefix("TW2WL_CHANNEL:").strip() or None
     return None
 
 
@@ -476,3 +531,67 @@ async def import_playlist(url: str) -> None:
         except Exception as exc:
             logger.warning("Playlist entry %s failed: %s", video_id, exc)
         await cache.clear()
+
+
+# yt-dlp is querying YouTube once per row here with no download attached, so
+# the walk is sequential and paced. It is a one-off catch-up, not a hot path.
+BACKFILL_PAUSE_SECONDS = 0.5
+# The response cache only invalidates on a mutating HTTP request, and this
+# writes rows without one. Flushing per row would keep the cache cold for the
+# whole walk, so progress lands in batches instead.
+BACKFILL_CACHE_FLUSH_EVERY = 25
+
+
+async def backfill_channels() -> int:
+    """Fill `videos.channel` on YouTube rows downloaded before it was recorded.
+
+    Returns how many rows were filled. A row whose video is gone (deleted,
+    private, region-locked) keeps a NULL channel and the walk carries on — the
+    alternative is one dead video stopping the whole catch-up. The mp4 files
+    themselves are not re-tagged: that would mean remuxing every one of them.
+    """
+    rows = await asyncio.to_thread(db.videos_missing_channel)
+    if not rows:
+        return 0
+
+    logger.info("Backfilling channels for %d YouTube videos", len(rows))
+    filled = 0
+    for row in rows:
+        try:
+            channel = await asyncio.to_thread(_fetch_channel_sync, row["url"])
+        except Exception as exc:
+            logger.warning("Channel backfill failed for video %s: %s", row["id"], exc)
+            channel = None
+        if channel:
+            await asyncio.to_thread(db.set_video_channel, row["id"], channel)
+            filled += 1
+            if filled % BACKFILL_CACHE_FLUSH_EVERY == 0:
+                await cache.clear()
+        await asyncio.sleep(BACKFILL_PAUSE_SECONDS)
+
+    logger.info("Channel backfill filled %d of %d videos", filled, len(rows))
+    await cache.clear()
+    return filled
+
+
+def _fetch_channel_sync(url: str) -> str | None:
+    def run(use_cookies: bool) -> subprocess.CompletedProcess:
+        cmd = [
+            YTDLP_BIN,
+            *_ytdlp_cookie_args(use_cookies),
+            "--skip-download",
+            "--no-playlist",
+            "--print",
+            CHANNEL_FIELD_TEMPLATE,
+            url,
+        ]
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    proc = run(True)
+    if proc.returncode != 0 and _is_cookie_failure((proc.stderr or "") + (proc.stdout or "")):
+        logger.warning("yt-dlp cookies unusable; retrying channel lookup without them: %s", url)
+        proc = run(False)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "").strip() or "yt-dlp failed")
+
+    return (proc.stdout or "").strip() or None

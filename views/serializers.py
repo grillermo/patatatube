@@ -92,6 +92,9 @@ def serialize_video(video: dict) -> dict:
         "title": video.get("title"),
         "platform": video.get("platform"),
         "source_key": video.get("source_key"),
+        # The YouTube channel, when known. The clients search on it; the same
+        # string is also written into the mp4's `artist` tag at download time.
+        "channel": video.get("channel"),
         "preview_url": preview_url_for(video),
         "group_id": video.get("group_id"),
         "plex_kind": video.get("plex_kind"),

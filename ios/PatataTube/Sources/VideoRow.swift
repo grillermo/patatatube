@@ -51,11 +51,22 @@ struct VideoRow: View {
                 Button(action: onPlay) {
                     HStack(spacing: 12) {
                         thumbnail
-                        Text(video.title ?? video.url)
-                            .font(.subheadline)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(video.title ?? video.url)
+                                .font(.subheadline)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            // The channel doubles as the hint for what to type
+                            // in the search field, which filters on it too.
+                            if let channel = video.channel, !channel.isEmpty {
+                                Text(channel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .contentShape(Rectangle())
                 }

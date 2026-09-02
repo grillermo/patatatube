@@ -60,7 +60,11 @@ def _handle_normalize(job: dict, on_progress) -> dict:
     from downloader import _normalize_media_for_ios_sync
 
     payload = job.get("payload") or {}
-    output = _normalize_media_for_ios_sync(Path(payload["input_path"]))
+    output = _normalize_media_for_ios_sync(
+        Path(payload["input_path"]),
+        channel=payload.get("channel"),
+        source_key=payload.get("source_key"),
+    )
     return {"output_path": str(output)}
 
 

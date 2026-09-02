@@ -80,6 +80,7 @@ def test_serialize_video_full_shape():
         "error_msg": None,
         "stream_path": "/videos/7/stream",
         "source": "download",
+        "channel": None,
         "show_title": None,
         "season": None,
         "episode": None,
@@ -284,3 +285,19 @@ def test_serialize_video_resume_secs_defaults_to_zero():
 
     data = serialize_video({"id": 8, "url": "u", "status": "done"})
     assert data["resume_secs"] == 0
+
+
+def test_serialize_exposes_the_channel():
+    data = serialize_video({
+        "id": 7, "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "status": "done",
+        "platform": "youtube", "channel": "Veritasium",
+    })
+    assert data["channel"] == "Veritasium"
+
+
+def test_serialize_channel_is_null_when_unknown():
+    data = serialize_video({
+        "id": 7, "url": "https://twitter.com/user/status/1", "status": "done",
+        "platform": "twitter",
+    })
+    assert data["channel"] is None

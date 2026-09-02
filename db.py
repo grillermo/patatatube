@@ -171,6 +171,11 @@ def init_db():
             _add_column(conn, "ALTER TABLE videos ADD COLUMN group_id INTEGER REFERENCES groups(id)")
         if "plex_kind" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN plex_kind TEXT")
+        # The YouTube channel a download came from, captured at download time.
+        # NULL for everything else, and for youtube rows downloaded before this
+        # column existed until `POST /api/videos/backfill-channels` fills them.
+        if "channel" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN channel TEXT")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS video_versions (
@@ -917,6 +922,29 @@ def get_completed_video_by_source(platform: str, source_key: str) -> dict | None
         return dict(row) if row else None
 
 
+def videos_missing_channel() -> list[dict]:
+    """Completed YouTube rows downloaded before the channel was recorded.
+
+    Ordered oldest-first so a backfill interrupted halfway resumes where it
+    left off rather than re-walking the same head of the list.
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, url FROM videos
+            WHERE platform = 'youtube' AND status = 'done'
+              AND channel IS NULL AND deleted_at IS NULL
+            ORDER BY id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def set_video_channel(video_id: int, channel: str) -> None:
+    with _conn() as conn:
+        conn.execute("UPDATE videos SET channel = ? WHERE id = ?", (channel, video_id))
+
+
 def update_video(
     video_id: int,
     status: str,
@@ -924,6 +952,7 @@ def update_video(
     error_msg: str | None = None,
     title: str | None = None,
     preview_url: str | None = None,
+    channel: str | None = None,
 ):
     if status == "error":
         delete_video(video_id)
@@ -937,10 +966,11 @@ def update_video(
                 filename = COALESCE(?, filename),
                 error_msg = ?,
                 title = COALESCE(?, title),
-                preview_url = COALESCE(?, preview_url)
+                preview_url = COALESCE(?, preview_url),
+                channel = COALESCE(?, channel)
             WHERE id = ?
             """,
-            (status, filename, error_msg, title, preview_url, video_id),
+            (status, filename, error_msg, title, preview_url, channel, video_id),
         )
 
 

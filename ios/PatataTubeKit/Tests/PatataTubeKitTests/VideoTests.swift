@@ -180,3 +180,25 @@ private let sampleJSON = """
     )
     #expect(video.effectiveSubtitleLang == "es")
 }
+
+@Test func decodesTheYouTubeChannel() throws {
+    let json = #"{"id":9,"url":"u","status":"done","channel":"Veritasium","subtitle_tracks":[]}"#
+    let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
+    #expect(video.channel == "Veritasium")
+}
+
+@Test func channelIsNilWhenTheServerOmitsIt() throws {
+    // Cached UserDefaults blobs written before the field existed decode too.
+    let json = #"{"id":9,"url":"u","status":"done","subtitle_tracks":[]}"#
+    let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
+    #expect(video.channel == nil)
+}
+
+@Test func copyHelpersCarryTheChannel() throws {
+    let json = #"{"id":9,"url":"u","status":"done","channel":"Kurzgesagt","subtitle_tracks":[]}"#
+    let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
+    #expect(video.withGroupID(4).channel == "Kurzgesagt")
+    #expect(video.withAudioLang("eng").channel == "Kurzgesagt")
+    #expect(video.withSubtitleLang("eng").channel == "Kurzgesagt")
+    #expect(video.withChosenVersion(nil).channel == "Kurzgesagt")
+}

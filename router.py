@@ -25,7 +25,12 @@ import library
 import plex
 import promote
 import services
-from downloader import download_video, import_playlist, process_uploaded_video
+from downloader import (
+    backfill_channels,
+    download_video,
+    import_playlist,
+    process_uploaded_video,
+)
 from paths import VIDEOS_DIR
 from views.serializers import serialize_video
 from views.render import build_login_page, build_videos_page
@@ -1160,6 +1165,20 @@ async def api_delete_video(video_id: int, request: Request):
             (PREVIEWS_DIR / f"dl{video_id}.{PREVIEW_CACHE_SUFFIX}.jpg").unlink(missing_ok=True)
             db.delete_video(video_id)
     return {"ok": True}
+
+
+@router.post("/api/videos/backfill-channels", status_code=202)
+async def api_backfill_channels(request: Request, background_tasks: BackgroundTasks):
+    """Fill `channel` on YouTube rows that predate the column.
+
+    One yt-dlp metadata lookup per row, so it runs in the background and the
+    response says nothing about the outcome — watch `log/backend.log`. Rows
+    whose video is gone stay NULL, and already-downloaded mp4s keep their
+    untagged files; only the DB column is filled.
+    """
+    _check_token(request)
+    background_tasks.add_task(backfill_channels)
+    return {"status": "queued"}
 
 
 @router.post("/api/library/scan")

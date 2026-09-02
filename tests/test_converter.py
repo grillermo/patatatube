@@ -548,3 +548,50 @@ def test_failed_job_also_flushes_the_response_cache(tmp_db, monkeypatch):
     converter.run_job(tmp_db.claim_job())
 
     assert flushes, "expected the failed job to flush the response cache"
+
+
+def test_normalize_handler_forwards_the_channel_tag(tmp_db, monkeypatch):
+    """converter.py is the only process that spawns ffmpeg, so the channel has
+    to survive the trip through the job payload to reach the -metadata flag."""
+    import converter
+    import downloader
+
+    seen = {}
+
+    def fake_normalize(input_path, channel=None, source_key=None):
+        seen["input_path"] = input_path
+        seen["channel"] = channel
+        return Path("/tmp/out.mp4")
+
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios_sync", fake_normalize)
+    tmp_db.enqueue_job(
+        "normalize", video_id=7,
+        payload={"input_path": "/tmp/in.mkv", "channel": "Veritasium"},
+    )
+
+    converter.run_job(tmp_db.claim_job())
+
+    assert seen == {"input_path": Path("/tmp/in.mkv"), "channel": "Veritasium"}
+    assert tmp_db.get_job(1)["result"] == {"output_path": "/tmp/out.mp4"}
+
+
+def test_normalize_handler_forwards_the_youtube_id(tmp_db, monkeypatch):
+    import converter
+    import downloader
+
+    seen = {}
+
+    def fake_normalize(input_path, channel=None, source_key=None):
+        seen["channel"] = channel
+        seen["source_key"] = source_key
+        return Path("/tmp/out.mp4")
+
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios_sync", fake_normalize)
+    tmp_db.enqueue_job(
+        "normalize", video_id=7,
+        payload={"input_path": "/tmp/in.mkv", "source_key": "dQw4w9WgXcQ"},
+    )
+
+    converter.run_job(tmp_db.claim_job())
+
+    assert seen == {"channel": None, "source_key": "dQw4w9WgXcQ"}

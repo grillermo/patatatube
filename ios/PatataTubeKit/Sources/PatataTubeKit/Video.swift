@@ -56,6 +56,10 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let title: String?
     public let platform: String?
     public let sourceKey: String?
+    /// The YouTube channel this video came from, when the server knows it.
+    /// Nil for Twitter, uploads, Plex rows, and YouTube downloads that
+    /// predate the server recording it.
+    public let channel: String?
     public let previewUrl: String?
     /// The group this video is in, or nil when it is a Plex item or unsorted.
     public let groupID: Int?
@@ -81,7 +85,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let resumeSecs: Double
 
     enum CodingKeys: String, CodingKey {
-        case id, url, title, platform, sourceKey, previewUrl, position
+        case id, url, title, platform, sourceKey, channel, previewUrl, position
         case groupID = "groupId", plexKind
         case status, errorMsg, streamPath, source, showTitle, season, episode, summary
         case showPreviewUrl, chosenVersionId, versions, hlsPath, subtitleTracks
@@ -110,7 +114,8 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
             hlsPath: String? = nil, subtitleTracks: [SubtitleTrack] = [],
             sourceFilename: String? = nil, audioLang: String? = nil,
             subtitleLang: String? = nil,
-            resumeSecs: Double = 0) {
+            resumeSecs: Double = 0,
+            channel: String? = nil) {
         self.id = id; self.url = url; self.title = title; self.platform = platform
         self.sourceKey = sourceKey; self.previewUrl = previewUrl
         self.groupID = groupID; self.plexKind = plexKind; self.position = position
@@ -123,6 +128,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.audioLang = audioLang
         self.subtitleLang = subtitleLang
         self.resumeSecs = resumeSecs
+        self.channel = channel
     }
 
     public init(from decoder: Decoder) throws {
@@ -156,6 +162,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.audioLang = try c.decodeIfPresent(String.self, forKey: .audioLang)
         self.subtitleLang = try c.decodeIfPresent(String.self, forKey: .subtitleLang)
         self.resumeSecs = try c.decodeIfPresent(Double.self, forKey: .resumeSecs) ?? 0
+        self.channel = try c.decodeIfPresent(String.self, forKey: .channel)
     }
 
     public func withChosenVersion(_ versionId: Int) -> Video {
@@ -176,7 +183,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               },
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs)
+              resumeSecs: resumeSecs, channel: channel)
     }
 
     func withGroupID(_ groupID: Int?) -> Video {
@@ -188,7 +195,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs)
+              resumeSecs: resumeSecs, channel: channel)
     }
 
     func withAudioLang(_ lang: String) -> Video {
@@ -200,7 +207,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: lang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs)
+              resumeSecs: resumeSecs, channel: channel)
     }
 
     func withSubtitleLang(_ lang: String?) -> Video {
@@ -212,7 +219,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: lang,
-              resumeSecs: resumeSecs)
+              resumeSecs: resumeSecs, channel: channel)
     }
 
     /// The subtitle language to force on the player, or `nil` to force nothing.

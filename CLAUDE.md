@@ -166,8 +166,25 @@ map for the intermittent-playback investigation:
    `/api/groups`. A failed or empty playlist creates nothing and is only
    visible in `log/backend.log`.
 3. `downloader.py` runs the download off the event loop: **pybalt** for Twitter/X, **yt-dlp** (`--cookies-from-browser`) for YouTube — a run that fails with a cookie-decryption/lock error (Chrome rotates its key) is retried once with cookies dropped, for both single videos and playlist metadata. Every file is passed through `_normalize_media_for_ios` — an ffmpeg step that guarantees H.264/AAC + `+faststart` so iOS can stream it. Output lands at `videos/{id}.mp4`.
-4. Status transitions queued → downloading → done. **Failures don't get an `error` status** — `db.update_video(status="error")` and the download exception handler both *delete the row* instead. Don't rely on error rows existing.
-5. `GET /videos/{id}/stream` serves the MP4 with HTTP Range support (206 partial content), hand-rolled in `_parse_byte_range` / `_iter_file_range`, gated by an asyncio semaphore (`VIDEO_STREAM_LIMIT`).
+4. YouTube downloads record the **channel**. `yt-dlp` prints it alongside the
+   title (`%(channel,uploader|)s`), `download_video` stores it in
+   `videos.channel`, and it rides in the `normalize` job's payload so the
+   ffmpeg step can write it into the mp4 as `-metadata artist=` — the tag
+   QuickTime, Finder and Plex read. Only that process may spawn ffmpeg, so the
+   payload is the only way the tag can be written. The clients filter on the
+   **column** (`serialize_video` exposes `channel`, the iOS search box matches
+   it, `VideoRow` shows it under the title) — nothing reads the container tag.
+   Rows downloaded before the column existed stay NULL until
+   `POST /api/videos/backfill-channels`, which walks them with one
+   `yt-dlp --skip-download` lookup each; it fills the DB only and never
+   re-tags files already on disk. The **video id** rides the same payload and
+   becomes `-metadata comment=` — mp4 has no atom meaning "where this came
+   from" and `comment` is the free-text one every tool shows. It is
+   deliberately *not* searchable: the id is already `videos.source_key`, and
+   nobody types one into a filter. Only YouTube rows get it; a tweet id is not
+   a YouTube id.
+5. Status transitions queued → downloading → done. **Failures don't get an `error` status** — `db.update_video(status="error")` and the download exception handler both *delete the row* instead. Don't rely on error rows existing.
+6. `GET /videos/{id}/stream` serves the MP4 with HTTP Range support (206 partial content), hand-rolled in `_parse_byte_range` / `_iter_file_range`, gated by an asyncio semaphore (`VIDEO_STREAM_LIMIT`).
 
 ### ffmpeg runs in exactly one process
 
