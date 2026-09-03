@@ -50,6 +50,7 @@
 require_relative "ios/ipa_builder"
 require "digest"
 require "json"
+require "shellwords"
 require "time"
 
 B = IpaBuilder # build helpers (step/run/die/colors) live here
@@ -141,6 +142,38 @@ download = "#{RELEASE_BASE}/#{tag}/#{asset}"
 
 if `git tag -l #{tag}`.strip == tag || !`gh release view #{tag} 2>/dev/null`.empty?
   B.die("release #{tag} already exists — bump to a new version")
+end
+
+# --- push --------------------------------------------------------------------
+
+# Push the branch, tolerating a push someone else already made for us.
+#
+# git-sync is installed as a global post-commit hook (core.hooksPath ->
+# ~/.gitsync/hooks) and pushes to this same remote the instant a commit lands.
+# So by the time we run our own push, the ref may already be where we wanted to
+# put it, and git reports that as a failure:
+#
+#   ! [remote rejected] main -> main (cannot lock ref 'refs/heads/main':
+#     is at <ours> but expected <parent>)
+#
+# Treating that as fatal is worse than useless here: it aborts one step before
+# `gh release create`, leaving a *pushed* manifest that advertises a download
+# URL for a release that does not exist. So on failure, ask the remote what it
+# actually holds. If that is our HEAD, the hook did our work and we carry on;
+# anything else is a genuine failure and still dies.
+def push_branch(branch, chdir:)
+  cmd = "git push github #{branch}"
+  puts "    $ #{cmd}"
+  return if system(cmd, chdir: chdir)
+
+  local  = `git -C #{chdir.shellescape} rev-parse HEAD`.strip
+  remote = `git -C #{chdir.shellescape} ls-remote github refs/heads/#{branch}`.split.first.to_s
+  unless !local.empty? && local == remote
+    B.die("command failed: #{cmd} (remote is at #{remote.empty? ? "nothing" : remote[0, 7]}, " \
+          "we are at #{local[0, 7]})")
+  end
+
+  puts B.green("    remote already at #{local[0, 7]} — pushed by the git-sync hook; continuing")
 end
 
 # --- release notes -----------------------------------------------------------
@@ -271,7 +304,7 @@ File.write(APPS_JSON, JSON.pretty_generate(source) + "\n")
 B.step "Committing + pushing"
 B.run("git add #{PROJECT_YML} #{APPS_JSON}", chdir: __dir__)
 B.run("git commit -m 'Release iOS #{tag}'", chdir: __dir__)
-B.run("git push github #{DEFAULT_BRANCH}", chdir: __dir__)
+push_branch(DEFAULT_BRANCH, chdir: __dir__)
 
 B.step "Creating GitHub release #{tag} + uploading .ipa"
 # Via a file, not --notes: the body is multi-line and would need shell escaping.

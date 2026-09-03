@@ -109,6 +109,15 @@ command to ship a clean build afterwards.
 
 ## Gotchas
 
+- **A push that "fails" may have succeeded.** `git-sync` is installed as a
+  global `post-commit` hook (`core.hooksPath` -> `~/.gitsync/hooks`) and pushes
+  to the same remote the instant a commit lands, so our own push can lose the
+  race and exit non-zero with `cannot lock ref 'refs/heads/main': is at X but
+  expected Y` — while the commit is safely on the remote. Both this driver and
+  `./deploy` now check the remote before failing, and continue when it already
+  holds our HEAD. This mattered: taking the exit code at face value aborted one
+  step before `gh release create`, twice, leaving a *pushed* `apps.json`
+  advertising a download URL for a release that did not exist.
 - **The remote is named `github`, not `origin`.** `git push origin` fails — there is no `origin`. Both this driver and `./deploy` push to `github`.
 - **Default-branch guard is hard.** `./deploy` calls `die` if you're not on `main`; the driver checks the same thing first so you fail fast before any commit.
 - **`./deploy` commits twice-over is expected.** This driver commits your pending work; `./deploy` then makes a *second* commit for the version bump + manifest. Two commits per release is normal.

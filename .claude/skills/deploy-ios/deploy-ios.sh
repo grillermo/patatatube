@@ -176,8 +176,24 @@ else
   echo "no pending changes — nothing to commit"
 fi
 
-git push "$remote" "$branch"
-ok "pushed to $remote/$branch"
+# git-sync runs as a global post-commit hook (core.hooksPath -> ~/.gitsync/hooks)
+# and pushes to this same remote the moment the commit above landed. Ours can
+# therefore lose the race and exit non-zero ("cannot lock ref ... is at X but
+# expected Y") with the commit already safely on the remote. Under `set -e` that
+# aborts the deploy for no reason, so confirm against the remote before failing.
+if git push "$remote" "$branch"; then
+  ok "pushed to $remote/$branch"
+else
+  local_head=$(git rev-parse HEAD)
+  remote_head=$(git ls-remote "$remote" "refs/heads/$branch" | awk '{print $1}')
+  if [ -n "$remote_head" ] && [ "$local_head" = "$remote_head" ]; then
+    ok "remote already at ${local_head:0:7} — pushed by the git-sync hook"
+  else
+    remote_desc="${remote_head:0:7}"
+    [ -z "$remote_head" ] && remote_desc="nothing"
+    fail "git push $remote $branch failed (remote at $remote_desc, we are at ${local_head:0:7})"
+  fi
+fi
 
 # --- hand off to the release script -----------------------------------------
 exec "${deploy_cmd[@]}"
