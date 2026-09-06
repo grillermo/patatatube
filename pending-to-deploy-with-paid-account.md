@@ -1,9 +1,9 @@
 # Pending: finish OTA distribution
 
-All Apple-side setup is **done and verified end to end**. What's left is one
-`./deploy` and installing on the three devices.
+**v2.5.14 is published and verified.** The only thing left is tapping Install on
+each device.
 
-Last updated 2026-09-05, against version 2.5.13 / build 175.
+Last updated 2026-09-05, against version 2.5.14 / build 176.
 
 Reference: `ios/install.md` (full guide), `ios/altstore.md` (secondary route).
 
@@ -42,37 +42,23 @@ service. `./deploy` needs network access and a live Xcode account session.
 
 ---
 
+## Shipped
+
+`v2.5.14` — <https://github.com/grillermo/patatatube/releases/tag/v2.5.14>
+
+| Check | Result |
+|---|---|
+| Published `.ipa` signature | `Apple Distribution: GUILLERMO SILICEO TRUEBA (Q3WS4MWCW3)` |
+| `codesign --verify --deep --strict` | OK |
+| Version | 2.5.14 (build 176) |
+| `ios/manifest.plist` | points at the v2.5.14 release asset |
+| Release asset | HTTP 206 on a range request |
+| GitHub Pages | `built` |
+| Install page | HTTP 200, `text/html`, shows "Version 2.5.14 (build 176)" |
+
 ## What's left
 
-### 1. Commit the work
-
-The whole change is uncommitted: `ios/ipa_builder.rb`, `deploy`,
-`ios/install.md`, `ios/altstore.md`, `CLAUDE.md`, `docs/.nojekyll`, and this
-file. Note the tree also carries **unrelated** in-progress changes to
-`views/render.py`, `views/templates/`, and `tests/` — keep those out of the
-commit, or land them separately first.
-
-`docs/.nojekyll` is what fixes the currently-failing GitHub Pages build: without
-it Pages runs all of `docs/` through Jekyll and Liquid aborts on the `{{` inside
-code blocks in `docs/superpowers/plans/*.md`.
-
-### 2. Deploy
-
-```bash
-./deploy
-```
-
-### 3. Verify
-
-```bash
-# the manifest describes the release just cut ('appURL' is the *export option*
-# name; in the manifest it lands as assets[0].url with kind software-package)
-plutil -p ios/manifest.plist | grep -E 'url"|bundle-version'
-gh api repos/grillermo/patatatube/pages/builds -q '.[0].status'
-curl -sS -o /dev/null -w '%{http_code}\n' -L https://grillermo.github.io/patatatube/install.html
-```
-
-### 4. Install on each device
+### 1. Install on each device
 
 **In Safari** (Chrome and in-app browsers cannot start an install):
 
@@ -96,7 +82,7 @@ certificate and has `get-task-allow = 0`, i.e. it is not development-signed.
 If an installed app refuses to launch anyway, **Settings → Privacy & Security →
 Developer Mode** is a one-toggle thing to rule out.
 
-### 5. Retire AltStore on the iPad
+### 2. Retire AltStore on the iPad
 
 Install over the top from the Safari link — same bundle ID, so it adopts the
 existing data and the 7-day expiry stops applying. Then delete AltStore and stop
