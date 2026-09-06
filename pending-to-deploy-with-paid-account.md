@@ -65,7 +65,9 @@ code blocks in `docs/superpowers/plans/*.md`.
 ### 3. Verify
 
 ```bash
-plutil -p ios/manifest.plist | grep -E 'appURL|bundle-version'
+# the manifest describes the release just cut ('appURL' is the *export option*
+# name; in the manifest it lands as assets[0].url with kind software-package)
+plutil -p ios/manifest.plist | grep -E 'url"|bundle-version'
 gh api repos/grillermo/patatatube/pages/builds -q '.[0].status'
 curl -sS -o /dev/null -w '%{http_code}\n' -L https://grillermo.github.io/patatatube/install.html
 ```
