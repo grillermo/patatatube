@@ -418,6 +418,32 @@ hand an anonymous visitor a cached authenticated page.
   reaching the last 30s stores 0, and auto-advance inside the player always
   starts the next item at 0.
 
+### Distribution — `./deploy` ships two routes from one build
+
+The `.ipa` is signed **ad hoc** against the paid Apple Developer team in
+`project.yml`'s `DEVELOPMENT_TEAM`, which `ipa_builder.rb` reads for both the
+archive and the export so the two can never disagree. From that one archive,
+`./deploy` publishes:
+
+1. **Over the air** — `xcodebuild -exportArchive` emits the OTA `manifest.plist`
+   itself (the `manifest` key in `ExportOptions.plist`), so it always describes
+   the binary being uploaded. It lands at `ios/manifest.plist` on the default
+   branch, and `docs/install.html` (GitHub Pages) offers an
+   `itms-services://` link to it. **Both URLs are constant across releases** —
+   that is what makes a Home Screen bookmark a permanent update button, so don't
+   version them.
+2. **AltStore** — `ios/apps.json`, unchanged. AltStore re-signs on-device, so it
+   is indifferent to our signature.
+
+An ad-hoc profile embeds the UDIDs registered on the portal **at build time**, so
+registering a device is only half the job — the app must be redeployed before
+that device can install it. `PATATATUBE_UNSIGNED=1` restores the old unsigned
+archive; that path deliberately leaves `ios/manifest.plist` and the install page
+alone rather than advertising a build Safari cannot install.
+
+Full setup and troubleshooting: `ios/install.md` (`ios/altstore.md` for the
+secondary route).
+
 ### Plex library (library rows)
 
 - `plex.py` fetches metadata from the local Plex server (`PLEX_URL`/`PLEX_TOKEN`); its JSON contains raw control characters, so it parses with `json.loads(text, strict=False)`.

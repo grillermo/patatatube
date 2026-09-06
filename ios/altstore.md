@@ -1,5 +1,13 @@
 # Installing PatataTube via AltStore
 
+> **This is the secondary route.** With the paid Apple Developer Program, the app
+> installs straight from Safari — no AltStore, no AltServer, no computer, and a
+> signature good for a year instead of 7 days. See **[install.md](install.md)**.
+>
+> AltStore is still published by every `./deploy` and still works. Keep it if you
+> want *notified* updates: it polls the source and installs in the background,
+> which the Safari link deliberately does not do.
+
 Sideload the app onto your iPad without an Apple Developer account, with AltStore keeping the signature refreshed automatically in the background.
 
 ## Two kinds of "automatic"
@@ -86,7 +94,7 @@ Do **not** use **Distribute App → Development → Export** — on a free Apple
 7. In that folder, create a directory named exactly `Payload` (capital P) and move `PatataTube.app` inside it.
 8. Zip the `Payload` folder, then rename `Payload.zip` → `PatataTube.ipa`.
 
-No paid Apple Developer account required — AltStore re-signs the `.ipa` itself using the free Apple ID from step 2.
+No paid Apple Developer account required — AltStore re-signs the `.ipa` itself using the free Apple ID from step 2. (`./deploy` now ships a *signed* ad-hoc `.ipa`; AltStore re-signs it anyway, so this route is unaffected. `PATATATUBE_UNSIGNED=1 ./deploy` reproduces the old unsigned build.)
 
 ## 5. Sideload the .ipa
 
