@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.5.14",
+          "buildVersion": "176",
+          "date": "2026-09-06T05:36:00Z",
+          "localizedDescription": "Installs straight from Safari now\n\n• Signed for the Apple Developer Program - no AltStore, no cable, and the signature lasts a year\n• The app itself is unchanged from 2.5.13",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.14/PatataTube-2.5.14.ipa",
+          "size": 4413772,
+          "sha256": "e66595e815bc85a24f25d902f4948b567701288892797ccf235a582b895cf15e",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.5.13",
           "buildVersion": "175",
           "date": "2026-09-02T14:33:47Z",
@@ -1664,11 +1674,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.5.13",
-      "versionDate": "2026-09-02T14:33:47Z",
-      "versionDescription": "The video info sheet now shows the channel\n\n• Video Info lists the YouTube channel alongside the platform and source key",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.13/PatataTube-2.5.13.ipa",
-      "size": 4317784
+      "version": "2.5.14",
+      "versionDate": "2026-09-06T05:36:00Z",
+      "versionDescription": "Installs straight from Safari now\n\n• Signed for the Apple Developer Program - no AltStore, no cable, and the signature lasts a year\n• The app itself is unchanged from 2.5.13",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.5.14/PatataTube-2.5.14.ipa",
+      "size": 4413772
     }
   ],
   "news": []
