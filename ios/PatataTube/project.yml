@@ -48,9 +48,6 @@ targets:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations: {}
         UIApplicationShortcutItems:
-          - UIApplicationShortcutItemType: com.patatatube.openWeb
-            UIApplicationShortcutItemTitle: Open Web
-            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeBookmark
           - UIApplicationShortcutItemType: com.patatatube.clearVideos
             UIApplicationShortcutItemTitle: Clear Videos
             UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
@@ -76,7 +73,6 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSAppleMusicUsageDescription: PatataTube controls the system music player when the live page asks it to.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UIFileSharingEnabled: true

@@ -1,9 +1,9 @@
 import Foundation
 
-/// `UserDefaults`-backed home for `RestorationState`, in the shape of
-/// `WebHistoryStore`: nothing throws, and unreadable storage is treated as no
-/// state and overwritten on the next save. A broken blob must never keep the
-/// app from launching or from recording fresh state.
+/// `UserDefaults`-backed home for `RestorationState`: nothing throws, and
+/// unreadable storage is treated as no state and overwritten on the next
+/// save. A broken blob must never keep the app from launching or from
+/// recording fresh state.
 ///
 /// There is deliberately no expiry — a relaunch a week later still restores.
 public final class RestorationStore: @unchecked Sendable {

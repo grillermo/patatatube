@@ -4,7 +4,6 @@ import UIKit
 /// The home-screen quick actions. Raw value matches the
 /// `UIApplicationShortcutItem.type` declared in project.yml.
 enum QuickAction: String {
-    case openWeb = "com.patatatube.openWeb"
     case clearVideos = "com.patatatube.clearVideos"
     case clearCovers = "com.patatatube.clearCovers"
     case clearLists = "com.patatatube.clearLists"

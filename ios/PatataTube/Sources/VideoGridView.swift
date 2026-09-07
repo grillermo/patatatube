@@ -177,7 +177,6 @@ struct VideoGridView: View {
     @State private var loadedGroup: Int?
     @State private var showSettings = false
     @State private var showUpload = false
-    @State private var showWebBridge = false
     /// Explicit navigation path. Required for restoration — an implicit stack
     /// cannot be replayed — and the reason `.downloads` is a route rather than
     /// an `isPresented` destination: SwiftUI desyncs a stack that mixes the two.
@@ -318,13 +317,6 @@ struct VideoGridView: View {
             ScrollViewReader { proxy in
                 tabRoot
                 .task { await initialLoad(scrollProxy: proxy) }
-                // Deferred launch restoration (web-bridge quick action) lands
-                // here when the bridge is dismissed. `initialLoad` is safe to
-                // re-enter: the gate still admits exactly one run.
-                .task(id: model.restorationReleases) {
-                    guard model.restorationReleases > 0 else { return }
-                    await initialLoad(scrollProxy: proxy)
-                }
                 .task { await refreshGroups() }
             }
             .navigationDestination(for: Route.self) { route in
@@ -361,13 +353,8 @@ struct VideoGridView: View {
                 }
                 Task { await loadGroup(id) }
             }
-            .onChange(of: model.webBridgeRequests) { _, _ in showWebBridge = true }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
-            .fullScreenCover(isPresented: $showWebBridge,
-                             onDismiss: { model.releaseRestoration() }) {
-                WebBridgeView()
-            }
             .alert(
                 "Download all",
                 isPresented: Binding(
@@ -774,14 +761,6 @@ struct VideoGridView: View {
     /// popped `EpisodesView` under the user's tap
     /// (`docs/restoration-buggy.md`).
     private func initialLoad(scrollProxy: ScrollViewProxy) async {
-        // "Open Web" quick action: the web bridge is the whole point of the
-        // launch. Restoration waits for its back button
-        // (`releaseRestoration`), which re-runs this via `restorationReleases`.
-        if model.deferRestorationIfWebLaunch() {
-            DevLog.event(.nav, "initial load deferred",
-                         ["reason": "web bridge launch", "tab": tab.rawValue])
-            return
-        }
         let restoredTab = model.restorationStore.load().tab ?? .videos
         guard tab == restoredTab else {
             DevLog.event(.nav, "initial load skipped", ["reason": "other tab", "tab": tab.rawValue])
