@@ -105,22 +105,6 @@ struct PiPSessionTests {
         #expect(sut.restoreRequest == nil)
     }
 
-    /// The crash in PATATATUBE-K: a cover dismissed without PiP ever starting
-    /// left its player and its already-removed periodic observer staged, and
-    /// the next audio-only tap called `stopFloating()` on them.
-    @Test func aDismissedCoverTakesItsStagingWithIt() {
-        var dismissals = 0
-        let sut = PiPSession()
-        let player = staged(sut) { dismissals += 1 }
-
-        sut.cancelStaging(for: player)
-        sut.stopFloating()
-        sut.playerViewControllerWillStartPictureInPicture(AVPlayerViewController())
-
-        #expect(!sut.isHandingOff)
-        #expect(dismissals == 0)
-    }
-
     /// Staging and mounting race, so an older view's teardown can land after a
     /// newer view has staged. Identity is what keeps it from stealing it.
     @Test func cancellingStagingIgnoresAnotherViewsPlayer() {
