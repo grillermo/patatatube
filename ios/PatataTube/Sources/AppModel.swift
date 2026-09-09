@@ -62,12 +62,14 @@ final class AppModel: ObservableObject {
     /// "movies" can never share a bucket with the movies tab.
     static func showScope(_ title: String) -> String { "show:\(title)" }
 
-    func autoplay(for feed: Feed) -> Bool { autoplayByFeed[feed.storageKey] ?? false }
+    /// Autoplay is **on until switched off**: nothing is persisted, so every
+    /// launch starts every scope at the default, and that default is on.
+    func autoplay(for feed: Feed) -> Bool { autoplayByFeed[feed.storageKey] ?? true }
 
     /// Episode queues keep their existing per-show scope; feeds use the typed
     /// overload above.
     func autoplay(for scope: String?) -> Bool {
-        scope.flatMap { autoplayByFeed[$0] } ?? false
+        scope.flatMap { autoplayByFeed[$0] } ?? true
     }
 
     func autoplayBinding(for feed: Feed) -> Binding<Bool> {
@@ -79,7 +81,7 @@ final class AppModel: ObservableObject {
 
     func autoplayBinding(for scope: String) -> Binding<Bool> {
         Binding(
-            get: { self.autoplayByFeed[scope] ?? false },
+            get: { self.autoplay(for: scope) },
             set: { self.autoplayByFeed[scope] = $0 }
         )
     }

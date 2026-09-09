@@ -40,6 +40,11 @@ struct HorizontalLockOverlay: View {
     let onToggle: () -> Void
     let isSleepOn: Bool
     let onToggleSleep: () -> Void
+    /// Autoplay for the queue's scope. `onToggleAutoplay == nil` means this
+    /// presentation has no scope to key the setting under (a PiP restore with
+    /// no `restoreScope`), and the button is left out rather than shown inert.
+    var isAutoplayOn: Bool = false
+    var onToggleAutoplay: (() -> Void)? = nil
 
     var body: some View {
         GeometryReader { geometry in
@@ -62,6 +67,23 @@ struct HorizontalLockOverlay: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(isSleepOn ? "Cancel sleep after this video" : "Sleep after this video")
+
+                        if let onToggleAutoplay {
+                            Button {
+                                onToggleAutoplay()
+                            } label: {
+                                controlIcon(active: isAutoplayOn) {
+                                    // Not an SF Symbol, so it needs an explicit
+                                    // size — `.font` does not scale a bitmap.
+                                    Image("Autoplay")
+                                        .renderingMode(.template)
+                                        .resizable()
+                                        .frame(width: 22, height: 22)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(isAutoplayOn ? "Turn autoplay off" : "Turn autoplay on")
+                        }
                     }
                     .padding(.trailing, 16)
                     .padding(.top, geometry.size.height * Self.verticalOffsetFraction)
@@ -73,8 +95,15 @@ struct HorizontalLockOverlay: View {
     }
 
     private func controlIcon(_ systemName: String, active: Bool) -> some View {
-        Image(systemName: systemName)
-            .font(.title3.weight(.semibold))
+        controlIcon(active: active) {
+            Image(systemName: systemName).font(.title3.weight(.semibold))
+        }
+    }
+
+    private func controlIcon<Content: View>(
+        active: Bool, @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
             .foregroundStyle(active ? Color.accentColor : .white)
             .frame(width: 44, height: 44)
             .background(.black.opacity(0.55), in: Circle())

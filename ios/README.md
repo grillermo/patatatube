@@ -15,6 +15,7 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 
 ### Playback
 - Tap a cell to open a fullscreen player that autoplays
+- Autoplay is **on by default** for every feed/show scope on a fresh launch (nothing is persisted); the overflow menu and the in-player toggle (below the moon) turn it off
 - Auto-dismisses on end of video in the foreground when autoplay is off; with autoplay on, a finished video advances to the next playable queue item (foreground or backgrounded); with autoplay off and backgrounded, playback pauses instead of dismissing
 - Randomize toggle (overflow menu) — per feed, works with or without autoplay: "next" (Control Center) and autoplay-on-end pick from a shuffled order instead of the fixed list; the same video doesn't repeat back-to-back when the shuffle loops; toggling it off reverts that feed's "next" to sequential order the next time the player is opened (state remembered while the app stays open)
 - Tap to dismiss
@@ -151,7 +152,7 @@ On first launch grid is empty / errors — need server config:
 2. Tap the wedge → video plays full screen. Tap elsewhere on the thumbnail → normal playback (autoplay behavior unchanged).
 3. Requires a user Shortcut named `black-screen` (Shortcuts app). With autoplay ON, let a play-and-sleep video finish → PatataTube pauses and the `black-screen` Shortcut runs, no next video starts.
 4. If the Shortcut is missing, iOS shows its "shortcut not found" prompt — create one named exactly `black-screen`.
-5. In-player moon toggle: start a normal video, tap it → moon button appears below the orientation-lock button. Tap it (turns accent) → at the current video's end the `black-screen` Shortcut runs even with autoplay ON. Tap again to cancel. A video launched from the grid wedge shows the moon already on.
+5. In-player moon toggle: start a normal video, tap it → moon button appears below the orientation-lock button, and the autoplay button below that. Tap it (turns accent) → at the current video's end the `black-screen` Shortcut runs even with autoplay ON. Tap again to cancel. A video launched from the grid wedge shows the moon already on.
 
 ### Plex library
 

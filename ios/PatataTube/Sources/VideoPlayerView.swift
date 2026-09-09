@@ -143,6 +143,16 @@ struct VideoPlayerView: View {
                 onToggleSleep: {
                     sleepAfterCurrent.toggle()
                     orientationControlVisibility.reveal()
+                },
+                isAutoplayOn: model.autoplay(for: autoplayScope),
+                onToggleAutoplay: autoplayScope.map { scope in
+                    {
+                        // Writes the same per-scope bucket the overflow menu
+                        // does, and `bindPlayToEnd` re-reads it at fire time,
+                        // so flipping it mid-video takes effect on this video.
+                        model.autoplayByFeed[scope] = !model.autoplay(for: scope)
+                        orientationControlVisibility.reveal()
+                    }
                 }
             )
         }
