@@ -82,15 +82,32 @@ def test_upload_uses_requested_group(client, monkeypatch):
     assert db.get_video(resp.json()["id"])["group_id"] == group_id
 
 
-def test_upload_without_group_uses_first_group(client, monkeypatch):
+def test_upload_without_group_uses_inbox(client, monkeypatch):
     import db
 
     monkeypatch.setattr("router.download_video", lambda *a, **kw: None)
-    first_group_id = db.list_groups()[0]["id"]
+    inbox_id = db.create_group("inbox", "inbox")["id"]
 
     resp = client.post(
         "/upload",
         json={"url": "https://twitter.com/x/status/125"},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert resp.status_code == 202
+    assert db.get_video(resp.json()["id"])["group_id"] == inbox_id
+
+
+def test_upload_without_group_falls_back_to_first_group_without_inbox(client, monkeypatch):
+    import db
+
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: None)
+    assert db.get_group_by_name("inbox") is None
+    first_group_id = db.list_groups()[0]["id"]
+
+    resp = client.post(
+        "/upload",
+        json={"url": "https://twitter.com/x/status/126"},
         headers={"Authorization": "Bearer test-secret"},
     )
 

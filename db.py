@@ -19,6 +19,12 @@ DEFAULT_GROUPS = [
     ("asmr", "ASMR", 3),
 ]
 
+# Where an upload lands when the client names no group. A staging group the
+# user triages by hand, so it is looked up by name rather than pinned to an id
+# or a position: renaming or reordering the groups must not silently retarget
+# new downloads. Absent from the table, `/upload` falls back to the first group.
+DEFAULT_UPLOAD_GROUP = "inbox"
+
 JOB_KINDS = ("convert", "hls", "normalize")
 PRIORITY_INTERACTIVE = 0
 PRIORITY_BULK = 100

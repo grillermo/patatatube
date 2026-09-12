@@ -371,10 +371,13 @@ async def upload(body: UploadRequest, request: Request, background_tasks: Backgr
 
     group_id = body.group_id
     if group_id is None:
-        groups = db.list_groups()
-        if not groups:
-            raise HTTPException(status_code=409, detail="No video groups configured")
-        group_id = groups[0]["id"]
+        default = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)
+        if default is None:
+            groups = db.list_groups()
+            if not groups:
+                raise HTTPException(status_code=409, detail="No video groups configured")
+            default = groups[0]
+        group_id = default["id"]
     elif db.get_group(group_id) is None:
         raise HTTPException(status_code=400, detail="No such group")
 
