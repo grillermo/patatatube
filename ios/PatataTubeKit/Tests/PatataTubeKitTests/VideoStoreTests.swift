@@ -81,6 +81,8 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
     private(set) var chosenAudio: [(id: Int, lang: String)] = []
     var chooseSubtitleResult = true
     private(set) var chosenSubtitle: [(id: Int, lang: String?)] = []
+    var setRememberPositionResult = true
+    private(set) var rememberPositionCalls: [(id: Int, on: Bool)] = []
     var prepareResult = "done"
     var videoResults: [Video] = []
     private(set) var videoCalls = 0
@@ -107,6 +109,11 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         if let mutationError { throw mutationError }
         chosenSubtitle.append((id, lang))
         return chooseSubtitleResult
+    }
+    func setRememberPosition(id: Int, on: Bool) async throws -> Bool {
+        if let mutationError { throw mutationError }
+        rememberPositionCalls.append((id, on))
+        return setRememberPositionResult
     }
     func savePosition(id: Int, secs: Double) async throws {
         if let mutationError { throw mutationError }
@@ -1118,6 +1125,68 @@ private actor StaleVideoFetch {
     await store.chooseSubtitle(id: 1, lang: "es")
 
     #expect(store.videos[0].subtitleLang == nil)
+}
+
+@MainActor @Test func setRememberPositionOptimisticallyUpdates() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.load()
+
+    await store.setRememberPosition(id: 1, true)
+
+    #expect(api.rememberPositionCalls.map(\.id) == [1])
+    #expect(api.rememberPositionCalls.map(\.on) == [true])
+    #expect(store.videos[0].rememberPosition)
+    #expect(api.loadCount == 1)
+}
+
+@MainActor @Test func setRememberPositionRevertsWhenServerReturnsNotOk() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1)]
+    api.setRememberPositionResult = false
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.load()
+
+    await store.setRememberPosition(id: 1, true)
+
+    #expect(store.videos[0].rememberPosition == false)
+}
+
+@MainActor @Test func setRememberPositionRevertsWhenTheRequestThrows() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1)]
+    api.mutationError = APIError.badStatus(500)
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.load()
+
+    await store.setRememberPosition(id: 1, true)
+
+    #expect(store.videos[0].rememberPosition == false)
+}
+
+@MainActor @Test func setRememberPositionIgnoresAnUnknownID() async {
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1)]
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.load()
+
+    await store.setRememberPosition(id: 999, true)
+
+    #expect(api.rememberPositionCalls.isEmpty)
+}
+
+@MainActor @Test func setRememberPositionLeavesResumeSecsAlone() async {
+    // Off must never discard the stored position: the toggle gates the
+    // prompt, it does not reset progress.
+    let api = FakeAPI()
+    api.videosToReturn = [makeVideo(id: 1, resumeSecs: 91.5)]
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.load()
+
+    await store.setRememberPosition(id: 1, false)
+
+    #expect(store.videos[0].resumeSecs == 91.5)
 }
 
 private func tempCache() -> VideoListCache {

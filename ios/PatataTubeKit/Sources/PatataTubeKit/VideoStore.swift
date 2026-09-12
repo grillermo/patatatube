@@ -397,6 +397,22 @@ public final class VideoStore: ObservableObject {
         }
     }
 
+    /// Opts one video into the resume prompt. Optimistic like the other
+    /// per-video writes here — the menu's switch flips at once and a rejected
+    /// or failed request puts it back. Never touches `resumeSecs`.
+    public func setRememberPosition(id: Int, _ on: Bool) async {
+        guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
+        let previous = videos[index]
+        videos[index] = videos[index].withRememberPosition(on)
+        do {
+            let ok = try await api.setRememberPosition(id: id, on: on)
+            if !ok { videos[index] = previous }
+        } catch {
+            videos[index] = previous
+            report(error)
+        }
+    }
+
     /// Deletes on the server, then refreshes the list (and cache) from the API.
     public func delete(id: Int) async {
         do {
