@@ -70,6 +70,40 @@ def test_init_db_is_idempotent_with_resume_secs(tmp_db):
     assert tmp_db.get_video(video_id)["resume_secs"] == 0
 
 
+def test_remember_position_defaults_to_off(tmp_db):
+    video_id = tmp_db.add_video("https://x.com/i/status/10", "twitter")
+    assert tmp_db.get_video(video_id)["remember_position"] == 0
+
+
+def test_set_remember_position_turns_it_on(tmp_db):
+    video_id = tmp_db.add_video("https://x.com/i/status/11", "twitter")
+    tmp_db.set_remember_position(video_id, True)
+    assert tmp_db.get_video(video_id)["remember_position"] == 1
+
+
+def test_set_remember_position_turns_it_off_again(tmp_db):
+    video_id = tmp_db.add_video("https://x.com/i/status/12", "twitter")
+    tmp_db.set_remember_position(video_id, True)
+    tmp_db.set_remember_position(video_id, False)
+    assert tmp_db.get_video(video_id)["remember_position"] == 0
+
+
+def test_turning_remember_position_off_keeps_the_stored_position(tmp_db):
+    """Off stops the prompt; it must never discard where playback got to."""
+    video_id = tmp_db.add_video("https://x.com/i/status/13", "twitter")
+    tmp_db.set_resume_secs(video_id, 123.5)
+    tmp_db.set_remember_position(video_id, True)
+    tmp_db.set_remember_position(video_id, False)
+    assert tmp_db.get_video(video_id)["resume_secs"] == 123.5
+
+
+def test_init_db_is_idempotent_with_remember_position(tmp_db):
+    tmp_db.init_db()
+    tmp_db.init_db()
+    video_id = tmp_db.add_video("https://x.com/i/status/14", "twitter")
+    assert tmp_db.get_video(video_id)["remember_position"] == 0
+
+
 def test_init_db_deletes_legacy_error_videos(tmp_db):
     good_id = tmp_db.add_video("https://twitter.com/x/status/123")
     bad_id = tmp_db.add_video("https://twitter.com/x/status/789")
