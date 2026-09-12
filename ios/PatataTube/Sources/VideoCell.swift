@@ -29,6 +29,8 @@ struct VideoCell: View {
     let onPromote: (PlexKind) -> Void
     let onChooseVersion: (Int) -> Void
     let onDelete: () -> Void
+    /// Videos-tab only: opt this video into the resume prompt.
+    let onSetRememberPosition: (Bool) -> Void
 
     @State private var confirmingDelete = false
     @State private var showingInfo = false
@@ -144,6 +146,13 @@ struct VideoCell: View {
                 Menu {
                     Button("Info", systemImage: "info.circle") { showingInfo = true }
                     if !video.isPlexItem {
+                        Toggle(isOn: Binding(
+                            get: { video.rememberPosition },
+                            set: { onSetRememberPosition($0) }
+                        )) {
+                            Label("Remember position", systemImage: "clock.arrow.circlepath")
+                        }
+
                         ForEach(groups) { group in
                             Button(group.label) { onSetGroup(group.id) }
                         }

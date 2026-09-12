@@ -28,7 +28,8 @@ struct VideoRowAudioTests {
                 audioState: state,
                 onPlay: {}, onPlaySleep: {}, onDownload: { true }, onCancel: {},
                 onDeleteCache: {}, onSetGroup: { _ in }, onPromote: { _ in },
-                onChooseVersion: { _ in }, onDelete: {}
+                onChooseVersion: { _ in }, onDelete: {},
+                onSetRememberPosition: { _ in }
             )
             #expect(row.audioState == state)
         }

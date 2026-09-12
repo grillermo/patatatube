@@ -547,7 +547,10 @@ struct VideoGridView: View {
                             onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
                             onPromote: { kind in Task { await store.promote(id: video.id, kind: kind) } },
                             onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
-                            onDelete: { Task { await store.delete(id: video.id) } }
+                            onDelete: { Task { await store.delete(id: video.id) } },
+                            onSetRememberPosition: { on in
+                                Task { await store.setRememberPosition(id: video.id, on) }
+                            }
                         )
                     } else {
                         VideoCell(
@@ -571,7 +574,10 @@ struct VideoGridView: View {
                             onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
                             onPromote: { kind in Task { await store.promote(id: video.id, kind: kind) } },
                             onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
-                            onDelete: { Task { await store.delete(id: video.id) } }
+                            onDelete: { Task { await store.delete(id: video.id) } },
+                            onSetRememberPosition: { on in
+                                Task { await store.setRememberPosition(id: video.id, on) }
+                            }
                         )
                     }
                 }
@@ -1056,11 +1062,12 @@ struct VideoGridView: View {
 
     /// Starts playback from the tap-time queue snapshot. `video` may be the
     /// ensureReady-updated copy, so it replaces its stale row in the snapshot.
-    /// tv/movies rows with real progress stop here and ask first.
+    /// tv/movies rows, and Videos rows that remember, stop here and ask first.
     private func startPlayback(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false, caller: String = "?") {
         model.audio.stop()
         let secs = model.resumeStore.resolved(server: video.resumeSecs, for: video.id)
-        switch ResumeDecision.decide(resumeSecs: secs, plexKind: video.plexKind) {
+        switch ResumeDecision.decide(resumeSecs: secs, plexKind: video.plexKind,
+                                     remembersPosition: video.rememberPosition) {
         case .ask(let secs):
             pendingResume = PendingResume(
                 id: video.id,
