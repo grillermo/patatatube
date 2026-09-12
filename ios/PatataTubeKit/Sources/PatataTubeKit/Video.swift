@@ -83,6 +83,10 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let audioLang: String?
     public let subtitleLang: String?
     public let resumeSecs: Double
+    /// Whether this video's `resumeSecs` may produce a resume prompt. Plex
+    /// rows prompt regardless; a group video prompts only once the user turns
+    /// this on from the Videos tab. Position is recorded either way.
+    public let rememberPosition: Bool
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, platform, sourceKey, channel, previewUrl, position
@@ -93,6 +97,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         case audioLang
         case subtitleLang
         case resumeSecs
+        case rememberPosition
     }
 
     private enum RawGroupCodingKeys: String, CodingKey {
@@ -115,6 +120,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
             sourceFilename: String? = nil, audioLang: String? = nil,
             subtitleLang: String? = nil,
             resumeSecs: Double = 0,
+            rememberPosition: Bool = false,
             channel: String? = nil) {
         self.id = id; self.url = url; self.title = title; self.platform = platform
         self.sourceKey = sourceKey; self.previewUrl = previewUrl
@@ -128,6 +134,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.audioLang = audioLang
         self.subtitleLang = subtitleLang
         self.resumeSecs = resumeSecs
+        self.rememberPosition = rememberPosition
         self.channel = channel
     }
 
@@ -162,6 +169,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.audioLang = try c.decodeIfPresent(String.self, forKey: .audioLang)
         self.subtitleLang = try c.decodeIfPresent(String.self, forKey: .subtitleLang)
         self.resumeSecs = try c.decodeIfPresent(Double.self, forKey: .resumeSecs) ?? 0
+        self.rememberPosition = try c.decodeIfPresent(Bool.self, forKey: .rememberPosition) ?? false
         self.channel = try c.decodeIfPresent(String.self, forKey: .channel)
     }
 
@@ -183,7 +191,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               },
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs, channel: channel)
+              resumeSecs: resumeSecs, rememberPosition: rememberPosition, channel: channel)
     }
 
     func withGroupID(_ groupID: Int?) -> Video {
@@ -195,7 +203,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs, channel: channel)
+              resumeSecs: resumeSecs, rememberPosition: rememberPosition, channel: channel)
     }
 
     func withAudioLang(_ lang: String) -> Video {
@@ -207,7 +215,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: lang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs, channel: channel)
+              resumeSecs: resumeSecs, rememberPosition: rememberPosition, channel: channel)
     }
 
     func withSubtitleLang(_ lang: String?) -> Video {
@@ -219,7 +227,19 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: lang,
-              resumeSecs: resumeSecs, channel: channel)
+              resumeSecs: resumeSecs, rememberPosition: rememberPosition, channel: channel)
+    }
+
+    func withRememberPosition(_ on: Bool) -> Video {
+        return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
+              previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: position,
+              status: status, errorMsg: errorMsg, streamPath: streamPath,
+              source: source, showTitle: showTitle, season: season,
+              episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
+              chosenVersionId: chosenVersionId, versions: versions,
+              hlsPath: hlsPath, subtitleTracks: subtitleTracks,
+              sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
+              resumeSecs: resumeSecs, rememberPosition: on, channel: channel)
     }
 
     /// The subtitle language to force on the player, or `nil` to force nothing.
