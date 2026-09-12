@@ -100,6 +100,9 @@ def serialize_video(video: dict) -> dict:
         "plex_kind": video.get("plex_kind"),
         "position": video.get("position"),
         "resume_secs": video.get("resume_secs") or 0,
+        # SQLite stores this as 0/1; the iOS client decodes a Swift Bool, so
+        # normalize here rather than leaking the integer into the API.
+        "remember_position": bool(video.get("remember_position")),
         "status": video["status"],
         "error_msg": video.get("error_msg"),
         "stream_path": f"/videos/{video['id']}/stream",

@@ -76,6 +76,7 @@ def test_serialize_video_full_shape():
         "plex_kind": None,
         "position": 3,
         "resume_secs": 0,
+        "remember_position": False,
         "status": "done",
         "error_msg": None,
         "stream_path": "/videos/7/stream",
@@ -301,3 +302,17 @@ def test_serialize_channel_is_null_when_unknown():
         "platform": "twitter",
     })
     assert data["channel"] is None
+
+
+def test_serialize_remember_position_defaults_to_false():
+    assert serialize_video(_library_video())["remember_position"] is False
+
+
+def test_serialize_remember_position_is_true_when_set():
+    assert serialize_video(_library_video(remember_position=1))["remember_position"] is True
+
+
+def test_serialize_remember_position_is_a_bool_not_an_int():
+    """The iOS client decodes this into a Swift Bool; a 0/1 would fail to decode."""
+    data = serialize_video(_library_video(remember_position=1))
+    assert isinstance(data["remember_position"], bool)

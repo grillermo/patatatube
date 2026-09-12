@@ -2132,6 +2132,78 @@ def test_position_requires_secs(client, monkeypatch):
     assert resp.status_code == 422
 
 
+def test_remember_position_requires_token(client):
+    resp = client.post("/api/videos/1/remember-position", json={"on": True})
+    assert resp.status_code == 401
+
+
+def test_remember_position_turns_on(client, monkeypatch):
+    import db
+    video_id = _make_done_video(client, monkeypatch, "https://twitter.com/x/status/910")
+    resp = client.post(
+        f"/api/videos/{video_id}/remember-position",
+        json={"on": True},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    assert db.get_video(video_id)["remember_position"] == 1
+
+
+def test_remember_position_turns_off(client, monkeypatch):
+    import db
+    video_id = _make_done_video(client, monkeypatch, "https://twitter.com/x/status/911")
+    db.set_remember_position(video_id, True)
+    resp = client.post(
+        f"/api/videos/{video_id}/remember-position",
+        json={"on": False},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 200
+    assert db.get_video(video_id)["remember_position"] == 0
+
+
+def test_remember_position_off_keeps_resume_secs(client, monkeypatch):
+    import db
+    video_id = _make_done_video(client, monkeypatch, "https://twitter.com/x/status/912")
+    db.set_resume_secs(video_id, 91.5)
+    client.post(
+        f"/api/videos/{video_id}/remember-position",
+        json={"on": False},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert db.get_video(video_id)["resume_secs"] == 91.5
+
+
+def test_remember_position_unknown_video_is_404(client):
+    resp = client.post(
+        "/api/videos/999999/remember-position",
+        json={"on": True},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 404
+
+
+def test_remember_position_requires_on(client, monkeypatch):
+    video_id = _make_done_video(client, monkeypatch, "https://twitter.com/x/status/913")
+    resp = client.post(
+        f"/api/videos/{video_id}/remember-position",
+        json={},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 422
+
+
+def test_video_list_exposes_remember_position(client, monkeypatch):
+    import db
+    video_id = _make_done_video(client, monkeypatch, "https://twitter.com/x/status/914")
+    db.set_remember_position(video_id, True)
+    resp = client.get("/api/videos")  # this route is unauthenticated, unlike the POSTs
+    assert resp.status_code == 200
+    row = next(v for v in resp.json() if v["id"] == video_id)
+    assert row["remember_position"] is True
+
+
 @pytest.mark.parametrize("secs", [float("nan"), float("inf"), float("-inf")])
 def test_position_rejects_non_finite_seconds(client, monkeypatch, secs):
     video_id = _make_done_video(

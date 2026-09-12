@@ -170,6 +170,16 @@ def init_db():
         # end of a video resets it to 0, so a finished video never prompts.
         if "resume_secs" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN resume_secs REAL NOT NULL DEFAULT 0")
+        # Whether this video's stored `resume_secs` may produce a resume
+        # prompt. Plex rows prompt unconditionally and ignore this column; a
+        # group video prompts only once the user switches it on for that
+        # video. Position keeps being recorded either way, so switching it
+        # back on resumes where playback actually got to.
+        if "remember_position" not in columns:
+            _add_column(
+                conn,
+                "ALTER TABLE videos ADD COLUMN remember_position INTEGER NOT NULL DEFAULT 0",
+            )
         # A video is either in a group or is a Plex item — never both, never
         # neither-but-meaningful. Nullability is the discriminator; there is no
         # `kind` column.
@@ -661,6 +671,19 @@ def set_resume_secs(video_id: int, secs: float) -> None:
     value = max(0.0, value)
     with _conn() as conn:
         conn.execute("UPDATE videos SET resume_secs = ? WHERE id = ?", (value, video_id))
+
+
+def set_remember_position(video_id: int, on: bool) -> None:
+    """Whether this video's resume position may produce a resume prompt.
+
+    Deliberately does not touch `resume_secs`: turning the toggle off only
+    silences the prompt, so turning it back on resumes where playback got to.
+    """
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE videos SET remember_position = ? WHERE id = ?",
+            (1 if on else 0, video_id),
+        )
 
 
 def set_version_audio_langs(version_id: int, audio_langs_json: str) -> None:

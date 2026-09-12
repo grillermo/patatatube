@@ -186,6 +186,10 @@ class SubtitleRequest(BaseModel):
     lang: str | None = None
 
 
+class RememberPositionRequest(BaseModel):
+    on: bool
+
+
 class PositionRequest(BaseModel):
     secs: FiniteFloat
 
@@ -1147,6 +1151,25 @@ async def api_save_position(video_id: int, body: PositionRequest, request: Reque
         raise HTTPException(status_code=404, detail="Video not found")
     db.set_resume_secs(video_id, body.secs)
     return Response(status_code=204)
+
+
+@router.post("/api/videos/{video_id}/remember-position")
+async def api_set_remember_position(
+    video_id: int, body: RememberPositionRequest, request: Request
+):
+    """Opt one video into the resume prompt.
+
+    Plex rows prompt unconditionally, so in practice this only matters for
+    group videos — the Videos tab is the only place the toggle is shown.
+    Turning it off does not clear `resume_secs`: the position keeps being
+    reported, so switching it back on resumes where playback got to.
+    """
+    _check_token(request)
+    video = db.get_video(video_id)
+    if not video or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Video not found")
+    db.set_remember_position(video_id, body.on)
+    return {"ok": True}
 
 
 @router.post("/api/video/{video_id}/delete")
