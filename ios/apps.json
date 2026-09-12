@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.0",
+          "buildVersion": "182",
+          "date": "2026-09-12T19:47:44Z",
+          "localizedDescription": "Resume playback and quicker access to app info\n\n• Videos can opt in to remembering playback position, with a resume/start-over prompt when you come back\n• Added an About item to the options menu",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.0/PatataTube-2.7.0.ipa",
+          "size": 4423815,
+          "sha256": "c86682138afc576a3a1c505379c28f5768e51dbe11d1ad1c22f916385e6de4d4",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.6.2",
           "buildVersion": "180",
           "date": "2026-09-12T19:21:23Z",
@@ -1704,11 +1714,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.6.2",
-      "versionDate": "2026-09-12T19:21:23Z",
-      "versionDescription": "Added an About screen\n\n• The ⋯ menu has a new About item showing the app icon, version, and copyright",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.6.2/PatataTube-2.6.2.ipa",
-      "size": 4420597
+      "version": "2.7.0",
+      "versionDate": "2026-09-12T19:47:44Z",
+      "versionDescription": "Resume playback and quicker access to app info\n\n• Videos can opt in to remembering playback position, with a resume/start-over prompt when you come back\n• Added an About item to the options menu",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.0/PatataTube-2.7.0.ipa",
+      "size": 4423815
     }
   ],
   "news": []
