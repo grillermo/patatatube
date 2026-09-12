@@ -126,10 +126,14 @@ struct DisplayTitlesToggle: View {
     }
 }
 
-/// Downloads, then whatever the screen adds, then Settings under a divider.
+/// Downloads, then whatever the screen adds, then Settings and About under a
+/// divider.
 private struct OptionsMenuFooter<Extras: View>: View {
     let actions: OptionsMenuActions
     let downloadAll: DownloadAllOption?
+    /// Unlike the other actions this is not the screen's: the About sheet has
+    /// no per-screen state, so each menu shape presents it itself.
+    let about: () -> Void
     @ViewBuilder let extras: Extras
 
     var body: some View {
@@ -153,6 +157,10 @@ private struct OptionsMenuFooter<Extras: View>: View {
             Button {
                 actions.settings()
             } label: { Label("Settings", systemImage: "gear") }
+
+            Button {
+                about()
+            } label: { Label("About", systemImage: "info.circle") }
         }
     }
 }
@@ -170,14 +178,18 @@ struct ListOptionsMenu<Extras: View>: View {
     var isBusy: Bool = false
     @ViewBuilder var extras: Extras
 
+    @State private var showingAbout = false
+
     var body: some View {
         Menu {
             OptionsMenuHeader(scope: scope, actions: actions)
             Divider()
-            OptionsMenuFooter(actions: actions, downloadAll: downloadAll) { extras }
+            OptionsMenuFooter(actions: actions, downloadAll: downloadAll,
+                              about: { showingAbout = true }) { extras }
         } label: {
             OptionsMenuLabel(isBusy: isBusy)
         }
+        .sheet(isPresented: $showingAbout) { AboutView() }
     }
 }
 
@@ -202,14 +214,18 @@ struct SingleOptionsMenu<Extras: View>: View {
     let actions: OptionsMenuActions
     @ViewBuilder var extras: Extras
 
+    @State private var showingAbout = false
+
     var body: some View {
         Menu {
             OptionsMenuHeader(scope: scope, actions: actions)
             Divider()
-            OptionsMenuFooter(actions: actions, downloadAll: nil) { extras }
+            OptionsMenuFooter(actions: actions, downloadAll: nil,
+                              about: { showingAbout = true }) { extras }
         } label: {
             OptionsMenuLabel()
         }
+        .sheet(isPresented: $showingAbout) { AboutView() }
     }
 }
 
