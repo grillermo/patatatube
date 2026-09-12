@@ -11,7 +11,7 @@
 					<key>kind</key>
 					<string>software-package</string>
 					<key>url</key>
-					<string>https://github.com/grillermo/patatatube/releases/download/v2.6.0/PatataTube-2.6.0.ipa</string>
+					<string>https://files.chiq.me/files/PatataTube-2.6.1.ipa</string>
 				</dict>
 				<dict>
 					<key>kind</key>
@@ -31,7 +31,7 @@
 				<key>bundle-identifier</key>
 				<string>com.patatatube.app</string>
 				<key>bundle-version</key>
-				<string>2.6.0</string>
+				<string>2.6.1</string>
 				<key>kind</key>
 				<string>software</string>
 				<key>platform-identifier</key>

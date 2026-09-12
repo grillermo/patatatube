@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.6.1",
+          "buildVersion": "179",
+          "date": "2026-09-12T18:38:23Z",
+          "localizedDescription": "Install and update straight from files.chiq.me\n\n• The install page on files.chiq.me now always offers the newest build\n• No app changes since 2.6.0",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.6.1/PatataTube-2.6.1.ipa",
+          "size": 4385718,
+          "sha256": "f48b17c363752d236323b8ce732ba1b975053f1cea840f30025227ad49603214",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.6.0",
           "buildVersion": "177",
           "date": "2026-09-09T22:12:53Z",
@@ -1684,11 +1694,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.6.0",
-      "versionDate": "2026-09-09T22:12:53Z",
-      "versionDescription": "Autoplay is on by default, and easier to control\n\n• Autoplay now starts on for every video list, so playback keeps going without a tap\n• A new autoplay button in the player (below the moon icon) lets you turn it off or on for that video's list\n• Removed the in-app web browser feature",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.6.0/PatataTube-2.6.0.ipa",
-      "size": 4385906
+      "version": "2.6.1",
+      "versionDate": "2026-09-12T18:38:23Z",
+      "versionDescription": "Install and update straight from files.chiq.me\n\n• The install page on files.chiq.me now always offers the newest build\n• No app changes since 2.6.0",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.6.1/PatataTube-2.6.1.ipa",
+      "size": 4385718
     }
   ],
   "news": []
