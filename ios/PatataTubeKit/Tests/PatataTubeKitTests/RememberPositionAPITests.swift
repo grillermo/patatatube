@@ -98,5 +98,12 @@ extension APIClientTests {
                     .setRememberPosition(id: 12, on: true)
             }
         }
+
+        private func makeClient(statusToken token: String) -> APIClient {
+            let store = InMemoryCredentialStore(
+                baseURL: URL(string: "https://srv.test")!, token: token
+            )
+            return APIClient(store: store, session: mockSession())
+        }
     }
 }
