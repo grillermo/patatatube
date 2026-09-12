@@ -432,6 +432,12 @@ archive and the export so the two can never disagree. From that one archive,
    `itms-services://` link to it. **Both URLs are constant across releases** —
    that is what makes a Home Screen bookmark a permanent update button, so don't
    version them.
+   The same release is also published to **files.chiq.me**: `deploy` copies the
+   `.ipa`, the manifest (`patatatube-manifest.plist`) and the install page
+   (`3cf25ffc-…-Install_PatataTube.html`) straight into `../file_to_s3/files`,
+   the directory that service serves from this machine. The manifest's `appURL`
+   and every install page's `itms-services://` link point there; AltStore keeps
+   downloading from the GitHub Release.
 2. **AltStore** — `ios/apps.json`, unchanged. AltStore re-signs on-device, so it
    is indifferent to our signature.
 

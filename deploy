@@ -140,7 +140,33 @@ OTA_MANIFEST_REL  = "ios/manifest.plist"
 OTA_MANIFEST_URL  = "#{RAW_BASE}/#{OTA_MANIFEST_REL}"
 INSTALL_PAGE_REL  = "docs/install.html"
 INSTALL_PAGE_URL  = "https://#{OWNER}.github.io/#{REPO_NAME}/install.html"
-ITMS_URL          = "itms-services://?action=download-manifest&url=#{OTA_MANIFEST_URL}"
+# The Safari route is served by files.chiq.me: the file_to_s3 service runs on
+# this machine and serves ../file_to_s3/files, so publishing is a copy into that
+# directory, not an HTTP upload (large bodies stall in the Cloudflare tunnel —
+# see ../vvterm/scripts/deploy/uploader.rb). The install page and manifest
+# names are pinned so their URLs never change; each release overwrites them.
+FILES_BASE         = ENV.fetch("PATATATUBE_FILES_BASE", "https://files.chiq.me").sub(%r{/+\z}, "")
+PUBLISH_DIR        = ENV.fetch("PATATATUBE_PUBLISH_DIR", File.expand_path("../file_to_s3/files", __dir__))
+PINNED_MANIFEST    = "patatatube-manifest.plist"
+PINNED_INSTALL     = "3cf25ffc-754e-4a19-b4e1-bcc84cf02bd4-Install_PatataTube.html"
+FILES_MANIFEST_URL = "#{FILES_BASE}/files/#{PINNED_MANIFEST}"
+FILES_INSTALL_URL  = "#{FILES_BASE}/files/#{PINNED_INSTALL}"
+ITMS_URL           = "itms-services://?action=download-manifest&url=#{FILES_MANIFEST_URL}"
+
+# Publishes `path` into the served directory under exactly `name`. Copies
+# beside the target and renames, so a device mid-download never reads a
+# half-written file while a pinned name is overwritten.
+def publish_file(path, name:)
+  target = File.join(PUBLISH_DIR, name)
+  staged = "#{target}.publishing-#{Process.pid}"
+  begin
+    FileUtils.cp(path, staged)
+    File.rename(staged, target)
+  ensure
+    FileUtils.rm_f(staged)
+  end
+  "#{FILES_BASE}/files/#{name}"
+end
 
 # --- version bump ------------------------------------------------------------
 
@@ -160,7 +186,13 @@ current  = B.marketing_version
 version  = bump(current, ARGV[0])
 tag      = "v#{version}"
 asset    = "#{APP_NAME}-#{version}.ipa"
-download = "#{RELEASE_BASE}/#{tag}/#{asset}"
+download = "#{RELEASE_BASE}/#{tag}/#{asset}"  # AltStore source
+ota_download = "#{FILES_BASE}/files/#{asset}" # OTA manifest (files.chiq.me)
+
+unless File.directory?(PUBLISH_DIR)
+  B.die("file_to_s3 files/ directory not found at #{PUBLISH_DIR} — it is what " \
+        "#{FILES_BASE} serves. Set PATATATUBE_PUBLISH_DIR if it moved.")
+end
 
 if `git tag -l #{tag}`.strip == tag || !`gh release view #{tag} 2>/dev/null`.empty?
   B.die("release #{tag} already exists — bump to a new version")
@@ -256,7 +288,7 @@ end
 # export step (not by us) so it can never describe a different binary than the
 # one we are about to upload; `download` is already the URL that .ipa will have.
 ipa      = B.build(instrumented: INSTRUMENTED,
-                   manifest: { app_url: download, icon_url: ICON_URL })
+                   manifest: { app_url: ota_download, icon_url: ICON_URL })
 work     = File.dirname(ipa)
 released = File.join(work, asset)
 File.rename(ipa, released)
@@ -430,6 +462,13 @@ FileUtils.touch(File.join(__dir__, "docs", ".nojekyll"))
 
 # --- commit, push, release ---------------------------------------------------
 
+if ota
+  B.step "Publishing to #{FILES_BASE} (#{PUBLISH_DIR})"
+  puts "    #{publish_file(released, name: asset)}"
+  puts "    #{publish_file(built_manifest, name: PINNED_MANIFEST)}"
+  puts "    #{publish_file(File.join(__dir__, INSTALL_PAGE_REL), name: PINNED_INSTALL)}"
+end
+
 B.step "Committing + pushing"
 # The OTA pair is skipped on an unsigned build and so may not exist at all on a
 # repo that has never published a signed release — stage only what is there,
@@ -455,7 +494,8 @@ FileUtils.remove_entry(work)
 puts B.green("\n✓ Published #{APP_NAME} #{version}")
 if ota
   puts "\n  Install / update on a device — open in Safari, tap Install:"
-  puts B.bold("    #{INSTALL_PAGE_URL}")
+  puts B.bold("    #{FILES_INSTALL_URL}")
+  puts "  (GitHub Pages mirror: #{INSTALL_PAGE_URL})"
   puts "  (Home Screen bookmark it once; the URL never changes. Pages takes"
   puts "   ~1 min to rebuild — the Install button itself works immediately.)"
 else
