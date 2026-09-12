@@ -58,5 +58,45 @@ extension APIClientTests {
             #expect(video.withSubtitleLang("es").rememberPosition)
             #expect(video.withChosenVersion(nil).rememberPosition)
         }
+
+        @Test func setRememberPositionPostsTheFlag() async throws {
+            MockURLProtocol.handler = { request in
+                #expect(request.httpMethod == "POST")
+                #expect(request.url?.path == "/api/videos/12/remember-position")
+                let json = try JSONSerialization.jsonObject(
+                    with: request.httpBodyData()
+                ) as? [String: Bool]
+                #expect(json?["on"] == true)
+                return (jsonResponse(request.url!, status: 200), Data("{\"ok\": true}".utf8))
+            }
+
+            let ok = try await makeClient(statusToken: "tok")
+                .setRememberPosition(id: 12, on: true)
+            #expect(ok)
+        }
+
+        @Test func setRememberPositionPostsFalse() async throws {
+            MockURLProtocol.handler = { request in
+                let json = try JSONSerialization.jsonObject(
+                    with: request.httpBodyData()
+                ) as? [String: Bool]
+                #expect(json?["on"] == false)
+                return (jsonResponse(request.url!, status: 200), Data("{\"ok\": true}".utf8))
+            }
+
+            let ok = try await makeClient(statusToken: "tok")
+                .setRememberPosition(id: 12, on: false)
+            #expect(ok)
+        }
+
+        @Test func setRememberPositionThrowsOnBadStatus() async {
+            MockURLProtocol.handler = { request in
+                (jsonResponse(request.url!, status: 404), Data())
+            }
+            await #expect(throws: APIError.badStatus(404)) {
+                _ = try await makeClient(statusToken: "tok")
+                    .setRememberPosition(id: 12, on: true)
+            }
+        }
     }
 }
