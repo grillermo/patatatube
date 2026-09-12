@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.6.2",
+          "buildVersion": "180",
+          "date": "2026-09-12T19:21:23Z",
+          "localizedDescription": "Added an About screen\n\n• The ⋯ menu has a new About item showing the app icon, version, and copyright",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.6.2/PatataTube-2.6.2.ipa",
+          "size": 4420597,
+          "sha256": "fa1e60ebf3b38164d1145ef19abaebccbb768b486d21c1ac4dc62855581dad7e",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.6.1",
           "buildVersion": "179",
           "date": "2026-09-12T18:38:23Z",
@@ -1694,11 +1704,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.6.1",
-      "versionDate": "2026-09-12T18:38:23Z",
-      "versionDescription": "Install and update straight from files.chiq.me\n\n• The install page on files.chiq.me now always offers the newest build\n• No app changes since 2.6.0",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.6.1/PatataTube-2.6.1.ipa",
-      "size": 4385718
+      "version": "2.6.2",
+      "versionDate": "2026-09-12T19:21:23Z",
+      "versionDescription": "Added an About screen\n\n• The ⋯ menu has a new About item showing the app icon, version, and copyright",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.6.2/PatataTube-2.6.2.ipa",
+      "size": 4420597
     }
   ],
   "news": []
