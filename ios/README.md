@@ -268,7 +268,7 @@ On first launch grid is empty / errors — need server config:
 - `PatataTubeTests` covers the shared download button's state, rendering,
   interaction, polling, and task cancellation. Run it from `ios/PatataTube`
   with `xcodebuild test -project PatataTube.xcodeproj -scheme PatataTube
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.3.1'`.
+  -destination 'platform=iOS Simulator,name=iPhone 16e,OS=26.3.1'`.
 - `PatataTubeKit` (Sources/PatataTubeKit) is a local SwiftPM package with the networking/cache/model logic — build it standalone with `swift build` inside `ios/PatataTubeKit` if isolating a bug there.
 
 ### Player orientation lock
