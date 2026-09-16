@@ -745,6 +745,7 @@ struct VideoGridView: View {
                             )
                         } catch {
                             guard !isCancellation(error) else { return }
+                            DevLog.error(error, "resume failed", ["video_id": "\(activity.videoID)"])
                             store.errorText = "Download failed: \(error)"
                         }
                     }
@@ -1152,6 +1153,7 @@ struct VideoGridView: View {
             return true
         } catch {
             if isCancellation(error) { return false }
+            DevLog.error(error, "download failed", ["video_id": "\(target.id)"])
             store.errorText = "Download failed: \(error)"
             return false
         }

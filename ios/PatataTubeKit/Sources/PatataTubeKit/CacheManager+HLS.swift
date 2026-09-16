@@ -210,6 +210,7 @@ extension CacheManager {
             if operation.isCancelled {
                 throw CancellationError()
             }
+            DevLog.error(error, "downloadHLS operation failed", ["video_id": "\(id)"])
             throw error
         }
         // Best-effort: missing artwork must not fail the cached HLS package.
@@ -256,7 +257,12 @@ extension CacheManager {
                         "url": url.lastPathComponent, "poll": "\(packagingPolls)",
                     ])
                 } else {
-                    guard isRetryableHLSError(error) else { throw error }
+                    guard isRetryableHLSError(error) else {
+                        DevLog.error(error, "hls asset fetch failed", [
+                            "url": url.lastPathComponent,
+                        ])
+                        throw error
+                    }
                 }
                 attempt += 1
                 try await hlsRetrySleep(hlsRetryBackoff(attempt: attempt))
