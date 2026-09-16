@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.3",
+          "buildVersion": "185",
+          "date": "2026-09-16T14:14:45Z",
+          "localizedDescription": "[DEVLOG] Diagnostic build: logging the real error behind failed downloads\n\n• HLS download failures now record the actual error to help find why some downloads silently stop\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.3/PatataTube-2.7.3.ipa",
+          "size": 4452723,
+          "sha256": "449f353cbf8722523d57ae8bc3972479e9ed14487227154a1c937eb09e0690df",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.1",
           "buildVersion": "183",
           "date": "2026-09-16T01:24:16Z",
@@ -1724,11 +1734,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.1",
-      "versionDate": "2026-09-16T01:24:16Z",
-      "versionDescription": "[DEVLOG] Diagnostic build to trace the download button issue\n\n• Download taps now emit detailed logs (proxy, cache, download lifecycle) to help diagnose why downloads sometimes don't start\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.1/PatataTube-2.7.1.ipa",
-      "size": 4457189
+      "version": "2.7.3",
+      "versionDate": "2026-09-16T14:14:45Z",
+      "versionDescription": "[DEVLOG] Diagnostic build: logging the real error behind failed downloads\n\n• HLS download failures now record the actual error to help find why some downloads silently stop\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.3/PatataTube-2.7.3.ipa",
+      "size": 4452723
     }
   ],
   "news": []
