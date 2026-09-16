@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.4",
+          "buildVersion": "186",
+          "date": "2026-09-16T14:55:34Z",
+          "localizedDescription": "Maintenance release\n\n• HLS download failures now log the actual error to help diagnose issues",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.4/PatataTube-2.7.4.ipa",
+          "size": 4422055,
+          "sha256": "859e071321749c52f3664ce062755ffcf526d02c4f080b19f4d50c41463bd7c8",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.3",
           "buildVersion": "185",
           "date": "2026-09-16T14:14:45Z",
@@ -1734,11 +1744,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.3",
-      "versionDate": "2026-09-16T14:14:45Z",
-      "versionDescription": "[DEVLOG] Diagnostic build: logging the real error behind failed downloads\n\n• HLS download failures now record the actual error to help find why some downloads silently stop\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.3/PatataTube-2.7.3.ipa",
-      "size": 4452723
+      "version": "2.7.4",
+      "versionDate": "2026-09-16T14:55:34Z",
+      "versionDescription": "Maintenance release\n\n• HLS download failures now log the actual error to help diagnose issues",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.4/PatataTube-2.7.4.ipa",
+      "size": 4422055
     }
   ],
   "news": []
