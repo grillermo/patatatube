@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.1",
+          "buildVersion": "183",
+          "date": "2026-09-16T01:24:16Z",
+          "localizedDescription": "[DEVLOG] Diagnostic build to trace the download button issue\n\n• Download taps now emit detailed logs (proxy, cache, download lifecycle) to help diagnose why downloads sometimes don't start\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.1/PatataTube-2.7.1.ipa",
+          "size": 4457189,
+          "sha256": "9eb3147a894a974f8e54465f3d10579e78559de9ab89d9f114a15d8fd6d46445",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.0",
           "buildVersion": "182",
           "date": "2026-09-12T19:47:44Z",
@@ -1714,11 +1724,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.0",
-      "versionDate": "2026-09-12T19:47:44Z",
-      "versionDescription": "Resume playback and quicker access to app info\n\n• Videos can opt in to remembering playback position, with a resume/start-over prompt when you come back\n• Added an About item to the options menu",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.0/PatataTube-2.7.0.ipa",
-      "size": 4423815
+      "version": "2.7.1",
+      "versionDate": "2026-09-16T01:24:16Z",
+      "versionDescription": "[DEVLOG] Diagnostic build to trace the download button issue\n\n• Download taps now emit detailed logs (proxy, cache, download lifecycle) to help diagnose why downloads sometimes don't start\n\nInstrumented build — posts runtime logs to the PatataTube backend.",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.1/PatataTube-2.7.1.ipa",
+      "size": 4457189
     }
   ],
   "news": []
