@@ -25,7 +25,11 @@ DEFAULT_GROUPS = [
 # new downloads. Absent from the table, `/upload` falls back to the first group.
 DEFAULT_UPLOAD_GROUP = "inbox"
 
-JOB_KINDS = ("convert", "hls", "normalize")
+# The group /sd plays until someone picks another. Looked up by name like
+# DEFAULT_UPLOAD_GROUP, so renaming its label or reordering groups is harmless.
+SD_DEFAULT_GROUP = "children"
+
+JOB_KINDS = ("convert", "hls", "normalize", "sd")
 PRIORITY_INTERACTIVE = 0
 PRIORITY_BULK = 100
 
@@ -192,6 +196,10 @@ def init_db():
         # column existed until `POST /api/videos/backfill-channels` fills them.
         if "channel" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN channel TEXT")
+        # 1 once converter.py has written videos/{id}.sd.mp4, the iPad 1-safe
+        # rendition /sd plays. Set only after the file is atomically in place.
+        if "sd_ready" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN sd_ready INTEGER NOT NULL DEFAULT 0")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS video_versions (
@@ -265,6 +273,7 @@ def init_db():
                 "ALTER TABLE groups ADD COLUMN display_titles INTEGER NOT NULL DEFAULT 0",
             )
         _seed_default_groups(conn)
+        _seed_sd_state(conn)
         _migrate_classifications_to_groups(conn)
         version_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(video_versions)").fetchall()
@@ -725,6 +734,29 @@ def _seed_default_groups(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _seed_sd_state(conn: sqlite3.Connection) -> None:
+    """The /sd player's one row: selected group plus shuffle position.
+
+    INSERT OR IGNORE, so a group picked on /sd survives every later boot; only
+    the very first boot chooses SD_DEFAULT_GROUP (NULL when it does not exist).
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sd_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            group_id INTEGER,
+            current_id INTEGER,
+            played TEXT NOT NULL DEFAULT '[]'
+        )
+        """
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO sd_state (id, group_id) "
+        "VALUES (1, (SELECT id FROM groups WHERE name = ?))",
+        (SD_DEFAULT_GROUP,),
+    )
+
+
 def _migrate_classifications_to_groups(conn: sqlite3.Connection) -> int:
     """Fold the old `classification` text column into `groups` + `plex_kind`."""
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()}
@@ -851,6 +883,67 @@ def delete_video(video_id: int):
     with _conn() as conn:
         conn.execute("DELETE FROM video_versions WHERE video_id = ?", (video_id,))
         conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+
+
+_SD_ELIGIBLE = """
+    FROM videos
+    WHERE group_id = ? AND status = 'done' AND source != 'library'
+      AND deleted_at IS NULL
+"""
+
+
+def get_sd_state() -> dict:
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM sd_state WHERE id = 1").fetchone()
+    if row is None:
+        return {"group_id": None, "current_id": None, "played": []}
+    return {
+        "group_id": row["group_id"],
+        "current_id": row["current_id"],
+        "played": json.loads(row["played"] or "[]"),
+    }
+
+
+def save_sd_state(group_id: int | None, current_id: int | None, played: list[int]) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO sd_state (id, group_id, current_id, played) "
+            "VALUES (1, ?, ?, ?)",
+            (group_id, current_id, json.dumps(played)),
+        )
+
+
+def sd_candidate_ids(group_id: int) -> list[int]:
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT id {_SD_ELIGIBLE} AND sd_ready = 1 ORDER BY id", (group_id,)
+        ).fetchall()
+    return [row["id"] for row in rows]
+
+
+def sd_pending_ids(group_id: int) -> list[int]:
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT id {_SD_ELIGIBLE} AND sd_ready = 0 ORDER BY id", (group_id,)
+        ).fetchall()
+    return [row["id"] for row in rows]
+
+
+def sd_counts(group_id: int) -> tuple[int, int]:
+    """(eligible videos in the group, how many of them have an SD file)."""
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS total, COALESCE(SUM(sd_ready), 0) AS ready {_SD_ELIGIBLE}",
+            (group_id,),
+        ).fetchone()
+    return row["total"], row["ready"]
+
+
+def set_sd_ready(video_id: int, ready: bool) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE videos SET sd_ready = ? WHERE id = ?", (1 if ready else 0, video_id)
+        )
 
 
 def get_all_videos(
