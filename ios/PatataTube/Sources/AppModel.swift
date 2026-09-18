@@ -23,6 +23,13 @@ final class AppModel: ObservableObject {
     /// hierarchy (every `fullScreenCover` dismissal). The gate lives here, not
     /// in the view, so exactly one run per launch can apply saved state.
     let restorationGate = RestorationGate()
+    /// Last time the app was in front of the user or playing something.
+    let idle = IdleTracker()
+    /// Bumped by `resetAfterIdle`. An open `VideoPlayerView` watches it and
+    /// dismisses itself — the grid's and the PiP-restore's covers both.
+    @Published private(set) var idleResetToken = 0
+    /// This process started more than an hour after the last engagement.
+    private(set) var launchedAfterIdle = false
     /// Picture in Picture outlives the player cover, so its state lives here.
     let pip = PiPSession()
     /// Audio-only playback for the group-detail list. Lives here, like `pip`,
@@ -167,7 +174,45 @@ final class AppModel: ObservableObject {
         // recorded until it knows where to post. No-op without DEVLOG.
         DevLog.connect(baseURL: credentials.baseURL, token: credentials.token)
         Task { await streamProxy.start() }
+        // Cold launch: nothing is on screen yet. `VideoGridView.initialLoad`
+        // reads this to skip re-presenting the saved player, and resets its
+        // position once the row (and so whether it remembers) is known.
+        launchedAfterIdle = idle.isStale()
+        idle.markEngaged()
     }
+
+    /// Called whenever the scene becomes active. After more than an hour away
+    /// (and nothing playing), the previous session is over: nothing keeps
+    /// playing, no player stays full screen, and positions that aren't
+    /// remembered go back to 0 so the next tap starts from the top.
+    func appDidBecomeActive() {
+        // Audio only marks on start/stop, so a queue still going is engaged now.
+        if audio.isPlaying { idle.markEngaged() }
+        if idle.isStale() { resetAfterIdle() }
+        idle.markEngaged()
+    }
+
+    private func resetAfterIdle() {
+        DevLog.event(.lifecycle, "idle reset", [
+            "last_engaged": idle.lastEngagedAt.map { "\(Int($0.timeIntervalSince1970))" } ?? "nil",
+        ])
+        audio.stop()
+        if let floating = pip.floatingVideo {
+            pip.stopFloating()
+            resetPositionIfForgotten(floating)
+        }
+        // Open players dismiss themselves and write their own reset position
+        // on the way out, after the teardown's own position write.
+        idleResetToken += 1
+        restorationStore.mutate { $0.player = nil }
+    }
+
+    func resetPositionIfForgotten(_ video: Video) {
+        guard !remembersPosition(video) else { return }
+        let id = video.id
+        Task { await positions.record(id: id, secs: 0, duration: nil, force: true) }
+    }
+
 
     func saveSettings() {
         credentials.baseURL = URL(string: baseURLText.trimmingCharacters(in: .whitespaces))

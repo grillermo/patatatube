@@ -53,6 +53,11 @@ final class PiPSession: NSObject, ObservableObject, AVPlayerViewControllerDelega
     private var sleepMode = false
     private var scope: String?
     private var randomize = false
+    /// What the float is showing, or nil when there is no float.
+    var floatingVideo: Video? {
+        guard isHandingOff, videos.indices.contains(index) else { return nil }
+        return videos[index]
+    }
     /// Called once, on `willStart`, to dismiss the presenting cover.
     private var onStart: (() -> Void)?
 

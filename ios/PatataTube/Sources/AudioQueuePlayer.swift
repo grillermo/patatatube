@@ -263,6 +263,10 @@ final class AudioQueuePlayer: ObservableObject {
             Task { @MainActor in
                 guard let self, self.player === observed else { return }
                 self.isPlaying = observed.timeControlStatus != .paused
+                // Every start and stop, so the moment it went quiet is what
+                // the idle reset measures from (`AppModel.appDidBecomeActive`
+                // covers audio still playing on return).
+                self.model?.idle.markEngaged()
             }
         }
         isPlaying = player.timeControlStatus != .paused

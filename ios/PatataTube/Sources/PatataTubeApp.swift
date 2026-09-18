@@ -87,18 +87,23 @@ struct PatataTubeApp: App {
                 .environmentObject(model)
                 .environmentObject(model.store)
                 .environmentObject(model.audio)
-                .onChange(of: scenePhase) { _, phase in
+                .onChange(of: scenePhase) { oldPhase, phase in
                     DevLog.event(.lifecycle, "scenePhase -> \(phase)")
                     // Downloads use a foreground session, so they stall when the
                     // app is suspended. Resume them from persisted resume data
                     // whenever we come back to the foreground (and on launch).
                     if phase == .active {
+                        model.appDidBecomeActive()
                         model.cache.resumeInterrupted(bearerToken: model.credentials.token)
                         // iOS reclaims the loopback listener while the app is
                         // suspended, and a proxy that came back dead takes every
                         // cached video's playback URL with it.
                         Task { await model.streamProxy.ensureRunning() }
                     } else {
+                        // Only on the way out of the foreground: coming back
+                        // from the background passes through `.inactive` too,
+                        // and marking there would hide the idle gap.
+                        if oldPhase == .active { model.idle.markEngaged() }
                         // Last chance to get pending records out before the app
                         // is suspended or killed.
                         DevLog.flush()

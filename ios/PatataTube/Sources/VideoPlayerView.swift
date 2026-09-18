@@ -111,6 +111,9 @@ struct VideoPlayerView: View {
     /// consulted by the audio handback (`shouldReturnToAudio`), which must not
     /// restart a finished track in the mini player.
     @State private var reachedEnd = false
+    /// Closed by `AppModel.resetAfterIdle`: no handback to the audio queue, and
+    /// a position that isn't remembered is written as 0 instead of where it was.
+    @State private var closedForIdle = false
 
     var body: some View {
         ZStack {
@@ -170,6 +173,10 @@ struct VideoPlayerView: View {
         .task { await setup() }
         .onChange(of: currentIndex) { _, _ in armPictureInPictureHandoff() }
         .onChange(of: sleepAfterCurrent) { _, _ in armPictureInPictureHandoff() }
+        .onChange(of: model.idleResetToken) { _, _ in
+            closedForIdle = true
+            dismiss()
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .inactive:
@@ -195,7 +202,7 @@ struct VideoPlayerView: View {
             // from the teardown that PiP gets: pausing it, releasing the audio
             // session out from under it, or handing its observers away would
             // each put a hole in the sound the handback exists to avoid.
-            let returningToAudio = shouldReturnToAudio(
+            let returningToAudio = !closedForIdle && shouldReturnToAudio(
                 cameFromAudio: returnsToAudio, isHandingOff: handingOff, reachedEnd: reachedEnd
             )
             let keepsPlaying = handingOff || returningToAudio
@@ -398,6 +405,9 @@ struct VideoPlayerView: View {
             forInterval: CMTime(seconds: 10, preferredTimescale: 600), queue: .main
         ) { time in
             guard player.timeControlStatus == .playing else { return }
+            // Keeps firing in the background and in PiP, so playing counts as
+            // engagement for the idle reset.
+            model.idle.markEngaged()
             let id = video.id
             let duration = player.currentItem?.duration.seconds
             let secs = time.seconds
@@ -493,7 +503,7 @@ struct VideoPlayerView: View {
     private func reportPosition(force: Bool = true) {
         guard let player else { return }
         let id = video.id
-        let secs = player.currentTime().seconds
+        let secs = closedForIdle && !remembersPosition(video) ? 0 : player.currentTime().seconds
         guard secs.isFinite else { return }
         let duration = player.currentItem?.duration.seconds
         Task { await model.positions.record(id: id, secs: secs,

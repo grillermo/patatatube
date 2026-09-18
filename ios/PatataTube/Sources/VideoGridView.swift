@@ -819,7 +819,12 @@ struct VideoGridView: View {
             "apply_player": "\(applyPlayer)",
         ])
         if applyPath { path = resolved.path }
-        if applyPlayer, let player = resolved.player {
+        if model.launchedAfterIdle, let player = resolved.player {
+            // Over an hour away: the last session's player is not put back.
+            DevLog.event(.lifecycle, "idle reset at launch", ["video_id": "\(player.video.id)"])
+            model.restorationStore.mutate { $0.player = nil }
+            model.resetPositionIfForgotten(player.video)
+        } else if applyPlayer, let player = resolved.player {
             let startSecs = model.resumeStore.resolved(server: player.video.resumeSecs, for: player.video.id)
             playing = PlaybackQueue(
                 video: player.video,
