@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.5",
+          "buildVersion": "187",
+          "date": "2026-09-18T12:14:21Z",
+          "localizedDescription": "Coming back after an hour starts fresh\n\n• Returning to the app after more than an hour away stops anything still playing and closes the full-screen player\n• Videos that don't remember their position start from the beginning again\n• TV, Movies and videos with Remember position on keep their spot",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.5/PatataTube-2.7.5.ipa",
+          "size": 4427765,
+          "sha256": "1d9aa1302e5b82f328d069a9e22acc74b0194ab46de9a3772dfb2b1e8b1d46a6",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.4",
           "buildVersion": "186",
           "date": "2026-09-16T14:55:34Z",
@@ -1744,11 +1754,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.4",
-      "versionDate": "2026-09-16T14:55:34Z",
-      "versionDescription": "Maintenance release\n\n• HLS download failures now log the actual error to help diagnose issues",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.4/PatataTube-2.7.4.ipa",
-      "size": 4422055
+      "version": "2.7.5",
+      "versionDate": "2026-09-18T12:14:21Z",
+      "versionDescription": "Coming back after an hour starts fresh\n\n• Returning to the app after more than an hour away stops anything still playing and closes the full-screen player\n• Videos that don't remember their position start from the beginning again\n• TV, Movies and videos with Remember position on keep their spot",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.5/PatataTube-2.7.5.ipa",
+      "size": 4427765
     }
   ],
   "news": []
