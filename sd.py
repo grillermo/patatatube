@@ -8,10 +8,12 @@ survives restarts and needs no client storage an iOS 5 browser lacks.
 See docs/superpowers/specs/2026-09-18-sd-page-design.md.
 """
 import logging
+import os
 import random
 from pathlib import Path
 
 import db
+from ffmpeg_progress import probe_duration, run_ffmpeg
 from paths import VIDEOS_DIR
 
 logger = logging.getLogger(__name__)
@@ -28,6 +30,63 @@ def sd_filename(video_id: int) -> str:
 
 def sd_path(video_id: int) -> Path:
     return VIDEOS_DIR / sd_filename(video_id)
+
+
+FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
+
+
+def part_path(video_id: int) -> Path:
+    return VIDEOS_DIR / f"{sd_filename(video_id)}.part"
+
+
+def encode_cmd(src: Path, dst: Path) -> list[str]:
+    """Always a re-encode: a copied High-profile stream is exactly what the
+    iPad 1 cannot decode. -f mp4 because the .part suffix hides the format."""
+    return [
+        FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-profile:v", "main", "-level", "3.1", "-pix_fmt", "yuv420p",
+        "-vf", "scale='min(1280,iw)':-2", "-r", "30",
+        "-maxrate", "2.5M", "-bufsize", "5M",
+        "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+        "-movflags", "+faststart", "-f", "mp4", str(dst),
+    ]
+
+
+def _source_duration(path: Path) -> float | None:
+    # downloader pulls in pybalt; only the converter process pays for it.
+    from downloader import _probe_media
+
+    try:
+        return probe_duration(_probe_media(path)) or None
+    except Exception:  # noqa: BLE001 - progress is optional, the encode is not
+        return None
+
+
+def build_sd(video_id: int, on_progress=None) -> None:
+    """Converter handler body. Raises on failure; sd_ready then stays 0."""
+    video = db.get_video(video_id)
+    if not video or video.get("source") == "library" or video.get("status") != "done":
+        raise ValueError(f"video {video_id} is not a finished download")
+    if not video.get("filename"):
+        raise ValueError(f"video {video_id} has no file")
+    src = VIDEOS_DIR / video["filename"]
+    if not src.exists():
+        raise FileNotFoundError(f"source missing: {src}")
+
+    part = part_path(video_id)
+    try:
+        run_ffmpeg(
+            encode_cmd(src, part),
+            duration=_source_duration(src),
+            on_progress=on_progress,
+        )
+        os.replace(part, sd_path(video_id))
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    db.set_sd_ready(video_id, True)
 
 
 def next_video() -> dict | None:

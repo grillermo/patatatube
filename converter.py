@@ -22,6 +22,7 @@ import cache  # noqa: E402
 import db  # noqa: E402
 import hls  # noqa: E402
 import library  # noqa: E402
+import sd  # noqa: E402
 from paths import ensure_media_root  # noqa: E402
 
 
@@ -68,10 +69,15 @@ def _handle_normalize(job: dict, on_progress) -> dict:
     return {"output_path": str(output)}
 
 
+def _handle_sd(job: dict, on_progress) -> None:
+    sd.build_sd(job["video_id"], on_progress=on_progress)
+
+
 JOB_HANDLERS = {
     "convert": _handle_convert,
     "hls": _handle_hls,
     "normalize": _handle_normalize,
+    "sd": _handle_sd,
 }
 
 
@@ -121,6 +127,8 @@ def cleanup_orphan(job: dict) -> None:
                 Path(temp).unlink(missing_ok=True)
         elif job["kind"] == "hls":
             hls.invalidate(job["video_id"])
+        elif job["kind"] == "sd":
+            sd.part_path(job["video_id"]).unlink(missing_ok=True)
         # normalize writes into the system temp dir, which the OS reaps.
     except Exception:  # noqa: BLE001
         traceback.print_exc()

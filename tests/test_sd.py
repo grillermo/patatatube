@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -173,3 +174,92 @@ def test_enqueue_if_selected_never_raises(tmp_db, monkeypatch):
     vid = _done_video(tmp_db, _children(tmp_db))
     monkeypatch.setattr(tmp_db, "enqueue_job", lambda *a, **k: 1 / 0)
     assert sd.enqueue_if_selected(vid) is False
+
+
+@pytest.fixture()
+def videos_dir(monkeypatch, tmp_path):
+    import sd
+    d = tmp_path / "videos"
+    d.mkdir()
+    monkeypatch.setattr(sd, "VIDEOS_DIR", d)
+    return d
+
+
+def test_encode_cmd_targets_ipad1_main_31(tmp_path):
+    import sd
+    cmd = sd.encode_cmd(tmp_path / "in.mp4", tmp_path / "out.part")
+    joined = " ".join(cmd)
+    for arg in ("-profile:v main", "-level 3.1", "-r 30", "-maxrate 2.5M",
+                "-bufsize 5M", "-movflags +faststart", "-f mp4",
+                "scale='min(1280,iw)':-2", "-c:a aac"):
+        assert arg in joined
+    assert cmd[-1] == str(tmp_path / "out.part")
+
+
+def test_build_sd_writes_atomically_and_marks_ready(tmp_db, videos_dir, monkeypatch):
+    import sd
+    vid = _done_video(tmp_db, _children(tmp_db))
+    (videos_dir / f"{vid}.mp4").write_bytes(b"src")
+    seen = {}
+
+    def fake_run(cmd, *, duration=None, on_progress=None):
+        seen["duration"] = duration
+        part = Path(cmd[-1])
+        assert part.name == f"{vid}.sd.mp4.part"
+        part.write_bytes(b"sd")
+
+    monkeypatch.setattr(sd, "run_ffmpeg", fake_run)
+    monkeypatch.setattr(sd, "_source_duration", lambda path: 12.5)
+
+    sd.build_sd(vid)
+
+    assert (videos_dir / f"{vid}.sd.mp4").read_bytes() == b"sd"
+    assert not (videos_dir / f"{vid}.sd.mp4.part").exists()
+    assert tmp_db.get_video(vid)["sd_ready"] == 1
+    assert seen["duration"] == 12.5
+
+
+def test_build_sd_failure_leaves_no_file_and_not_ready(tmp_db, videos_dir, monkeypatch):
+    import sd
+    vid = _done_video(tmp_db, _children(tmp_db))
+    (videos_dir / f"{vid}.mp4").write_bytes(b"src")
+
+    def boom(cmd, **kw):
+        Path(cmd[-1]).write_bytes(b"half")
+        raise RuntimeError("ffmpeg exploded")
+
+    monkeypatch.setattr(sd, "run_ffmpeg", boom)
+    monkeypatch.setattr(sd, "_source_duration", lambda path: None)
+
+    with pytest.raises(RuntimeError):
+        sd.build_sd(vid)
+    assert list(videos_dir.glob("*.sd.mp4*")) == []
+    assert tmp_db.get_video(vid)["sd_ready"] == 0
+
+
+def test_build_sd_rejects_a_missing_source(tmp_db, videos_dir):
+    import sd
+    vid = _done_video(tmp_db, _children(tmp_db))
+    with pytest.raises(FileNotFoundError):
+        sd.build_sd(vid)
+
+
+def test_converter_dispatches_sd_jobs(tmp_db, monkeypatch):
+    import converter
+    import sd
+    built = []
+    monkeypatch.setattr(sd, "build_sd", lambda vid, on_progress=None: built.append(vid))
+    tmp_db.enqueue_job("sd", video_id=7, priority=200)
+
+    converter.run_job(tmp_db.claim_job())
+
+    assert built == [7]
+    assert tmp_db.get_job(1)["status"] == "done"
+
+
+def test_converter_orphan_cleanup_removes_the_part_file(tmp_db, videos_dir):
+    import converter
+    part = videos_dir / "7.sd.mp4.part"
+    part.write_bytes(b"half")
+    converter.cleanup_orphan({"kind": "sd", "video_id": 7})
+    assert not part.exists()
