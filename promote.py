@@ -14,6 +14,7 @@ from pathlib import Path
 import db
 import hls
 import plex
+import sd
 from paths import VIDEOS_DIR
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ def promote_to_plex(video: dict, kind: str) -> Path:
         raise PromotionError(f"could not move {source} to {target}: {exc}") from exc
 
     source.unlink(missing_ok=True)
+    (VIDEOS_DIR / sd.sd_filename(video["id"])).unlink(missing_ok=True)
     hls.invalidate(video["id"])
     db.delete_video(video["id"])
     _refresh_plex(kind)

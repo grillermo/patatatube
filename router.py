@@ -24,6 +24,7 @@ import hls
 import library
 import plex
 import promote
+import sd
 import services
 from downloader import (
     backfill_channels,
@@ -1187,6 +1188,7 @@ async def api_delete_video(video_id: int, request: Request):
         else:
             if video.get("filename"):
                 (VIDEOS_DIR / video["filename"]).unlink(missing_ok=True)
+            (VIDEOS_DIR / sd.sd_filename(video_id)).unlink(missing_ok=True)
             # The generated poster is derived from that mp4 — drop it too.
             (PREVIEWS_DIR / f"dl{video_id}.{PREVIEW_CACHE_SUFFIX}.jpg").unlink(missing_ok=True)
             db.delete_video(video_id)

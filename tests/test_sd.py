@@ -263,3 +263,66 @@ def test_converter_orphan_cleanup_removes_the_part_file(tmp_db, videos_dir):
     part.write_bytes(b"half")
     converter.cleanup_orphan({"kind": "sd", "video_id": 7})
     assert not part.exists()
+
+
+@pytest.mark.asyncio
+async def test_finished_download_calls_the_sd_hook(tmp_db, monkeypatch, tmp_path):
+    import downloader
+    import sd
+    calls = []
+    monkeypatch.setattr(sd, "enqueue_if_selected", lambda vid: calls.append(vid) or True)
+
+    async def fake_twitter(video_id, url):
+        return f"{video_id}.mp4"
+
+    monkeypatch.setattr(downloader, "_download_twitter", fake_twitter)
+    vid = tmp_db.add_video("https://twitter.com/x/status/1", group_id=_children(tmp_db))
+
+    await downloader.download_video(vid)
+
+    assert calls == [vid]
+    assert tmp_db.get_video(vid)["status"] == "done"
+
+
+def _api_client(monkeypatch, tmp_path):
+    import importlib
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv("UPLOAD_TOKEN", "test-secret")
+    import main
+    importlib.reload(main)
+    return TestClient(main.app)
+
+
+def test_api_delete_removes_the_sd_file(tmp_db, monkeypatch, tmp_path):
+    import router
+    videos = tmp_path / "vids"
+    videos.mkdir()
+    monkeypatch.setattr(router, "VIDEOS_DIR", videos)
+    vid = _done_video(tmp_db, _children(tmp_db), sd_ready=True)
+    (videos / f"{vid}.mp4").write_bytes(b"x")
+    (videos / f"{vid}.sd.mp4").write_bytes(b"x")
+
+    with _api_client(monkeypatch, tmp_path) as client:
+        resp = client.post(f"/api/video/{vid}/delete",
+                           headers={"Authorization": "Bearer test-secret"})
+
+    assert resp.status_code == 200
+    assert not (videos / f"{vid}.sd.mp4").exists()
+
+
+def test_promote_removes_the_sd_file(tmp_db, monkeypatch, tmp_path):
+    import promote
+    videos = tmp_path / "vids"
+    videos.mkdir()
+    movies = tmp_path / "movies"
+    movies.mkdir()
+    monkeypatch.setattr(promote, "VIDEOS_DIR", videos)
+    monkeypatch.setenv("LIBRARY_MOVIES_DIR", str(movies))
+    monkeypatch.setattr(promote, "_refresh_plex", lambda kind: None)
+    vid = _done_video(tmp_db, _children(tmp_db), sd_ready=True)
+    (videos / f"{vid}.mp4").write_bytes(b"x")
+    (videos / f"{vid}.sd.mp4").write_bytes(b"x")
+
+    promote.promote_to_plex(tmp_db.get_video(vid), "movies")
+
+    assert not (videos / f"{vid}.sd.mp4").exists()

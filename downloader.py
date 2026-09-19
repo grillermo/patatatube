@@ -13,6 +13,7 @@ from pybalt import download as pybalt_download
 
 import cache
 import db
+import sd
 from paths import VIDEOS_DIR
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 FFPROBE_BIN = os.getenv("FFPROBE_BIN", "ffprobe")
@@ -41,11 +42,13 @@ async def download_video(video_id: int):
             db.update_video(
                 video_id, status="done", filename=dest_name, title=title, channel=channel
             )
+            sd.enqueue_if_selected(video_id)
             return
 
         if video["platform"] in (None, "twitter"):
             dest_name = await _download_twitter(video_id, video["url"])
             db.update_video(video_id, status="done", filename=dest_name)
+            sd.enqueue_if_selected(video_id)
             return
 
         raise ValueError(f"Unsupported platform: {video['platform']}")
@@ -64,6 +67,7 @@ async def process_uploaded_video(video_id: int):
     try:
         dest_name = await _store_ios_compatible_video(video_id, tmp_path)
         db.update_video(video_id, status="done", filename=dest_name)
+        sd.enqueue_if_selected(video_id)
     except Exception as exc:
         logger.warning("Upload processing failed; deleting video row %s: %s", video_id, exc)
         db.delete_video(video_id)
