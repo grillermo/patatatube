@@ -633,6 +633,42 @@ async def test_import_playlist_reuses_completed_video(playlist_env):
 
 
 @pytest.mark.asyncio
+async def test_import_playlist_enqueues_sd_for_a_reused_video_in_the_selected_group(
+    monkeypatch, playlist_env,
+):
+    """A completed video re-homed into a new playlist group should get an SD
+    rendition queued when that new group happens to be the selected /sd
+    group -- same trigger as services.set_group."""
+    db, downloader, state = playlist_env
+    existing_id = db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+    )
+    db.update_video(existing_id, status="done", filename=f"{existing_id}.mp4")
+    state["entries"] = [{"id": "dQw4w9WgXcQ", "title": "First"}]
+
+    # The playlist's group doesn't exist until import_playlist creates it, so
+    # select it as the /sd group right after creation to simulate "the
+    # currently-selected /sd group happens to be this one".
+    orig_create_group = db.create_group
+
+    def create_and_select(name, label):
+        group = orig_create_group(name, label)
+        db.save_sd_state(group["id"], None, [])
+        return group
+
+    monkeypatch.setattr(downloader.db, "create_group", create_and_select)
+
+    await downloader.import_playlist("https://www.youtube.com/playlist?list=PL123456789")
+
+    group = db.get_group_by_name("lo-fi-beats")
+    assert db.get_sd_state()["group_id"] == group["id"]
+    job = db.get_job(1)
+    assert (job["kind"], job["video_id"]) == ("sd", existing_id)
+
+
+@pytest.mark.asyncio
 async def test_import_playlist_mixed_reuse_and_new_entries_sort_order(playlist_env):
     """Pins today's actual (imperfect) ordering: a reused entry keeps its old
     position instead of being reinserted at its playlist slot, so it sorts

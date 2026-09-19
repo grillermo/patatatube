@@ -506,6 +506,7 @@ async def import_playlist(url: str) -> None:
             existing = db.get_completed_video_by_source("youtube", entry["id"])
             if existing:
                 db.set_video_group(existing["id"], group["id"])
+                sd.enqueue_if_selected(existing["id"])
                 video_ids_by_entry[index] = existing["id"]
             else:
                 new_entries.append((index, entry))

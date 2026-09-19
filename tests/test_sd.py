@@ -191,9 +191,21 @@ def test_encode_cmd_targets_ipad1_main_31(tmp_path):
     joined = " ".join(cmd)
     for arg in ("-profile:v main", "-level 3.1", "-r 30", "-maxrate 2.5M",
                 "-bufsize 5M", "-movflags +faststart", "-f mp4",
-                "scale='min(1280,iw)':-2", "-c:a aac"):
+                "scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2",
+                "-c:a aac"):
         assert arg in joined
     assert cmd[-1] == str(tmp_path / "out.part")
+
+
+def test_encode_cmd_scale_filter_caps_both_dimensions(tmp_path):
+    """A portrait source (e.g. a YouTube Short) must not leave height
+    uncapped -- min(1280,iw) alone only caps width, letting a 1080x1920
+    source pass through at 1080x1920, far past what the iPad 1 can decode."""
+    import sd
+    cmd = sd.encode_cmd(tmp_path / "in.mp4", tmp_path / "out.part")
+    assert "-vf" in cmd
+    vf = cmd[cmd.index("-vf") + 1]
+    assert vf == "scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2"
 
 
 def test_build_sd_writes_atomically_and_marks_ready(tmp_db, videos_dir, monkeypatch):
@@ -463,3 +475,21 @@ def test_backfill_rejects_unknown_group_and_bad_usage(tmp_db):
     import sd_backfill
     assert sd_backfill.main(["sd_backfill.py", "nope"]) == 1
     assert sd_backfill.main(["sd_backfill.py"]) == 2
+
+
+def test_backfill_force_requeues_already_ready_rows(tmp_db, capsys):
+    import sd_backfill
+    gid = _children(tmp_db)
+    ready = _done_video(tmp_db, gid, sd_ready=True)
+
+    # Without --force, an already-ready row is not requeued.
+    assert sd_backfill.main(["sd_backfill.py", "children"]) == 0
+    assert "queued 0, already queued 0" in capsys.readouterr().out
+    assert tmp_db.get_video(ready)["sd_ready"] == 1
+
+    # With --force, sd_ready is cleared first and the row is queued.
+    assert sd_backfill.main(["sd_backfill.py", "children", "--force"]) == 0
+    assert tmp_db.get_video(ready)["sd_ready"] == 0
+    job = tmp_db.get_job(1)
+    assert (job["kind"], job["video_id"], job["priority"]) == ("sd", ready, 50)
+    assert "queued 1" in capsys.readouterr().out

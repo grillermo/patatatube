@@ -241,7 +241,8 @@ group on `/sd` queues its missing renditions; downloads finishing into that
 group queue theirs (`sd.enqueue_if_selected`). The selected group and the
 shuffle (every video once per round, no stored order) live in the single-row
 `sd_state` table, seeded once to the group named `children`.
-`python sd_backfill.py <group-name>` queues a group at priority 50. The page's
+`python sd_backfill.py <group-name>` queues a group at priority 50 (`--force`
+clears `sd_ready` first to rebuild every rendition, not just missing ones). The page's
 script is ES5 and swaps `src` on the one `<video>` element — iOS 5 only lets a
 tapped element keep playing, so reloading the page between videos would need a
 tap each time. Delete and promote remove the `.sd.mp4` with the mp4.

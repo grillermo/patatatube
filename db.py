@@ -885,11 +885,11 @@ def delete_video(video_id: int):
         conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
 
 
-_SD_ELIGIBLE = """
-    FROM videos
+_SD_ELIGIBLE_WHERE = """
     WHERE group_id = ? AND status = 'done' AND source != 'library'
       AND deleted_at IS NULL
 """
+_SD_ELIGIBLE = "FROM videos\n" + _SD_ELIGIBLE_WHERE
 
 
 def get_sd_state() -> dict:
@@ -944,6 +944,14 @@ def set_sd_ready(video_id: int, ready: bool) -> None:
         conn.execute(
             "UPDATE videos SET sd_ready = ? WHERE id = ?", (1 if ready else 0, video_id)
         )
+
+
+def clear_sd_ready(group_id: int) -> None:
+    """Reset every SD-eligible row in a group back to not-ready, so a
+    `--force` backfill re-queues all of them, not just the never-encoded
+    ones."""
+    with _conn() as conn:
+        conn.execute(f"UPDATE videos SET sd_ready = 0 {_SD_ELIGIBLE_WHERE}", (group_id,))
 
 
 def get_all_videos(

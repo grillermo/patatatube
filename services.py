@@ -5,6 +5,7 @@ import hls
 # Aliased: this module defines a function called `promote`, which would
 # otherwise shadow the import and break every `promote.…` reference below.
 import promote as plex_promote
+import sd
 
 
 def set_group(video_id: int, group_id: int) -> bool:
@@ -18,6 +19,10 @@ def set_group(video_id: int, group_id: int) -> bool:
     if db.get_group(group_id) is None or not video or video.get("plex_kind") is not None:
         return False
     db.set_video_group(video_id, group_id)
+    # Moving a video into the currently-selected /sd group is one of the
+    # trigger points that should queue an SD rendition — otherwise it never
+    # gets one until someone reselects the group or reruns the backfill.
+    sd.enqueue_if_selected(video_id)
     return True
 
 

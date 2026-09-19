@@ -45,8 +45,8 @@ existing SSR page or iOS app.
 - **File:** `VIDEOS_DIR/{id}.sd.mp4`, next to the original.
 - **Encode** (always re-encode, never copy):
   `-c:v libx264 -preset veryfast -crf 23 -profile:v main -level 3.1
-  -pix_fmt yuv420p -vf "scale='min(1280,iw)':-2" -r 30 -maxrate 2.5M
-  -bufsize 5M -c:a aac -b:a 128k -ac 2 -movflags +faststart`.
+  -pix_fmt yuv420p -vf "scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2"
+  -r 30 -maxrate 2.5M -bufsize 5M -c:a aac -b:a 128k -ac 2 -movflags +faststart`.
   The bitrate cap protects the A4 decoder and the iPad's Wi-Fi.
 - **Atomic write:** encode to `{id}.sd.mp4.part` (with `-f mp4`), then
   `os.replace` into place, then set the flag. A half-written file is never
