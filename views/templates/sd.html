@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+{% if not video and group_id and total -%}
+<meta http-equiv="refresh" content="30">
+{%- endif %}
+<title>Patata SD</title>
+<style>
+  body { margin: 0; padding: 10px; background: #000; color: #ddd;
+         font-family: Helvetica, Arial, sans-serif; }
+  form { margin: 0 0 10px 0; }
+  select, button { font-size: 18px; }
+  #player { display: block; width: 100%; height: 540px; background: #000; }
+  #title { margin: 10px 0; font-size: 20px; }
+  #msg { margin: 10px 0; color: #f88; font-size: 18px; }
+  .note { color: #aaa; font-size: 18px; }
+  .inline { display: inline; }
+</style>
+</head>
+<body>
+<form method="post" action="/sd/group" class="inline">
+  <select name="group_id">
+    {% if not group_id %}<option value="">Choose a group</option>{% endif %}
+    {% for g in groups -%}
+    <option value="{{ g.id }}"{% if g.id == group_id %} selected{% endif %}>{{ g.label }}</option>
+    {% endfor -%}
+  </select>
+  <button type="submit">Play</button>
+</form>
+{% if video -%}
+<form method="post" action="/sd/next" class="inline"><button type="submit">Next</button></form>
+<video id="player" controls src="/videos/{{ video.id }}/sd.mp4"></video>
+<div id="title">{{ title }}</div>
+<div id="msg" style="display:none"></div>
+<script>
+(function () {
+  var player = document.getElementById('player');
+  var titleEl = document.getElementById('title');
+  var msg = document.getElementById('msg');
+  var failures = 0;
+  var busy = false;
+
+  function setText(el, text) {
+    while (el.firstChild) { el.removeChild(el.firstChild); }
+    el.appendChild(document.createTextNode(text));
+  }
+  function show(text) { setText(msg, text); msg.style.display = 'block'; }
+
+  function advance() {
+    if (busy) { return; }
+    busy = true;
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/sd/next', true);
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) { return; }
+      busy = false;
+      if (xhr.status === 200) {
+        var v = JSON.parse(xhr.responseText);
+        player.src = v.src;
+        player.load();
+        player.play();
+        setText(titleEl, v.title);
+      } else if (xhr.status === 204) {
+        show('No videos ready in this group.');
+      } else {
+        show('Could not load the next video.');
+      }
+    };
+    xhr.send(null);
+  }
+
+  player.addEventListener('ended', advance, false);
+  player.addEventListener('playing', function () {
+    failures = 0;
+    msg.style.display = 'none';
+  }, false);
+  player.addEventListener('error', function () {
+    failures += 1;
+    if (failures >= 3) { show("Can't play videos in this group."); return; }
+    advance();
+  }, false);
+})();
+</script>
+{%- elif group_id and total -%}
+<p class="note">Preparing {{ ready }} of {{ total }}…</p>
+{%- elif group_id -%}
+<p class="note">No videos in this group.</p>
+{%- else -%}
+<p class="note">Choose a group to start.</p>
+{%- endif %}
+</body>
+</html>

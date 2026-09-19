@@ -358,3 +358,87 @@ def test_sd_stream_404s_when_not_ready_and_401s_without_auth(tmp_db, monkeypatch
         assert client.get(f"/videos/{vid}/sd.mp4").status_code == 401
         client.cookies.set("upload_token", "test-secret")
         assert client.get(f"/videos/{vid}/sd.mp4").status_code == 404
+
+
+def _page_client(monkeypatch, tmp_path, cookie=True):
+    client = _api_client(monkeypatch, tmp_path)
+    if cookie:
+        client.cookies.set("upload_token", "test-secret")
+    return client
+
+
+def test_sd_page_redirects_to_login_without_cookie(tmp_db, monkeypatch, tmp_path):
+    with _page_client(monkeypatch, tmp_path, cookie=False) as client:
+        resp = client.get("/sd", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login?next=%2Fsd"
+
+
+def test_sd_page_plays_a_ready_video(tmp_db, monkeypatch, tmp_path):
+    vid = _done_video(tmp_db, _children(tmp_db), sd_ready=True)
+    with _page_client(monkeypatch, tmp_path) as client:
+        html = client.get("/sd").text
+    assert f'src="/videos/{vid}/sd.mp4"' in html
+    assert 'id="player"' in html
+
+
+def test_sd_page_shows_preparing_progress(tmp_db, monkeypatch, tmp_path):
+    gid = _children(tmp_db)
+    _done_video(tmp_db, gid)
+    _done_video(tmp_db, gid)
+    with _page_client(monkeypatch, tmp_path) as client:
+        html = client.get("/sd").text
+    assert "Preparing 0 of 2" in html
+    assert 'http-equiv="refresh"' in html
+    assert 'id="player"' not in html
+
+
+def test_sd_page_empty_group_and_no_group(tmp_db, monkeypatch, tmp_path):
+    with _page_client(monkeypatch, tmp_path) as client:
+        assert "No videos in this group." in client.get("/sd").text
+        tmp_db.save_sd_state(None, None, [])
+        html = client.get("/sd").text
+    assert "Choose a group" in html
+    assert 'id="player"' not in html
+
+
+def test_sd_page_script_is_es5(tmp_db, monkeypatch, tmp_path):
+    _done_video(tmp_db, _children(tmp_db), sd_ready=True)
+    with _page_client(monkeypatch, tmp_path) as client:
+        html = client.get("/sd").text
+    for banned in ("fetch(", "=>", "const ", "let ", "Promise", "`",
+                   "URLSearchParams", "display: grid", "display:flex",
+                   "display: flex", "aspect-ratio"):
+        assert banned not in html, banned
+
+
+def test_sd_group_post_selects_and_redirects(tmp_db, monkeypatch, tmp_path):
+    adults = tmp_db.get_group_by_name("adults")["id"]
+    with _page_client(monkeypatch, tmp_path) as client:
+        resp = client.post("/sd/group", data={"group_id": adults}, follow_redirects=False)
+        missing = client.post("/sd/group", data={"group_id": 9999}, follow_redirects=False)
+    assert resp.status_code == 303 and resp.headers["location"] == "/sd"
+    assert tmp_db.get_sd_state()["group_id"] == adults
+    assert missing.status_code == 404
+
+
+def test_sd_next_json_html_and_empty(tmp_db, monkeypatch, tmp_path):
+    vid = _done_video(tmp_db, _children(tmp_db), sd_ready=True)
+    with _page_client(monkeypatch, tmp_path) as client:
+        as_json = client.post("/sd/next", headers={"Accept": "application/json"})
+        as_form = client.post("/sd/next", follow_redirects=False)
+        tmp_db.set_sd_ready(vid, False)
+        empty = client.post("/sd/next", headers={"Accept": "application/json"})
+    with _page_client(monkeypatch, tmp_path, cookie=False) as anon_client:
+        anon = anon_client.post("/sd/next")
+    assert as_json.status_code == 200
+    assert as_json.json() == {"id": vid, "title": as_json.json()["title"],
+                              "src": f"/videos/{vid}/sd.mp4"}
+    assert as_form.status_code == 303 and as_form.headers["location"] == "/sd"
+    assert empty.status_code == 204
+    assert anon.status_code == 401
+
+
+def test_sd_is_never_cached():
+    import middleware
+    assert "/sd" in middleware._NEVER_CACHED_PATHS

@@ -76,3 +76,23 @@ def build_login_page(next_url: str = "/", error: bool = False) -> str:
     who has no credentials, so it links no token-gated asset and embeds its CSS."""
     template = _env.get_template("login.html")
     return template.render(next_url=next_url, error=error)
+
+
+def build_sd_page(
+    groups: list[dict],
+    group_id: int | None,
+    video: dict | None,
+    total: int,
+    ready: int,
+) -> str:
+    """The iPad 1 (iOS 5) player. Self-contained: inline ES5 and CSS only, no
+    /assets/app bundle, which leans on fetch/grid the device lacks."""
+    template = _env.get_template("sd.html")
+    return template.render(
+        groups=groups,
+        group_id=group_id,
+        video=video,
+        title=_display_name(video) if video else "",
+        total=total,
+        ready=ready,
+    )

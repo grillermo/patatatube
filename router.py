@@ -34,7 +34,7 @@ from downloader import (
 )
 from paths import VIDEOS_DIR
 from views.serializers import serialize_video
-from views.render import build_login_page, build_videos_page
+from views.render import _display_name, build_login_page, build_sd_page, build_videos_page
 
 router = APIRouter()
 
@@ -1439,3 +1439,38 @@ async def videos_page(
         plex_kind = None
     videos = db.get_all_videos(group_id=group_id, plex_kind=plex_kind)
     return build_videos_page(videos, db.list_groups(), group_id, plex_kind)
+
+
+@router.get("/sd", response_class=HTMLResponse)
+async def sd_page(request: Request):
+    """Single-video shuffle player for an iPad 1 on iOS 5 (plain HTTP, LAN)."""
+    if not _cookie_token_valid(request):
+        return RedirectResponse(url=f"/login?next={quote('/sd', safe='')}", status_code=303)
+    group_id = db.get_sd_state()["group_id"]
+    video = sd.current_video() if group_id is not None else None
+    total, ready = db.sd_counts(group_id) if group_id is not None else (0, 0)
+    return build_sd_page(db.list_groups(), group_id, video, total, ready)
+
+
+@router.post("/sd/group")
+async def sd_select_group(request: Request, group_id: int = Form(...)):
+    _check_token_or_query(request)
+    if db.get_group(group_id) is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+    sd.select_group(group_id)
+    return RedirectResponse(url="/sd", status_code=303)
+
+
+@router.post("/sd/next")
+async def sd_next(request: Request):
+    _check_token_or_query(request)
+    video = sd.next_video()
+    if "application/json" not in request.headers.get("Accept", ""):
+        return RedirectResponse(url="/sd", status_code=303)
+    if video is None:
+        return Response(status_code=204)
+    return {
+        "id": video["id"],
+        "title": _display_name(video),
+        "src": f"/videos/{video['id']}/sd.mp4",
+    }

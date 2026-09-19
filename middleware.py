@@ -14,7 +14,8 @@ _STRIPPED_HEADERS = {"content-length", "date", "server"}
 # between queued/running/done with no HTTP request, so nothing flushes a cached
 # copy: the iOS app polls this every 2s and would keep reading a frozen
 # snapshot, leaving the download button spinning on a job that finished.
-_NEVER_CACHED_PATHS = {"/api/jobs"}
+# /sd renders the shuffle position, which POST /sd/next and the converter both move.
+_NEVER_CACHED_PATHS = {"/api/jobs", "/sd"}
 
 # The web page's session cookie. Hardcoded rather than imported from router:
 # middleware is imported by main *before* the router, and this is a wire-format
