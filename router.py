@@ -685,6 +685,55 @@ async def video_preview(video_id: int, request: Request, kind: str = "item"):
     )
 
 
+def _file_response(
+    file_path: Path, mime: str, request: Request, title: str | None
+) -> StreamingResponse:
+    """Full or single-range body for a file on disk, via the stream semaphore."""
+    stat = file_path.stat()
+    file_size = stat.st_size
+    etag, last_modified = _stream_validators(stat)
+    range_header = request.headers.get("Range")
+
+    # A stale If-Range validator means the file changed since the client's
+    # partial copy (e.g. re-conversion); serve the full body instead of
+    # letting a resumed download splice bytes from two different files.
+    if range_header and _if_range_matches(request.headers.get("If-Range"), etag, last_modified):
+        start, end = _parse_byte_range(range_header, file_size)
+        chunk_size = end - start + 1
+        is_last = end == file_size - 1
+
+        return StreamingResponse(
+            _iter_file_range(
+                file_path,
+                start,
+                chunk_size,
+                completion_title=title if is_last else None,
+            ),
+            status_code=206,
+            media_type=mime,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(chunk_size),
+                "Cache-Control": VIDEO_CACHE_CONTROL,
+                "ETag": etag,
+                "Last-Modified": last_modified,
+            },
+        )
+
+    return StreamingResponse(
+        _iter_file_range(file_path, completion_title=title),
+        media_type=mime,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Cache-Control": VIDEO_CACHE_CONTROL,
+            "ETag": etag,
+            "Last-Modified": last_modified,
+        },
+    )
+
+
 @router.get("/videos/{video_id}/stream")
 async def stream_video(video_id: int, request: Request):
     _check_token_or_query(request)
@@ -714,49 +763,21 @@ async def stream_video(video_id: int, request: Request):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Video file missing")
 
-    stat = file_path.stat()
-    file_size = stat.st_size
-    etag, last_modified = _stream_validators(stat)
-    range_header = request.headers.get("Range")
+    return _file_response(file_path, mime, request, video.get("title"))
 
-    # A stale If-Range validator means the file changed since the client's
-    # partial copy (e.g. re-conversion); serve the full body instead of
-    # letting a resumed download splice bytes from two different files.
-    if range_header and _if_range_matches(request.headers.get("If-Range"), etag, last_modified):
-        start, end = _parse_byte_range(range_header, file_size)
-        chunk_size = end - start + 1
-        is_last = end == file_size - 1
 
-        return StreamingResponse(
-            _iter_file_range(
-                file_path,
-                start,
-                chunk_size,
-                completion_title=video.get("title") if is_last else None,
-            ),
-            status_code=206,
-            media_type=mime,
-            headers={
-                "Content-Range": f"bytes {start}-{end}/{file_size}",
-                "Accept-Ranges": "bytes",
-                "Content-Length": str(chunk_size),
-                "Cache-Control": VIDEO_CACHE_CONTROL,
-                "ETag": etag,
-                "Last-Modified": last_modified,
-            },
-        )
-
-    return StreamingResponse(
-        _iter_file_range(file_path, completion_title=video.get("title")),
-        media_type=mime,
-        headers={
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(file_size),
-            "Cache-Control": VIDEO_CACHE_CONTROL,
-            "ETag": etag,
-            "Last-Modified": last_modified,
-        },
-    )
+@router.get("/videos/{video_id}/sd.mp4")
+async def stream_sd_video(video_id: int, request: Request):
+    """The iPad 1 rendition /sd plays. Caddy serves it from disk when it can;
+    this is the fallback (and the only path when Caddy has no sd.mp4 rule)."""
+    _check_token_or_query(request)
+    video = db.get_video(video_id)
+    if not video or video.get("source") == "library" or not video.get("sd_ready"):
+        raise HTTPException(status_code=404, detail="SD rendition not ready")
+    file_path = VIDEOS_DIR / sd.sd_filename(video_id)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="SD file missing")
+    return _file_response(file_path, "video/mp4", request, video.get("title"))
 
 
 def _resolve_hls_source(video: dict, request: Request) -> Path:

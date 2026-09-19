@@ -326,3 +326,35 @@ def test_promote_removes_the_sd_file(tmp_db, monkeypatch, tmp_path):
     promote.promote_to_plex(tmp_db.get_video(vid), "movies")
 
     assert not (videos / f"{vid}.sd.mp4").exists()
+
+
+def test_sd_stream_serves_ranges_when_ready(tmp_db, monkeypatch, tmp_path):
+    import router
+    videos = tmp_path / "vids"
+    videos.mkdir()
+    monkeypatch.setattr(router, "VIDEOS_DIR", videos)
+    vid = _done_video(tmp_db, _children(tmp_db), sd_ready=True)
+    (videos / f"{vid}.sd.mp4").write_bytes(b"0123456789")
+
+    with _api_client(monkeypatch, tmp_path) as client:
+        client.cookies.set("upload_token", "test-secret")
+        full = client.get(f"/videos/{vid}/sd.mp4")
+        part = client.get(f"/videos/{vid}/sd.mp4", headers={"Range": "bytes=2-4"})
+
+    assert full.status_code == 200 and full.content == b"0123456789"
+    assert full.headers["content-type"] == "video/mp4"
+    assert part.status_code == 206 and part.content == b"234"
+
+
+def test_sd_stream_404s_when_not_ready_and_401s_without_auth(tmp_db, monkeypatch, tmp_path):
+    import router
+    videos = tmp_path / "vids"
+    videos.mkdir()
+    monkeypatch.setattr(router, "VIDEOS_DIR", videos)
+    vid = _done_video(tmp_db, _children(tmp_db))
+    (videos / f"{vid}.sd.mp4").write_bytes(b"x")
+
+    with _api_client(monkeypatch, tmp_path) as client:
+        assert client.get(f"/videos/{vid}/sd.mp4").status_code == 401
+        client.cookies.set("upload_token", "test-secret")
+        assert client.get(f"/videos/{vid}/sd.mp4").status_code == 404
