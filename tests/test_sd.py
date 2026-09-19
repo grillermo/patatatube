@@ -67,3 +67,109 @@ def test_candidates_and_pending_split_on_sd_ready(tmp_db):
 def test_sd_is_a_job_kind(tmp_db):
     assert tmp_db.enqueue_job("sd", video_id=1, priority=200) is not None
     assert tmp_db.enqueue_job("sd", video_id=1, priority=200) is None
+
+
+def _children(db):
+    return db.get_group_by_name("children")["id"]
+
+
+def test_next_video_plays_every_candidate_once_per_round(tmp_db):
+    import sd
+    gid = _children(tmp_db)
+    ids = {_done_video(tmp_db, gid, sd_ready=True) for _ in range(5)}
+
+    first_round = [sd.next_video()["id"] for _ in range(5)]
+    assert set(first_round) == ids
+
+    second_round_opener = sd.next_video()["id"]
+    assert second_round_opener != first_round[-1]
+    assert tmp_db.get_sd_state()["played"] == [second_round_opener]
+
+
+def test_next_video_repeats_the_only_candidate(tmp_db):
+    import sd
+    vid = _done_video(tmp_db, _children(tmp_db), sd_ready=True)
+    assert [sd.next_video()["id"] for _ in range(3)] == [vid, vid, vid]
+
+
+def test_next_video_is_none_without_candidates(tmp_db):
+    import sd
+    _done_video(tmp_db, _children(tmp_db))  # not sd_ready
+    assert sd.next_video() is None
+
+
+def test_next_video_is_none_without_a_group(tmp_db):
+    import sd
+    tmp_db.save_sd_state(None, None, [])
+    assert sd.next_video() is None
+
+
+def test_a_newly_ready_video_joins_the_current_round(tmp_db):
+    import sd
+    gid = _children(tmp_db)
+    a = _done_video(tmp_db, gid, sd_ready=True)
+    b = _done_video(tmp_db, gid, sd_ready=True)
+    first = sd.next_video()["id"]
+    late = _done_video(tmp_db, gid, sd_ready=True)
+    rest = {sd.next_video()["id"], sd.next_video()["id"]}
+    assert {first} | rest == {a, b, late}
+
+
+def test_removed_videos_are_never_picked(tmp_db):
+    import sd
+    gid = _children(tmp_db)
+    keep = _done_video(tmp_db, gid, sd_ready=True)
+    gone = _done_video(tmp_db, gid, sd_ready=True)
+    tmp_db.delete_video(gone)
+    assert {sd.next_video()["id"] for _ in range(4)} == {keep}
+
+
+def test_current_video_keeps_a_valid_current_and_replaces_a_stale_one(tmp_db):
+    import sd
+    gid = _children(tmp_db)
+    a = _done_video(tmp_db, gid, sd_ready=True)
+    tmp_db.save_sd_state(gid, a, [a])
+    assert sd.current_video()["id"] == a
+
+    tmp_db.save_sd_state(gid, 999, [999])
+    assert sd.current_video()["id"] == a
+
+
+def test_select_group_resets_state_and_queues_pending(tmp_db):
+    import sd
+    adults = tmp_db.get_group_by_name("adults")["id"]
+    pending = _done_video(tmp_db, adults)
+    _done_video(tmp_db, adults, sd_ready=True)
+    tmp_db.save_sd_state(_children(tmp_db), 5, [5])
+
+    sd.select_group(adults)
+
+    assert tmp_db.get_sd_state() == {"group_id": adults, "current_id": None, "played": []}
+    jobs = [tmp_db.get_job(1)]
+    assert jobs[0]["kind"] == "sd" and jobs[0]["video_id"] == pending
+    assert jobs[0]["priority"] == sd.SD_PRIORITY
+
+
+def test_enqueue_missing_reports_queued_and_already_pending(tmp_db):
+    import sd
+    gid = _children(tmp_db)
+    _done_video(tmp_db, gid)
+    _done_video(tmp_db, gid)
+    assert sd.enqueue_missing(gid, priority=50) == (2, 0)
+    assert sd.enqueue_missing(gid, priority=50) == (0, 2)
+
+
+def test_enqueue_if_selected_only_for_the_selected_group(tmp_db):
+    import sd
+    inside = _done_video(tmp_db, _children(tmp_db))
+    outside = _done_video(tmp_db, tmp_db.get_group_by_name("adults")["id"])
+    assert sd.enqueue_if_selected(inside) is True
+    assert sd.enqueue_if_selected(outside) is False
+    assert sd.enqueue_if_selected(424242) is False
+
+
+def test_enqueue_if_selected_never_raises(tmp_db, monkeypatch):
+    import sd
+    vid = _done_video(tmp_db, _children(tmp_db))
+    monkeypatch.setattr(tmp_db, "enqueue_job", lambda *a, **k: 1 / 0)
+    assert sd.enqueue_if_selected(vid) is False
