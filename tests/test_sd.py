@@ -442,3 +442,24 @@ def test_sd_next_json_html_and_empty(tmp_db, monkeypatch, tmp_path):
 def test_sd_is_never_cached():
     import middleware
     assert "/sd" in middleware._NEVER_CACHED_PATHS
+
+
+def test_backfill_queues_the_group_once(tmp_db, capsys):
+    import sd_backfill
+    gid = _children(tmp_db)
+    a = _done_video(tmp_db, gid)
+    _done_video(tmp_db, gid, sd_ready=True)
+
+    assert sd_backfill.main(["sd_backfill.py", "children"]) == 0
+    job = tmp_db.get_job(1)
+    assert (job["kind"], job["video_id"], job["priority"]) == ("sd", a, 50)
+    assert "queued 1" in capsys.readouterr().out
+
+    assert sd_backfill.main(["sd_backfill.py", "children"]) == 0
+    assert "queued 0, already queued 1" in capsys.readouterr().out
+
+
+def test_backfill_rejects_unknown_group_and_bad_usage(tmp_db):
+    import sd_backfill
+    assert sd_backfill.main(["sd_backfill.py", "nope"]) == 1
+    assert sd_backfill.main(["sd_backfill.py"]) == 2
