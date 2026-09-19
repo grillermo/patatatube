@@ -42,6 +42,12 @@ async def download_video(video_id: int):
             db.update_video(
                 video_id, status="done", filename=dest_name, title=title, channel=channel
             )
+            db.enqueue_job(
+                "hls",
+                video_id,
+                priority=db.PRIORITY_BULK,
+                payload={"source_path": str(VIDEOS_DIR / dest_name)},
+            )
             sd.enqueue_if_selected(video_id)
             return
 

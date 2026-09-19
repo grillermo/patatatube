@@ -1136,6 +1136,37 @@ async def test_download_youtube_passes_the_id_to_normalization(
 
 
 @pytest.mark.asyncio
+async def test_download_youtube_enqueues_hls_packaging(
+    monkeypatch, downloader_env, tmp_path
+):
+    db, downloader, videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"youtube-bytes")
+
+    async def fake_download(url):
+        return source_file, "Downloaded Title", "Veritasium"
+
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
+        return Path(path)
+
+    monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    video_id = db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+    )
+    await downloader.download_video(video_id)
+
+    job = db.claim_job()
+    assert job["kind"] == "hls"
+    assert job["video_id"] == video_id
+    assert job["priority"] == db.PRIORITY_BULK
+    assert job["payload"]["source_path"] == str(videos_dir / f"{video_id}.mp4")
+
+
+@pytest.mark.asyncio
 async def test_twitter_downloads_are_not_tagged_with_a_source_key(
     monkeypatch, downloader_env, tmp_path
 ):
