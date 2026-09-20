@@ -140,6 +140,19 @@ def test_update_group_clears_the_emoji(fresh_db):
     assert fresh_db.update_group(gid, clear_emoji=True)["emoji"] is None
 
 
+def test_groups_start_without_a_description(fresh_db):
+    assert all(g["description"] is None for g in fresh_db.list_groups())
+    assert fresh_db.create_group("cooking", "Cooking")["description"] is None
+
+
+def test_update_group_sets_and_clears_the_description(fresh_db):
+    gid = fresh_db.get_group_by_name("children")["id"]
+    assert fresh_db.update_group(gid, description="Sleep songs")["description"] == "Sleep songs"
+    # Omitted means "leave it alone"; only clear_description NULLs it.
+    assert fresh_db.update_group(gid, label="Kids")["description"] == "Sleep songs"
+    assert fresh_db.update_group(gid, clear_description=True)["description"] is None
+
+
 def test_groups_start_with_display_titles_off(fresh_db):
     assert all(g["display_titles"] == 0 for g in fresh_db.list_groups())
     assert fresh_db.create_group("cooking", "Cooking")["display_titles"] == 0

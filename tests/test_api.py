@@ -63,7 +63,7 @@ def test_upload_success(client, monkeypatch):
     data = resp.json()
     assert "id" in data
     assert data["status"] == "queued"
-    assert queued == [((data["id"],), {})]
+    assert queued == [((data["id"],), {"classify": True})]
 
 
 def test_upload_uses_requested_group(client, monkeypatch):
@@ -172,7 +172,7 @@ def test_upload_youtube_success(client, monkeypatch):
     assert resp.status_code == 202
     data = resp.json()
     assert data["status"] == "queued"
-    assert queued == [((data["id"],), {})]
+    assert queued == [((data["id"],), {"classify": True})]
 
     import db
 
@@ -180,6 +180,21 @@ def test_upload_youtube_success(client, monkeypatch):
     assert video["platform"] == "youtube"
     assert video["source_key"] == "dQw4w9WgXcQ"
     assert video["preview_url"] == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+
+
+def test_upload_with_a_group_does_not_ask_for_classification(client, monkeypatch):
+    import db
+
+    queued = []
+    monkeypatch.setattr("router.download_video", lambda *a, **kw: queued.append((a, kw)))
+    inbox = db.create_group(db.DEFAULT_UPLOAD_GROUP, "Inbox")
+    resp = client.post(
+        "/upload",
+        json={"url": "https://youtu.be/dQw4w9WgXcQ", "group_id": inbox["id"]},
+        headers={"Authorization": "Bearer test-secret"},
+    )
+    assert resp.status_code == 202
+    assert queued == [((resp.json()["id"],), {"classify": False})]
 
 
 def test_upload_youtube_strips_non_video_query_params(client, monkeypatch):
@@ -192,7 +207,7 @@ def test_upload_youtube_strips_non_video_query_params(client, monkeypatch):
     )
     assert resp.status_code == 202
     data = resp.json()
-    assert queued == [((data["id"],), {})]
+    assert queued == [((data["id"],), {"classify": True})]
 
     import db
 
@@ -211,7 +226,7 @@ def test_upload_youtube_bare_path_id(client, monkeypatch):
     )
     assert resp.status_code == 202
     data = resp.json()
-    assert queued == [((data["id"],), {})]
+    assert queued == [((data["id"],), {"classify": True})]
 
     import db
 
@@ -839,8 +854,9 @@ def test_get_groups_lists_the_defaults(client):
     groups = resp.json()["groups"]
     assert [g["name"] for g in groups] == ["children", "adults", "anabel", "asmr"]
     assert set(groups[0]) == {
-        "id", "name", "label", "emoji", "position", "display_titles",
+        "id", "name", "label", "emoji", "position", "display_titles", "description",
     }
+    assert all(g["description"] is None for g in groups)
     assert all(g["display_titles"] is False for g in groups)
 
 
@@ -884,6 +900,29 @@ def test_patch_group_clears_the_emoji_with_null(client, auth_headers):
     client.patch(f"/api/groups/{gid}", json={"emoji": "🧒"}, headers=auth_headers)
     resp = client.patch(f"/api/groups/{gid}", json={"emoji": None}, headers=auth_headers)
     assert resp.json()["emoji"] is None
+
+
+def test_patch_group_sets_and_clears_the_description(client, auth_headers):
+    gid = client.get("/api/groups").json()["groups"][0]["id"]
+    resp = client.patch(
+        f"/api/groups/{gid}", json={"description": "  Sleep songs  "}, headers=auth_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["description"] == "Sleep songs"
+
+    # Patching something else leaves it alone.
+    other = client.patch(f"/api/groups/{gid}", json={"emoji": "🧒"}, headers=auth_headers)
+    assert other.json()["description"] == "Sleep songs"
+
+    # An explicit null (or blank) clears it.
+    cleared = client.patch(f"/api/groups/{gid}", json={"description": None}, headers=auth_headers)
+    assert cleared.json()["description"] is None
+
+
+def test_patch_group_description_requires_a_token(client):
+    gid = client.get("/api/groups").json()["groups"][0]["id"]
+    resp = client.patch(f"/api/groups/{gid}", json={"description": "x"})
+    assert resp.status_code in (401, 503)
 
 
 def test_patch_group_toggles_display_titles(client, auth_headers):

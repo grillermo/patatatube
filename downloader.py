@@ -8,12 +8,15 @@ import subprocess
 import tempfile
 from contextlib import suppress
 from pathlib import Path
+from typing import NamedTuple
 
 from pybalt import download as pybalt_download
 
 import cache
+import classifier
 import db
 import sd
+import services
 from paths import VIDEOS_DIR
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 FFPROBE_BIN = os.getenv("FFPROBE_BIN", "ffprobe")
@@ -28,7 +31,17 @@ YTDLP_FORMAT = os.getenv(
 logger = logging.getLogger(__name__)
 
 
-async def download_video(video_id: int):
+class YoutubeDownload(NamedTuple):
+    path: Path
+    title: str | None
+    channel: str | None
+    duration_secs: int | None = None
+    description: str | None = None
+
+
+async def download_video(video_id: int, classify: bool = False):
+    """`classify` files the finished video into a group chosen by the
+    classifier. The router sets it only when the caller named no group."""
     video = db.get_video(video_id)
     if not video:
         raise ValueError(f"Unknown video id: {video_id}")
@@ -36,12 +49,18 @@ async def download_video(video_id: int):
     db.update_video(video_id, status="downloading")
     try:
         if video["platform"] == "youtube":
-            dest_name, title, channel = await _download_youtube(
+            dest_name, meta = await _download_youtube(
                 video_id, video["url"], source_key=video["source_key"]
             )
             db.update_video(
-                video_id, status="done", filename=dest_name, title=title, channel=channel
+                video_id,
+                status="done",
+                filename=dest_name,
+                title=meta.title,
+                channel=meta.channel,
             )
+            if classify:
+                await _classify_into_group(video_id, meta)
             db.enqueue_job(
                 "hls",
                 video_id,
@@ -61,6 +80,24 @@ async def download_video(video_id: int):
     except Exception as exc:
         logger.warning("Download failed; deleting video row %s: %s", video_id, exc)
         db.delete_video(video_id)
+
+
+async def _classify_into_group(video_id: int, meta: YoutubeDownload) -> None:
+    """Move a still-unsorted video out of the inbox. Best effort: the download
+    has already succeeded, so nothing here may fail it."""
+    try:
+        inbox = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)
+        video = db.get_video(video_id)
+        # A move made by hand while the download ran wins over the classifier.
+        if not inbox or not video or video["group_id"] != inbox["id"]:
+            return
+        group = await classifier.classify(
+            meta.title, meta.channel, meta.duration_secs, meta.description
+        )
+        if group is not None:
+            services.set_group(video_id, group["id"])
+    except Exception as exc:
+        logger.warning("Classifying video %s failed: %s", video_id, exc)
 
 
 async def process_uploaded_video(video_id: int):
@@ -89,12 +126,12 @@ async def _download_twitter(video_id: int, url: str) -> str:
 
 async def _download_youtube(
     video_id: int, url: str, source_key: str | None = None
-) -> tuple[str, str | None, str | None]:
-    downloaded_path, title, channel = await _download_youtube_media(url)
+) -> tuple[str, YoutubeDownload]:
+    meta = await _download_youtube_media(url)
     dest_name = await _store_ios_compatible_video(
-        video_id, downloaded_path, channel=channel, source_key=source_key
+        video_id, meta.path, channel=meta.channel, source_key=source_key
     )
-    return dest_name, title, channel
+    return dest_name, meta
 
 
 async def _store_ios_compatible_video(
@@ -301,11 +338,11 @@ CHANNEL_FIELD_TEMPLATE = "%(channel,uploader|)s"
 CHANNEL_PRINT_TEMPLATE = f"after_move:TW2WL_CHANNEL:{CHANNEL_FIELD_TEMPLATE}"
 
 
-async def _download_youtube_media(url: str) -> tuple[Path, str | None, str | None]:
+async def _download_youtube_media(url: str) -> YoutubeDownload:
     return await asyncio.to_thread(_download_youtube_media_sync, url)
 
 
-def _download_youtube_media_sync(url: str) -> tuple[Path, str | None, str | None]:
+def _download_youtube_media_sync(url: str) -> YoutubeDownload:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         outtmpl = str(tmpdir_path / "%(id)s.%(ext)s")
@@ -330,6 +367,12 @@ def _download_youtube_media_sync(url: str) -> tuple[Path, str | None, str | None
                 # the empty default keeps the line printed either way.
                 "--print",
                 CHANNEL_PRINT_TEMPLATE,
+                "--print",
+                "after_move:TW2WL_DURATION:%(duration)s",
+                # `j` JSON-encodes the value: descriptions are multi-line and
+                # this output is parsed one line per field.
+                "--print",
+                "after_move:TW2WL_DESC:%(description)j",
                 "--newline",
                 url,
             ]
@@ -349,13 +392,15 @@ def _download_youtube_media_sync(url: str) -> tuple[Path, str | None, str | None
         downloaded_path = _parse_ytdlp_path(output)
         title = _parse_ytdlp_title(output)
         channel = _parse_ytdlp_channel(output)
+        duration_secs = _parse_ytdlp_duration(output)
+        description = _parse_ytdlp_description(output)
         if not downloaded_path:
             downloaded_path = _resolve_downloaded_path(tmpdir_path)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=downloaded_path.suffix) as tmpfile:
             stable_path = Path(tmpfile.name)
         shutil.copy2(downloaded_path, stable_path)
-        return stable_path, title, channel
+        return YoutubeDownload(stable_path, title, channel, duration_secs, description)
 
 
 def _parse_ytdlp_path(output: str) -> Path | None:
@@ -378,6 +423,28 @@ def _parse_ytdlp_channel(output: str) -> str | None:
     for line in output.splitlines():
         if line.startswith("TW2WL_CHANNEL:"):
             return line.removeprefix("TW2WL_CHANNEL:").strip() or None
+    return None
+
+
+def _parse_ytdlp_duration(output: str) -> int | None:
+    """Whole seconds, or None when yt-dlp printed `NA` (live streams, odd sites)."""
+    for line in output.splitlines():
+        if line.startswith("TW2WL_DURATION:"):
+            try:
+                return int(float(line.removeprefix("TW2WL_DURATION:")))
+            except ValueError:
+                return None
+    return None
+
+
+def _parse_ytdlp_description(output: str) -> str | None:
+    for line in output.splitlines():
+        if line.startswith("TW2WL_DESC:"):
+            try:
+                value = json.loads(line.removeprefix("TW2WL_DESC:"))
+            except ValueError:
+                return None
+            return value.strip() or None if isinstance(value, str) else None
     return None
 
 

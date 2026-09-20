@@ -217,6 +217,7 @@ class GroupUpdateRequest(BaseModel):
     emoji: str | None = None
     position: int | None = None
     display_titles: bool | None = None
+    description: str | None = None
 
 
 class PrepareRequest(BaseModel):
@@ -400,7 +401,9 @@ async def upload(body: UploadRequest, request: Request, background_tasks: Backgr
         preview_url=_youtube_preview_url(source["source_key"]) if source["platform"] == "youtube" else None,
         group_id=group_id,
     )
-    background_tasks.add_task(download_video, video_id)
+    # Only a caller who named no group gets the classifier's opinion; a named
+    # group (even the inbox) is a decision already made.
+    background_tasks.add_task(download_video, video_id, classify=body.group_id is None)
     return {"id": video_id, "status": "queued"}
 
 
@@ -996,6 +999,7 @@ def serialize_group(group: dict) -> dict:
         "emoji": group["emoji"],
         "position": group["position"],
         "display_titles": bool(group["display_titles"]),
+        "description": group["description"],
     }
 
 
@@ -1028,6 +1032,7 @@ async def api_update_group(group_id: int, body: GroupUpdateRequest, request: Req
     _check_token(request)
     fields = body.model_dump(exclude_unset=True)
     emoji = _validated_emoji(body.emoji) if "emoji" in fields else None
+    description = (body.description or "").strip()
     group = db.update_group(
         group_id,
         label=body.label.strip() if body.label else None,
@@ -1036,6 +1041,9 @@ async def api_update_group(group_id: int, body: GroupUpdateRequest, request: Req
         clear_emoji="emoji" in fields and not emoji,
         position=body.position,
         display_titles=body.display_titles,
+        description=description or None,
+        # An explicit null or blank string clears it; an omitted key leaves it.
+        clear_description="description" in fields and not description,
     )
     if group is None:
         raise HTTPException(status_code=404, detail="No such group")

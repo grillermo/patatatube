@@ -189,6 +189,24 @@ map for the intermittent-playback investigation:
    deliberately *not* searchable: the id is already `videos.source_key`, and
    nobody types one into a filter. Only YouTube rows get it; a tweet id is not
    a YouTube id.
+4b. **A YouTube upload that names no group is classified into one.** The row
+   starts in the `inbox` group as before; when the download finishes,
+   `downloader._classify_into_group` asks `classifier.classify` (TypeSafe's `jev`
+   model, `JEV_API_KEY`) to pick a group from title, channel, duration and
+   the first 1500 chars of the description — yt-dlp prints the last two as
+   `TW2WL_DURATION` / `TW2WL_DESC` (`%(description)j`, JSON, because the
+   parser is line-based). The router passes `classify=True` only when
+   `group_id` was omitted, so an explicit group — even the inbox — is never
+   second-guessed; a video moved by hand during the download is left alone.
+   Confidence below `CLASSIFY_MIN_CONFIDENCE` (0.6), no key, or any API
+   failure leaves it in the inbox: classification can never fail a download.
+   Options are the group `name`s described by `groups.description` (falling
+   back to the `label`; inbox excluded). Set it with `PATCH /api/groups/{id}`
+   `{"description": "..."}` — null or blank clears it. Labels alone are too
+   terse to separate look-alike groups (a 15-video trial put every "dormir"
+   song in "children" at 0.98 confidence), so accuracy is a matter of writing
+   good descriptions, not of tuning the threshold. Twitter and file uploads
+   are not classified (no title or description to read).
 5. Status transitions queued → downloading → done. **Failures don't get an `error` status** — `db.update_video(status="error")` and the download exception handler both *delete the row* instead. Don't rely on error rows existing.
 6. `GET /videos/{id}/stream` serves the MP4 with HTTP Range support (206 partial content), hand-rolled in `_parse_byte_range` / `_iter_file_range`, gated by an asyncio semaphore (`VIDEO_STREAM_LIMIT`).
 

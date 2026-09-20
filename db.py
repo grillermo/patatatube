@@ -272,6 +272,11 @@ def init_db():
                 conn,
                 "ALTER TABLE groups ADD COLUMN display_titles INTEGER NOT NULL DEFAULT 0",
             )
+        # What the group is *for*, in the owner's words. The classifier reads it
+        # instead of the label, which is too terse to separate groups that look
+        # alike ("dormir" vs "videos musicales"). NULL falls back to the label.
+        if "description" not in group_columns:
+            _add_column(conn, "ALTER TABLE groups ADD COLUMN description TEXT")
         _seed_default_groups(conn)
         _seed_sd_state(conn)
         _migrate_classifications_to_groups(conn)
@@ -842,10 +847,12 @@ def update_group(
     clear_emoji: bool = False,
     position: int | None = None,
     display_titles: bool | None = None,
+    description: str | None = None,
+    clear_description: bool = False,
 ) -> dict | None:
     """Partial update. `clear_emoji` is how a caller sets the emoji to NULL —
     `emoji=None` means "leave it alone", since that is what an omitted JSON
-    field decodes to."""
+    field decodes to. `clear_description` does the same for the description."""
     sets: list[str] = []
     params: list = []
     if label is not None:
@@ -862,6 +869,11 @@ def update_group(
     if display_titles is not None:
         sets.append("display_titles = ?")
         params.append(1 if display_titles else 0)
+    if clear_description:
+        sets.append("description = NULL")
+    elif description is not None:
+        sets.append("description = ?")
+        params.append(description)
     with _conn() as conn:
         if not conn.execute("SELECT 1 FROM groups WHERE id = ?", (group_id,)).fetchone():
             return None

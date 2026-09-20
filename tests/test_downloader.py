@@ -31,7 +31,7 @@ async def test_download_youtube_success_persists_title(monkeypatch, downloader_e
 
     async def fake_download(url):
         assert url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-        return source_file, "Downloaded Title", "Veritasium"
+        return downloader.YoutubeDownload(source_file, "Downloaded Title", "Veritasium")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
         return Path(path)
@@ -116,7 +116,7 @@ def test_youtube_download_uses_browser_cookies(monkeypatch, downloader_env):
     monkeypatch.setattr(downloader, "YTDLP_BIN", "/opt/homebrew/bin/yt-dlp")
     monkeypatch.setattr(downloader, "YTDLP_BROWSER", "chrome")
 
-    path, title, _channel = downloader._download_youtube_media_sync(
+    path, title, _channel, *_ = downloader._download_youtube_media_sync(
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     )
 
@@ -157,7 +157,7 @@ def test_youtube_download_retries_without_cookies_after_cookie_failure(
     monkeypatch.setattr(downloader, "YTDLP_BIN", "/opt/homebrew/bin/yt-dlp")
     monkeypatch.setattr(downloader, "YTDLP_BROWSER", "chrome")
 
-    path, title, _channel = downloader._download_youtube_media_sync(
+    path, title, _channel, *_ = downloader._download_youtube_media_sync(
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     )
 
@@ -802,7 +802,7 @@ def test_youtube_download_captures_the_channel(monkeypatch, downloader_env):
 
     monkeypatch.setattr(downloader.subprocess, "run", fake_run)
 
-    path, title, channel = downloader._download_youtube_media_sync(
+    path, title, channel, *_ = downloader._download_youtube_media_sync(
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     )
 
@@ -828,7 +828,7 @@ def test_youtube_download_tolerates_a_missing_channel(monkeypatch, downloader_en
 
     monkeypatch.setattr(downloader.subprocess, "run", fake_run)
 
-    path, _title, channel = downloader._download_youtube_media_sync(
+    path, _title, channel, *_ = downloader._download_youtube_media_sync(
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     )
 
@@ -843,7 +843,7 @@ async def test_download_youtube_persists_the_channel(monkeypatch, downloader_env
     source_file.write_bytes(b"youtube-bytes")
 
     async def fake_download(url):
-        return source_file, "Downloaded Title", "Veritasium"
+        return downloader.YoutubeDownload(source_file, "Downloaded Title", "Veritasium")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
         return Path(path)
@@ -874,7 +874,7 @@ async def test_download_youtube_passes_the_channel_to_normalization(
     seen = {}
 
     async def fake_download(url):
-        return source_file, "Downloaded Title", "Veritasium"
+        return downloader.YoutubeDownload(source_file, "Downloaded Title", "Veritasium")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
         seen["channel"] = channel
@@ -1116,7 +1116,7 @@ async def test_download_youtube_passes_the_id_to_normalization(
     seen = {}
 
     async def fake_download(url):
-        return source_file, "Downloaded Title", "Veritasium"
+        return downloader.YoutubeDownload(source_file, "Downloaded Title", "Veritasium")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
         seen["source_key"] = source_key
@@ -1144,7 +1144,7 @@ async def test_download_youtube_enqueues_hls_packaging(
     source_file.write_bytes(b"youtube-bytes")
 
     async def fake_download(url):
-        return source_file, "Downloaded Title", "Veritasium"
+        return downloader.YoutubeDownload(source_file, "Downloaded Title", "Veritasium")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
         return Path(path)
@@ -1192,3 +1192,168 @@ async def test_twitter_downloads_are_not_tagged_with_a_source_key(
     await downloader.download_video(video_id)
 
     assert seen == {"source_key": None, "channel": None}
+
+
+def _fake_ytdlp(stdout_extra):
+    def fake_run(cmd, stdout, stderr, text):
+        outtmpl = Path(cmd[cmd.index("-o") + 1])
+        media_path = Path(str(outtmpl).replace("%(id)s", "dQw4w9WgXcQ").replace("%(ext)s", "mp4"))
+        media_path.write_bytes(b"video")
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=f"TW2WL_FILE:{media_path}\nTW2WL_TITLE:Title\nTW2WL_CHANNEL:Ch\n" + stdout_extra,
+        )
+
+    return fake_run
+
+
+def test_youtube_download_reads_duration_and_description(monkeypatch, downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+    monkeypatch.setattr(
+        downloader.subprocess,
+        "run",
+        _fake_ytdlp('TW2WL_DURATION:4320\nTW2WL_DESC:"line one\\nline two"\n'),
+    )
+
+    meta = downloader._download_youtube_media_sync("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+    # The description is JSON-encoded by yt-dlp (%(description)j) so a multi-line
+    # one still occupies a single parseable line.
+    assert meta.duration_secs == 4320
+    assert meta.description == "line one\nline two"
+    meta.path.unlink()
+
+
+def test_youtube_download_asks_ytdlp_for_duration_and_description(monkeypatch, downloader_env):
+    _db, downloader, _videos_dir = downloader_env
+    captured = {}
+    fake = _fake_ytdlp("")
+
+    def spy(cmd, stdout, stderr, text):
+        captured["cmd"] = cmd
+        return fake(cmd, stdout, stderr, text)
+
+    monkeypatch.setattr(downloader.subprocess, "run", spy)
+
+    downloader._download_youtube_media_sync("https://www.youtube.com/watch?v=dQw4w9WgXcQ").path.unlink()
+
+    assert "after_move:TW2WL_DURATION:%(duration)s" in captured["cmd"]
+    assert "after_move:TW2WL_DESC:%(description)j" in captured["cmd"]
+
+
+@pytest.mark.parametrize("extra", ["", "TW2WL_DURATION:NA\nTW2WL_DESC:null\n"])
+def test_youtube_download_tolerates_missing_duration_and_description(
+    monkeypatch, downloader_env, extra
+):
+    _db, downloader, _videos_dir = downloader_env
+    monkeypatch.setattr(downloader.subprocess, "run", _fake_ytdlp(extra))
+
+    meta = downloader._download_youtube_media_sync("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+    assert meta.duration_secs is None
+    assert meta.description is None
+    meta.path.unlink()
+
+
+@pytest.fixture()
+def classify_env(monkeypatch, downloader_env, tmp_path):
+    db, downloader, _videos_dir = downloader_env
+    db.create_group(db.DEFAULT_UPLOAD_GROUP, "Inbox")
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"youtube-bytes")
+    calls = []
+
+    async def fake_download(url):
+        return downloader.YoutubeDownload(
+            source_file, "Rain sounds", "Calm", duration_secs=3600, description="sleep"
+        )
+
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
+        return Path(path)
+
+    async def fake_classify(title, channel, duration_secs, description):
+        calls.append((title, channel, duration_secs, description))
+        return db.get_group_by_name("asmr")
+
+    monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+    monkeypatch.setattr(downloader.classifier, "classify", fake_classify)
+
+    def add():
+        inbox = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)
+        return db.add_video(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            platform="youtube",
+            source_key="dQw4w9WgXcQ",
+            group_id=inbox["id"],
+        )
+
+    return db, downloader, add, calls
+
+
+@pytest.mark.asyncio
+async def test_download_classifies_an_inbox_video_when_asked(classify_env):
+    db, downloader, add, calls = classify_env
+    video_id = add()
+
+    await downloader.download_video(video_id, classify=True)
+
+    assert calls == [("Rain sounds", "Calm", 3600, "sleep")]
+    assert db.get_video(video_id)["group_id"] == db.get_group_by_name("asmr")["id"]
+
+
+@pytest.mark.asyncio
+async def test_download_does_not_classify_unless_asked(classify_env):
+    db, downloader, add, calls = classify_env
+    video_id = add()
+
+    await downloader.download_video(video_id)
+
+    assert calls == []
+    assert db.get_video(video_id)["group_id"] == db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)["id"]
+
+
+@pytest.mark.asyncio
+async def test_download_does_not_override_a_manual_move(classify_env):
+    db, downloader, add, calls = classify_env
+    video_id = add()
+    adults = db.get_group_by_name("adults")
+    db.set_video_group(video_id, adults["id"])  # moved by hand mid-download
+
+    await downloader.download_video(video_id, classify=True)
+
+    assert calls == []
+    assert db.get_video(video_id)["group_id"] == adults["id"]
+
+
+@pytest.mark.asyncio
+async def test_download_keeps_the_video_in_inbox_when_classifier_declines(monkeypatch, classify_env):
+    db, downloader, add, _calls = classify_env
+
+    async def decline(*args):
+        return None
+
+    monkeypatch.setattr(downloader.classifier, "classify", decline)
+    video_id = add()
+
+    await downloader.download_video(video_id, classify=True)
+
+    video = db.get_video(video_id)
+    assert video["status"] == "done"
+    assert video["group_id"] == db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)["id"]
+
+
+@pytest.mark.asyncio
+async def test_a_classifier_crash_never_fails_the_download(monkeypatch, classify_env):
+    db, downloader, add, _calls = classify_env
+
+    async def boom(*args):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(downloader.classifier, "classify", boom)
+    video_id = add()
+
+    await downloader.download_video(video_id, classify=True)
+
+    assert db.get_video(video_id)["status"] == "done"
