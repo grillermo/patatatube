@@ -196,6 +196,12 @@ def init_db():
         # column existed until `POST /api/videos/backfill-channels` fills them.
         if "channel" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN channel TEXT")
+        # 1 from the moment a download/upload finishes until it is first played.
+        # A group's badge is the count of these, derived rather than stored, so it
+        # cannot drift. DEFAULT 0 is deliberate: every video that already exists
+        # is "read", which is what makes every counter start at zero on rollout.
+        if "unread" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN unread INTEGER NOT NULL DEFAULT 0")
         # 1 once converter.py has written videos/{id}.sd.mp4, the iPad 1-safe
         # rendition /sd plays. Set only after the file is atomically in place.
         if "sd_ready" not in columns:
@@ -803,12 +809,45 @@ def _migrate_classifications_to_groups(conn: sqlite3.Connection) -> int:
     return unmatched
 
 
+_UNREAD_WHERE = "unread = 1 AND status = 'done' AND deleted_at IS NULL"
+
+
 def list_groups() -> list[dict]:
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM groups ORDER BY position ASC, id ASC"
+            f"""
+            SELECT g.*,
+                   (SELECT COUNT(*) FROM videos v
+                    WHERE v.group_id = g.id AND {_UNREAD_WHERE}
+                   ) AS unread_count
+            FROM groups g
+            ORDER BY g.position ASC, g.id ASC
+            """
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def unread_count(group_id: int) -> int:
+    with _conn() as conn:
+        return conn.execute(
+            f"SELECT COUNT(*) FROM videos WHERE group_id = ? AND {_UNREAD_WHERE}",
+            (group_id,),
+        ).fetchone()[0]
+
+
+def mark_unread(video_id: int) -> None:
+    """Called when a download or upload finishes. Moves never call this."""
+    with _conn() as conn:
+        conn.execute("UPDATE videos SET unread = 1 WHERE id = ?", (video_id,))
+
+
+def mark_played(video_id: int) -> bool:
+    """True only when the video was unread. Idempotent: replays return False."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE videos SET unread = 0 WHERE id = ? AND unread = 1", (video_id,)
+        )
+        return cur.rowcount > 0
 
 
 def get_group(group_id: int) -> dict | None:
