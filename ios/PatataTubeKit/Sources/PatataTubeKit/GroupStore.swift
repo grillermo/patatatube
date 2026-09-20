@@ -41,6 +41,16 @@ public final class GroupStore: ObservableObject, @unchecked Sendable {
         persist()
     }
 
+    /// Optimistic local edit of one group's description, same contract as
+    /// `setDisplayTitles`: the caller PATCHes and restores the old value if that
+    /// fails.
+    public func setDescription(id: Int, _ text: String?) {
+        guard let index = groups.firstIndex(where: { $0.id == id }),
+              groups[index].description != text else { return }
+        groups[index] = groups[index].withDescription(text)
+        persist()
+    }
+
     private func persist() {
         if let data = try? JSONEncoder().encode(groups) {
             defaults.set(data, forKey: Self.defaultsKey)

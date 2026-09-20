@@ -151,6 +151,19 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         catch { throw APIError.decoding(String(describing: error)) }
     }
 
+    /// Also its own call: `updateGroup` always sends `emoji`, so routing this
+    /// through it would clear the cover. Nil or blank clears the description
+    /// server-side.
+    public func setGroupDescription(id: Int, _ text: String?) async throws -> VideoGroup {
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let data = try await authedRequest(
+            "api/groups/\(id)", method: "PATCH",
+            body: ["description": (trimmed?.isEmpty == false ? trimmed : nil) ?? NSNull()]
+        )
+        do { return try Self.makeDecoder().decode(VideoGroup.self, from: data) }
+        catch { throw APIError.decoding(String(describing: error)) }
+    }
+
     public func setGroup(id: Int, groupID: Int) async throws -> Bool {
         try await postOK("api/videos/\(id)/group", body: ["group_id": groupID])
     }

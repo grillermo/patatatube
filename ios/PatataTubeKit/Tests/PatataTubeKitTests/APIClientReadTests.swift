@@ -173,6 +173,32 @@ struct APIClientTests {
             #expect(group.emoji == "🧒")
         }
 
+        /// Same constraint as the display-titles toggle: it must not ride on
+        /// `updateGroup`, which always sends `emoji`.
+        @Test func setGroupDescriptionSendsThatFieldAlone() async throws {
+            MockURLProtocol.handler = { req in
+                #expect(req.url?.path == "/api/groups/1")
+                #expect(req.httpMethod == "PATCH")
+                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: Any]
+                #expect(Array(json.keys) == ["description"])
+                #expect(json["description"] as? String == "Kids songs")
+                return (jsonResponse(req.url!), #"{"id":1,"name":"children","label":"Children","emoji":"🧒","position":0,"display_titles":false,"description":"Kids songs"}"#.data(using: .utf8)!)
+            }
+            let group = try await makeClient().setGroupDescription(id: 1, "  Kids songs  ")
+            #expect(group.description == "Kids songs")
+            #expect(group.emoji == "🧒")
+        }
+
+        @Test func setGroupDescriptionSendsNullToClearIt() async throws {
+            MockURLProtocol.handler = { req in
+                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: Any]
+                #expect(json["description"] is NSNull)
+                return (jsonResponse(req.url!), #"{"id":1,"name":"children","label":"Children","emoji":null,"position":0,"display_titles":false,"description":null}"#.data(using: .utf8)!)
+            }
+            let group = try await makeClient().setGroupDescription(id: 1, "   ")
+            #expect(group.description == nil)
+        }
+
         @Test func promotePostsTheKind() async throws {
             MockURLProtocol.handler = { req in
                 #expect(req.url?.path == "/api/videos/5/promote")

@@ -17,6 +17,7 @@ struct GroupsView: View {
     @State private var saveError: String?
     @State private var editing: EditingGroup?
     @State private var renaming: EditingGroup?
+    @State private var describing: EditingGroup?
     @State private var creating = false
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
@@ -48,6 +49,12 @@ struct GroupsView: View {
                 renaming = nil
             }
         }
+        .sheet(item: $describing) { item in
+            DescriptionGroupView(group: item.group) { text in
+                describe(text, for: item.group)
+                describing = nil
+            }
+        }
         .sheet(isPresented: $creating) {
             CreateGroupView { label, emoji in
                 create(label: label, emoji: emoji)
@@ -70,7 +77,8 @@ struct GroupsView: View {
         groups.apply(groups.groups.map {
             $0.id == group.id
                 ? VideoGroup(id: $0.id, name: $0.name, label: $0.label, emoji: emoji,
-                             position: $0.position, displayTitles: $0.displayTitles)
+                             position: $0.position, displayTitles: $0.displayTitles,
+                             description: $0.description)
                 : $0
         })
         Task {
@@ -92,7 +100,8 @@ struct GroupsView: View {
         groups.apply(groups.groups.map {
             $0.id == group.id
                 ? VideoGroup(id: $0.id, name: $0.name, label: trimmed, emoji: $0.emoji,
-                             position: $0.position, displayTitles: $0.displayTitles)
+                             position: $0.position, displayTitles: $0.displayTitles,
+                             description: $0.description)
                 : $0
         })
         Task {
@@ -103,6 +112,24 @@ struct GroupsView: View {
                 _ = try await model.api.updateGroup(id: group.id, label: trimmed, emoji: group.emoji)
             } catch {
                 groups.apply(previous)
+                saveError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Optimistic like `save` and `rename`. Goes through its own PATCH so the
+    /// cover is untouched; blank clears the description.
+    private func describe(_ text: String, for group: VideoGroup) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let new: String? = trimmed.isEmpty ? nil : trimmed
+        guard new != group.description else { return }
+        let previous = group.description
+        groups.setDescription(id: group.id, new)
+        Task {
+            do {
+                _ = try await model.api.setGroupDescription(id: group.id, new)
+            } catch {
+                groups.setDescription(id: group.id, previous)
                 saveError = error.localizedDescription
             }
         }
@@ -212,6 +239,7 @@ struct GroupsView: View {
     private func menu(for group: VideoGroup) -> some View {
         Menu {
             Button("Rename") { renaming = EditingGroup(group: group) }
+            Button("Edit description") { describing = EditingGroup(group: group) }
             Button("Choose cover") { editing = EditingGroup(group: group) }
             if group.emoji != nil {
                 Button("Remove cover", role: .destructive) { save(nil, for: group) }
@@ -410,6 +438,45 @@ private struct RenameGroupView: View {
 
     private func save() {
         onSave(text)
+    }
+}
+
+/// Description sheet, mirrors `RenameGroupView`. Multi-line: it is a sentence or
+/// two telling the server's classifier what belongs in the group.
+private struct DescriptionGroupView: View {
+    let group: VideoGroup
+    let onSave: (String) -> Void
+
+    @State private var text: String = ""
+    @FocusState private var focused: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Description", text: $text, axis: .vertical)
+                        .lineLimit(4...10)
+                        .focused($focused)
+                } footer: {
+                    Text("Tells the server what belongs in this group when it files a new upload. Leave empty to use the name.")
+                }
+            }
+            .navigationTitle("Group Description")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { onSave(text) }
+                }
+            }
+        }
+        .onAppear {
+            text = group.description ?? ""
+            focused = true
+        }
     }
 }
 

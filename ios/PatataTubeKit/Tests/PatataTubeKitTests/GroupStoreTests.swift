@@ -75,6 +75,37 @@ final class GroupStoreTests: XCTestCase {
         XCTAssertEqual(store.group(id: 1)?.displayTitles, false)
     }
 
+    func testSetDescriptionUpdatesAndPersists() {
+        let defaults = makeDefaults()
+        let store = GroupStore(defaults: defaults)
+        store.apply(sample)
+
+        store.setDescription(id: 2, "Sleep songs")
+
+        XCTAssertEqual(store.group(id: 2)?.description, "Sleep songs")
+        XCTAssertNil(store.group(id: 1)?.description)
+        XCTAssertEqual(GroupStore(defaults: defaults).group(id: 2)?.description, "Sleep songs")
+        store.setDescription(id: 2, nil)
+        XCTAssertNil(store.group(id: 2)?.description)
+    }
+
+    func testSetDescriptionKeepsTheOtherFields() {
+        let store = GroupStore(defaults: makeDefaults())
+        store.apply(sample)
+        store.setDisplayTitles(id: 2, true)
+
+        store.setDescription(id: 2, "x")
+
+        XCTAssertEqual(store.group(id: 2)?.displayTitles, true)
+        XCTAssertEqual(store.group(id: 2)?.emoji, sample[1].emoji)
+    }
+
+    func testDecodesAMirrorWrittenBeforeDescriptionExisted() throws {
+        let json = #"{"id":1,"name":"children","label":"Children","position":0}"#
+        let group = try JSONDecoder().decode(VideoGroup.self, from: Data(json.utf8))
+        XCTAssertNil(group.description)
+    }
+
     func testSurvivesACorruptMirror() {
         let defaults = makeDefaults()
         defaults.set(Data("not json".utf8), forKey: GroupStore.defaultsKey)
