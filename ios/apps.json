@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.6",
+          "buildVersion": "188",
+          "date": "2026-09-20T07:02:28Z",
+          "localizedDescription": "Describe your groups\n\n• New Edit description item in a group's ⋯ menu, next to Rename and Choose cover\n• The description tells the server which group new videos belong in",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.6/PatataTube-2.7.6.ipa",
+          "size": 4436276,
+          "sha256": "640d9965cb6f56a09d88006fbaa4f5f80d44b75a8f157f33ae2b141a4a285535",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.5",
           "buildVersion": "187",
           "date": "2026-09-18T12:14:21Z",
@@ -1754,11 +1764,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.5",
-      "versionDate": "2026-09-18T12:14:21Z",
-      "versionDescription": "Coming back after an hour starts fresh\n\n• Returning to the app after more than an hour away stops anything still playing and closes the full-screen player\n• Videos that don't remember their position start from the beginning again\n• TV, Movies and videos with Remember position on keep their spot",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.5/PatataTube-2.7.5.ipa",
-      "size": 4427765
+      "version": "2.7.6",
+      "versionDate": "2026-09-20T07:02:28Z",
+      "versionDescription": "Describe your groups\n\n• New Edit description item in a group's ⋯ menu, next to Rename and Choose cover\n• The description tells the server which group new videos belong in",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.6/PatataTube-2.7.6.ipa",
+      "size": 4436276
     }
   ],
   "news": []
