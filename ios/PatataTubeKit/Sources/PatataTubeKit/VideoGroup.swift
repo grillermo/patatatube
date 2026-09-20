@@ -16,9 +16,13 @@ public struct VideoGroup: Codable, Identifiable, Hashable, Sendable {
     /// reads it to file new uploads (`groups.description`); nothing in the app
     /// renders it outside the editor. Nil when unset.
     public let description: String?
+    /// Videos added to this group and not yet played, derived by the server
+    /// from `videos.unread`. The card hides its badge at 0.
+    public let unreadCount: Int
 
     public init(id: Int, name: String, label: String, emoji: String?, position: Int,
-                displayTitles: Bool = false, description: String? = nil) {
+                displayTitles: Bool = false, description: String? = nil,
+                unreadCount: Int = 0) {
         self.id = id
         self.name = name
         self.label = label
@@ -26,9 +30,10 @@ public struct VideoGroup: Codable, Identifiable, Hashable, Sendable {
         self.position = position
         self.displayTitles = displayTitles
         self.description = description
+        self.unreadCount = unreadCount
     }
 
-    /// Hand-rolled so a payload without `displayTitles` (or `description`)
+    /// Hand-rolled so a payload without `displayTitles` (or `description`, or `unreadCount`)
     /// decodes as off/nil rather than throwing: `GroupStore`'s UserDefaults
     /// mirror holds blobs written by builds that predate the fields, and dropping the whole mirror on upgrade
     /// would empty the offline-first group screen.
@@ -41,16 +46,17 @@ public struct VideoGroup: Codable, Identifiable, Hashable, Sendable {
         position = try c.decode(Int.self, forKey: .position)
         displayTitles = try c.decodeIfPresent(Bool.self, forKey: .displayTitles) ?? false
         description = try c.decodeIfPresent(String.self, forKey: .description)
+        unreadCount = try c.decodeIfPresent(Int.self, forKey: .unreadCount) ?? 0
     }
 
     public func withDisplayTitles(_ on: Bool) -> VideoGroup {
         VideoGroup(id: id, name: name, label: label, emoji: emoji, position: position,
-                   displayTitles: on, description: description)
+                   displayTitles: on, description: description, unreadCount: unreadCount)
     }
 
     public func withDescription(_ text: String?) -> VideoGroup {
         VideoGroup(id: id, name: name, label: label, emoji: emoji, position: position,
-                   displayTitles: displayTitles, description: text)
+                   displayTitles: displayTitles, description: text, unreadCount: unreadCount)
     }
 
     public var feed: Feed { .group(id: id) }

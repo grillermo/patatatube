@@ -111,4 +111,29 @@ final class GroupStoreTests: XCTestCase {
         defaults.set(Data("not json".utf8), forKey: GroupStore.defaultsKey)
         XCTAssertEqual(GroupStore(defaults: defaults).groups, [])
     }
+
+    func testDecodesUnreadCountFromServerPayload() throws {
+        let json = #"[{"id":1,"name":"children","label":"Children","emoji":null,"position":0,"display_titles":false,"unread_count":3}]"#
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        XCTAssertEqual(try decoder.decode([VideoGroup].self, from: Data(json.utf8)).first?.unreadCount, 3)
+    }
+
+    func testMirrorWrittenBeforeUnreadCountExistedDecodesAsZero() throws {
+        // A UserDefaults blob from a build that predates the field.
+        let json = #"[{"id":1,"name":"children","label":"Children","position":0}]"#
+        XCTAssertEqual(try JSONDecoder().decode([VideoGroup].self, from: Data(json.utf8)).first?.unreadCount, 0)
+    }
+
+    func testCopyHelpersKeepTheUnreadCount() {
+        let g = VideoGroup(id: 1, name: "a", label: "A", emoji: nil, position: 0, unreadCount: 4)
+        XCTAssertEqual(g.withDisplayTitles(true).unreadCount, 4)
+        XCTAssertEqual(g.withDescription("x").unreadCount, 4)
+    }
+
+    func testUnreadCountSurvivesTheUserDefaultsMirror() {
+        let defaults = makeDefaults()
+        GroupStore(defaults: defaults).apply([VideoGroup(id: 1, name: "a", label: "A", emoji: nil, position: 0, unreadCount: 2)])
+        XCTAssertEqual(GroupStore(defaults: defaults).groups.first?.unreadCount, 2)
+    }
 }

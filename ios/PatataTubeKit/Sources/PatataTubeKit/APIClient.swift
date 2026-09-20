@@ -207,6 +207,15 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         )
     }
 
+    /// First playback of a video. Answers whether the server actually cleared an
+    /// unread flag; only then do the group badges need refetching.
+    public func markPlayed(id: Int) async throws -> Bool {
+        let data = try await authedPost("api/videos/\(id)/played", body: [:])
+        struct Result: Decodable { let changed: Bool }
+        do { return try Self.makeDecoder().decode(Result.self, from: data).changed }
+        catch { throw APIError.decoding(String(describing: error)) }
+    }
+
     public func delete(id: Int) async throws -> Bool {
         try await postOK("api/video/\(id)/delete", body: [:])
     }
