@@ -14,6 +14,19 @@ def downloader_env(monkeypatch, tmp_path):
     videos_dir.mkdir()
 
     import db
+    # Import in the same order as router.py does: library, then hls, then downloader.
+    # This breaks the circular import cycle since hls imports library functions
+    # before library tries to import from downloader.
+    try:
+        import library  # noqa: F401
+    except ImportError:
+        # library might fail to import due to circular dependency, that's OK
+        pass
+    try:
+        import hls  # noqa: F401
+    except ImportError:
+        # hls might fail, that's OK
+        pass
     import downloader
 
     importlib.reload(db)
@@ -1357,3 +1370,71 @@ async def test_a_classifier_crash_never_fails_the_download(monkeypatch, classify
     await downloader.download_video(video_id, classify=True)
 
     assert db.get_video(video_id)["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_finished_youtube_download_adds_one_unread_to_its_group(monkeypatch, downloader_env, tmp_path):
+    db, downloader, _videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"youtube-bytes")
+
+    async def fake_download(url):
+        return downloader.YoutubeDownload(source_file, "T", "Ch")
+
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
+        return Path(path)
+
+    monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+    group_id = db.list_groups()[0]["id"]
+    video_id = db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        platform="youtube", source_key="dQw4w9WgXcQ", group_id=group_id,
+    )
+    assert db.unread_count(group_id) == 0  # not while it is still queued
+
+    await downloader.download_video(video_id)
+
+    assert db.unread_count(group_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_finished_upload_adds_one_unread_and_flushes_the_cache(monkeypatch, downloader_env, tmp_path):
+    db, downloader, _videos_dir = downloader_env
+    tmp_upload = tmp_path / "up.mp4"
+    tmp_upload.write_bytes(b"bytes")
+    group_id = db.list_groups()[0]["id"]
+    video_id = db.add_video(str(tmp_upload), platform="upload", title="U", group_id=group_id)
+
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
+        return Path(path)
+
+    flushes = []
+
+    async def fake_clear():
+        flushes.append(1)
+
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+    monkeypatch.setattr(downloader.cache, "clear", fake_clear)
+
+    await downloader.process_uploaded_video(video_id)
+
+    assert db.unread_count(group_id) == 1
+    assert flushes, "a stale cached /api/groups would hide the new badge"
+
+
+@pytest.mark.asyncio
+async def test_failed_download_leaves_no_unread(monkeypatch, downloader_env):
+    db, downloader, _videos_dir = downloader_env
+
+    async def fake_download(url):
+        raise RuntimeError("yt-dlp failed")
+
+    monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    group_id = db.list_groups()[0]["id"]
+    video_id = db.add_video("https://www.youtube.com/watch?v=abc", platform="youtube",
+                            source_key="abc", group_id=group_id)
+
+    await downloader.download_video(video_id)
+
+    assert db.unread_count(group_id) == 0

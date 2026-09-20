@@ -61,6 +61,7 @@ async def download_video(video_id: int, classify: bool = False):
             )
             if classify:
                 await _classify_into_group(video_id, meta)
+            await _announce_new_video(video_id)
             db.enqueue_job(
                 "hls",
                 video_id,
@@ -73,6 +74,7 @@ async def download_video(video_id: int, classify: bool = False):
         if video["platform"] in (None, "twitter"):
             dest_name = await _download_twitter(video_id, video["url"])
             db.update_video(video_id, status="done", filename=dest_name)
+            await _announce_new_video(video_id)
             sd.enqueue_if_selected(video_id)
             return
 
@@ -80,6 +82,18 @@ async def download_video(video_id: int, classify: bool = False):
     except Exception as exc:
         logger.warning("Download failed; deleting video row %s: %s", video_id, exc)
         db.delete_video(video_id)
+
+
+async def _announce_new_video(video_id: int) -> None:
+    """Flag a finished download unread and flush the response cache.
+
+    The cache flush is not optional: this runs as a BackgroundTask, after the
+    request that queued it has already returned, so nothing else invalidates a
+    cached `GET /api/groups` and the badge would not appear for up to
+    CACHE_TTL_SECONDS.
+    """
+    db.mark_unread(video_id)
+    await cache.clear()
 
 
 async def _classify_into_group(video_id: int, meta: YoutubeDownload) -> None:
@@ -110,6 +124,7 @@ async def process_uploaded_video(video_id: int):
     try:
         dest_name = await _store_ios_compatible_video(video_id, tmp_path)
         db.update_video(video_id, status="done", filename=dest_name)
+        await _announce_new_video(video_id)
         sd.enqueue_if_selected(video_id)
     except Exception as exc:
         logger.warning("Upload processing failed; deleting video row %s: %s", video_id, exc)
