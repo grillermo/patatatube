@@ -301,6 +301,18 @@ with `decodeIfPresent ?? false` because `GroupStore`'s UserDefaults mirror holds
 blobs written before it existed. A Plex kind is not a group, so TV/Movies never
 overlay titles and never show the toggle.
 
+**Group cards show an unread badge.** `videos.unread` (idempotent `ALTER TABLE`
+guard, default 0) is set by `downloader._announce_new_video` when a download or
+upload finishes and cleared by `POST /api/videos/{id}/played`, which any player
+start calls once per video (`AppModel.markPlayed`: full-screen and the audio
+queue). `GET /api/groups` derives `unread_count` per group from the flag, so it
+never drifts and a **move never adds to it** — an unread video carries its
+badge to the new group. The default of 0 is what zeroed every counter on
+rollout. `_announce_new_video` also flushes the response cache: a BackgroundTask
+finishes after the request that queued it, so nothing else would. The app
+refetches `/api/groups` when `played` answers `changed: true` instead of editing
+the count locally. Plex rows have no badge.
+
 ### The response cache invalidates on writes, not on time
 
 `middleware.RedisCacheMiddleware` caches **every** 200 GET (`cache.py`, keyed by
