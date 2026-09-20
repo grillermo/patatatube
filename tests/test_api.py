@@ -854,7 +854,7 @@ def test_get_groups_lists_the_defaults(client):
     groups = resp.json()["groups"]
     assert [g["name"] for g in groups] == ["children", "adults", "anabel", "asmr"]
     assert set(groups[0]) == {
-        "id", "name", "label", "emoji", "position", "display_titles", "description",
+        "id", "name", "label", "emoji", "position", "display_titles", "description", "unread_count",
     }
     assert all(g["description"] is None for g in groups)
     assert all(g["display_titles"] is False for g in groups)
@@ -2569,4 +2569,55 @@ def test_backfill_channels_queues_the_walk(client, monkeypatch):
 
     assert resp.status_code == 202
     assert resp.json() == {"status": "queued"}
-    assert started == [True]
+
+
+def _finished_video(client, group_id):
+    import db
+    video_id = db.add_video("https://x/v", platform="youtube", group_id=group_id)
+    db.update_video(video_id, status="done", filename=f"{video_id}.mp4")
+    db.mark_unread(video_id)
+    return video_id
+
+
+def test_groups_report_unread_count(client, auth_headers):
+    import db
+    group_id = db.list_groups()[0]["id"]
+    _finished_video(client, group_id)
+
+    groups = {g["id"]: g for g in client.get("/api/groups", headers=auth_headers).json()["groups"]}
+
+    assert groups[group_id]["unread_count"] == 1
+    assert all(g["unread_count"] == 0 for gid, g in groups.items() if gid != group_id)
+
+
+def test_played_clears_unread_once_and_refreshes_groups(client, auth_headers):
+    import db
+    group_id = db.list_groups()[0]["id"]
+    video_id = _finished_video(client, group_id)
+    client.get("/api/groups", headers=auth_headers)  # prime any response cache
+
+    first = client.post(f"/api/videos/{video_id}/played", headers=auth_headers)
+    second = client.post(f"/api/videos/{video_id}/played", headers=auth_headers)
+
+    assert first.status_code == 200 and first.json() == {"changed": True}
+    assert second.json() == {"changed": False}
+    groups = {g["id"]: g for g in client.get("/api/groups", headers=auth_headers).json()["groups"]}
+    assert groups[group_id]["unread_count"] == 0
+
+
+def test_played_requires_token(client):
+    assert client.post("/api/videos/1/played").status_code == 401
+
+
+def test_played_unknown_video_is_404(client, auth_headers):
+    assert client.post("/api/videos/99999/played", headers=auth_headers).status_code == 404
+
+
+def test_patching_a_group_still_reports_its_unread_count(client, auth_headers):
+    import db
+    group_id = db.list_groups()[0]["id"]
+    _finished_video(client, group_id)
+
+    resp = client.patch(f"/api/groups/{group_id}", json={"display_titles": True}, headers=auth_headers)
+
+    assert resp.json()["unread_count"] == 1
