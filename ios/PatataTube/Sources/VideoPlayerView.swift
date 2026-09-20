@@ -401,6 +401,7 @@ struct VideoPlayerView: View {
             return
         }
         bindPauseTransitions(player: player, item: item, videoID: video.id)
+        model.markPlayed(video)
         positionObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 10, preferredTimescale: 600), queue: .main
         ) { time in
@@ -639,6 +640,7 @@ struct VideoPlayerView: View {
         currentIndex = nextIndex
         player.replaceCurrentItem(with: item)
         bindPauseTransitions(player: player, item: item, videoID: videos[nextIndex].id)
+        model.markPlayed(videos[nextIndex])
         playbackProbe.attach(item: item, player: player, video: videos[nextIndex], source: source)
         Task { await applyAudioSelection(item: item, lang: videos[nextIndex].audioLang) }
         Task { await applySubtitleSelection(item: item, lang: videos[nextIndex].subtitleLang) }

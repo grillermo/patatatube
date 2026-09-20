@@ -108,6 +108,7 @@ final class AudioQueuePlayer: ObservableObject {
             self.player = player
             currentID = video.id
             currentVideo = video
+            model.markPlayed(video)
             loadingID = nil
             observe(player: player)
             bindPlayToEnd()
@@ -326,6 +327,7 @@ final class AudioQueuePlayer: ObservableObject {
         _ = nextIndex
         currentID = video.id
         currentVideo = video
+        model.markPlayed(video)
         player.replaceCurrentItem(with: item)
         bindPlayToEnd()
         nowPlaying.updateTitle(video.title ?? video.url)

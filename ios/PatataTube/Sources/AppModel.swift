@@ -207,6 +207,30 @@ final class AppModel: ObservableObject {
         restorationStore.mutate { $0.player = nil }
     }
 
+    /// Videos already reported as played this run. The server is idempotent, so
+    /// this is only about not sending a request on every replay or every
+    /// hand-back from the full-screen player.
+    private var reportedPlayed = Set<Int>()
+
+    /// The first playback of `video` — any player (full-screen or the audio
+    /// queue) calls this each time an item starts. Plex items have no badge.
+    /// On a server-side change the group list is refetched rather than edited
+    /// locally, so the badge is always exactly what the server counts. A failed
+    /// request is forgotten so the next play tries again.
+    func markPlayed(_ video: Video) {
+        guard video.plexKind == nil, reportedPlayed.insert(video.id).inserted else { return }
+        let id = video.id
+        Task {
+            guard let changed = try? await api.markPlayed(id: id) else {
+                reportedPlayed.remove(id)
+                return
+            }
+            if changed, let remote = try? await api.groups() {
+                groups.apply(remote)
+            }
+        }
+    }
+
     func resetPositionIfForgotten(_ video: Video) {
         guard !remembersPosition(video) else { return }
         let id = video.id

@@ -78,7 +78,7 @@ struct GroupsView: View {
             $0.id == group.id
                 ? VideoGroup(id: $0.id, name: $0.name, label: $0.label, emoji: emoji,
                              position: $0.position, displayTitles: $0.displayTitles,
-                             description: $0.description)
+                             description: $0.description, unreadCount: $0.unreadCount)
                 : $0
         })
         Task {
@@ -101,7 +101,7 @@ struct GroupsView: View {
             $0.id == group.id
                 ? VideoGroup(id: $0.id, name: $0.name, label: trimmed, emoji: $0.emoji,
                              position: $0.position, displayTitles: $0.displayTitles,
-                             description: $0.description)
+                             description: $0.description, unreadCount: $0.unreadCount)
                 : $0
         })
         Task {
@@ -190,6 +190,9 @@ struct GroupsView: View {
                     .overlay { artwork(for: group.emoji) }
                     .background(.secondary.opacity(0.2))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(alignment: .bottomTrailing) {
+                        UnreadBadge(count: group.unreadCount).padding(8)
+                    }
             }
             .buttonStyle(.plain)
             .overlay(alignment: .topTrailing) {
