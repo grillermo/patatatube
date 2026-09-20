@@ -2569,6 +2569,7 @@ def test_backfill_channels_queues_the_walk(client, monkeypatch):
 
     assert resp.status_code == 202
     assert resp.json() == {"status": "queued"}
+    assert started == [True]
 
 
 def _finished_video(client, group_id):
