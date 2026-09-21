@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import app_logging  # noqa: E402
 import cache  # noqa: E402
 import db  # noqa: E402
 import hls  # noqa: E402
@@ -178,6 +179,9 @@ def main() -> None:
     parser.add_argument("--poll-interval", type=float, default=1.0)
     args = parser.parse_args()
 
+    # Classification runs here, after each HLS job; without this its log lines
+    # never reach ./serve's "convert" stream.
+    app_logging.configure()
     ensure_media_root()
     db.init_db()
 

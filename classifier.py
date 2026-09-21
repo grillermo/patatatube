@@ -90,7 +90,7 @@ async def classify(
 ) -> dict | None:
     """The group row the video belongs in, or None to leave it in the inbox."""
     if not os.getenv("JEV_API_KEY"):
-        logger.info("JEV_API_KEY not set; skipping classification")
+        logger.info("[classify] JEV_API_KEY not set; skipping classification")
         return None
 
     groups = {g["name"]: g for g in db.list_groups() if g["name"] != db.DEFAULT_UPLOAD_GROUP}
@@ -115,14 +115,29 @@ async def classify(
         answer = (await _post(payload))["answers"]["group"]
         choice, confidence = answer["choice"], float(answer["confidence"])
     except Exception as exc:
-        logger.warning("Classification failed: %s", exc)
+        logger.warning("[classify] %r: request failed: %s", title, exc)
         return None
 
+    # The runner-up is what explains a miss: a low confidence is almost always
+    # two groups' descriptions both claiming the video.
+    ranked = sorted((answer.get("probabilities") or {}).items(), key=lambda kv: -kv[1])
+    spread = ", ".join(f"{name} {p:.2f}" for name, p in ranked if p > 0)
+    # Options are keyed by the immutable `name`, not the label the app shows,
+    # so print both plus the exact text the model judged each one by.
+    criteria = payload["questions"]["group"]["criteria"]
+    for name, p in ranked[:2]:
+        if name in groups:
+            logger.info(
+                "[classify]   %s (label %r) %.2f: %r", name, groups[name]["label"], p, criteria[name]
+            )
     if choice not in groups:
-        logger.warning("Classifier chose %r, which is not a group", choice)
+        logger.warning("[classify] %r: chose %r, which is not a group", title, choice)
         return None
     if confidence < _min_confidence():
-        logger.info("Classifier chose %s at %.2f; below threshold, keeping in inbox", choice, confidence)
+        logger.info(
+            "[classify] %r: chose %s at %.2f < %.2f, keeping in inbox (%s)",
+            title, choice, confidence, _min_confidence(), spread,
+        )
         return None
-    logger.info("Classifier chose %s at %.2f", choice, confidence)
+    logger.info("[classify] %r: chose %s at %.2f (%s)", title, choice, confidence, spread)
     return groups[choice]

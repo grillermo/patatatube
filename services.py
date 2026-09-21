@@ -95,3 +95,4 @@ def _classify_into_group(
     )
     if group is not None:
         set_group(video_id, group["id"])
+        logger.info("[classify] video %s moved to %s (group %s)", video_id, group["name"], group["id"])

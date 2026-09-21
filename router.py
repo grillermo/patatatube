@@ -1040,6 +1040,7 @@ async def api_update_group(group_id: int, body: GroupUpdateRequest, request: Req
     fields = body.model_dump(exclude_unset=True)
     emoji = _validated_emoji(body.emoji) if "emoji" in fields else None
     description = (body.description or "").strip()
+    before = db.get_group(group_id)
     group = db.update_group(
         group_id,
         label=body.label.strip() if body.label else None,
@@ -1054,6 +1055,18 @@ async def api_update_group(group_id: int, body: GroupUpdateRequest, request: Req
     )
     if group is None:
         raise HTTPException(status_code=404, detail="No such group")
+    # The classifier files videos by these fields, so an edit that never lands
+    # (or lands with different text than the app shows) must be visible here.
+    changes = [
+        f"{key} {before[key]!r} -> {group[key]!r}"
+        for key in ("label", "emoji", "position", "display_titles", "description")
+        if before[key] != group[key]
+    ]
+    print(
+        f"[groups] PATCH {group_id} ({group['name']}) sent={sorted(fields)}: "
+        f"{'; '.join(changes) or 'no change'}",
+        flush=True,
+    )
     return serialize_group(group)
 
 
