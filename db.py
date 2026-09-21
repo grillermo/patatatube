@@ -196,12 +196,28 @@ def init_db():
         # column existed until `POST /api/videos/backfill-channels` fills them.
         if "channel" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN channel TEXT")
-        # 1 from the moment a download/upload finishes until it is first played.
-        # A group's badge is the count of these, derived rather than stored, so it
-        # cannot drift. DEFAULT 0 is deliberate: every video that already exists
-        # is "read", which is what makes every counter start at zero on rollout.
-        if "unread" not in columns:
-            _add_column(conn, "ALTER TABLE videos ADD COLUMN unread INTEGER NOT NULL DEFAULT 0")
+        # How many times the video has been played, bumped by every playback
+        # start. NULL is a third state and it matters: "not announced yet" --
+        # a download still running, or one whose HLS package is still being
+        # built. A group's badge counts the rows sitting at exactly 0 (announced,
+        # never played), derived rather than stored, so it cannot drift, and the
+        # count keeps rising long after the badge is gone. Replaces the `unread`
+        # boolean this backfills from, whose 1 is this column's 0. Rows that were
+        # never announced and never finished stay NULL so their download can
+        # still announce them.
+        if "play_count" not in columns:
+            _add_column(conn, "ALTER TABLE videos ADD COLUMN play_count INTEGER")
+            if "unread" in columns:
+                conn.execute(
+                    """
+                    UPDATE videos SET play_count = CASE
+                        WHEN unread = 1 THEN 0
+                        WHEN status = 'done' THEN 1
+                    END
+                    """
+                )
+        if "unread" in columns:
+            conn.execute("ALTER TABLE videos DROP COLUMN unread")
         # 1 once converter.py has written videos/{id}.sd.mp4, the iPad 1-safe
         # rendition /sd plays. Set only after the file is atomically in place.
         if "sd_ready" not in columns:
@@ -809,16 +825,21 @@ def _migrate_classifications_to_groups(conn: sqlite3.Connection) -> int:
     return unmatched
 
 
-_UNREAD_WHERE = "unread = 1 AND status = 'done' AND deleted_at IS NULL"
+# Announced (play_count IS NOT NULL) and never played. See init_db for why NULL
+# is not the same as 0 here.
+_UNPLAYED_WHERE = "play_count = 0 AND status = 'done' AND deleted_at IS NULL"
 
 
 def list_groups() -> list[dict]:
+    """Groups with their badge count. The alias is `unread_count` because that
+    is the wire name `/api/groups` has always used and the one every installed
+    build of the app decodes; the column behind it is `play_count` now."""
     with _conn() as conn:
         rows = conn.execute(
             f"""
             SELECT g.*,
                    (SELECT COUNT(*) FROM videos v
-                    WHERE v.group_id = g.id AND {_UNREAD_WHERE}
+                    WHERE v.group_id = g.id AND {_UNPLAYED_WHERE}
                    ) AS unread_count
             FROM groups g
             ORDER BY g.position ASC, g.id ASC
@@ -827,27 +848,47 @@ def list_groups() -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def unread_count(group_id: int) -> int:
+def unplayed_count(group_id: int) -> int:
     with _conn() as conn:
         return conn.execute(
-            f"SELECT COUNT(*) FROM videos WHERE group_id = ? AND {_UNREAD_WHERE}",
+            f"SELECT COUNT(*) FROM videos WHERE group_id = ? AND {_UNPLAYED_WHERE}",
             (group_id,),
         ).fetchone()[0]
 
 
-def mark_unread(video_id: int) -> None:
-    """Called when a download or upload finishes. Moves never call this."""
-    with _conn() as conn:
-        conn.execute("UPDATE videos SET unread = 1 WHERE id = ?", (video_id,))
+def mark_announced(video_id: int) -> None:
+    """Start counting plays for a video the user can now be told about.
 
-
-def mark_played(video_id: int) -> bool:
-    """True only when the video was unread. Idempotent: replays return False."""
+    Called once, when a finished download is ready to be watched. `IS NULL`
+    makes it idempotent in the direction that matters: a video that has already
+    been played is never dragged back to 0 and re-badged. Moves never call this.
+    """
     with _conn() as conn:
-        cur = conn.execute(
-            "UPDATE videos SET unread = 0 WHERE id = ? AND unread = 1", (video_id,)
+        conn.execute(
+            "UPDATE videos SET play_count = 0 WHERE id = ? AND play_count IS NULL",
+            (video_id,),
         )
-        return cur.rowcount > 0
+
+
+def record_play(video_id: int) -> bool:
+    """Count one play. True only when this was the play that cleared the badge.
+
+    Every playback start calls this, so the count keeps climbing; only the
+    0 -> 1 step changes a group's badge, and that is what the iOS client uses to
+    decide whether refetching the group list is worth it. A play of a video that
+    was never announced (NULL) counts too, but changes no badge.
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT play_count FROM videos WHERE id = ?", (video_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        conn.execute(
+            "UPDATE videos SET play_count = COALESCE(play_count, 0) + 1 WHERE id = ?",
+            (video_id,),
+        )
+        return row["play_count"] == 0
 
 
 def get_group(group_id: int) -> dict | None:

@@ -69,6 +69,7 @@ def label_versions(filenames: list[str]) -> list[str]:
                 ],
             },
             timeout=30,
+            trust_env=False,
         )
     except httpx.HTTPError as exc:
         raise VersionNamerError(f"OpenAI request failed: {exc}") from exc

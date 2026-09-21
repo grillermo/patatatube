@@ -1000,10 +1000,12 @@ def serialize_group(group: dict) -> dict:
         "position": group["position"],
         "display_titles": bool(group["display_titles"]),
         "description": group["description"],
+        # Wire name kept from the days this was a boolean `unread` column; it
+        # is the count of announced-but-never-played videos, `play_count = 0`.
         "unread_count": (
             group["unread_count"]
             if "unread_count" in group
-            else db.unread_count(group["id"])
+            else db.unplayed_count(group["id"])
         ),
     }
 
@@ -1190,18 +1192,18 @@ async def api_save_position(video_id: int, body: PositionRequest, request: Reque
 
 @router.post("/api/videos/{video_id}/played")
 async def api_mark_played(video_id: int, request: Request):
-    """First playback of a video: take it out of its group's unread badge.
+    """Count one play of a video. Every playback start calls this.
 
-    Idempotent — `changed` is false for a video that was already played (or
-    never unread), and the iOS client uses it to decide whether to refetch the
-    groups. Being a POST, it also flushes the response cache, so the refetch
-    sees the new count.
+    `videos.play_count` climbs on every call; only the first one takes the video
+    out of its group's badge, and that is exactly what `changed` reports, so the
+    iOS client refetches the group list once instead of on every replay. Being a
+    POST, it also flushes the response cache, so that refetch sees the new count.
     """
     _check_token(request)
     video = db.get_video(video_id)
     if not video or video.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Video not found")
-    return {"changed": db.mark_played(video_id)}
+    return {"changed": db.record_play(video_id)}
 
 
 @router.post("/api/videos/{video_id}/remember-position")

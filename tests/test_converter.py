@@ -595,3 +595,67 @@ def test_normalize_handler_forwards_the_youtube_id(tmp_db, monkeypatch):
     converter.run_job(tmp_db.claim_job())
 
     assert seen == {"channel": None, "source_key": "dQw4w9WgXcQ"}
+
+
+def test_a_finished_hls_job_classifies_and_announces_the_download(tmp_db, monkeypatch):
+    """The whole point of carrying `classify` in the payload: the video is
+    filed and badged only once its package exists."""
+    import converter
+
+    calls = []
+    monkeypatch.setitem(converter.JOB_HANDLERS, "hls", lambda job, on_progress: None)
+    monkeypatch.setattr(
+        converter.services, "classify_and_announce",
+        lambda video_id, **kw: calls.append((video_id, kw)),
+    )
+    tmp_db.enqueue_job(
+        "hls", video_id=42,
+        payload={"source_path": "x.mp4", "classify": {"duration_secs": 60, "description": "d"}},
+    )
+
+    converter.run_job(tmp_db.claim_job())
+
+    assert calls == [(42, {"duration_secs": 60, "description": "d"})]
+
+
+def test_a_failed_hls_job_still_announces_the_download(tmp_db, monkeypatch):
+    """A package that could not be built must not cost the user the badge --
+    the mp4 still plays, and being announced is their only notice it arrived."""
+    import converter
+
+    calls = []
+
+    def boom(job, on_progress):
+        raise RuntimeError("ffmpeg exploded")
+
+    monkeypatch.setitem(converter.JOB_HANDLERS, "hls", boom)
+    monkeypatch.setattr(
+        converter.services, "classify_and_announce",
+        lambda video_id, **kw: calls.append(video_id),
+    )
+    tmp_db.enqueue_job(
+        "hls", video_id=42,
+        payload={"source_path": "x.mp4", "classify": {"duration_secs": None, "description": None}},
+    )
+
+    converter.run_job(tmp_db.claim_job())
+
+    assert tmp_db.get_job(1)["status"] == "failed"
+    assert calls == [42]
+
+
+def test_an_hls_job_without_a_classify_payload_announces_nothing(tmp_db, monkeypatch):
+    """A /prepare tap re-packages a video the user has already been told about."""
+    import converter
+
+    calls = []
+    monkeypatch.setitem(converter.JOB_HANDLERS, "hls", lambda job, on_progress: None)
+    monkeypatch.setattr(
+        converter.services, "classify_and_announce",
+        lambda video_id, **kw: calls.append(video_id),
+    )
+    tmp_db.enqueue_job("hls", video_id=42, payload={"source_path": "x.mp4"})
+
+    converter.run_job(tmp_db.claim_job())
+
+    assert calls == []

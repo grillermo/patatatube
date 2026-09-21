@@ -23,6 +23,7 @@ import db  # noqa: E402
 import hls  # noqa: E402
 import library  # noqa: E402
 import sd  # noqa: E402
+import services  # noqa: E402
 from paths import ensure_media_root  # noqa: E402
 
 
@@ -100,6 +101,13 @@ def run_job(job: dict) -> None:
         traceback.print_exc()
         db.finish_job(job["id"], "failed", error_msg=str(exc))
         status = "failed"
+    # A download that named no group is filed once its package exists, not when
+    # the mp4 landed -- the badge should point at a group the video can already
+    # stream from. This process is the only one that sees that moment. It runs
+    # on a failed job too: classification is best effort, but the announcement
+    # it makes is the user's only notice that the video arrived at all.
+    if job["kind"] == "hls" and (job.get("payload") or {}).get("classify"):
+        services.classify_and_announce(job["video_id"], **job["payload"]["classify"])
     # The status this job just wrote (version 'done', hls_status, error_msg) is
     # what the iOS poll loop reads out of /api/videos/{id}. Only mutating HTTP
     # requests flush the response cache, and there is no request here, so

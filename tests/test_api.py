@@ -2576,7 +2576,7 @@ def _finished_video(client, group_id):
     import db
     video_id = db.add_video("https://x/v", platform="youtube", group_id=group_id)
     db.update_video(video_id, status="done", filename=f"{video_id}.mp4")
-    db.mark_unread(video_id)
+    db.mark_announced(video_id)
     return video_id
 
 
@@ -2591,7 +2591,7 @@ def test_groups_report_unread_count(client, auth_headers):
     assert all(g["unread_count"] == 0 for gid, g in groups.items() if gid != group_id)
 
 
-def test_played_clears_unread_once_and_refreshes_groups(client, auth_headers):
+def test_played_counts_every_play_and_reports_the_badge_change_once(client, auth_headers):
     import db
     group_id = db.list_groups()[0]["id"]
     video_id = _finished_video(client, group_id)
@@ -2599,9 +2599,11 @@ def test_played_clears_unread_once_and_refreshes_groups(client, auth_headers):
 
     first = client.post(f"/api/videos/{video_id}/played", headers=auth_headers)
     second = client.post(f"/api/videos/{video_id}/played", headers=auth_headers)
+    client.post(f"/api/videos/{video_id}/played", headers=auth_headers)
 
     assert first.status_code == 200 and first.json() == {"changed": True}
     assert second.json() == {"changed": False}
+    assert db.get_video(video_id)["play_count"] == 3
     groups = {g["id"]: g for g in client.get("/api/groups", headers=auth_headers).json()["groups"]}
     assert groups[group_id]["unread_count"] == 0
 

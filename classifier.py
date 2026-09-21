@@ -65,7 +65,14 @@ def build_state(
 
 
 async def _post(payload: dict) -> dict:
-    async with httpx.AsyncClient(timeout=TIMEOUT_SECS) as client:
+    # trust_env=False is not a preference, it is what keeps the worker alive.
+    # With it on, httpx asks urllib for the system proxies, which on macOS is
+    # _scproxy.get_proxies() -> SystemConfiguration -> a synchronous XPC round
+    # trip to cfprefsd. On the child side of gunicorn's fork that Mach port is
+    # invalid, so the call hangs ~30s and then segfaults the whole worker --
+    # taking the download's BackgroundTask (classification, the play counter,
+    # the HLS job) with it. Same reason plex.py passes it on every call.
+    async with httpx.AsyncClient(timeout=TIMEOUT_SECS, trust_env=False) as client:
         resp = await client.post(
             API_URL,
             json=payload,

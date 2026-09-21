@@ -371,12 +371,38 @@ def _done_video(db, group_id, url="https://x/1"):
     return video_id
 
 
-def test_every_group_starts_with_zero_unread(fresh_db):
+def test_every_group_starts_with_zero_unplayed(fresh_db):
     assert [g["unread_count"] for g in fresh_db.list_groups()] == [0, 0, 0, 0]
 
 
-def test_videos_that_existed_before_the_column_are_read(tmp_path, monkeypatch):
-    # A database created by the previous release: no `unread` column yet.
+def test_a_video_is_not_counted_until_it_is_announced(fresh_db):
+    """A download in flight, or one whose package is still building, has a NULL
+    play_count. Only `mark_announced` puts it at 0, which is what badges it."""
+    video_id = _done_video(fresh_db, group_id=1)
+
+    assert fresh_db.get_video(video_id)["play_count"] is None
+    assert fresh_db.unplayed_count(1) == 0
+
+    fresh_db.mark_announced(video_id)
+
+    assert fresh_db.get_video(video_id)["play_count"] == 0
+    assert fresh_db.unplayed_count(1) == 1
+
+
+def test_announcing_never_drags_a_played_video_back_into_the_badge(fresh_db):
+    video_id = _done_video(fresh_db, group_id=1)
+    fresh_db.mark_announced(video_id)
+    fresh_db.record_play(video_id)
+
+    fresh_db.mark_announced(video_id)
+
+    assert fresh_db.get_video(video_id)["play_count"] == 1
+    assert fresh_db.unplayed_count(1) == 0
+
+
+def test_the_unread_column_is_migrated_into_play_count(tmp_path, monkeypatch):
+    """The previous release stored a boolean. unread=1 becomes 0 plays, an
+    already-seen video becomes 1, and the old column goes away."""
     path = tmp_path / "old.sqlite"
     monkeypatch.setenv("DB_PATH", str(path))
     import db as db_module
@@ -384,57 +410,72 @@ def test_videos_that_existed_before_the_column_are_read(tmp_path, monkeypatch):
     importlib.reload(db_module)
     db_module.init_db()
     with db_module._conn() as conn:
-        # SQLite 3.35.0+ supports DROP COLUMN; earlier versions don't.
-        # Try to drop it; if unsupported, the column will be recreated below anyway.
-        try:
-            conn.execute("ALTER TABLE videos DROP COLUMN unread")
-        except sqlite3.OperationalError:
-            pass
-    video_id = _done_video(db_module, group_id=1)
+        conn.execute("ALTER TABLE videos DROP COLUMN play_count")
+        conn.execute("ALTER TABLE videos ADD COLUMN unread INTEGER NOT NULL DEFAULT 0")
+    new_id = _done_video(db_module, group_id=1, url="https://x/new")
+    seen_id = _done_video(db_module, group_id=1, url="https://x/seen")
+    queued_id = db_module.add_video("https://x/queued", platform="youtube", group_id=1)
+    with db_module._conn() as conn:
+        conn.execute("UPDATE videos SET unread = 1 WHERE id = ?", (new_id,))
 
-    db_module.init_db()  # the migration guard re-adds the column
+    db_module.init_db()  # the migration guard replaces the column
 
-    assert db_module.unread_count(1) == 0
-    assert db_module.get_video(video_id)["unread"] == 0
+    assert db_module.get_video(new_id)["play_count"] == 0
+    assert db_module.get_video(seen_id)["play_count"] == 1
+    # Still downloading: left unannounced so its download can still announce it.
+    assert db_module.get_video(queued_id)["play_count"] is None
+    assert "unread" not in db_module.get_video(new_id)
+    assert db_module.unplayed_count(1) == 1
 
 
-def test_mark_unread_counts_in_the_videos_group(fresh_db):
+def test_an_announced_video_counts_in_its_group(fresh_db):
     a = _done_video(fresh_db, group_id=1, url="https://x/a")
     _done_video(fresh_db, group_id=1, url="https://x/b")
-    fresh_db.mark_unread(a)
+    fresh_db.mark_announced(a)
 
-    assert fresh_db.unread_count(1) == 1
+    assert fresh_db.unplayed_count(1) == 1
     counts = {g["id"]: g["unread_count"] for g in fresh_db.list_groups()}
     assert counts[1] == 1 and counts[2] == 0
 
 
-def test_mark_played_decrements_once_and_reports_change(fresh_db):
+def test_every_play_is_counted_but_only_the_first_reports_a_change(fresh_db):
     video_id = _done_video(fresh_db, group_id=1)
-    fresh_db.mark_unread(video_id)
+    fresh_db.mark_announced(video_id)
 
-    assert fresh_db.mark_played(video_id) is True
-    assert fresh_db.unread_count(1) == 0
-    assert fresh_db.mark_played(video_id) is False
-    assert fresh_db.unread_count(1) == 0
+    assert fresh_db.record_play(video_id) is True
+    assert fresh_db.unplayed_count(1) == 0
+    assert fresh_db.record_play(video_id) is False
+    assert fresh_db.record_play(video_id) is False
+    assert fresh_db.get_video(video_id)["play_count"] == 3
+    assert fresh_db.unplayed_count(1) == 0
 
 
-def test_moving_a_video_never_adds_but_carries_its_unread_state(fresh_db):
+def test_playing_an_unannounced_video_counts_without_changing_a_badge(fresh_db):
     video_id = _done_video(fresh_db, group_id=1)
-    other = _done_video(fresh_db, group_id=1, url="https://x/other")  # read
-    fresh_db.mark_unread(video_id)
+
+    assert fresh_db.record_play(video_id) is False
+    assert fresh_db.get_video(video_id)["play_count"] == 1
+
+
+def test_moving_a_video_never_adds_but_carries_its_unplayed_state(fresh_db):
+    video_id = _done_video(fresh_db, group_id=1)
+    other = _done_video(fresh_db, group_id=1, url="https://x/other")  # played
+    fresh_db.mark_announced(video_id)
+    fresh_db.mark_announced(other)
+    fresh_db.record_play(other)
 
     fresh_db.set_video_group(video_id, 2)
     fresh_db.set_video_group(other, 2)
 
-    assert fresh_db.unread_count(1) == 0
-    assert fresh_db.unread_count(2) == 1  # only the unread one
+    assert fresh_db.unplayed_count(1) == 0
+    assert fresh_db.unplayed_count(2) == 1  # only the never-played one
 
 
 def test_unfinished_and_deleted_videos_are_not_counted(fresh_db):
     queued = fresh_db.add_video("https://x/q", platform="youtube", group_id=1)
-    fresh_db.mark_unread(queued)  # still queued
+    fresh_db.mark_announced(queued)  # still queued
     gone = _done_video(fresh_db, group_id=1, url="https://x/gone")
-    fresh_db.mark_unread(gone)
+    fresh_db.mark_announced(gone)
     fresh_db.delete_video(gone)
 
-    assert fresh_db.unread_count(1) == 0
+    assert fresh_db.unplayed_count(1) == 0

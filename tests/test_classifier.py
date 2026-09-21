@@ -171,3 +171,28 @@ async def test_classify_swallows_a_malformed_response(monkeypatch, classifier_en
     monkeypatch.setattr(classifier, "_post", fake_post)
 
     assert await classifier.classify("t", None, None, None) is None
+
+
+@pytest.mark.asyncio
+async def test_the_client_never_reads_the_system_proxy_configuration(classifier_env, monkeypatch):
+    """Regression: trust_env=True makes httpx call _scproxy.get_proxies(),
+    whose XPC round trip segfaults a forked gunicorn worker on macOS and kills
+    the download's BackgroundTask with it (2026-09-20, video 809)."""
+    import classifier
+
+    seen = {}
+    real_init = httpx.AsyncClient.__init__
+
+    def spy(self, *args, **kwargs):
+        seen.update(kwargs)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", spy)
+    monkeypatch.setattr(
+        httpx.AsyncClient, "post",
+        lambda self, *a, **kw: (_ for _ in ()).throw(httpx.ConnectError("no network")),
+    )
+
+    await classifier.classify("T", "C", 60, "d")
+
+    assert seen.get("trust_env") is False

@@ -59,15 +59,37 @@ async def download_video(video_id: int, classify: bool = False):
                 title=meta.title,
                 channel=meta.channel,
             )
+            payload = {"source_path": str(VIDEOS_DIR / dest_name)}
             if classify:
-                await _classify_into_group(video_id, meta)
-            await _announce_new_video(video_id)
-            db.enqueue_job(
-                "hls",
-                video_id,
-                priority=db.PRIORITY_BULK,
-                payload={"source_path": str(VIDEOS_DIR / dest_name)},
+                # Ride along with the HLS job instead of classifying here: the
+                # classifier runs once the package exists, so the video is
+                # already streamable in the group the badge points at. Only
+                # converter.py sees that moment, and the job payload is the
+                # only channel to it. yt-dlp's description is the one field
+                # that is not on the row, and the classifier caps it anyway.
+                payload["classify"] = {
+                    "duration_secs": meta.duration_secs,
+                    "description": (meta.description or "")[
+                        : classifier.DESCRIPTION_MAX_CHARS
+                    ]
+                    or None,
+                }
+            job_id = db.enqueue_job(
+                "hls", video_id, priority=db.PRIORITY_BULK, payload=payload
             )
+            if not classify:
+                await _announce_new_video(video_id)
+            elif job_id is None:
+                # An HLS job for this video was already pending, so ours -- and
+                # the classify payload with it -- was dropped. Nothing else will
+                # ever run it, and an unannounced video is one the user is
+                # never told about, so do it here instead.
+                await asyncio.to_thread(
+                    services.classify_and_announce,
+                    video_id,
+                    payload["classify"]["duration_secs"],
+                    payload["classify"]["description"],
+                )
             sd.enqueue_if_selected(video_id)
             return
 
@@ -85,33 +107,16 @@ async def download_video(video_id: int, classify: bool = False):
 
 
 async def _announce_new_video(video_id: int) -> None:
-    """Flag a finished download unread and flush the response cache.
+    """Announce a finished download -- start counting its plays at 0, which is
+    what puts it in its group's badge -- and flush the response cache.
 
     The cache flush is not optional: this runs as a BackgroundTask, after the
     request that queued it has already returned, so nothing else invalidates a
     cached `GET /api/groups` and the badge would not appear for up to
     CACHE_TTL_SECONDS.
     """
-    db.mark_unread(video_id)
+    db.mark_announced(video_id)
     await cache.clear()
-
-
-async def _classify_into_group(video_id: int, meta: YoutubeDownload) -> None:
-    """Move a still-unsorted video out of the inbox. Best effort: the download
-    has already succeeded, so nothing here may fail it."""
-    try:
-        inbox = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)
-        video = db.get_video(video_id)
-        # A move made by hand while the download ran wins over the classifier.
-        if not inbox or not video or video["group_id"] != inbox["id"]:
-            return
-        group = await classifier.classify(
-            meta.title, meta.channel, meta.duration_secs, meta.description
-        )
-        if group is not None:
-            services.set_group(video_id, group["id"])
-    except Exception as exc:
-        logger.warning("Classifying video %s failed: %s", video_id, exc)
 
 
 async def process_uploaded_video(video_id: int):

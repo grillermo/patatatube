@@ -189,9 +189,21 @@ map for the intermittent-playback investigation:
    deliberately *not* searchable: the id is already `videos.source_key`, and
    nobody types one into a filter. Only YouTube rows get it; a tweet id is not
    a YouTube id.
-4b. **A YouTube upload that names no group is classified into one.** The row
-   starts in the `inbox` group as before; when the download finishes,
-   `downloader._classify_into_group` asks `classifier.classify` (TypeSafe's `jev`
+4b. **A YouTube upload that names no group is classified into one — once its
+   HLS package exists, not when the mp4 lands.** The row starts in the `inbox`
+   group as before; `download_video` puts a `classify` key (duration and the
+   capped description, the two fields that are not on the row) into the **HLS
+   job's payload** instead of classifying, and `converter.run_job` calls
+   `services.classify_and_announce` when that job finishes. So the group move
+   and the badge happen together, at a point where the video already
+   streams from the group the badge points at — rather than the card showing
+   "1 new" in the inbox and the video jumping out of it a minute later. It runs
+   on a *failed* HLS job too: the mp4 still plays, and the announcement is the
+   user's only notice the video arrived. The payload is the only channel to
+   that moment, since converter.py is the only process that sees it; if the
+   enqueue is dropped because a package was already pending, `download_video`
+   runs the same call itself on a worker thread. `classify_and_announce` asks
+   `classifier.classify` (TypeSafe's `jev`
    model, `JEV_API_KEY`) to pick a group from title, channel, duration and
    the first 1500 chars of the description — yt-dlp prints the last two as
    `TW2WL_DURATION` / `TW2WL_DESC` (`%(description)j`, JSON, because the
@@ -199,7 +211,8 @@ map for the intermittent-playback investigation:
    `group_id` was omitted, so an explicit group — even the inbox — is never
    second-guessed; a video moved by hand during the download is left alone.
    Confidence below `CLASSIFY_MIN_CONFIDENCE` (0.6), no key, or any API
-   failure leaves it in the inbox: classification can never fail a download.
+   failure leaves it in the inbox: classification can never fail a download,
+   and the video is announced either way.
    Options are the group `name`s described by `groups.description` (falling
    back to the `label`; inbox excluded). Set it with `PATCH /api/groups/{id}`
    `{"description": "..."}` — null or blank clears it. Labels alone are too
@@ -301,17 +314,36 @@ with `decodeIfPresent ?? false` because `GroupStore`'s UserDefaults mirror holds
 blobs written before it existed. A Plex kind is not a group, so TV/Movies never
 overlay titles and never show the toggle.
 
-**Group cards show an unread badge.** `videos.unread` (idempotent `ALTER TABLE`
-guard, default 0) is set by `downloader._announce_new_video` when a download or
-upload finishes and cleared by `POST /api/videos/{id}/played`, which any player
-start calls once per video (`AppModel.markPlayed`: full-screen and the audio
-queue). `GET /api/groups` derives `unread_count` per group from the flag, so it
-never drifts and a **move never adds to it** — an unread video carries its
-badge to the new group. The default of 0 is what zeroed every counter on
-rollout. `_announce_new_video` also flushes the response cache: a BackgroundTask
-finishes after the request that queued it, so nothing else would. The app
-refetches `/api/groups` when `played` answers `changed: true` instead of editing
-the count locally. Plex rows have no badge.
+**Group cards show a new-video badge, and it is derived from a play counter.**
+`videos.play_count` (idempotent `ALTER TABLE` guard, nullable) counts every
+playback start, and **NULL is a third state that carries the logic**: it means
+*not announced yet* — a download still running, or one whose HLS package is
+still being built. `db.mark_announced` moves NULL to 0, and 0 is what a badge
+is: announced and never played. `downloader._announce_new_video` does that when
+a download or upload finishes; for a YouTube download being classified it is
+`services.classify_and_announce`, once the HLS package is built (4b above).
+Announcing is `WHERE play_count IS NULL`, so it can never drag an
+already-watched video back into a badge.
+
+`POST /api/videos/{id}/played` (`db.record_play`) bumps the count on **every**
+playback start — `AppModel.markPlayed` deliberately does not deduplicate, since
+a count that ignores replays is not a play count. What is *not* a new play is a
+handover of an already-playing item between the mini player and the full-screen
+player, so `VideoPlayerView.finishSetup` takes `countsAsPlay: false` on the
+adoption path and `AudioQueuePlayer.adopt` never counted at all. The endpoint's
+`changed` is true only for the 0 -> 1 step, which is the only one that moves a
+badge, and the app refetches `/api/groups` on it instead of editing the count
+locally.
+
+`GET /api/groups` derives its per-group count from the column, so it never
+drifts and a **move never adds to it** — a never-played video carries its badge
+to the new group. The wire name is still `unread_count` (and
+`VideoGroup.unreadCount`), frozen from when this was a boolean `unread` column,
+which the migration folds in: `unread = 1` becomes 0 plays, any other finished
+video becomes 1, anything unfinished stays NULL, and the old column is dropped.
+That is what left every counter at zero on rollout. `_announce_new_video` also
+flushes the response cache: a BackgroundTask finishes after the request that
+queued it, so nothing else would. Plex rows have no badge.
 
 ### The response cache invalidates on writes, not on time
 
@@ -529,6 +561,15 @@ secondary route).
 
 ## Conventions
 
+- **Every httpx call passes `trust_env=False`.** With it on, httpx asks urllib
+  for the system proxies, which on macOS means `_scproxy.get_proxies()` -> a
+  synchronous SystemConfiguration/XPC round trip to `cfprefsd`. On the child
+  side of gunicorn's fork that Mach port is invalid: the call hangs ~30s and
+  then **segfaults the whole worker**, taking any in-flight BackgroundTask with
+  it. That is how video 809 ended up unclassified, unannounced and with no HLS job
+  on 2026-09-20 (`classifier.py` was the one call site missing the flag; see
+  `~/Library/Logs/DiagnosticReports/Python-*.ips`). Same family of bug as the
+  fork hazard `gunicorn_conf.py` documents.
 - ffmpeg/ffprobe/yt-dlp binaries and behavior are all env-overridable (`FFMPEG_BIN`, `FFPROBE_BIN`, `YTDLP_BIN`, `YTDLP_BROWSER`, `YTDLP_FORMAT`). Downloader code should keep reading these rather than hardcoding paths.
 - `ALLOWED_HOSTS` env drives `TrustedHostMiddleware`; the default includes the production hosts plus `testserver` (FastAPI TestClient's host).
 - Tests reload `db` then `main` after setting `DB_PATH`/`UPLOAD_TOKEN` env vars (see the `client` fixture in `tests/test_api.py`) — because both modules read env at import time. Follow that pattern for new integration tests.

@@ -1291,7 +1291,7 @@ def classify_env(monkeypatch, downloader_env, tmp_path):
 
     monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
     monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
-    monkeypatch.setattr(downloader.classifier, "classify", fake_classify)
+    monkeypatch.setattr(downloader.services.classifier, "classify", fake_classify)
 
     def add():
         inbox = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)
@@ -1305,26 +1305,70 @@ def classify_env(monkeypatch, downloader_env, tmp_path):
     return db, downloader, add, calls
 
 
+async def _run_hls_job(db, downloader, video_id):
+    """Stand in for converter.py finishing this video's HLS package.
+
+    Off the event loop on purpose: converter.py is a plain worker thread, and
+    `classify_and_announce` opens its own loop for the classifier call.
+    """
+    while (job := db.claim_job()) is not None and job["kind"] != "hls":
+        pass
+    assert job is not None and job["video_id"] == video_id
+    payload = job["payload"] or {}
+    if payload.get("classify"):
+        await asyncio.to_thread(
+            downloader.services.classify_and_announce, video_id, **payload["classify"]
+        )
+    return payload
+
+
 @pytest.mark.asyncio
 async def test_download_classifies_an_inbox_video_when_asked(classify_env):
     db, downloader, add, calls = classify_env
     video_id = add()
+    inbox_id = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)["id"]
 
     await downloader.download_video(video_id, classify=True)
 
+    # Nothing yet: the package does not exist, so neither the move nor the
+    # badge has happened.
+    assert calls == []
+    assert db.get_video(video_id)["group_id"] == inbox_id
+    assert db.unplayed_count(inbox_id) == 0
+
+    await _run_hls_job(db, downloader, video_id)
+
     assert calls == [("Rain sounds", "Calm", 3600, "sleep")]
-    assert db.get_video(video_id)["group_id"] == db.get_group_by_name("asmr")["id"]
+    asmr_id = db.get_group_by_name("asmr")["id"]
+    assert db.get_video(video_id)["group_id"] == asmr_id
+    assert db.unplayed_count(asmr_id) == 1
+    assert db.unplayed_count(inbox_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_the_hls_job_carries_what_the_classifier_needs(classify_env):
+    db, downloader, add, _calls = classify_env
+    video_id = add()
+
+    await downloader.download_video(video_id, classify=True)
+
+    payload = await _run_hls_job(db, downloader, video_id)
+    assert payload["classify"] == {"duration_secs": 3600, "description": "sleep"}
 
 
 @pytest.mark.asyncio
 async def test_download_does_not_classify_unless_asked(classify_env):
     db, downloader, add, calls = classify_env
     video_id = add()
+    inbox_id = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)["id"]
 
     await downloader.download_video(video_id)
 
+    # No classify payload, and the badge appears straight away instead.
+    assert (await _run_hls_job(db, downloader, video_id)).get("classify") is None
     assert calls == []
-    assert db.get_video(video_id)["group_id"] == db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)["id"]
+    assert db.get_video(video_id)["group_id"] == inbox_id
+    assert db.unplayed_count(inbox_id) == 1
 
 
 @pytest.mark.asyncio
@@ -1335,9 +1379,11 @@ async def test_download_does_not_override_a_manual_move(classify_env):
     db.set_video_group(video_id, adults["id"])  # moved by hand mid-download
 
     await downloader.download_video(video_id, classify=True)
+    await _run_hls_job(db, downloader, video_id)
 
     assert calls == []
     assert db.get_video(video_id)["group_id"] == adults["id"]
+    assert db.unplayed_count(adults["id"]) == 1
 
 
 @pytest.mark.asyncio
@@ -1347,14 +1393,18 @@ async def test_download_keeps_the_video_in_inbox_when_classifier_declines(monkey
     async def decline(*args):
         return None
 
-    monkeypatch.setattr(downloader.classifier, "classify", decline)
+    monkeypatch.setattr(downloader.services.classifier, "classify", decline)
     video_id = add()
 
     await downloader.download_video(video_id, classify=True)
+    await _run_hls_job(db, downloader, video_id)
 
     video = db.get_video(video_id)
+    inbox_id = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)["id"]
     assert video["status"] == "done"
-    assert video["group_id"] == db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)["id"]
+    assert video["group_id"] == inbox_id
+    # A video nobody could file is still a new video.
+    assert db.unplayed_count(inbox_id) == 1
 
 
 @pytest.mark.asyncio
@@ -1364,16 +1414,35 @@ async def test_a_classifier_crash_never_fails_the_download(monkeypatch, classify
     async def boom(*args):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(downloader.classifier, "classify", boom)
+    monkeypatch.setattr(downloader.services.classifier, "classify", boom)
     video_id = add()
 
     await downloader.download_video(video_id, classify=True)
+    await _run_hls_job(db, downloader, video_id)
 
+    inbox_id = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)["id"]
     assert db.get_video(video_id)["status"] == "done"
+    assert db.unplayed_count(inbox_id) == 1
 
 
 @pytest.mark.asyncio
-async def test_finished_youtube_download_adds_one_unread_to_its_group(monkeypatch, downloader_env, tmp_path):
+async def test_classification_still_runs_when_the_hls_job_is_already_pending(classify_env):
+    db, downloader, add, calls = classify_env
+    video_id = add()
+    # Something queued a package for this id first, so our enqueue is dropped
+    # and no converter run will ever see the classify payload.
+    db.enqueue_job("hls", video_id, payload={"source_path": "elsewhere.mp4"})
+
+    await downloader.download_video(video_id, classify=True)
+
+    assert calls == [("Rain sounds", "Calm", 3600, "sleep")]
+    asmr_id = db.get_group_by_name("asmr")["id"]
+    assert db.get_video(video_id)["group_id"] == asmr_id
+    assert db.unplayed_count(asmr_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_finished_youtube_download_adds_one_unplayed_to_its_group(monkeypatch, downloader_env, tmp_path):
     db, downloader, _videos_dir = downloader_env
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"youtube-bytes")
@@ -1391,15 +1460,15 @@ async def test_finished_youtube_download_adds_one_unread_to_its_group(monkeypatc
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         platform="youtube", source_key="dQw4w9WgXcQ", group_id=group_id,
     )
-    assert db.unread_count(group_id) == 0  # not while it is still queued
+    assert db.unplayed_count(group_id) == 0  # not while it is still queued
 
     await downloader.download_video(video_id)
 
-    assert db.unread_count(group_id) == 1
+    assert db.unplayed_count(group_id) == 1
 
 
 @pytest.mark.asyncio
-async def test_finished_upload_adds_one_unread_and_flushes_the_cache(monkeypatch, downloader_env, tmp_path):
+async def test_finished_upload_adds_one_unplayed_and_flushes_the_cache(monkeypatch, downloader_env, tmp_path):
     db, downloader, _videos_dir = downloader_env
     tmp_upload = tmp_path / "up.mp4"
     tmp_upload.write_bytes(b"bytes")
@@ -1419,12 +1488,12 @@ async def test_finished_upload_adds_one_unread_and_flushes_the_cache(monkeypatch
 
     await downloader.process_uploaded_video(video_id)
 
-    assert db.unread_count(group_id) == 1
+    assert db.unplayed_count(group_id) == 1
     assert flushes, "a stale cached /api/groups would hide the new badge"
 
 
 @pytest.mark.asyncio
-async def test_failed_download_leaves_no_unread(monkeypatch, downloader_env):
+async def test_failed_download_leaves_no_unplayed(monkeypatch, downloader_env):
     db, downloader, _videos_dir = downloader_env
 
     async def fake_download(url):
@@ -1437,4 +1506,4 @@ async def test_failed_download_leaves_no_unread(monkeypatch, downloader_env):
 
     await downloader.download_video(video_id)
 
-    assert db.unread_count(group_id) == 0
+    assert db.unplayed_count(group_id) == 0

@@ -207,8 +207,9 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         )
     }
 
-    /// First playback of a video. Answers whether the server actually cleared an
-    /// unread flag; only then do the group badges need refetching.
+    /// Counts one play of a video (the server bumps `play_count` on every
+    /// call). Answers whether this was the play that emptied the badge; only
+    /// then do the group badges need refetching.
     public func markPlayed(id: Int) async throws -> Bool {
         let data = try await authedPost("api/videos/\(id)/played", body: [:])
         struct Result: Decodable { let changed: Bool }

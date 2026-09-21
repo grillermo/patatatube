@@ -1,11 +1,18 @@
 """Mutation logic shared by the SSR form endpoints and the JSON API."""
 
+import asyncio
+import logging
+
+import cache
+import classifier
 import db
 import hls
 # Aliased: this module defines a function called `promote`, which would
 # otherwise shadow the import and break every `promote.…` reference below.
 import promote as plex_promote
 import sd
+
+logger = logging.getLogger(__name__)
 
 
 def set_group(video_id: int, group_id: int) -> bool:
@@ -47,3 +54,44 @@ def choose_version(video_id: int, version_id: int) -> bool:
     if chosen:
         hls.invalidate(video_id)
     return chosen
+
+
+def classify_and_announce(
+    video_id: int, duration_secs: int | None = None, description: str | None = None
+) -> None:
+    """File a finished download into a group and start counting its plays.
+
+    Called by converter.py once the video's HLS package exists, not by the
+    downloader when the mp4 lands: a video the classifier moves should already
+    be playable where the badge sends the user, and the group card's "1 new"
+    should appear once, on the group the video ends up in, instead of showing
+    in the inbox and then jumping.
+
+    Best effort from end to end. The download has already succeeded, so nothing
+    here may raise, and the video is announced whatever the classifier decides
+    (or fails to) -- a video that stays in the inbox still counts as new.
+    """
+    try:
+        _classify_into_group(video_id, duration_secs, description)
+    except Exception as exc:  # noqa: BLE001 - classification is never fatal
+        logger.warning("Classifying video %s failed: %s", video_id, exc)
+    db.mark_announced(video_id)
+    # The caller has no event loop and no HTTP request is involved, so nothing
+    # else would invalidate a cached /api/groups holding the old badge count.
+    cache.clear_blocking()
+
+
+def _classify_into_group(
+    video_id: int, duration_secs: int | None, description: str | None
+) -> None:
+    """Move a still-unsorted video out of the inbox."""
+    inbox = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)
+    video = db.get_video(video_id)
+    # A move made by hand while the download ran wins over the classifier.
+    if not inbox or not video or video["group_id"] != inbox["id"]:
+        return
+    group = asyncio.run(
+        classifier.classify(video["title"], video["channel"], duration_secs, description)
+    )
+    if group is not None:
+        set_group(video_id, group["id"])

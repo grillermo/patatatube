@@ -17,7 +17,8 @@ public struct VideoGroup: Codable, Identifiable, Hashable, Sendable {
     /// renders it outside the editor. Nil when unset.
     public let description: String?
     /// Videos added to this group and not yet played, derived by the server
-    /// from `videos.unread`. The card hides its badge at 0.
+    /// from `videos.play_count` (announced, never played). The wire name stays
+    /// `unread_count`. The card hides its badge at 0.
     public let unreadCount: Int
 
     public init(id: Int, name: String, label: String, emoji: String?, position: Int,

@@ -344,7 +344,9 @@ struct VideoPlayerView: View {
                 adopted.allowsExternalPlayback = true
                 adopted.usesExternalPlaybackWhileExternalScreenIsActive = true
                 player = adopted
-                await finishSetup(player: adopted, item: item, source: "adopted_audio")
+                await finishSetup(
+                    player: adopted, item: item, source: "adopted_audio", countsAsPlay: false
+                )
                 return
             }
             // Handed a player with nothing loaded: unusable, and nothing else
@@ -384,7 +386,13 @@ struct VideoPlayerView: View {
 
     /// Everything a mounted player needs, whichever way it got here: built by
     /// `setup` over a fresh item, or adopted live from the audio mini player.
-    private func finishSetup(player: AVPlayer, item: AVPlayerItem, source: String) async {
+    ///
+    /// `countsAsPlay` is false for that adoption: the item is already playing
+    /// and the mini player counted it when it started, so counting it again
+    /// would make every trip to full screen look like a replay.
+    private func finishSetup(
+        player: AVPlayer, item: AVPlayerItem, source: String, countsAsPlay: Bool = true
+    ) async {
         playbackProbe.attach(item: item, player: player, video: video, source: source)
         playWhenReady(item: item, on: player)
         Task { await applyAudioSelection(item: item, lang: video.audioLang) }
@@ -401,7 +409,7 @@ struct VideoPlayerView: View {
             return
         }
         bindPauseTransitions(player: player, item: item, videoID: video.id)
-        model.markPlayed(video)
+        if countsAsPlay { model.markPlayed(video) }
         positionObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 10, preferredTimescale: 600), queue: .main
         ) { time in

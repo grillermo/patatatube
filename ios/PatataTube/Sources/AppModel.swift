@@ -207,25 +207,23 @@ final class AppModel: ObservableObject {
         restorationStore.mutate { $0.player = nil }
     }
 
-    /// Videos already reported as played this run. The server is idempotent, so
-    /// this is only about not sending a request on every replay or every
-    /// hand-back from the full-screen player.
-    private var reportedPlayed = Set<Int>()
-
-    /// The first playback of `video` — any player (full-screen or the audio
-    /// queue) calls this each time an item starts. Plex items have no badge.
-    /// On a server-side change the group list is refetched rather than edited
-    /// locally, so the badge is always exactly what the server counts. A failed
-    /// request is forgotten so the next play tries again.
+    /// One play of `video` — any player (full-screen or the audio queue) calls
+    /// this each time an item starts, and every call is counted, so replays
+    /// keep climbing `videos.play_count`. Deliberately not deduplicated per
+    /// run: a count that ignores replays is not a play count. What is not a new
+    /// play is a *handover* of an already-playing item between the mini player
+    /// and the full-screen player, and those call sites skip this instead.
+    /// Plex items have no badge and are not counted at all.
+    ///
+    /// Only the play that empties the badge answers `changed`, and only then is
+    /// the group list refetched — rather than edited locally, so the badge is
+    /// always exactly what the server counts.
     func markPlayed(_ video: Video) {
-        guard video.plexKind == nil, reportedPlayed.insert(video.id).inserted else { return }
+        guard video.plexKind == nil else { return }
         let id = video.id
         Task {
-            guard let changed = try? await api.markPlayed(id: id) else {
-                reportedPlayed.remove(id)
-                return
-            }
-            if changed, let remote = try? await api.groups() {
+            if let changed = try? await api.markPlayed(id: id), changed,
+               let remote = try? await api.groups() {
                 groups.apply(remote)
             }
         }
