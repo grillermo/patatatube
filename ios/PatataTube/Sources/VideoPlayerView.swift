@@ -156,6 +156,18 @@ struct VideoPlayerView: View {
                         model.autoplayByFeed[scope] = !model.autoplay(for: scope)
                         orientationControlVisibility.reveal()
                     }
+                },
+                isShuffleOn: isRandomized,
+                onToggleShuffle: autoplayScope.map { scope in
+                    {
+                        // Same per-scope bucket as the overflow menu and the
+                        // mini player's shuffle; the navigator switches modes
+                        // in place, so the current video keeps playing.
+                        model.randomizeByFeed[scope] = !model.randomize(for: scope)
+                        syncRandomize()
+                        armPictureInPictureHandoff()
+                        orientationControlVisibility.reveal()
+                    }
                 }
             )
         }
@@ -285,7 +297,7 @@ struct VideoPlayerView: View {
             index: currentIndex,
             sleepMode: sleepAfterCurrent,
             scope: autoplayScope,
-            randomize: randomize,
+            randomize: isRandomized,
             onStart: { dismiss() }
         )
     }
@@ -630,12 +642,27 @@ struct VideoPlayerView: View {
         }
     }
 
+    /// Shuffle as it stands now. The in-player toggle writes
+    /// `model.randomizeByFeed`, so the scope's live value wins over the
+    /// `randomize` this presentation was opened with; that snapshot only
+    /// decides for a PiP restore with no scope to key the setting under.
+    private var isRandomized: Bool {
+        autoplayScope.map { model.randomize(for: $0) } ?? randomize
+    }
+
+    /// Read at step time rather than trusted from `setup()`, the same way
+    /// `AudioQueuePlayer.syncRandomize` does for the mini player's toggle.
+    private func syncRandomize() {
+        navigator?.setRandomize(isRandomized)
+    }
+
     /// Switch to the nearest playable video in `direction`; stop at queue
     /// ends (sequential mode) or when nothing playable remains at all
     /// (random mode — otherwise it loops forever via reshuffling).
     private func advance(by direction: Int) {
         reportPosition()
         guard let player else { return }
+        syncRandomize()
         let nextIndex = navigator?.step(direction: direction)
         guard let nextIndex, let (item, source) = playerItemWithSource(for: videos[nextIndex]) else {
             DevLog.event(.play, "advance found nothing playable", ["direction": "\(direction)"])

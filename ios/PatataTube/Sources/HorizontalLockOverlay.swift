@@ -45,6 +45,9 @@ struct HorizontalLockOverlay: View {
     /// no `restoreScope`), and the button is left out rather than shown inert.
     var isAutoplayOn: Bool = false
     var onToggleAutoplay: (() -> Void)? = nil
+    /// Shuffle for the queue's scope; `nil` hides the button, same as autoplay.
+    var isShuffleOn: Bool = false
+    var onToggleShuffle: (() -> Void)? = nil
 
     var body: some View {
         GeometryReader { geometry in
@@ -83,6 +86,16 @@ struct HorizontalLockOverlay: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel(isAutoplayOn ? "Turn autoplay off" : "Turn autoplay on")
+                        }
+
+                        if let onToggleShuffle {
+                            Button {
+                                onToggleShuffle()
+                            } label: {
+                                controlIcon("shuffle", active: isShuffleOn)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(isShuffleOn ? "Turn shuffle off" : "Turn shuffle on")
                         }
                     }
                     .padding(.trailing, 16)
