@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.8",
+          "buildVersion": "190",
+          "date": "2026-09-22T15:39:14Z",
+          "localizedDescription": "Shuffle from the full-screen player\n\n• New shuffle button in the player, right below continuous play — flips shuffle for the group without interrupting the current video\n• Replaying a video now counts as another play; handing playback between the mini player and full screen does not",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.8/PatataTube-2.7.8.ipa",
+          "size": 4442488,
+          "sha256": "d57f21524fcae50736f3d6ff99b2010a736d374a0cea031bb5634cfd33961442",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.7",
           "buildVersion": "189",
           "date": "2026-09-20T14:23:10Z",
@@ -1774,11 +1784,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.7",
-      "versionDate": "2026-09-20T14:23:10Z",
-      "versionDescription": "Unread badges on groups\n\n• Each group card shows a red count of new videos you haven't played yet\n• The count drops by one the first time you play a video, in the player or as audio\n• Groups start at zero; the badge is hidden when nothing is new",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.7/PatataTube-2.7.7.ipa",
-      "size": 4441626
+      "version": "2.7.8",
+      "versionDate": "2026-09-22T15:39:14Z",
+      "versionDescription": "Shuffle from the full-screen player\n\n• New shuffle button in the player, right below continuous play — flips shuffle for the group without interrupting the current video\n• Replaying a video now counts as another play; handing playback between the mini player and full screen does not",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.8/PatataTube-2.7.8.ipa",
+      "size": 4442488
     }
   ],
   "news": []
