@@ -1,8 +1,16 @@
 {% macro nav(groups, current_group_id, current_plex_kind) -%}
 <nav class="nav">
-{%- for g in groups -%}
-<a href="/?group_id={{ g.id }}" class="nav-link{{ ' active' if g.id == current_group_id else '' }}">{{ g.emoji ~ ' ' if g.emoji }}{{ g.label }}</a>
-{%- endfor -%}
+{#- The count is `unread_count` from db.list_groups: announced, never played.
+    Rendered once per page load; nothing refreshes it live. -#}
+<select class="nav-link nav-select{{ ' active' if current_group_id else '' }}" aria-label="Group"
+        onchange="if(this.value)window.location.href=this.value">
+{%- if not current_group_id %}
+<option value="" selected disabled>Groups</option>
+{%- endif -%}
+{%- for g in groups %}
+<option value="/?group_id={{ g.id }}"{{ ' selected' if g.id == current_group_id else '' }}>{{ g.emoji ~ ' ' if g.emoji }}{{ g.label }}{{ ' (%d)' % g.unread_count if g.unread_count else '' }}</option>
+{%- endfor %}
+</select>
 <a href="/?plex_kind=tv" class="nav-link{{ ' active' if current_plex_kind == 'tv' else '' }}">TV</a>
 <a href="/?plex_kind=movies" class="nav-link{{ ' active' if current_plex_kind == 'movies' else '' }}">Movies</a>
 <button type="button" id="autoplay-toggle" class="nav-link" aria-pressed="false">autoplay</button>

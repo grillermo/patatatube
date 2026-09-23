@@ -1,3 +1,7 @@
+# views.render -> serializers -> library -> downloader -> services -> hls ->
+# library is a cycle that only resolves when `main` loads first, as it does in
+# the app. Imported alone, this file fails collection.
+import main  # noqa: F401
 from views.render import build_videos_page
 
 
@@ -86,7 +90,21 @@ def test_page_renders_group_labels_not_names():
 def test_page_marks_the_current_group_active():
     html = build_videos_page([_video()], GROUPS, 2, None)
 
-    assert 'class="nav-link active"' in html
+    assert '<option value="/?group_id=2" selected>' in html
+
+
+def test_group_dropdown_shows_unplayed_counts():
+    groups = [dict(GROUPS[0], unread_count=3), dict(GROUPS[1], unread_count=0)]
+    html = build_videos_page([], groups, 1, None)
+
+    assert "Children (3)</option>" in html
+    assert "Adults</option>" in html
+
+
+def test_group_dropdown_has_a_placeholder_off_a_group():
+    html = build_videos_page([], GROUPS, None, "tv")
+
+    assert '<option value="" selected disabled>Groups</option>' in html
 
 
 def test_page_offers_plex_links():
