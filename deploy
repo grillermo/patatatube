@@ -140,13 +140,13 @@ OTA_MANIFEST_REL  = "ios/manifest.plist"
 OTA_MANIFEST_URL  = "#{RAW_BASE}/#{OTA_MANIFEST_REL}"
 INSTALL_PAGE_REL  = "docs/install.html"
 INSTALL_PAGE_URL  = "https://#{OWNER}.github.io/#{REPO_NAME}/install.html"
-# The Safari route is served by files.chiq.me: the file_to_s3 service runs on
-# this machine and serves ../file_to_s3/files, so publishing is a copy into that
+# The Safari route is served by files.chiq.me: the file_server service runs on
+# this machine and serves ../file_server/files, so publishing is a copy into that
 # directory, not an HTTP upload (large bodies stall in the Cloudflare tunnel —
 # see ../vvterm/scripts/deploy/uploader.rb). The install page and manifest
 # names are pinned so their URLs never change; each release overwrites them.
 FILES_BASE         = ENV.fetch("PATATATUBE_FILES_BASE", "https://files.chiq.me").sub(%r{/+\z}, "")
-PUBLISH_DIR        = ENV.fetch("PATATATUBE_PUBLISH_DIR", File.expand_path("../file_to_s3/files", __dir__))
+PUBLISH_DIR        = ENV.fetch("PATATATUBE_PUBLISH_DIR", File.expand_path("../file_server/files", __dir__))
 PINNED_MANIFEST    = "patatatube-manifest.plist"
 PINNED_INSTALL     = "3cf25ffc-754e-4a19-b4e1-bcc84cf02bd4-Install_PatataTube.html"
 FILES_MANIFEST_URL = "#{FILES_BASE}/files/#{PINNED_MANIFEST}"
@@ -190,7 +190,7 @@ download = "#{RELEASE_BASE}/#{tag}/#{asset}"  # AltStore source
 ota_download = "#{FILES_BASE}/files/#{asset}" # OTA manifest (files.chiq.me)
 
 unless File.directory?(PUBLISH_DIR)
-  B.die("file_to_s3 files/ directory not found at #{PUBLISH_DIR} — it is what " \
+  B.die("file_server files/ directory not found at #{PUBLISH_DIR} — it is what " \
         "#{FILES_BASE} serves. Set PATATATUBE_PUBLISH_DIR if it moved.")
 end
 
