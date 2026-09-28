@@ -293,7 +293,7 @@ final class AudioQueuePlayer: ObservableObject {
                     self.advance(by: 1)
                 case .sleep:
                     self.stop()
-                    self.runBlackScreenShortcut()
+                    model.sleepScreenShown = true
                 // Nothing is presented, so there is nothing to dismiss: both
                 // non-advancing outcomes end playback where it is.
                 case .dismiss, .stop:
@@ -346,13 +346,6 @@ final class AudioQueuePlayer: ObservableObject {
         } else {
             advance(by: -1)
         }
-    }
-
-    /// Sleep end-action: hand off to the user's "black-screen" iOS Shortcut,
-    /// the same URL the full-screen player opens.
-    private func runBlackScreenShortcut() {
-        guard let url = URL(string: "shortcuts://run-shortcut?name=black-screen") else { return }
-        UIApplication.shared.open(url)
     }
 
     private func activateAudioSession() {

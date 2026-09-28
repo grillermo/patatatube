@@ -28,6 +28,10 @@ final class AppModel: ObservableObject {
     /// Bumped by `resetAfterIdle`. An open `VideoPlayerView` watches it and
     /// dismisses itself — the grid's and the PiP-restore's covers both.
     @Published private(set) var idleResetToken = 0
+    /// Play-and-sleep reached its end: `SleepScreen` covers the whole app until
+    /// a long-press clears it. Set by both the full-screen player and the audio
+    /// queue, including while backgrounded, so it is waiting on return.
+    @Published var sleepScreenShown = false
     /// This process started more than an hour after the last engagement.
     private(set) var launchedAfterIdle = false
     /// Picture in Picture outlives the player cover, so its state lives here.

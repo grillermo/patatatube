@@ -150,9 +150,13 @@ On first launch grid is empty / errors — need server config:
 ### Play-and-sleep
 1. Grid: children's videos with status `done` show the dark bottom-right wedge with play+moon; adults/education/tv/movies cells and non-`done` children's rows do not.
 2. Tap the wedge → video plays full screen. Tap elsewhere on the thumbnail → normal playback (autoplay behavior unchanged).
-3. Requires a user Shortcut named `black-screen` (Shortcuts app). With autoplay ON, let a play-and-sleep video finish → PatataTube pauses and the `black-screen` Shortcut runs, no next video starts.
-4. If the Shortcut is missing, iOS shows its "shortcut not found" prompt — create one named exactly `black-screen`.
-5. In-player moon toggle: start a normal video, tap it → moon button appears below the orientation-lock button, and the autoplay button below that. Tap it (turns accent) → at the current video's end the `black-screen` Shortcut runs even with autoplay ON. Tap again to cancel. A video launched from the grid wedge shows the moon already on.
+3. With autoplay ON, let a play-and-sleep video finish → screen goes black, no next video starts.
+4. On the black screen: taps and swipes do nothing (no player controls, pull-down doesn't dismiss).
+5. Press and hold ~2s anywhere on the black screen → returns to the grid.
+6. (Device only) Leave the black screen untouched → device auto-locks after the system auto-lock interval.
+7. Background the app before a play-and-sleep video ends; come back after it ends → the black screen is waiting.
+8. Group list mode, "Play and sleep" from a row's menu (audio only) → at its end the whole app, tabs and mini player included, goes black; hold ~2s to clear it.
+9. In-player moon toggle: start a normal video, tap it → moon button appears below the orientation-lock button, and the autoplay button below that. Tap it (turns accent) → the current video goes black at its end even with autoplay ON. Tap again to cancel. A video launched from the grid wedge shows the moon already on.
 
 ### Plex library
 

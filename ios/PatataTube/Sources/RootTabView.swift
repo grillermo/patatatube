@@ -48,6 +48,13 @@ struct RootTabView: View {
         // It lives at the root rather than in a grid because all three grids
         // exist at once and only one presentation may answer.
         .modifier(PictureInPictureRestoreCover(pip: model.pip, audio: model.audio))
+        // Covers tabs and the mini player bar alike. An open full-screen player
+        // draws its own copy above this one.
+        .overlay {
+            if model.sleepScreenShown {
+                SleepScreen { model.sleepScreenShown = false }
+            }
+        }
         .onAppear {
             selection = model.restorationStore.load().tab ?? .videos
         }

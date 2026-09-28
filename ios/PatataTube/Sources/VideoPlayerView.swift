@@ -7,7 +7,7 @@ import UIKit
 struct VideoPlayerView: View {
     let videos: [Video]
     let startIndex: Int
-    /// Play-and-sleep: play only this item, then run the "black-screen" iOS Shortcut.
+    /// Play-and-sleep: play only this item, then cover the app with `SleepScreen`.
     let sleepMode: Bool
     /// When true, "next" (manual skip and autoplay-on-end) draws from a
     /// shuffled, no-immediate-repeat order instead of the sequential list.
@@ -94,9 +94,8 @@ struct VideoPlayerView: View {
     /// Live vertical drag offset for the pull-down-to-dismiss gesture.
     @State private var dragOffset: CGFloat = 0
     /// Runtime sleep intent, seeded from `sleepMode`. When true, the current
-    /// video runs the "black-screen" iOS Shortcut at its end instead of
-    /// advancing — this wins over the
-    /// autoplay toggle (see `playbackEndAction`). Toggled by the in-player moon
+    /// video pauses under `SleepScreen` at its end instead of advancing — this
+    /// wins over the autoplay toggle (see `playbackEndAction`). Toggled by the in-player moon
     /// button; `sleepMode` stays the immutable launch seed.
     @State private var sleepAfterCurrent: Bool
     /// Records the AVPlayer/AVPlayerItem state machine into DevLog. Inert
@@ -137,7 +136,7 @@ struct VideoPlayerView: View {
             HorizontalLockOverlay(
                 isHorizontal: horizontalLock.isHorizontal,
                 isVisible: orientationControlVisibility.isVisible,
-                isBlocked: false,
+                isBlocked: model.sleepScreenShown,
                 onToggle: {
                     horizontalLock.toggle()
                     orientationControlVisibility.reveal()
@@ -170,6 +169,14 @@ struct VideoPlayerView: View {
                     }
                 }
             )
+            if model.sleepScreenShown {
+                // The root draws one too, but this cover sits above it. The
+                // long-press lands on the grid, so it closes the player as well.
+                SleepScreen {
+                    model.sleepScreenShown = false
+                    dismiss()
+                }
+            }
         }
         // Home indicator off while playing (YouTube-style); the system still
         // brings it back on touch and hides it again after idle.
@@ -185,6 +192,9 @@ struct VideoPlayerView: View {
         .task { await setup() }
         .onChange(of: currentIndex) { _, _ in armPictureInPictureHandoff() }
         .onChange(of: sleepAfterCurrent) { _, _ in armPictureInPictureHandoff() }
+        .onChange(of: model.sleepScreenShown) { _, shown in
+            if shown { orientationControlVisibility.hide() }
+        }
         .onChange(of: model.idleResetToken) { _, _ in
             closedForIdle = true
             dismiss()
@@ -306,6 +316,7 @@ struct VideoPlayerView: View {
     private var pullDownToDismiss: some Gesture {
         DragGesture(minimumDistance: 20)
             .onChanged { value in
+                guard !model.sleepScreenShown else { return }
                 let dy = value.translation.height
                 let dx = value.translation.width
                 // Only engage on a downward, vertically-dominant drag.
@@ -313,6 +324,7 @@ struct VideoPlayerView: View {
                 dragOffset = dy
             }
             .onEnded { value in
+                guard !model.sleepScreenShown else { return }
                 if value.translation.height > 150 {
                     DevLog.event(.nav, "pull-down dismiss", ["video_id": "\(video.id)", "inst": instanceID, "translation": "\(value.translation.height)"])
                     dismiss()
@@ -601,14 +613,6 @@ struct VideoPlayerView: View {
         video.title ?? video.sourceFilename ?? "PatataTube"
     }
 
-    /// Sleep end-action: hand off to the user's "black-screen" iOS Shortcut
-    /// instead of an in-app overlay. The Shortcut owns whatever "black screen"
-    /// means (brightness, lock, etc.); PatataTube just pauses and launches it.
-    private func runBlackScreenShortcut() {
-        guard let url = URL(string: "shortcuts://run-shortcut?name=black-screen") else { return }
-        UIApplication.shared.open(url)
-    }
-
     /// Rebind end-of-item handling to the current item. `applicationState` and
     /// `model.autoplay` are read at fire time — closure-captured copies would be
     /// frozen at bind time.
@@ -636,7 +640,7 @@ struct VideoPlayerView: View {
                 case .sleep:
                     reachedEnd = true
                     player?.pause()
-                    runBlackScreenShortcut()
+                    model.sleepScreenShown = true
                 }
             }
         }
