@@ -63,6 +63,9 @@ targets:
           - UIApplicationShortcutItemType: com.patatatube.clearRestoration
             UIApplicationShortcutItemTitle: Clear Restoration
             UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
+          - UIApplicationShortcutItemType: com.patatatube.app.install-latest
+            UIApplicationShortcutItemTitle: Install Latest
+            UIApplicationShortcutItemIconSymbolName: arrow.down.app
         UILaunchStoryboardName: LaunchScreen
         "UISupportedInterfaceOrientations~iphone":
           - UIInterfaceOrientationPortrait

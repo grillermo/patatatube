@@ -74,6 +74,14 @@
 			<key>UIApplicationShortcutItemType</key>
 			<string>com.patatatube.clearRestoration</string>
 		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>arrow.down.app</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Install Latest</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.patatatube.app.install-latest</string>
+		</dict>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>

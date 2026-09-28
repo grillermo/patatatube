@@ -261,6 +261,8 @@ final class AppModel: ObservableObject {
         case .clearLists: await clearLists()
         case .resetSettings: resetSettings()
         case .clearRestoration: clearRestoration()
+        // Opened as a link by SceneDelegate; never routed here.
+        case .installLatest: break
         }
     }
 
