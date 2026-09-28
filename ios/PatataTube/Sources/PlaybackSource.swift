@@ -20,7 +20,11 @@ enum PlaybackSource {
     /// branch — a `cached` state over a file that is missing or half written,
     /// say — so the branch and the on-disk facts behind it are recorded
     /// together, before AVFoundation ever sees the URL.
-    static func item(for video: Video, model: AppModel, log: Bool = true)
+    ///
+    /// `external` asks for a source an AirPlay receiver can load on its own —
+    /// see `airPlayRouteActive`. Only the full-screen player passes it; the
+    /// audio queue stays on the device and sends AirPlay just its sound.
+    static func item(for video: Video, model: AppModel, log: Bool = true, external: Bool = false)
         -> (item: AVPlayerItem, source: String)? {
         let cacheState = model.cache.state(for: video.id, versionId: video.chosenVersionId)
         let local = model.cache.localURL(for: video.id, versionId: video.chosenVersionId)
@@ -54,11 +58,18 @@ enum PlaybackSource {
             return (item, source)
         }
 
+        // Offline wins: a local MP4 file, which AirPlay can also take.
+        if cacheState == .cached, localExists {
+            return chose("local_mp4", AVPlayerItem(url: local))
+        }
+        // Everything below is the proxy or needs a header, neither of which an
+        // Apple TV can use, so an AirPlay route streams the MP4 from the server.
+        if external, !(video.isLibrary && video.status != "done"),
+           let url = model.airPlayStreamURL(for: video) {
+            return chose("airplay_mp4", AVPlayerItem(url: url))
+        }
         if cacheState == .cached {
-            // Offline wins: local MP4 file, else promoted HLS via the proxy.
-            if localExists {
-                return chose("local_mp4", AVPlayerItem(url: local))
-            }
+            // Else promoted HLS via the proxy.
             if let offline = model.offlineHLSURL(for: video) {
                 return chose("offline_hls", AVPlayerItem(url: offline))
             }
@@ -113,6 +124,32 @@ enum PlaybackSource {
             options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(token)"]
         }
         return AVURLAsset(url: url, options: options)
+    }
+
+    /// Whether audio is going to an AirPlay receiver — the case while screen
+    /// mirroring to an Apple TV, and after picking one in a route picker.
+    static var airPlayRouteActive: Bool {
+        AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .airPlay }
+    }
+
+    /// Lets `player` hand `item` to an AirPlay receiver only when the receiver
+    /// can load it. External playback sends the receiver the item's *URL*, and
+    /// the proxy's `http://127.0.0.1:…` is the Apple TV itself, and AirPlay
+    /// doesn't forward a bearer header — the TV shows a crossed-out icon and
+    /// nothing plays. A local file AVFoundation serves to the receiver itself;
+    /// `airplay_mp4` carries its token in the query. For the rest, playback
+    /// stays on the device and screen mirroring shows it.
+    /// Per item, so call it again after every `replaceCurrentItem`.
+    static func configureExternalPlayback(_ player: AVPlayer, for item: AVPlayerItem) {
+        let reachable = isReachableByAirPlay(item)
+        player.allowsExternalPlayback = reachable
+        player.usesExternalPlaybackWhileExternalScreenIsActive = reachable
+    }
+
+    /// A local file, or `airplay_mp4` — the two sources a receiver can load.
+    static func isReachableByAirPlay(_ item: AVPlayerItem) -> Bool {
+        let url = (item.asset as? AVURLAsset)?.url
+        return url?.isFileURL == true || url?.query?.contains("token=") == true
     }
 
     /// Playability probe for `QueueNavigator`: a video has a source or it doesn't.

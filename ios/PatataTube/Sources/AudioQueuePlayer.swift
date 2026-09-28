@@ -104,7 +104,7 @@ final class AudioQueuePlayer: ObservableObject {
             }
             activateAudioSession()
             let player = AVPlayer(playerItem: item)
-            player.allowsExternalPlayback = true
+            PlaybackSource.configureExternalPlayback(player, for: item)
             self.player = player
             currentID = video.id
             currentVideo = video
@@ -158,7 +158,9 @@ final class AudioQueuePlayer: ObservableObject {
             }
         )
         self.player = player
-        player.allowsExternalPlayback = true
+        if let item = player.currentItem {
+            PlaybackSource.configureExternalPlayback(player, for: item)
+        }
         currentID = video.id
         currentVideo = video
         loadingID = nil
@@ -328,6 +330,7 @@ final class AudioQueuePlayer: ObservableObject {
         currentID = video.id
         currentVideo = video
         model.markPlayed(video)
+        PlaybackSource.configureExternalPlayback(player, for: item)
         player.replaceCurrentItem(with: item)
         bindPlayToEnd()
         nowPlaying.updateTitle(video.title ?? video.url)

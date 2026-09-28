@@ -309,6 +309,19 @@ final class AppModel: ObservableObject {
         return absoluteURL(for: video, path: video.streamPath)
     }
 
+    /// `streamURL` with the token in its query, for an AirPlay receiver: the
+    /// Apple TV fetches the URL itself, so it can't use the stream proxy
+    /// (loopback) or a bearer header. MP4 rather than HLS because Caddy serves
+    /// the packaged playlists as-is, and their relative segment URIs don't
+    /// carry the token.
+    func airPlayStreamURL(for video: Video) -> URL? {
+        guard !video.streamPath.isEmpty, let token = credentials.token,
+              let url = streamURL(for: video),
+              var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "token", value: token)]
+        return comps.url
+    }
+
     /// HLS master playlist URL, or nil when the server did not advertise one.
     func hlsURL(for video: Video) -> URL? {
         guard let hlsPath = video.hlsPath, !hlsPath.isEmpty else { return nil }

@@ -192,6 +192,10 @@ struct VideoPlayerView: View {
         .task { await setup() }
         .onChange(of: currentIndex) { _, _ in armPictureInPictureHandoff() }
         .onChange(of: sleepAfterCurrent) { _, _ in armPictureInPictureHandoff() }
+        // Posted off the main thread; `switchSourceForAirPlay` hops back.
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
+            Task { @MainActor in switchSourceForAirPlay() }
+        }
         .onChange(of: model.sleepScreenShown) { _, shown in
             if shown { orientationControlVisibility.hide() }
         }
@@ -365,8 +369,7 @@ struct VideoPlayerView: View {
                     "video_id": "\(video.id)", "inst": instanceID,
                     "secs": "\(Int(max(0, adopted.currentTime().seconds.isFinite ? adopted.currentTime().seconds : 0)))",
                 ])
-                adopted.allowsExternalPlayback = true
-                adopted.usesExternalPlaybackWhileExternalScreenIsActive = true
+                PlaybackSource.configureExternalPlayback(adopted, for: item)
                 player = adopted
                 await finishSetup(
                     player: adopted, item: item, source: "adopted_audio", countsAsPlay: false
@@ -390,8 +393,7 @@ struct VideoPlayerView: View {
         }
         guard let (item, source) = playerItemWithSource(for: video) else { return }
         let player = AVPlayer(playerItem: item)
-        player.allowsExternalPlayback = true
-        player.usesExternalPlaybackWhileExternalScreenIsActive = true
+        PlaybackSource.configureExternalPlayback(player, for: item)
         self.player = player
         if let target = Self.seekTarget(startSecs: startSecs) {
             DevLog.event(.play, "resuming", [
@@ -606,7 +608,7 @@ struct VideoPlayerView: View {
     }
 
     private func playerItemWithSource(for video: Video) -> (item: AVPlayerItem, source: String)? {
-        PlaybackSource.item(for: video, model: model)
+        PlaybackSource.item(for: video, model: model, external: PlaybackSource.airPlayRouteActive)
     }
 
     private func title(of video: Video) -> String {
@@ -646,6 +648,43 @@ struct VideoPlayerView: View {
         }
     }
 
+    /// Mirroring started, or an Apple TV was picked, while a streamed video
+    /// plays. Its item is the proxy (or a header-authed URL) the receiver can't
+    /// load, so playback has stayed on the device; swap in `airplay_mp4` at the
+    /// same second so the TV takes it over. Same `AVPlayer`, so PiP staging,
+    /// the position observer and Now Playing stay attached — only the
+    /// per-item bindings are redone, as in `advance`. The spinner isn't
+    /// re-shown (`playWhenReady`): the mounted player covers the re-buffer,
+    /// and a paused video must stay paused. Leaving AirPlay doesn't swap back —
+    /// `airplay_mp4` streams just as well on the device.
+    private func switchSourceForAirPlay() {
+        guard !hasDisappeared, itemReady, let player, let current = player.currentItem,
+              PlaybackSource.airPlayRouteActive,
+              !PlaybackSource.isReachableByAirPlay(current),
+              let (item, source) = PlaybackSource.item(for: video, model: model, external: true),
+              PlaybackSource.isReachableByAirPlay(item) else { return }
+        let resumeAt = player.currentTime()
+        let wasPlaying = player.timeControlStatus != .paused
+        DevLog.event(.play, "airplay route, switching source", [
+            "video_id": "\(video.id)", "source": source,
+            "secs": "\(Int(resumeAt.seconds.isFinite ? resumeAt.seconds : 0))",
+            "playing": "\(wasPlaying)",
+        ])
+        PlaybackSource.configureExternalPlayback(player, for: item)
+        player.replaceCurrentItem(with: item)
+        bindPauseTransitions(player: player, item: item, videoID: video.id)
+        playbackProbe.attach(item: item, player: player, video: video, source: source)
+        Task { await applyAudioSelection(item: item, lang: video.audioLang) }
+        Task { await applySubtitleSelection(item: item, lang: video.subtitleLang) }
+        bindPlayToEnd()
+        Task {
+            if resumeAt.seconds.isFinite, resumeAt.seconds >= 1 {
+                await player.seek(to: resumeAt, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
+            if wasPlaying, player.currentItem === item { player.play() }
+        }
+    }
+
     /// Shuffle as it stands now. The in-player toggle writes
     /// `model.randomizeByFeed`, so the scope's live value wins over the
     /// `randomize` this presentation was opened with; that snapshot only
@@ -677,6 +716,7 @@ struct VideoPlayerView: View {
         }
         reachedEnd = false
         currentIndex = nextIndex
+        PlaybackSource.configureExternalPlayback(player, for: item)
         player.replaceCurrentItem(with: item)
         bindPauseTransitions(player: player, item: item, videoID: videos[nextIndex].id)
         model.markPlayed(videos[nextIndex])

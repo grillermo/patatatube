@@ -468,6 +468,18 @@ hand an anonymous visitor a cached authenticated page.
   autoplay-off self-dismiss, sleep, or a dry queue), which would otherwise
   restart a finished track in the bar. `AudioQueuePlayer.start` stays the
   from-scratch path (a list tap) and still always starts at 0.
+- **AirPlay gets its own source, because the receiver fetches the URL itself.**
+  External playback (mirroring, or an Apple TV picked in a route picker) hands
+  the Apple TV the item's URL. The stream proxy's `127.0.0.1` is the Apple TV
+  itself there, and AirPlay doesn't forward the Bearer header — the TV shows a
+  crossed-out icon. So `PlaybackSource.configureExternalPlayback` allows
+  external playback only for a local file or `airplay_mp4`: the server's MP4
+  `stream` URL with `?token=` (`AppModel.airPlayStreamURL`), chosen by the
+  full-screen player when `PlaybackSource.airPlayRouteActive`. MP4, not HLS:
+  Caddy serves the packaged playlists as-is and their relative segment URIs
+  don't carry the token. A route change mid-video swaps the item in place
+  (`VideoPlayerView.switchSourceForAirPlay`). Every other item stays on the
+  device and mirroring shows it; the audio queue never uses `airplay_mp4`.
 - **Downloads can be paused, and a pause outlives the process.** Each row in
   the Downloads view carries a three-dot menu holding Cancel plus Pause (or
   Resume). `CacheManager.pause` is deliberately not `cancel`: cancel wipes
