@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.12",
+          "buildVersion": "194",
+          "date": "2026-09-28T04:49:56Z",
+          "localizedDescription": "Videos play on Apple TV while screen mirroring\n\n• Full-screen videos now play on the Apple TV when mirroring, instead of a crossed-out icon\n• Streamed (not downloaded) videos play on the Apple TV too\n• Starting AirPlay mid-video moves playback to the TV at the same second",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.12/PatataTube-2.7.12.ipa",
+          "size": 4447427,
+          "sha256": "0b423731037ff7c8ea1ad2b0e2495e28623f11e4049b00963f80368a105de07c",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.11",
           "buildVersion": "193",
           "date": "2026-09-28T04:05:58Z",
@@ -1814,11 +1824,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.11",
-      "versionDate": "2026-09-28T04:05:58Z",
-      "versionDescription": "Play-and-sleep ends on a black screen\n\n• When a video ends with the moon on, the screen goes black instead of opening the black-screen Shortcut\n• Hold anywhere for 2 seconds to clear it and return to the grid; taps and swipes do nothing\n• Works for audio-only list playback too, and is waiting if the video ended in the background",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.11/PatataTube-2.7.11.ipa",
-      "size": 4444795
+      "version": "2.7.12",
+      "versionDate": "2026-09-28T04:49:56Z",
+      "versionDescription": "Videos play on Apple TV while screen mirroring\n\n• Full-screen videos now play on the Apple TV when mirroring, instead of a crossed-out icon\n• Streamed (not downloaded) videos play on the Apple TV too\n• Starting AirPlay mid-video moves playback to the TV at the same second",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.12/PatataTube-2.7.12.ipa",
+      "size": 4447427
     }
   ],
   "news": []
