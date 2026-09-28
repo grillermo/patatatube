@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.10",
+          "buildVersion": "192",
+          "date": "2026-09-28T01:08:20Z",
+          "localizedDescription": "Simpler Home Screen menu\n\n• Install Latest now appears when you long-press the app icon\n• The five cleanup items are now one Clear All, which resets the app as if freshly installed (you'll need to log in again)",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.10/PatataTube-2.7.10.ipa",
+          "size": 4442612,
+          "sha256": "d037502294544ff303feeb1880f9a87a6457d3a616f6deb708ba24a425abb3e6",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.9",
           "buildVersion": "191",
           "date": "2026-09-28T00:50:41Z",
@@ -1794,11 +1804,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.9",
-      "versionDate": "2026-09-28T00:50:41Z",
-      "versionDescription": "Install updates from the Home Screen\n\n• Long-press the app icon and tap Install Latest to install the newest build directly",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.9/PatataTube-2.7.9.ipa",
-      "size": 4443351
+      "version": "2.7.10",
+      "versionDate": "2026-09-28T01:08:20Z",
+      "versionDescription": "Simpler Home Screen menu\n\n• Install Latest now appears when you long-press the app icon\n• The five cleanup items are now one Clear All, which resets the app as if freshly installed (you'll need to log in again)",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.10/PatataTube-2.7.10.ipa",
+      "size": 4442612
     }
   ],
   "news": []
