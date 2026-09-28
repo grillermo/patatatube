@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.9",
+          "buildVersion": "191",
+          "date": "2026-09-28T00:50:41Z",
+          "localizedDescription": "Install updates from the Home Screen\n\n• Long-press the app icon and tap Install Latest to install the newest build directly",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.9/PatataTube-2.7.9.ipa",
+          "size": 4443351,
+          "sha256": "dba8ea4f04cdf01909d50615fe4d27f2137ac260838044e6d974c17a30047cf3",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.8",
           "buildVersion": "190",
           "date": "2026-09-22T15:39:14Z",
@@ -1784,11 +1794,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.8",
-      "versionDate": "2026-09-22T15:39:14Z",
-      "versionDescription": "Shuffle from the full-screen player\n\n• New shuffle button in the player, right below continuous play — flips shuffle for the group without interrupting the current video\n• Replaying a video now counts as another play; handing playback between the mini player and full screen does not",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.8/PatataTube-2.7.8.ipa",
-      "size": 4442488
+      "version": "2.7.9",
+      "versionDate": "2026-09-28T00:50:41Z",
+      "versionDescription": "Install updates from the Home Screen\n\n• Long-press the app icon and tap Install Latest to install the newest build directly",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.9/PatataTube-2.7.9.ipa",
+      "size": 4443351
     }
   ],
   "news": []
