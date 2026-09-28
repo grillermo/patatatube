@@ -14,7 +14,7 @@ struct QuickActionTests {
 
     @Test
     func maintenanceActionsOpenNoURL() {
-        #expect(QuickAction.clearVideos.url == nil)
+        #expect(QuickAction.clearAll.url == nil)
     }
 
     @Test

@@ -48,21 +48,9 @@ targets:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations: {}
         UIApplicationShortcutItems:
-          - UIApplicationShortcutItemType: com.patatatube.clearVideos
-            UIApplicationShortcutItemTitle: Clear Videos
-            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
-          - UIApplicationShortcutItemType: com.patatatube.clearCovers
-            UIApplicationShortcutItemTitle: Clear Covers
-            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
-          - UIApplicationShortcutItemType: com.patatatube.clearLists
-            UIApplicationShortcutItemTitle: Clear Lists
-            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
-          - UIApplicationShortcutItemType: com.patatatube.resetSettings
-            UIApplicationShortcutItemTitle: Reset Settings
-            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
-          - UIApplicationShortcutItemType: com.patatatube.clearRestoration
-            UIApplicationShortcutItemTitle: Clear Restoration
-            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
+          - UIApplicationShortcutItemType: com.patatatube.clearAll
+            UIApplicationShortcutItemTitle: Clear All
+            UIApplicationShortcutItemIconSymbolName: trash
           - UIApplicationShortcutItemType: com.patatatube.app.install-latest
             UIApplicationShortcutItemTitle: Install Latest
             UIApplicationShortcutItemIconSymbolName: arrow.down.app

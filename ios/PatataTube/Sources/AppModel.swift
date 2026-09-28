@@ -256,53 +256,40 @@ final class AppModel: ObservableObject {
 
     func handle(_ action: QuickAction) async {
         switch action {
-        case .clearVideos: await clearVideos()
-        case .clearCovers: await clearCovers()
-        case .clearLists: await clearLists()
-        case .resetSettings: resetSettings()
-        case .clearRestoration: clearRestoration()
+        case .clearAll: clearAll()
         // Opened as a link by SceneDelegate; never routed here.
         case .installLatest: break
         }
     }
 
-    /// Wipes the saved path/player/scroll state. The running session keeps
-    /// whatever is on screen — the point is a clean slate for the *next*
-    /// launch, so a bad restored state can't be replayed forever.
-    func clearRestoration() {
-        restorationStore.clear()
-        restorationGate.reset()
-        DevLog.event(.state, "restoration cleared")
-    }
-
-    func clearVideos() async {
+    /// Leaves the app as if freshly installed: downloads cancelled, every file
+    /// the app wrote deleted, UserDefaults and the Keychain token wiped. Then
+    /// the process exits — the stores in memory still hold the old state, and
+    /// several of them write it back to UserDefaults as they go, so only a
+    /// fresh launch actually starts from nothing.
+    func clearAll() {
+        DevLog.event(.state, "clear all")
+        DevLog.flush()
+        audio.stop()
         cache.clearAllVideos()
-        await store.load()
-    }
-
-    func clearCovers() async {
-        cache.clearAllCovers()
-        await store.load()
-    }
-
-    func clearLists() async {
-        store.clearListCache()
-        await store.load()
-    }
-
-    /// Logs out (Keychain token + base URL) and resets download settings to
-    /// defaults. Leaves cached files untouched.
-    func resetSettings() {
+        let fm = FileManager.default
+        let roots = [
+            fm.urls(for: .documentDirectory, in: .userDomainMask)[0],
+            fm.urls(for: .cachesDirectory, in: .userDomainMask)[0],
+            fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0],
+            fm.temporaryDirectory,
+        ]
+        for root in roots {
+            for item in (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] {
+                try? fm.removeItem(at: item)
+            }
+        }
         credentials.token = nil
-        credentials.baseURL = nil
-        resumeStore.useServer(nil)
-        tokenText = ""
-        baseURLText = ""
-        downloadStreamCount = DownloadStreamSettings.defaultCount
-        downloadConcurrency = SimultaneousDownloadSettings.defaultCount
-        downloadSettings.save(downloadStreamCount)
-        simultaneousSettings.save(downloadConcurrency)
-        cache.setMaxConcurrentDownloads(downloadConcurrency)
+        if let domain = Bundle.main.bundleIdentifier {
+            UserDefaults.standard.removePersistentDomain(forName: domain)
+            UserDefaults.standard.synchronize()
+        }
+        exit(0)
     }
 
     func makeCacheStatisticsCollector() -> CacheStatisticsCollector {
