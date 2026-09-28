@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.11",
+          "buildVersion": "193",
+          "date": "2026-09-28T04:05:58Z",
+          "localizedDescription": "Play-and-sleep ends on a black screen\n\n• When a video ends with the moon on, the screen goes black instead of opening the black-screen Shortcut\n• Hold anywhere for 2 seconds to clear it and return to the grid; taps and swipes do nothing\n• Works for audio-only list playback too, and is waiting if the video ended in the background",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.11/PatataTube-2.7.11.ipa",
+          "size": 4444795,
+          "sha256": "89210093d7fae56ae9737532586eefcdde2077cfdf55d53017223b76892bd435",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.10",
           "buildVersion": "192",
           "date": "2026-09-28T01:08:20Z",
@@ -1804,11 +1814,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.10",
-      "versionDate": "2026-09-28T01:08:20Z",
-      "versionDescription": "Simpler Home Screen menu\n\n• Install Latest now appears when you long-press the app icon\n• The five cleanup items are now one Clear All, which resets the app as if freshly installed (you'll need to log in again)",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.10/PatataTube-2.7.10.ipa",
-      "size": 4442612
+      "version": "2.7.11",
+      "versionDate": "2026-09-28T04:05:58Z",
+      "versionDescription": "Play-and-sleep ends on a black screen\n\n• When a video ends with the moon on, the screen goes black instead of opening the black-screen Shortcut\n• Hold anywhere for 2 seconds to clear it and return to the grid; taps and swipes do nothing\n• Works for audio-only list playback too, and is waiting if the video ended in the background",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.11/PatataTube-2.7.11.ipa",
+      "size": 4444795
     }
   ],
   "news": []
