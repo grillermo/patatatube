@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.13",
+          "buildVersion": "195",
+          "date": "2026-09-30T01:06:34Z",
+          "localizedDescription": "Sleep mode leaves nothing to replay\n\n• After play-and-sleep ends, the lock screen no longer shows the video's preview or a play button",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.13/PatataTube-2.7.13.ipa",
+          "size": 4447435,
+          "sha256": "f47f123bcc392ae8b47a3f1cd5d125098f1894e085bc2ff1221a7167c40f9fe1",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.12",
           "buildVersion": "194",
           "date": "2026-09-28T04:49:56Z",
@@ -1824,11 +1834,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.12",
-      "versionDate": "2026-09-28T04:49:56Z",
-      "versionDescription": "Videos play on Apple TV while screen mirroring\n\n• Full-screen videos now play on the Apple TV when mirroring, instead of a crossed-out icon\n• Streamed (not downloaded) videos play on the Apple TV too\n• Starting AirPlay mid-video moves playback to the TV at the same second",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.12/PatataTube-2.7.12.ipa",
-      "size": 4447427
+      "version": "2.7.13",
+      "versionDate": "2026-09-30T01:06:34Z",
+      "versionDescription": "Sleep mode leaves nothing to replay\n\n• After play-and-sleep ends, the lock screen no longer shows the video's preview or a play button",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.13/PatataTube-2.7.13.ipa",
+      "size": 4447435
     }
   ],
   "news": []
