@@ -4,7 +4,7 @@ import SwiftUI
 /// Play-and-sleep's end state: a black screen that swallows every touch, so a
 /// child can't tap back into the app. Playback is already paused, which
 /// releases the idle timer, so the device auto-locks on the system schedule.
-/// Parents escape with a two-second long-press.
+/// Parents escape with a three-second long-press, shown as a ring that fills while held.
 ///
 /// Drawn by both `RootTabView` and `VideoPlayerView` from the one
 /// `AppModel.sleepScreenShown` flag: a `fullScreenCover` sits above anything
@@ -12,7 +12,7 @@ import SwiftUI
 struct SleepScreen: View {
     let onDismiss: () -> Void
 
-    private static let holdDuration = 2.0
+    private static let holdDuration = 3.0
 
     @State private var isHolding = false
 
