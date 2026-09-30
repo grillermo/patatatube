@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.15",
+          "buildVersion": "197",
+          "date": "2026-09-30T02:31:58Z",
+          "localizedDescription": "Longer hold to leave the sleep screen\n\n• Leaving the sleep screen now takes a 3-second hold",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.15/PatataTube-2.7.15.ipa",
+          "size": 4450346,
+          "sha256": "8676604dde0967b2aa50534ab1887c552d36cec14e1749f12378698c5d9f3b83",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.14",
           "buildVersion": "196",
           "date": "2026-09-30T02:23:29Z",
@@ -1844,11 +1854,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.14",
-      "versionDate": "2026-09-30T02:23:29Z",
-      "versionDescription": "Easier to leave the sleep screen\n\n• Holding the sleep screen now shows a ring that fills as you hold\n• A slightly drifting finger no longer cancels the hold",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.14/PatataTube-2.7.14.ipa",
-      "size": 4450338
+      "version": "2.7.15",
+      "versionDate": "2026-09-30T02:31:58Z",
+      "versionDescription": "Longer hold to leave the sleep screen\n\n• Leaving the sleep screen now takes a 3-second hold",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.15/PatataTube-2.7.15.ipa",
+      "size": 4450346
     }
   ],
   "news": []
