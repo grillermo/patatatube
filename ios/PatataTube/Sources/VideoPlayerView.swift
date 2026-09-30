@@ -642,6 +642,11 @@ struct VideoPlayerView: View {
                 case .sleep:
                     reachedEnd = true
                     player?.pause()
+                    // A "last video" must not be replayable from the lock
+                    // screen: drop the now-playing card (title, artwork, play
+                    // button) and its remote commands, and free the session.
+                    nowPlaying.detach()
+                    deactivateAudioSession()
                     model.sleepScreenShown = true
                 }
             }
