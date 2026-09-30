@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.14",
+          "buildVersion": "196",
+          "date": "2026-09-30T02:23:29Z",
+          "localizedDescription": "Easier to leave the sleep screen\n\n• Holding the sleep screen now shows a ring that fills as you hold\n• A slightly drifting finger no longer cancels the hold",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.14/PatataTube-2.7.14.ipa",
+          "size": 4450338,
+          "sha256": "518ed5a913552b9c2f40ffeeaf3dad84d44fd3305db7cfdb4683a127d81c93d6",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.13",
           "buildVersion": "195",
           "date": "2026-09-30T01:06:34Z",
@@ -1834,11 +1844,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.13",
-      "versionDate": "2026-09-30T01:06:34Z",
-      "versionDescription": "Sleep mode leaves nothing to replay\n\n• After play-and-sleep ends, the lock screen no longer shows the video's preview or a play button",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.13/PatataTube-2.7.13.ipa",
-      "size": 4447435
+      "version": "2.7.14",
+      "versionDate": "2026-09-30T02:23:29Z",
+      "versionDescription": "Easier to leave the sleep screen\n\n• Holding the sleep screen now shows a ring that fills as you hold\n• A slightly drifting finger no longer cancels the hold",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.14/PatataTube-2.7.14.ipa",
+      "size": 4450338
     }
   ],
   "news": []
