@@ -4,18 +4,18 @@ import SwiftUI
 /// Play-and-sleep's end state: a black screen that swallows every touch, so a
 /// child can't tap back into the app. Playback is already paused, which
 /// releases the idle timer, so the device auto-locks on the system schedule.
-/// Parents escape by tapping squares of a 2x3 grid in order; each correct tap lights
+/// Parents escape by tapping squares of a 3x3 grid in order; each correct tap lights
 /// its square, a wrong one blanks them all.
 ///
 /// Drawn by both `RootTabView` and `VideoPlayerView` from the one
 /// `AppModel.sleepScreenShown` flag: a `fullScreenCover` sits above anything
 /// the root draws, so the player has to draw its own copy.
-/// The unlock sequence over a 2-column, 3-row grid. Walking the ring counter-
-/// clockwise from top-left gives TL, ML, BL, BR, MR, TR; the code is every
-/// other one: top-left, bottom-left, middle-right. A wrong tap (including a
-/// skipped-over square) resets to the start.
+/// The unlock sequence over a 3x3 grid: the checkers pattern, i.e. every square
+/// where column + row is even. Order is counter-clockwise round the corners
+/// from top-left, then the centre. A wrong tap (including any of the four
+/// edge squares) resets to the start.
 struct GridUnlock: Equatable {
-    static let columns = 2
+    static let columns = 3
     static let rows = 3
 
     struct Cell: Hashable { let column: Int; let row: Int }
@@ -23,6 +23,8 @@ struct GridUnlock: Equatable {
     static let sequence = [
         Cell(column: 0, row: 0),
         Cell(column: 0, row: 2),
+        Cell(column: 2, row: 2),
+        Cell(column: 2, row: 0),
         Cell(column: 1, row: 1),
     ]
 
