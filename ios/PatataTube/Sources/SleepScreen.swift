@@ -4,54 +4,77 @@ import SwiftUI
 /// Play-and-sleep's end state: a black screen that swallows every touch, so a
 /// child can't tap back into the app. Playback is already paused, which
 /// releases the idle timer, so the device auto-locks on the system schedule.
-/// Parents escape with a three-second long-press, shown as a ring that fills while held.
+/// Parents escape by tapping the four quadrants counter-clockwise from the
+/// top-left; each correct tap lights its square, a wrong one blanks them all.
 ///
 /// Drawn by both `RootTabView` and `VideoPlayerView` from the one
 /// `AppModel.sleepScreenShown` flag: a `fullScreenCover` sits above anything
 /// the root draws, so the player has to draw its own copy.
-struct SleepScreen: View {
-    let onDismiss: () -> Void
+/// The unlock sequence: quadrants in counter-clockwise order from top-left.
+/// A wrong tap resets to the start; the fourth correct tap completes it.
+struct QuadrantUnlock: Equatable {
+    enum Quadrant: Int, CaseIterable { case topLeft, bottomLeft, bottomRight, topRight }
 
-    private static let holdDuration = 3.0
+    private(set) var lit: [Quadrant] = []
 
-    @State private var isHolding = false
-
-    var body: some View {
-        ZStack {
-            Color.black
-            // An empty ring appears under the finger's press and fills over the
-            // hold, so a parent can see the hold is registering.
-            if isHolding {
-                Circle().stroke(.white.opacity(0.25), lineWidth: 6)
-                    .frame(width: 120, height: 120)
-                    .overlay(FillingRing(duration: Self.holdDuration))
-                    .transition(.opacity)
-            }
+    /// Returns true when this tap completes the sequence.
+    mutating func tap(_ quadrant: Quadrant) -> Bool {
+        guard quadrant.rawValue == lit.count else {
+            lit = []
+            return false
         }
-        .ignoresSafeArea()
-        .contentShape(Rectangle())
-        .onTapGesture {}
-        // Generous `maximumDistance` (default 10pt): a slightly drifting
-        // finger must not cancel the hold.
-        .onLongPressGesture(minimumDuration: Self.holdDuration, maximumDistance: 150) {
-            onDismiss()
-        } onPressingChanged: { pressing in
-            withAnimation(.easeOut(duration: 0.15)) { isHolding = pressing }
+        lit.append(quadrant)
+        return lit.count == Quadrant.allCases.count
+    }
+
+    static func quadrant(at point: CGPoint, in size: CGSize) -> Quadrant {
+        let left = point.x < size.width / 2
+        let top = point.y < size.height / 2
+        switch (left, top) {
+        case (true, true): return .topLeft
+        case (true, false): return .bottomLeft
+        case (false, false): return .bottomRight
+        case (false, true): return .topRight
         }
-        .persistentSystemOverlays(.hidden)
     }
 }
 
-/// Trims from empty to full once on appear; removed from the tree on release,
-/// so each press starts again from empty.
-private struct FillingRing: View {
-    let duration: Double
-    @State private var progress = 0.0
+struct SleepScreen: View {
+    let onDismiss: () -> Void
+
+    @State private var unlock = QuadrantUnlock()
 
     var body: some View {
-        Circle().trim(from: 0, to: progress)
-            .stroke(.white, style: StrokeStyle(lineWidth: 6, lineCap: .round))
-            .rotationEffect(.degrees(-90))
-            .onAppear { withAnimation(.linear(duration: duration)) { progress = 1 } }
+        GeometryReader { geo in
+            ZStack {
+                Color.black
+                // Lit squares only; unlit ones are indistinguishable from the
+                // black background so nothing hints where to tap.
+                ForEach(unlock.lit, id: \.self) { quadrant in
+                    Color.white
+                        .frame(width: geo.size.width / 2, height: geo.size.height / 2)
+                        .position(center(of: quadrant, in: geo.size))
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                SpatialTapGesture().onEnded { tap in
+                    let quadrant = QuadrantUnlock.quadrant(at: tap.location, in: geo.size)
+                    if unlock.tap(quadrant) { onDismiss() }
+                }
+            )
+        }
+        .ignoresSafeArea()
+        .persistentSystemOverlays(.hidden)
+    }
+
+    private func center(of quadrant: QuadrantUnlock.Quadrant, in size: CGSize) -> CGPoint {
+        let x = size.width / 4, y = size.height / 4
+        switch quadrant {
+        case .topLeft: return CGPoint(x: x, y: y)
+        case .bottomLeft: return CGPoint(x: x, y: y * 3)
+        case .bottomRight: return CGPoint(x: x * 3, y: y * 3)
+        case .topRight: return CGPoint(x: x * 3, y: y)
+        }
     }
 }
