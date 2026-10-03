@@ -4,77 +4,76 @@ import SwiftUI
 /// Play-and-sleep's end state: a black screen that swallows every touch, so a
 /// child can't tap back into the app. Playback is already paused, which
 /// releases the idle timer, so the device auto-locks on the system schedule.
-/// Parents escape by tapping the four quadrants counter-clockwise from the
-/// top-left; each correct tap lights its square, a wrong one blanks them all.
+/// Parents escape by tapping squares of a 2x3 grid in order; each correct tap lights
+/// its square, a wrong one blanks them all.
 ///
 /// Drawn by both `RootTabView` and `VideoPlayerView` from the one
 /// `AppModel.sleepScreenShown` flag: a `fullScreenCover` sits above anything
 /// the root draws, so the player has to draw its own copy.
-/// The unlock sequence: quadrants in counter-clockwise order from top-left.
-/// A wrong tap resets to the start; the fourth correct tap completes it.
-struct QuadrantUnlock: Equatable {
-    enum Quadrant: Int, CaseIterable { case topLeft, bottomLeft, bottomRight, topRight }
+/// The unlock sequence over a 2-column, 3-row grid. Walking the ring counter-
+/// clockwise from top-left gives TL, ML, BL, BR, MR, TR; the code is every
+/// other one: top-left, bottom-left, middle-right. A wrong tap (including a
+/// skipped-over square) resets to the start.
+struct GridUnlock: Equatable {
+    static let columns = 2
+    static let rows = 3
 
-    private(set) var lit: [Quadrant] = []
+    struct Cell: Hashable { let column: Int; let row: Int }
+
+    static let sequence = [
+        Cell(column: 0, row: 0),
+        Cell(column: 0, row: 2),
+        Cell(column: 1, row: 1),
+    ]
+
+    private(set) var lit: [Cell] = []
 
     /// Returns true when this tap completes the sequence.
-    mutating func tap(_ quadrant: Quadrant) -> Bool {
-        guard quadrant.rawValue == lit.count else {
+    mutating func tap(_ cell: Cell) -> Bool {
+        guard cell == Self.sequence[lit.count] else {
             lit = []
             return false
         }
-        lit.append(quadrant)
-        return lit.count == Quadrant.allCases.count
+        lit.append(cell)
+        return lit.count == Self.sequence.count
     }
 
-    static func quadrant(at point: CGPoint, in size: CGSize) -> Quadrant {
-        let left = point.x < size.width / 2
-        let top = point.y < size.height / 2
-        switch (left, top) {
-        case (true, true): return .topLeft
-        case (true, false): return .bottomLeft
-        case (false, false): return .bottomRight
-        case (false, true): return .topRight
-        }
+    static func cell(at point: CGPoint, in size: CGSize) -> Cell {
+        let column = min(max(Int(point.x / (size.width / CGFloat(columns))), 0), columns - 1)
+        let row = min(max(Int(point.y / (size.height / CGFloat(rows))), 0), rows - 1)
+        return Cell(column: column, row: row)
     }
 }
 
 struct SleepScreen: View {
     let onDismiss: () -> Void
 
-    @State private var unlock = QuadrantUnlock()
+    @State private var unlock = GridUnlock()
 
     var body: some View {
         GeometryReader { geo in
+            let cellWidth = geo.size.width / CGFloat(GridUnlock.columns)
+            let cellHeight = geo.size.height / CGFloat(GridUnlock.rows)
             ZStack {
                 Color.black
                 // Lit squares only; unlit ones are indistinguishable from the
                 // black background so nothing hints where to tap.
-                ForEach(unlock.lit, id: \.self) { quadrant in
+                ForEach(unlock.lit, id: \.self) { cell in
                     Color.white
-                        .frame(width: geo.size.width / 2, height: geo.size.height / 2)
-                        .position(center(of: quadrant, in: geo.size))
+                        .frame(width: cellWidth, height: cellHeight)
+                        .position(x: cellWidth * (CGFloat(cell.column) + 0.5),
+                                  y: cellHeight * (CGFloat(cell.row) + 0.5))
                 }
             }
             .contentShape(Rectangle())
             .gesture(
                 SpatialTapGesture().onEnded { tap in
-                    let quadrant = QuadrantUnlock.quadrant(at: tap.location, in: geo.size)
-                    if unlock.tap(quadrant) { onDismiss() }
+                    let cell = GridUnlock.cell(at: tap.location, in: geo.size)
+                    if unlock.tap(cell) { onDismiss() }
                 }
             )
         }
         .ignoresSafeArea()
         .persistentSystemOverlays(.hidden)
-    }
-
-    private func center(of quadrant: QuadrantUnlock.Quadrant, in size: CGSize) -> CGPoint {
-        let x = size.width / 4, y = size.height / 4
-        switch quadrant {
-        case .topLeft: return CGPoint(x: x, y: y)
-        case .bottomLeft: return CGPoint(x: x, y: y * 3)
-        case .bottomRight: return CGPoint(x: x * 3, y: y * 3)
-        case .topRight: return CGPoint(x: x * 3, y: y)
-        }
     }
 }
