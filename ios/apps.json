@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.19",
+          "buildVersion": "201",
+          "date": "2026-10-03T02:44:00Z",
+          "localizedDescription": "Hardest sleep screen unlock yet\n\n• Sleep screen is now a 3x3 grid; unlock by tapping the checkers squares in order: the four corners counter-clockwise from top-left, then the centre\n• Each correct square lights up white; a wrong tap blanks them all and you start over",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.19/PatataTube-2.7.19.ipa",
+          "size": 4450299,
+          "sha256": "d5c226b35c424fac9262c24abdde7d957d9c4185ebbcf76f07f3d567637f7411",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.18",
           "buildVersion": "200",
           "date": "2026-10-03T02:29:19Z",
@@ -1874,11 +1884,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.18",
-      "versionDate": "2026-10-03T02:29:19Z",
-      "versionDescription": "Even harder sleep screen unlock\n\n• Sleep screen is now split into six squares; unlock by tapping every other one in order: top-left, bottom-left, then middle-right\n• Each correct square lights up white; a wrong tap blanks them all and you start over",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.18/PatataTube-2.7.18.ipa",
-      "size": 4450282
+      "version": "2.7.19",
+      "versionDate": "2026-10-03T02:44:00Z",
+      "versionDescription": "Hardest sleep screen unlock yet\n\n• Sleep screen is now a 3x3 grid; unlock by tapping the checkers squares in order: the four corners counter-clockwise from top-left, then the centre\n• Each correct square lights up white; a wrong tap blanks them all and you start over",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.19/PatataTube-2.7.19.ipa",
+      "size": 4450299
     }
   ],
   "news": []
