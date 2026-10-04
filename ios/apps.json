@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.20",
+          "buildVersion": "202",
+          "date": "2026-10-04T01:34:28Z",
+          "localizedDescription": "New videos show up right away\n\n• Pulling down inside a group now shows a newly added video immediately, with no need to leave and re-enter the group\n• Pull-to-refresh in a group is faster: it no longer scans the Plex library first\n• A video you add without choosing a group now lands in its group as soon as it is downloaded, before conversion finishes",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.20/PatataTube-2.7.20.ipa",
+          "size": 4451027,
+          "sha256": "f3f643e11ed2f50513e9791891743870086509d0bccc90c259dcb6ceada8b016",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.19",
           "buildVersion": "201",
           "date": "2026-10-03T02:44:00Z",
@@ -1884,11 +1894,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.19",
-      "versionDate": "2026-10-03T02:44:00Z",
-      "versionDescription": "Hardest sleep screen unlock yet\n\n• Sleep screen is now a 3x3 grid; unlock by tapping the checkers squares in order: the four corners counter-clockwise from top-left, then the centre\n• Each correct square lights up white; a wrong tap blanks them all and you start over",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.19/PatataTube-2.7.19.ipa",
-      "size": 4450299
+      "version": "2.7.20",
+      "versionDate": "2026-10-04T01:34:28Z",
+      "versionDescription": "New videos show up right away\n\n• Pulling down inside a group now shows a newly added video immediately, with no need to leave and re-enter the group\n• Pull-to-refresh in a group is faster: it no longer scans the Plex library first\n• A video you add without choosing a group now lands in its group as soon as it is downloaded, before conversion finishes",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.20/PatataTube-2.7.20.ipa",
+      "size": 4451027
     }
   ],
   "news": []
