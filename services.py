@@ -56,28 +56,25 @@ def choose_version(video_id: int, version_id: int) -> bool:
     return chosen
 
 
-def classify_and_announce(
+def classify_download(
     video_id: int, duration_secs: int | None = None, description: str | None = None
 ) -> None:
-    """File a finished download into a group and start counting its plays.
+    """File a still-downloading video into a group.
 
-    Called by converter.py once the video's HLS package exists, not by the
-    downloader when the mp4 lands: a video the classifier moves should already
-    be playable where the badge sends the user, and the group card's "1 new"
-    should appear once, on the group the video ends up in, instead of showing
-    in the inbox and then jumping.
+    Called by the downloader as soon as yt-dlp has the metadata, before the
+    mp4 is normalized or packaged: showing the video in its group fast matters
+    more than the move coinciding with the badge, which still waits for the
+    file (`downloader._announce_new_video`).
 
-    Best effort from end to end. The download has already succeeded, so nothing
-    here may raise, and the video is announced whatever the classifier decides
-    (or fails to) -- a video that stays in the inbox still counts as new.
+    Best effort from end to end. Nothing here may raise -- the caller's except
+    deletes the row -- and a video nobody could file just stays in the inbox.
     """
     try:
         _classify_into_group(video_id, duration_secs, description)
     except Exception as exc:  # noqa: BLE001 - classification is never fatal
         logger.warning("Classifying video %s failed: %s", video_id, exc)
-    db.mark_announced(video_id)
-    # The caller has no event loop and no HTTP request is involved, so nothing
-    # else would invalidate a cached /api/groups holding the old badge count.
+    # This runs from a BackgroundTask on a worker thread, with no HTTP request
+    # involved, so nothing else would invalidate a cached /api/videos?group_id=.
     cache.clear_blocking()
 
 
@@ -94,5 +91,7 @@ def _classify_into_group(
         classifier.classify(video["title"], video["channel"], duration_secs, description)
     )
     if group is not None:
-        set_group(video_id, group["id"])
+        # Not set_group(): that queues an SD rendition, and there is no mp4 to
+        # render yet. download_video queues it once the file exists.
+        db.set_video_group(video_id, group["id"])
         logger.info("[classify] video %s moved to %s (group %s)", video_id, group["name"], group["id"])

@@ -49,8 +49,23 @@ async def download_video(video_id: int, classify: bool = False):
     db.update_video(video_id, status="downloading")
     try:
         if video["platform"] == "youtube":
-            dest_name, meta = await _download_youtube(
-                video_id, video["url"], source_key=video["source_key"]
+            meta = await _download_youtube_media(video["url"])
+            if classify:
+                # File it now, while the mp4 is still to be normalized: the
+                # video should show up in its group as soon as we know which
+                # one, not once ffmpeg has finished with it. The classifier
+                # reads title and channel off the row, so they go on first.
+                db.update_video(
+                    video_id, status="downloading", title=meta.title, channel=meta.channel
+                )
+                await asyncio.to_thread(
+                    services.classify_download,
+                    video_id,
+                    meta.duration_secs,
+                    (meta.description or "")[: classifier.DESCRIPTION_MAX_CHARS] or None,
+                )
+            dest_name = await _store_ios_compatible_video(
+                video_id, meta.path, channel=meta.channel, source_key=video["source_key"]
             )
             db.update_video(
                 video_id,
@@ -59,37 +74,13 @@ async def download_video(video_id: int, classify: bool = False):
                 title=meta.title,
                 channel=meta.channel,
             )
-            payload = {"source_path": str(VIDEOS_DIR / dest_name)}
-            if classify:
-                # Ride along with the HLS job instead of classifying here: the
-                # classifier runs once the package exists, so the video is
-                # already streamable in the group the badge points at. Only
-                # converter.py sees that moment, and the job payload is the
-                # only channel to it. yt-dlp's description is the one field
-                # that is not on the row, and the classifier caps it anyway.
-                payload["classify"] = {
-                    "duration_secs": meta.duration_secs,
-                    "description": (meta.description or "")[
-                        : classifier.DESCRIPTION_MAX_CHARS
-                    ]
-                    or None,
-                }
-            job_id = db.enqueue_job(
-                "hls", video_id, priority=db.PRIORITY_BULK, payload=payload
+            db.enqueue_job(
+                "hls",
+                video_id,
+                priority=db.PRIORITY_BULK,
+                payload={"source_path": str(VIDEOS_DIR / dest_name)},
             )
-            if not classify:
-                await _announce_new_video(video_id)
-            elif job_id is None:
-                # An HLS job for this video was already pending, so ours -- and
-                # the classify payload with it -- was dropped. Nothing else will
-                # ever run it, and an unannounced video is one the user is
-                # never told about, so do it here instead.
-                await asyncio.to_thread(
-                    services.classify_and_announce,
-                    video_id,
-                    payload["classify"]["duration_secs"],
-                    payload["classify"]["description"],
-                )
+            await _announce_new_video(video_id)
             sd.enqueue_if_selected(video_id)
             return
 
@@ -142,16 +133,6 @@ async def _download_twitter(video_id: int, url: str) -> str:
     downloaded_path = await pybalt_download(url)
     downloaded_path = Path(downloaded_path)
     return await _store_ios_compatible_video(video_id, downloaded_path)
-
-
-async def _download_youtube(
-    video_id: int, url: str, source_key: str | None = None
-) -> tuple[str, YoutubeDownload]:
-    meta = await _download_youtube_media(url)
-    dest_name = await _store_ios_compatible_video(
-        video_id, meta.path, channel=meta.channel, source_key=source_key
-    )
-    return dest_name, meta
 
 
 async def _store_ios_compatible_video(

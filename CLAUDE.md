@@ -189,20 +189,21 @@ map for the intermittent-playback investigation:
    deliberately *not* searchable: the id is already `videos.source_key`, and
    nobody types one into a filter. Only YouTube rows get it; a tweet id is not
    a YouTube id.
-4b. **A YouTube upload that names no group is classified into one — once its
-   HLS package exists, not when the mp4 lands.** The row starts in the `inbox`
-   group as before; `download_video` puts a `classify` key (duration and the
-   capped description, the two fields that are not on the row) into the **HLS
-   job's payload** instead of classifying, and `converter.run_job` calls
-   `services.classify_and_announce` when that job finishes. So the group move
-   and the badge happen together, at a point where the video already
-   streams from the group the badge points at — rather than the card showing
-   "1 new" in the inbox and the video jumping out of it a minute later. It runs
-   on a *failed* HLS job too: the mp4 still plays, and the announcement is the
-   user's only notice the video arrived. The payload is the only channel to
-   that moment, since converter.py is the only process that sees it; if the
-   enqueue is dropped because a package was already pending, `download_video`
-   runs the same call itself on a worker thread. `classify_and_announce` asks
+4b. **A YouTube upload that names no group is classified into one as soon as
+   yt-dlp returns, before any ffmpeg step.** The row starts in the `inbox`
+   group; once `_download_youtube_media` has the metadata, `download_video`
+   writes title and channel onto the still-`downloading` row and calls
+   `services.classify_download` on a worker thread, which moves the row and
+   flushes the response cache. Normalize and the HLS job come after. Showing
+   the video in its group fast is the priority: it used to be filed only once
+   its HLS package existed, so that the move and the badge coincided, and that
+   kept a new video out of its group for the whole conversion. The **badge**
+   still waits for the file — `_announce_new_video` runs when the row turns
+   `done` — so a group can list a video that is not badged or playable yet.
+   The move writes `db.set_video_group` directly rather than
+   `services.set_group`: the latter queues an SD rendition, and there is no
+   mp4 to render at that point (`sd.enqueue_if_selected` runs after `done`).
+   `classify_download` asks
    `classifier.classify` (TypeSafe's `jev`
    model, `JEV_API_KEY`) to pick a group from title, channel, duration and
    the first 1500 chars of the description — yt-dlp prints the last two as
@@ -317,11 +318,10 @@ overlay titles and never show the toggle.
 **Group cards show a new-video badge, and it is derived from a play counter.**
 `videos.play_count` (idempotent `ALTER TABLE` guard, nullable) counts every
 playback start, and **NULL is a third state that carries the logic**: it means
-*not announced yet* — a download still running, or one whose HLS package is
-still being built. `db.mark_announced` moves NULL to 0, and 0 is what a badge
+*not announced yet* — a download still running. `db.mark_announced` moves NULL to 0, and 0 is what a badge
 is: announced and never played. `downloader._announce_new_video` does that when
-a download or upload finishes; for a YouTube download being classified it is
-`services.classify_and_announce`, once the HLS package is built (4b above).
+a download or upload finishes, whether or not the video was classified (4b
+above).
 Announcing is `WHERE play_count IS NULL`, so it can never drag an
 already-watched video back into a badge.
 

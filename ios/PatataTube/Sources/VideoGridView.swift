@@ -430,7 +430,7 @@ struct VideoGridView: View {
                 .searchable(text: $searchText,
                             placement: .navigationBarDrawer(displayMode: .always),
                             prompt: "Search videos")
-                .refreshable { await store.refreshLibrary() }
+                .refreshable { await store.refresh() }
         }
     }
 
@@ -675,7 +675,7 @@ struct VideoGridView: View {
             .searchable(text: $searchText,
                         placement: .navigationBarDrawer(displayMode: .always),
                         prompt: "Search videos")
-            .refreshable { await store.refreshLibrary() }
+            .refreshable { await store.refresh() }
             .toolbar { optionsToolbar }
         case .show(let title):
             if let show = ShowGroup.group(filteredVideos).first(where: { $0.id == title }) {

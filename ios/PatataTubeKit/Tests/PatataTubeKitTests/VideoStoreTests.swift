@@ -1328,6 +1328,36 @@ private func tempCache() -> VideoListCache {
     #expect(store.videos.map(\.id) == [1])   // load() still ran
 }
 
+// SwiftUI cancels a .refreshable action mid-flight; URLSession then throws
+// .cancelled and load() drops the result. refresh() must not inherit that.
+@MainActor @Test func refreshSurvivesCancellationOfTheCallingTask() async {
+    let api = FakeAPI()
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.switchFeed(to: .group(id: 2))
+    api.videosHook = { _ in
+        if Task.isCancelled { throw URLError(.cancelled) }
+        return [makeVideo(id: 7, groupID: 2)]
+    }
+
+    let pull = Task { await store.refresh() }
+    pull.cancel()
+    await pull.value
+
+    #expect(store.videos.map(\.id) == [7])
+}
+
+@MainActor @Test func refreshScansOnlyOnAPlexFeed() async {
+    let api = FakeAPI()
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.switchFeed(to: .group(id: 2))
+    await store.refresh()
+    #expect(api.scanCalls == 0)
+
+    await store.switchFeed(to: .plex(.movies))
+    await store.refresh()
+    #expect(api.scanCalls == 1)
+}
+
 // A genuine scan failure must still surface -- the cancellation guard is
 // narrow, not a blanket silencer.
 @MainActor @Test func refreshLibraryStillReportsRealScanFailure() async {

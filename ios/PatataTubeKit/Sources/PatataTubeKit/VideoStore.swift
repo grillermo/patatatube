@@ -436,6 +436,25 @@ public final class VideoStore: ObservableObject {
         }
     }
 
+    /// Pull-to-refresh. Runs in its own unstructured task because SwiftUI
+    /// cancels a `.refreshable` action as soon as the view re-renders -- and
+    /// `load()` re-renders it itself by flipping `isLoading`. The cancelled
+    /// fetch then returned silently with the server's answer thrown away, so a
+    /// pull never showed a new video while leaving the group and coming back
+    /// (the same request, from a `.task`) did.
+    ///
+    /// Only a Plex feed scans the library first: a group holds downloads, which
+    /// a Plex scan cannot change, and the scan cost two seconds per pull.
+    public func refresh() async {
+        await Task {
+            if case .plex = feed {
+                await refreshLibrary()
+            } else {
+                await load()
+            }
+        }.value
+    }
+
     /// Scan the server-side Plex library, then reload the list.
     /// A failed scan surfaces in errorText but still refreshes the list.
     public func refreshLibrary() async {
