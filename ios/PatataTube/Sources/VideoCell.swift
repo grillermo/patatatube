@@ -96,6 +96,9 @@ struct VideoCell: View {
             }
             .buttonStyle(.plain)
             .logTap("play", ["video_id": "\(video.id)", "status": video.status])
+            .overlay(alignment: .topTrailing) {
+                if video.unwatched { UnwatchedDot().padding(8) }
+            }
             .overlay(alignment: .bottomTrailing) {
                 if isChildrenVideo {
                     Button(action: onPlaySleep) {

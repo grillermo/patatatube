@@ -1358,6 +1358,36 @@ private func tempCache() -> VideoListCache {
     #expect(api.scanCalls == 1)
 }
 
+@MainActor @Test func markWatchedClearsOnlyThatVideosDot() async {
+    let api = FakeAPI()
+    api.videosToReturn = [
+        Video(id: 1, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
+              groupID: 1, plexKind: nil, position: nil, status: "done", errorMsg: nil,
+              streamPath: "/s", unwatched: true),
+        Video(id: 2, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
+              groupID: 1, plexKind: nil, position: nil, status: "done", errorMsg: nil,
+              streamPath: "/s", unwatched: true),
+    ]
+    let store = VideoStore(api: api, defaults: makeDefaults())
+    await store.load()
+
+    store.markWatched(id: 1)
+
+    #expect(store.videos.map(\.unwatched) == [false, true])
+}
+
+@Test func unwatchedDecodesAndDefaultsToFalseWhenAbsent() throws {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let with = #"{"id":1,"url":"u","status":"done","stream_path":"/s","unwatched":true}"#
+    let without = #"{"id":1,"url":"u","status":"done","stream_path":"/s"}"#
+    #expect(try decoder.decode(Video.self, from: Data(with.utf8)).unwatched)
+    #expect(try decoder.decode(Video.self, from: Data(without.utf8)).unwatched == false)
+    // The copy helpers must carry the flag, not reset it.
+    let video = try decoder.decode(Video.self, from: Data(with.utf8))
+    #expect(video.withChosenVersion(nil).unwatched)
+}
+
 // A genuine scan failure must still surface -- the cancellation guard is
 // narrow, not a blanket silencer.
 @MainActor @Test func refreshLibraryStillReportsRealScanFailure() async {

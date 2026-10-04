@@ -413,6 +413,15 @@ public final class VideoStore: ObservableObject {
         }
     }
 
+    /// Clears a video's red dot the moment it starts playing, without waiting
+    /// for the next list fetch. Local only: the server learns of the play from
+    /// `POST /played`, and the next `load()` brings back its own answer.
+    public func markWatched(id: Int) {
+        guard let index = videos.firstIndex(where: { $0.id == id }),
+              videos[index].unwatched else { return }
+        videos[index] = videos[index].markingWatched()
+    }
+
     /// Deletes on the server, then refreshes the list (and cache) from the API.
     public func delete(id: Int) async {
         do {

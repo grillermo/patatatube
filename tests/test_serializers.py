@@ -78,6 +78,7 @@ def test_serialize_video_full_shape():
         "resume_secs": 0,
         "remember_position": False,
         "status": "done",
+        "unwatched": False,
         "error_msg": None,
         "stream_path": "/videos/7/stream",
         "source": "download",
@@ -316,3 +317,14 @@ def test_serialize_remember_position_is_a_bool_not_an_int():
     """The iOS client decodes this into a Swift Bool; a 0/1 would fail to decode."""
     data = serialize_video(_library_video(remember_position=1))
     assert isinstance(data["remember_position"], bool)
+
+
+def test_serialize_video_marks_only_announced_never_played_videos_unwatched():
+    base = {"id": 1, "url": "u", "status": "done"}
+    assert serialize_video({**base, "play_count": 0})["unwatched"] is True
+    assert serialize_video({**base, "play_count": 2})["unwatched"] is False
+    # NULL is "not announced yet", not "never played".
+    assert serialize_video({**base, "play_count": None})["unwatched"] is False
+    assert serialize_video({**base, "status": "downloading", "play_count": 0})["unwatched"] is False
+    # Plex rows have no badge, so they get no dot either.
+    assert serialize_video({**base, "play_count": 0, "plex_kind": "tv"})["unwatched"] is False

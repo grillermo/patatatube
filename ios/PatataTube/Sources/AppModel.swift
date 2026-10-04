@@ -225,6 +225,7 @@ final class AppModel: ObservableObject {
     func markPlayed(_ video: Video) {
         guard video.plexKind == nil else { return }
         let id = video.id
+        store.markWatched(id: id)
         Task {
             if let changed = try? await api.markPlayed(id: id), changed,
                let remote = try? await api.groups() {

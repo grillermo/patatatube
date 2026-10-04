@@ -112,6 +112,9 @@ struct VideoRow: View {
         .frame(width: Self.thumbWidth, height: Self.thumbHeight)
         .clipped()
         .cornerRadius(4)
+        .overlay(alignment: .topTrailing) {
+            if video.unwatched { UnwatchedDot(size: 9).padding(3) }
+        }
     }
 
     @ViewBuilder private var audioOverlay: some View {

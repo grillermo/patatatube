@@ -104,6 +104,11 @@ def serialize_video(video: dict) -> dict:
         # normalize here rather than leaking the integer into the API.
         "remember_position": bool(video.get("remember_position")),
         "status": video["status"],
+        # Announced and never played -- the same rule the group badge counts
+        # (db._UNPLAYED_WHERE), so the dots in a group add up to its badge.
+        "unwatched": video.get("play_count") == 0
+        and video["status"] == "done"
+        and video.get("plex_kind") is None,
         "error_msg": video.get("error_msg"),
         "stream_path": f"/videos/{video['id']}/stream",
         "source": source,
