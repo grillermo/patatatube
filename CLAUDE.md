@@ -343,15 +343,6 @@ which the migration folds in: `unread = 1` becomes 0 plays, any other finished
 video becomes 1, anything unfinished stays NULL, and the old column is dropped.
 That is what left every counter at zero on rollout. Plex rows have no badge.
 
-### There is no server-side response cache
-
-Every GET runs its endpoint and reads SQLite. A Redis cache of every 200 GET
-used to sit in `middleware.py`; it saved about 10 ms on a list request and
-needed every out-of-band writer (converter, downloader, classifier) to flush it
-by hand. Missed flushes froze the download ring, hid group badges and, after a
-restart, served bodies built by the previous code. It was removed on
-2026-10-03. Don't reintroduce one without a measured need.
-
 ### Auth
 
 Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` compared with `secrets.compare_digest`. If `UPLOAD_TOKEN` is unset the server returns 503 (upload disabled). The SSR endpoints are `/videos/{id}/group` and `/videos/{id}/promote`; the group endpoint is **not** token-gated, matching the old behavior.
