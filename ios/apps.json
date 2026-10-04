@@ -14,6 +14,16 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.7.21",
+          "buildVersion": "203",
+          "date": "2026-10-04T01:42:20Z",
+          "localizedDescription": "A red dot marks videos you haven't watched\n\n• Unwatched videos carry a red dot in the corner of their thumbnail, in both grid and list view\n• The dot disappears as soon as the video starts playing\n• The dots in a group add up to the number on its card",
+          "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.21/PatataTube-2.7.21.ipa",
+          "size": 4454928,
+          "sha256": "0ea85610d1bc75e4755c3b87494fa88bb9fea7c23b7d0139d1ed2e21087680b1",
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "2.7.20",
           "buildVersion": "202",
           "date": "2026-10-04T01:34:28Z",
@@ -1894,11 +1904,11 @@
           "minOSVersion": "17.0"
         }
       ],
-      "version": "2.7.20",
-      "versionDate": "2026-10-04T01:34:28Z",
-      "versionDescription": "New videos show up right away\n\n• Pulling down inside a group now shows a newly added video immediately, with no need to leave and re-enter the group\n• Pull-to-refresh in a group is faster: it no longer scans the Plex library first\n• A video you add without choosing a group now lands in its group as soon as it is downloaded, before conversion finishes",
-      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.20/PatataTube-2.7.20.ipa",
-      "size": 4451027
+      "version": "2.7.21",
+      "versionDate": "2026-10-04T01:42:20Z",
+      "versionDescription": "A red dot marks videos you haven't watched\n\n• Unwatched videos carry a red dot in the corner of their thumbnail, in both grid and list view\n• The dot disappears as soon as the video starts playing\n• The dots in a group add up to the number on its card",
+      "downloadURL": "https://github.com/grillermo/patatatube/releases/download/v2.7.21/PatataTube-2.7.21.ipa",
+      "size": 4454928
     }
   ],
   "news": []
