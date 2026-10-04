@@ -19,7 +19,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import app_logging  # noqa: E402
-import cache  # noqa: E402
 import db  # noqa: E402
 import hls  # noqa: E402
 import library  # noqa: E402
@@ -101,11 +100,6 @@ def run_job(job: dict) -> None:
         traceback.print_exc()
         db.finish_job(job["id"], "failed", error_msg=str(exc))
         status = "failed"
-    # The status this job just wrote (version 'done', hls_status, error_msg) is
-    # what the iOS poll loop reads out of /api/videos/{id}. Only mutating HTTP
-    # requests flush the response cache, and there is no request here, so
-    # without this the app polls a cached 'converting' until the entry expires.
-    cache.clear_blocking()
     print(
         f"[job] -1 kind={job['kind']} id={job['video_id']} "
         f"status={status} secs={time.monotonic() - started:.0f}",

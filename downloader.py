@@ -12,7 +12,6 @@ from typing import NamedTuple
 
 from pybalt import download as pybalt_download
 
-import cache
 import classifier
 import db
 import sd
@@ -99,15 +98,9 @@ async def download_video(video_id: int, classify: bool = False):
 
 async def _announce_new_video(video_id: int) -> None:
     """Announce a finished download -- start counting its plays at 0, which is
-    what puts it in its group's badge -- and flush the response cache.
-
-    The cache flush is not optional: this runs as a BackgroundTask, after the
-    request that queued it has already returned, so nothing else invalidates a
-    cached `GET /api/groups` and the badge would not appear for up to
-    CACHE_TTL_SECONDS.
+    what puts it in its group's badge.
     """
     db.mark_announced(video_id)
-    await cache.clear()
 
 
 async def process_uploaded_video(video_id: int):
@@ -594,11 +587,6 @@ async def import_playlist(url: str) -> None:
                 preview_url=_youtube_preview_url(entry["id"]),
                 group_id=group["id"],
             )
-
-        # The group and its rows exist now; flush before the (long) download loop so
-        # the app sees the group immediately. Nothing above was an HTTP write, so
-        # the cache middleware never fired.
-        await cache.clear()
     except Exception as exc:
         logger.warning("Playlist group/row setup failed for %s: %s", url, exc)
         return
@@ -609,16 +597,11 @@ async def import_playlist(url: str) -> None:
             await download_video(video_id)
         except Exception as exc:
             logger.warning("Playlist entry %s failed: %s", video_id, exc)
-        await cache.clear()
 
 
 # yt-dlp is querying YouTube once per row here with no download attached, so
 # the walk is sequential and paced. It is a one-off catch-up, not a hot path.
 BACKFILL_PAUSE_SECONDS = 0.5
-# The response cache only invalidates on a mutating HTTP request, and this
-# writes rows without one. Flushing per row would keep the cache cold for the
-# whole walk, so progress lands in batches instead.
-BACKFILL_CACHE_FLUSH_EVERY = 25
 
 
 async def backfill_channels() -> int:
@@ -644,12 +627,9 @@ async def backfill_channels() -> int:
         if channel:
             await asyncio.to_thread(db.set_video_channel, row["id"], channel)
             filled += 1
-            if filled % BACKFILL_CACHE_FLUSH_EVERY == 0:
-                await cache.clear()
         await asyncio.sleep(BACKFILL_PAUSE_SECONDS)
 
     logger.info("Channel backfill filled %d of %d videos", filled, len(rows))
-    await cache.clear()
     return filled
 
 

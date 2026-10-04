@@ -451,11 +451,6 @@ def test_sd_next_json_html_and_empty(tmp_db, monkeypatch, tmp_path):
     assert anon.status_code == 401
 
 
-def test_sd_is_never_cached():
-    import middleware
-    assert "/sd" in middleware._NEVER_CACHED_PATHS
-
-
 def test_backfill_queues_the_group_once(tmp_db, capsys):
     import sd_backfill
     gid = _children(tmp_db)

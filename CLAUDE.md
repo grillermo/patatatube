@@ -193,8 +193,8 @@ map for the intermittent-playback investigation:
    yt-dlp returns, before any ffmpeg step.** The row starts in the `inbox`
    group; once `_download_youtube_media` has the metadata, `download_video`
    writes title and channel onto the still-`downloading` row and calls
-   `services.classify_download` on a worker thread, which moves the row and
-   flushes the response cache. Normalize and the HLS job come after. Showing
+   `services.classify_download` on a worker thread, which moves the row.
+   Normalize and the HLS job come after. Showing
    the video in its group fast is the priority: it used to be filed only once
    its HLS package existed, so that the move and the badge coincided, and that
    kept a new video out of its group for the whole conversion. The **badge**
@@ -341,25 +341,16 @@ to the new group. The wire name is still `unread_count` (and
 `VideoGroup.unreadCount`), frozen from when this was a boolean `unread` column,
 which the migration folds in: `unread = 1` becomes 0 plays, any other finished
 video becomes 1, anything unfinished stays NULL, and the old column is dropped.
-That is what left every counter at zero on rollout. `_announce_new_video` also
-flushes the response cache: a BackgroundTask finishes after the request that
-queued it, so nothing else would. Plex rows have no badge.
+That is what left every counter at zero on rollout. Plex rows have no badge.
 
-### The response cache invalidates on writes, not on time
+### There is no server-side response cache
 
-`middleware.RedisCacheMiddleware` caches **every** 200 GET (`cache.py`, keyed by
-path + query + token fingerprint). Its only invalidation signals are: a mutating
-HTTP request (which flushes everything), `CACHE_TTL_SECONDS` (300s, safety net),
-and `_NEVER_CACHED_PATHS`.
-
-That means **any process that changes state without an HTTP request must flush
-it itself**, or the iOS poll loops read a frozen snapshot. `converter.py` calls
-`cache.clear_blocking()` after every job — a cached `/api/videos/{id}` reporting
-`converting` is what leaves `VideoStore.ensureReady` polling a video the server
-already finished. `/api/jobs` is in `_NEVER_CACHED_PATHS` because it is polled
-every 2s *for* live job state; caching it froze the download ring and the
-Downloads "Converting" section indefinitely. New out-of-band writers need the
-same flush; new live-state endpoints belong in that set.
+Every GET runs its endpoint and reads SQLite. A Redis cache of every 200 GET
+used to sit in `middleware.py`; it saved about 10 ms on a list request and
+needed every out-of-band writer (converter, downloader, classifier) to flush it
+by hand. Missed flushes froze the download ring, hid group badges and, after a
+restart, served bodies built by the previous code. It was removed on
+2026-10-03. Don't reintroduce one without a measured need.
 
 ### Auth
 
@@ -378,9 +369,7 @@ characters outside `[A-Za-z0-9._~-]` makes Starlette quote the cookie value and
 that Caddy matcher stops matching.** Write endpoints stay Bearer-only, and the
 page still gets its own token from the server-rendered `window.UPLOAD_TOKEN` —
 this gates access to the page, it does not hide the token from someone already
-logged in. `middleware.cache_key_for` scopes cached responses by a hash of the
-cookie, because the cache answers before the endpoint runs and would otherwise
-hand an anonymous visitor a cached authenticated page.
+logged in.
 
 ### iOS
 

@@ -1209,8 +1209,7 @@ async def api_mark_played(video_id: int, request: Request):
 
     `videos.play_count` climbs on every call; only the first one takes the video
     out of its group's badge, and that is exactly what `changed` reports, so the
-    iOS client refetches the group list once instead of on every replay. Being a
-    POST, it also flushes the response cache, so that refetch sees the new count.
+    iOS client refetches the group list once instead of on every replay.
     """
     _check_token(request)
     video = db.get_video(video_id)

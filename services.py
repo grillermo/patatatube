@@ -3,7 +3,6 @@
 import asyncio
 import logging
 
-import cache
 import classifier
 import db
 import hls
@@ -73,9 +72,6 @@ def classify_download(
         _classify_into_group(video_id, duration_secs, description)
     except Exception as exc:  # noqa: BLE001 - classification is never fatal
         logger.warning("Classifying video %s failed: %s", video_id, exc)
-    # This runs from a BackgroundTask on a worker thread, with no HTTP request
-    # involved, so nothing else would invalidate a cached /api/videos?group_id=.
-    cache.clear_blocking()
 
 
 def _classify_into_group(

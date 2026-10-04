@@ -577,9 +577,9 @@ def test_fetch_playlist_metadata_ignores_stderr_warnings_on_success(monkeypatch,
 
 @pytest.fixture()
 def playlist_env(monkeypatch, downloader_env):
-    """downloader_env plus stubbed metadata, downloads and cache flush."""
+    """downloader_env plus stubbed metadata and downloads."""
     db, downloader, videos_dir = downloader_env
-    state = {"downloaded": [], "cache_flushes": 0, "entries": [], "title": "Lo-fi Beats"}
+    state = {"downloaded": [], "entries": [], "title": "Lo-fi Beats"}
 
     async def fake_metadata(url):
         state["metadata_url"] = url
@@ -589,12 +589,8 @@ def playlist_env(monkeypatch, downloader_env):
         state["downloaded"].append(video_id)
         db.update_video(video_id, status="done", filename=f"{video_id}.mp4")
 
-    async def fake_clear():
-        state["cache_flushes"] += 1
-
     monkeypatch.setattr(downloader, "_fetch_playlist_metadata", fake_metadata)
     monkeypatch.setattr(downloader, "download_video", fake_download)
-    monkeypatch.setattr(downloader.cache, "clear", fake_clear)
     return db, downloader, state
 
 
@@ -623,7 +619,6 @@ async def test_import_playlist_creates_group_and_queues_entries(playlist_env):
         "https://i.ytimg.com/vi/aBcDeFgHiJk/hqdefault.jpg",
     ]
     assert state["downloaded"] == [v["id"] for v in videos]
-    assert state["cache_flushes"] >= 1
 
 
 @pytest.mark.asyncio
@@ -1461,7 +1456,7 @@ async def test_finished_youtube_download_adds_one_unplayed_to_its_group(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_finished_upload_adds_one_unplayed_and_flushes_the_cache(monkeypatch, downloader_env, tmp_path):
+async def test_finished_upload_adds_one_unplayed(monkeypatch, downloader_env, tmp_path):
     db, downloader, _videos_dir = downloader_env
     tmp_upload = tmp_path / "up.mp4"
     tmp_upload.write_bytes(b"bytes")
@@ -1471,18 +1466,11 @@ async def test_finished_upload_adds_one_unplayed_and_flushes_the_cache(monkeypat
     async def fake_normalize(path, video_id, channel=None, source_key=None):
         return Path(path)
 
-    flushes = []
-
-    async def fake_clear():
-        flushes.append(1)
-
     monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
-    monkeypatch.setattr(downloader.cache, "clear", fake_clear)
 
     await downloader.process_uploaded_video(video_id)
 
     assert db.unplayed_count(group_id) == 1
-    assert flushes, "a stale cached /api/groups would hide the new badge"
 
 
 @pytest.mark.asyncio

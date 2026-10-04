@@ -1803,19 +1803,8 @@ def test_preview_proxies_and_caches(client, tmp_path, monkeypatch):
     assert resp.status_code == 200 and calls == ["1264", "1262"]
 
 
-async def _cache_miss(key):
-    return None
-
-
-async def _cache_noop(*args, **kwargs):
-    return None
-
-
 def test_preview_resizes_and_keys_cache_on_plex_version(client, tmp_path, monkeypatch):
     import db, plex, router
-    # Disable the Redis response cache so we exercise the endpoint every request.
-    monkeypatch.setattr("cache.get", _cache_miss)
-    monkeypatch.setattr("cache.put", _cache_noop)
     src = tmp_path / "ep.mkv"
     src.write_bytes(b"fake")
     vid, _ = db.upsert_library_video({
@@ -2063,8 +2052,6 @@ def test_upload_file_no_longer_rejects_plex_kinds(client, auth_headers, monkeypa
 def test_preview_grabs_frame_for_download_without_thumbnail(client, tmp_path, monkeypatch):
     """Twitter/upload rows carry no external thumb — serve a frame from the mp4."""
     import router
-    monkeypatch.setattr("cache.get", _cache_miss)
-    monkeypatch.setattr("cache.put", _cache_noop)
     previews = tmp_path / "previews"
     monkeypatch.setattr("router.PREVIEWS_DIR", previews)
     grabs = []
@@ -2094,8 +2081,6 @@ def test_preview_grabs_frame_for_download_without_thumbnail(client, tmp_path, mo
 
 def test_preview_404s_when_download_file_is_missing(client, tmp_path, monkeypatch):
     import db
-    monkeypatch.setattr("cache.get", _cache_miss)
-    monkeypatch.setattr("cache.put", _cache_noop)
     monkeypatch.setattr("router.PREVIEWS_DIR", tmp_path / "previews")
     vid = db.add_video("https://x.com/a/status/9", platform="twitter")
     db.update_video(vid, "done", filename=f"{vid}.mp4")
@@ -2492,32 +2477,6 @@ def test_logout_clears_the_cookie(client):
     assert 'upload_token="";' in resp.headers["set-cookie"] or "upload_token=;" in resp.headers["set-cookie"]
 
 
-def test_cached_pages_are_scoped_to_the_login_cookie(client):
-    import middleware
-
-    # The key derivation is what matters, and it is not otherwise observable,
-    # so assert on it directly through a request-shaped stub.
-    class _Req:
-        def __init__(self, cookies, headers=None):
-            self.method = "GET"
-            self.cookies = cookies
-            self.headers = headers or {}
-
-            class _URL:
-                path = "/"
-                query = ""
-
-            self.url = _URL()
-
-    anon = middleware.cache_key_for(_Req({}))
-    authed = middleware.cache_key_for(_Req({"upload_token": "test-secret"}))
-    other = middleware.cache_key_for(_Req({"upload_token": "different"}))
-
-    assert anon != authed
-    assert authed != other
-    assert "test-secret" not in authed
-
-
 def test_page_redirects_to_login_without_a_cookie(client):
     # Clear the cookie that the fixture sets, to test anonymous access
     del client.cookies["upload_token"]
@@ -2595,7 +2554,6 @@ def test_played_counts_every_play_and_reports_the_badge_change_once(client, auth
     import db
     group_id = db.list_groups()[0]["id"]
     video_id = _finished_video(client, group_id)
-    client.get("/api/groups", headers=auth_headers)  # prime any response cache
 
     first = client.post(f"/api/videos/{video_id}/played", headers=auth_headers)
     second = client.post(f"/api/videos/{video_id}/played", headers=auth_headers)
