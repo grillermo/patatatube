@@ -1,4 +1,4 @@
-"""Pick a video group for a finished download, using TypeSafe's `jev` model.
+"""Pick a video group for a finished download, using SubQ's `subq-snap-preview` model.
 
 One `choice` question over the `groups` table: each group's name is an option
 and its description (the label when it has none) says what belongs there. The
@@ -18,8 +18,8 @@ import db
 
 logger = logging.getLogger(__name__)
 
-API_URL = "https://api.typesafe.ai/v1/systemone"
-MODEL = "jev-latest"
+API_URL = "https://api.subq.ai/v1/systemone"
+MODEL = "subq-snap-preview"
 TIMEOUT_SECS = 30
 DESCRIPTION_MAX_CHARS = 1500
 
@@ -76,7 +76,7 @@ async def _post(payload: dict) -> dict:
         resp = await client.post(
             API_URL,
             json=payload,
-            headers={"Authorization": f"Bearer {os.environ['JEV_API_KEY']}"},
+            headers={"Authorization": f"Bearer {os.environ['SUBQ_API_KEY']}"},
         )
         resp.raise_for_status()
         return resp.json()
@@ -89,8 +89,8 @@ async def classify(
     description: str | None,
 ) -> dict | None:
     """The group row the video belongs in, or None to leave it in the inbox."""
-    if not os.getenv("JEV_API_KEY"):
-        logger.info("[classify] JEV_API_KEY not set; skipping classification")
+    if not os.getenv("SUBQ_API_KEY"):
+        logger.info("[classify] SUBQ_API_KEY not set; skipping classification")
         return None
 
     groups = {g["name"]: g for g in db.list_groups() if g["name"] != db.DEFAULT_UPLOAD_GROUP}

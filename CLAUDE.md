@@ -204,8 +204,8 @@ map for the intermittent-playback investigation:
    `services.set_group`: the latter queues an SD rendition, and there is no
    mp4 to render at that point (`sd.enqueue_if_selected` runs after `done`).
    `classify_download` asks
-   `classifier.classify` (TypeSafe's `jev`
-   model, `JEV_API_KEY`) to pick a group from title, channel, duration and
+   `classifier.classify` (SubQ's `subq-snap-preview`
+   model, `SUBQ_API_KEY`) to pick a group from title, channel, duration and
    the first 1500 chars of the description — yt-dlp prints the last two as
    `TW2WL_DURATION` / `TW2WL_DESC` (`%(description)j`, JSON, because the
    parser is line-based). The router passes `classify=True` only when

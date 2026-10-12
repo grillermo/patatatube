@@ -7,7 +7,7 @@ import pytest
 @pytest.fixture()
 def classifier_env(monkeypatch, tmp_path):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
-    monkeypatch.setenv("JEV_API_KEY", "test-key")
+    monkeypatch.setenv("SUBQ_API_KEY", "test-key")
 
     import db
     import classifier
@@ -76,7 +76,7 @@ async def test_classify_returns_the_chosen_group(monkeypatch, classifier_env):
     assert "asmr" in question["criteria"]
     assert question["criteria"]["asmr"] == "ASMR"
     assert db.DEFAULT_UPLOAD_GROUP not in question["criteria"]
-    assert seen["payload"]["model"] == "jev-latest"
+    assert seen["payload"]["model"] == "subq-snap-preview"
     assert "Duration: 1h" in seen["payload"]["state"]
 
 
@@ -139,7 +139,7 @@ async def test_classify_ignores_a_choice_that_is_not_a_group(monkeypatch, classi
 @pytest.mark.asyncio
 async def test_classify_without_an_api_key_never_calls_the_api(monkeypatch, classifier_env):
     _db, classifier = classifier_env
-    monkeypatch.delenv("JEV_API_KEY")
+    monkeypatch.delenv("SUBQ_API_KEY")
 
     async def fake_post(payload):
         raise AssertionError("must not be called")
