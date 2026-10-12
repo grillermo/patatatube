@@ -1,16 +1,24 @@
-"""Pick a video group for a finished download, using SubQ's `subq-snap-preview` model.
+"""Pick a video group for a finished download, using SubQ's `subq-snap-preview`
+model, falling back to TypeSafe's `jev` when SubQ fails.
 
 One `choice` question over the `groups` table: each group's name is an option
 and its description (the label when it has none) says what belongs there. The
 inbox is left out — it is where a video sits when nobody knows where it
 belongs, so it is the fallback, not a target.
 
-`classify` never raises. A missing key, a network error or an unusable answer
+Both providers speak the same `systemone` request and response, so only the
+URL, model and key differ. SubQ goes first; any failure there -- an HTTP or
+network error, a malformed response, a choice that is not a group -- moves on
+to `jev`. A provider whose key is unset is skipped. A low-confidence answer is
+not a failure: it is the model saying it doesn't know, so it is not retried.
+
+`classify` never raises. No keys, every provider failing, or a low confidence
 all come back as None and the video simply stays in the inbox.
 """
 
 import logging
 import os
+from typing import NamedTuple
 
 import httpx
 
@@ -18,8 +26,19 @@ import db
 
 logger = logging.getLogger(__name__)
 
-API_URL = "https://api.subq.ai/v1/systemone"
-MODEL = "subq-snap-preview"
+
+
+class Provider(NamedTuple):
+    name: str
+    url: str
+    model: str
+    key_env: str
+
+
+PROVIDERS = (
+    Provider("subq", "https://api.subq.ai/v1/systemone", "subq-snap-preview", "SUBQ_API_KEY"),
+    Provider("jev", "https://api.typesafe.ai/v1/systemone", "jev-latest", "JEV_API_KEY"),
+)
 TIMEOUT_SECS = 30
 DESCRIPTION_MAX_CHARS = 1500
 
@@ -64,7 +83,7 @@ def build_state(
     return "\n".join(lines)
 
 
-async def _post(payload: dict) -> dict:
+async def _post(provider: Provider, payload: dict) -> dict:
     # trust_env=False is not a preference, it is what keeps the worker alive.
     # With it on, httpx asks urllib for the system proxies, which on macOS is
     # _scproxy.get_proxies() -> SystemConfiguration -> a synchronous XPC round
@@ -74,9 +93,9 @@ async def _post(payload: dict) -> dict:
     # the HLS job) with it. Same reason plex.py passes it on every call.
     async with httpx.AsyncClient(timeout=TIMEOUT_SECS, trust_env=False) as client:
         resp = await client.post(
-            API_URL,
-            json=payload,
-            headers={"Authorization": f"Bearer {os.environ['SUBQ_API_KEY']}"},
+            provider.url,
+            json={**payload, "model": provider.model},
+            headers={"Authorization": f"Bearer {os.environ[provider.key_env]}"},
         )
         resp.raise_for_status()
         return resp.json()
@@ -89,8 +108,9 @@ async def classify(
     description: str | None,
 ) -> dict | None:
     """The group row the video belongs in, or None to leave it in the inbox."""
-    if not os.getenv("SUBQ_API_KEY"):
-        logger.info("[classify] SUBQ_API_KEY not set; skipping classification")
+    providers = [p for p in PROVIDERS if os.getenv(p.key_env)]
+    if not providers:
+        logger.info("[classify] no classifier API key set; skipping classification")
         return None
 
     groups = {g["name"]: g for g in db.list_groups() if g["name"] != db.DEFAULT_UPLOAD_GROUP}
@@ -100,7 +120,6 @@ async def classify(
 
     payload = {
         "state": state,
-        "model": MODEL,
         "questions": {
             "group": {
                 "type": "choice",
@@ -111,11 +130,20 @@ async def classify(
             }
         },
     }
-    try:
-        answer = (await _post(payload))["answers"]["group"]
-        choice, confidence = answer["choice"], float(answer["confidence"])
-    except Exception as exc:
-        logger.warning("[classify] %r: request failed: %s", title, exc)
+    for provider in providers:
+        try:
+            answer = (await _post(provider, payload))["answers"]["group"]
+            choice, confidence = answer["choice"], float(answer["confidence"])
+        except Exception as exc:
+            logger.warning("[classify] %r: %s request failed: %s", title, provider.name, exc)
+            continue
+        if choice not in groups:
+            logger.warning(
+                "[classify] %r: %s chose %r, which is not a group", title, provider.name, choice
+            )
+            continue
+        break
+    else:
         return None
 
     # The runner-up is what explains a miss: a low confidence is almost always
@@ -130,14 +158,14 @@ async def classify(
             logger.info(
                 "[classify]   %s (label %r) %.2f: %r", name, groups[name]["label"], p, criteria[name]
             )
-    if choice not in groups:
-        logger.warning("[classify] %r: chose %r, which is not a group", title, choice)
-        return None
     if confidence < _min_confidence():
         logger.info(
-            "[classify] %r: chose %s at %.2f < %.2f, keeping in inbox (%s)",
-            title, choice, confidence, _min_confidence(), spread,
+            "[classify] %r: %s chose %s at %.2f < %.2f, keeping in inbox (%s)",
+            title, provider.name, choice, confidence, _min_confidence(), spread,
         )
         return None
-    logger.info("[classify] %r: chose %s at %.2f (%s)", title, choice, confidence, spread)
+    logger.info(
+        "[classify] %r: %s chose %s at %.2f (%s)",
+        title, provider.name, choice, confidence, spread,
+    )
     return groups[choice]

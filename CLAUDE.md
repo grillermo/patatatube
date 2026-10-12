@@ -205,14 +205,17 @@ map for the intermittent-playback investigation:
    mp4 to render at that point (`sd.enqueue_if_selected` runs after `done`).
    `classify_download` asks
    `classifier.classify` (SubQ's `subq-snap-preview`
-   model, `SUBQ_API_KEY`) to pick a group from title, channel, duration and
+   model, `SUBQ_API_KEY`; on any SubQ failure — HTTP/network error, malformed
+   answer, a choice that isn't a group — it retries once on TypeSafe's `jev`,
+   `JEV_API_KEY`, which speaks the same request; a low-confidence answer is
+   not a failure and is not retried) to pick a group from title, channel, duration and
    the first 1500 chars of the description — yt-dlp prints the last two as
    `TW2WL_DURATION` / `TW2WL_DESC` (`%(description)j`, JSON, because the
    parser is line-based). The router passes `classify=True` only when
    `group_id` was omitted, so an explicit group — even the inbox — is never
    second-guessed; a video moved by hand during the download is left alone.
-   Confidence below `CLASSIFY_MIN_CONFIDENCE` (0.6), no key, or any API
-   failure leaves it in the inbox: classification can never fail a download,
+   Confidence below `CLASSIFY_MIN_CONFIDENCE` (0.6), no key, or both APIs
+   failing leaves it in the inbox: classification can never fail a download,
    and the video is announced either way.
    Options are the group `name`s described by `groups.description` (falling
    back to the `label`; inbox excluded). Set it with `PATCH /api/groups/{id}`

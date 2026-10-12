@@ -8,6 +8,9 @@ import pytest
 def classifier_env(monkeypatch, tmp_path):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setenv("SUBQ_API_KEY", "test-key")
+    # The fallback is opted into per test, so a real key in the shell can't
+    # turn a "SubQ failed" test into a live call.
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
 
     import db
     import classifier
@@ -61,8 +64,8 @@ async def test_classify_returns_the_chosen_group(monkeypatch, classifier_env):
     db, classifier = classifier_env
     seen = {}
 
-    async def fake_post(payload):
-        seen["payload"] = payload
+    async def fake_post(provider, payload):
+        seen["provider"], seen["payload"] = provider, payload
         return _answer("asmr", 0.9)
 
     monkeypatch.setattr(classifier, "_post", fake_post)
@@ -76,7 +79,7 @@ async def test_classify_returns_the_chosen_group(monkeypatch, classifier_env):
     assert "asmr" in question["criteria"]
     assert question["criteria"]["asmr"] == "ASMR"
     assert db.DEFAULT_UPLOAD_GROUP not in question["criteria"]
-    assert seen["payload"]["model"] == "subq-snap-preview"
+    assert seen["provider"].model == "subq-snap-preview"
     assert "Duration: 1h" in seen["payload"]["state"]
 
 
@@ -88,7 +91,7 @@ async def test_classify_describes_a_group_by_its_description_when_it_has_one(
     db.update_group(db.get_group_by_name("children")["id"], description="Kids' songs, under 5 min")
     seen = {}
 
-    async def fake_post(payload):
+    async def fake_post(provider, payload):
         seen["criteria"] = payload["questions"]["group"]["criteria"]
         return _answer("asmr", 0.9)
 
@@ -104,7 +107,7 @@ async def test_classify_describes_a_group_by_its_description_when_it_has_one(
 async def test_classify_below_the_threshold_returns_none(monkeypatch, classifier_env):
     _db, classifier = classifier_env
 
-    async def fake_post(payload):
+    async def fake_post(provider, payload):
         return _answer("asmr", 0.59)
 
     monkeypatch.setattr(classifier, "_post", fake_post)
@@ -116,7 +119,7 @@ async def test_classify_below_the_threshold_returns_none(monkeypatch, classifier
 async def test_classify_at_the_threshold_is_accepted(monkeypatch, classifier_env):
     _db, classifier = classifier_env
 
-    async def fake_post(payload):
+    async def fake_post(provider, payload):
         return _answer("asmr", 0.6)
 
     monkeypatch.setattr(classifier, "_post", fake_post)
@@ -128,7 +131,7 @@ async def test_classify_at_the_threshold_is_accepted(monkeypatch, classifier_env
 async def test_classify_ignores_a_choice_that_is_not_a_group(monkeypatch, classifier_env):
     _db, classifier = classifier_env
 
-    async def fake_post(payload):
+    async def fake_post(provider, payload):
         return _answer("made-up", 0.99)
 
     monkeypatch.setattr(classifier, "_post", fake_post)
@@ -141,7 +144,7 @@ async def test_classify_without_an_api_key_never_calls_the_api(monkeypatch, clas
     _db, classifier = classifier_env
     monkeypatch.delenv("SUBQ_API_KEY")
 
-    async def fake_post(payload):
+    async def fake_post(provider, payload):
         raise AssertionError("must not be called")
 
     monkeypatch.setattr(classifier, "_post", fake_post)
@@ -153,7 +156,7 @@ async def test_classify_without_an_api_key_never_calls_the_api(monkeypatch, clas
 async def test_classify_swallows_api_errors(monkeypatch, classifier_env):
     _db, classifier = classifier_env
 
-    async def fake_post(payload):
+    async def fake_post(provider, payload):
         raise httpx.ConnectError("boom")
 
     monkeypatch.setattr(classifier, "_post", fake_post)
@@ -165,8 +168,88 @@ async def test_classify_swallows_api_errors(monkeypatch, classifier_env):
 async def test_classify_swallows_a_malformed_response(monkeypatch, classifier_env):
     _db, classifier = classifier_env
 
-    async def fake_post(payload):
+    async def fake_post(provider, payload):
         return {"answers": {}}
+
+    monkeypatch.setattr(classifier, "_post", fake_post)
+
+    assert await classifier.classify("t", None, None, None) is None
+
+
+def _with_jev(monkeypatch, classifier, subq_result):
+    """SubQ behaves as `subq_result` (an answer, or an exception to raise);
+    jev answers asmr at 0.9. Returns the provider names called, in order."""
+    monkeypatch.setenv("JEV_API_KEY", "jev-key")
+    calls = []
+
+    async def fake_post(provider, payload):
+        calls.append(provider.name)
+        if provider.name == "jev":
+            return _answer("asmr", 0.9)
+        if isinstance(subq_result, Exception):
+            raise subq_result
+        return subq_result
+
+    monkeypatch.setattr(classifier, "_post", fake_post)
+    return calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "subq_result",
+    [
+        httpx.ConnectError("boom"),
+        httpx.HTTPStatusError("402", request=None, response=None),
+        {"answers": {}},
+        _answer("made-up", 0.99),
+    ],
+    ids=["network", "http-error", "malformed", "not-a-group"],
+)
+async def test_a_subq_failure_falls_back_to_jev(monkeypatch, classifier_env, subq_result):
+    _db, classifier = classifier_env
+    calls = _with_jev(monkeypatch, classifier, subq_result)
+
+    group = await classifier.classify("t", None, None, None)
+
+    assert calls == ["subq", "jev"]
+    assert group["name"] == "asmr"
+
+
+@pytest.mark.asyncio
+async def test_a_subq_answer_never_calls_jev(monkeypatch, classifier_env):
+    _db, classifier = classifier_env
+    calls = _with_jev(monkeypatch, classifier, _answer("children", 0.9))
+
+    assert (await classifier.classify("t", None, None, None))["name"] == "children"
+    assert calls == ["subq"]
+
+
+@pytest.mark.asyncio
+async def test_a_low_confidence_subq_answer_is_not_retried_on_jev(monkeypatch, classifier_env):
+    _db, classifier = classifier_env
+    calls = _with_jev(monkeypatch, classifier, _answer("children", 0.3))
+
+    assert await classifier.classify("t", None, None, None) is None
+    assert calls == ["subq"]
+
+
+@pytest.mark.asyncio
+async def test_only_jev_configured_uses_jev(monkeypatch, classifier_env):
+    _db, classifier = classifier_env
+    monkeypatch.delenv("SUBQ_API_KEY")
+    calls = _with_jev(monkeypatch, classifier, AssertionError("subq must not be called"))
+
+    assert (await classifier.classify("t", None, None, None))["name"] == "asmr"
+    assert calls == ["jev"]
+
+
+@pytest.mark.asyncio
+async def test_both_providers_failing_returns_none(monkeypatch, classifier_env):
+    _db, classifier = classifier_env
+    monkeypatch.setenv("JEV_API_KEY", "jev-key")
+
+    async def fake_post(provider, payload):
+        raise httpx.ConnectError("boom")
 
     monkeypatch.setattr(classifier, "_post", fake_post)
 
