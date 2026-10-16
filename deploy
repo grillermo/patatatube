@@ -3,31 +3,25 @@
 
 # deploy
 #
-# One-shot release of the PatataTube iOS app to its AltStore source.
-#
-# AltStore (on the iPad) polls a "source" — a JSON manifest — and auto-installs
-# newer versions of apps listed in it. This script publishes a new version end
-# to end:
+# One-shot over-the-air release of the PatataTube iOS app, the same route as
+# ../my-claude-usage/deploy-ios:
 #
 #   1. bump MARKETING_VERSION (+ build number) in ios/PatataTube/project.yml
-#   2. build a fresh .ipa from source            (ios/ipa_builder.rb)
-#   3. create a GitHub Release and upload the .ipa as an asset (its host)
-#   4. regenerate ios/apps.json — the AltStore source manifest — pointing at
-#      the new release asset, with real size + sha256
-#   5. commit the bump + manifest and push to GitHub
+#   2. build an ad-hoc-signed .ipa + OTA manifest   (ios/ipa_builder.rb)
+#   3. publish the .ipa, icon, manifest and install page to files.chiq.me
+#   4. commit the bump, tag it, and push to the `github` remote
 #
-# AltStore then sees the bumped version in the raw manifest and updates the app
-# on the iPad automatically (this is separate from AltServer's 7-day re-sign,
-# which keeps the *current* build alive; this ships *new code*).
+# Nothing here talks to the GitHub API: no `gh`, no GitHub Release, no AltStore
+# source. The push is plain git over SSH, and only records the version bump.
 #
 # Usage:
 #   ./deploy                 # bump patch  (1.0.0 -> 1.0.1)
 #   ./deploy patch|minor|major
 #   ./deploy 1.4.2           # set an explicit version
 #   ./deploy --instrumented  # ^ any of the above, but with DEVLOG compiled in
-#   ./deploy --instrumented --yes   # skip the confirmation prompt
+#   ./deploy --yes           # skip the confirmation prompt
 #
-# Release notes (the "What's New" AltStore/SideStore shows on the iPad):
+# Release notes (shown on the install page):
 #
 #   ./deploy minor --summary "Faster offline downloads" \
 #            --note "Download-all now queues behind interactive taps" \
@@ -35,37 +29,47 @@
 #
 # --summary is a one-line headline, --note is repeatable and becomes a bullet.
 # With neither, the notes are derived from the commit subjects since the last
-# release tag, so a version's description is never just "Release X.Y.Z". The
-# same text becomes the GitHub Release body.
+# release tag.
 #
 # --instrumented builds the .ipa with the DEVLOG condition, so the app records
 # what it is doing at runtime and posts it to the backend (POST /api/devlog ->
-# log/ios.jsonl). Use it to reproduce a bug on the real iPad. It is a normal
-# public release in every other respect, so ship a clean build over it once the
-# bug is understood. See docs/ios-devlog-instrumentation-plan.md.
+# log/ios.jsonl). Use it to reproduce a bug on the real iPad, then ship a clean
+# build over it. See docs/ios-devlog-instrumentation-plan.md.
 #
-# The AltStore source URL to add on the iPad is printed at the end (and lives
-# in ios/altstore.md).
+# The install page URL never changes, so a Home Screen bookmark always installs
+# the newest release. It is printed at the end.
 
 require_relative "ios/ipa_builder"
-require "digest"
-require "json"
+require "fileutils"
 require "shellwords"
-require "time"
 
 B = IpaBuilder # build helpers (step/run/die/colors) live here
 
-APP_NAME     = IpaBuilder::APP_NAME
-PROJECT_YML  = IpaBuilder::PROJECT_YML
-APPS_JSON    = File.join(__dir__, "ios", "apps.json")
-BUNDLE_ID    = "com.patatatube.app"
-SOURCE_ID    = "com.patatatube.source"
-MANIFEST_REL = "ios/apps.json"
-ICON_REL     = "apple-touch-icon.png"
+APP_NAME    = IpaBuilder::APP_NAME
+PROJECT_YML = IpaBuilder::PROJECT_YML
+REMOTE      = "github"
+BRANCH      = "main"
+
+# The file_server service behind files.chiq.me runs on this machine and serves
+# ../file_server/files, so publishing is a copy into that directory, not an HTTP
+# upload (large bodies stall in the Cloudflare tunnel). The manifest, icon and
+# install page names are pinned so their URLs never change; each release
+# overwrites them.
+FILES_BASE      = ENV.fetch("PATATATUBE_FILES_BASE", "https://files.chiq.me").sub(%r{/+\z}, "")
+PUBLISH_DIR     = ENV.fetch("PATATATUBE_PUBLISH_DIR", File.expand_path("../file_server/files", __dir__))
+PINNED_MANIFEST = "patatatube-manifest.plist"
+PINNED_ICON     = "patatatube-icon.png"
+PINNED_INSTALL  = "3cf25ffc-754e-4a19-b4e1-bcc84cf02bd4-Install_PatataTube.html"
+ICON_SOURCE     = File.join(__dir__, "apple-touch-icon.png")
+MANIFEST_URL    = "#{FILES_BASE}/files/#{PINNED_MANIFEST}"
+ICON_URL        = "#{FILES_BASE}/files/#{PINNED_ICON}"
+INSTALL_URL     = "#{FILES_BASE}/files/#{PINNED_INSTALL}"
+ITMS_URL        = "itms-services://?action=download-manifest&url=#{MANIFEST_URL}"
+MIN_OS          = File.read(PROJECT_YML)[/^\s*iOS:\s*"?([\d.]+)"?/, 1] || "17.0"
 
 # --- flags -------------------------------------------------------------------
-# Pulled out of ARGV before the version argument is read, so --instrumented can
-# appear anywhere on the command line.
+# Pulled out of ARGV before the version argument is read, so they can appear
+# anywhere on the command line.
 
 ASSUME_YES   = !ARGV.delete("--yes").nil?
 INSTRUMENTED = !(ARGV.delete("--instrumented") || ARGV.delete("--devlog")).nil? ||
@@ -99,73 +103,18 @@ NOTES   = take_option(ARGV, "--note", "--notes", "-n")
           .map { |n| n.strip.sub(/\A[-*•]\s*/, "") }
           .reject(&:empty?)
 
-# --- repo / remote -----------------------------------------------------------
+# --- preflight ---------------------------------------------------------------
 
-B.die("no gh CLI on PATH (brew install gh)") if `which gh`.empty?
-B.die("gh not authenticated (run: gh auth login)") unless system("gh auth status >/dev/null 2>&1")
-
-REPO = `gh repo view --json nameWithOwner -q .nameWithOwner`.strip
-B.die("could not determine GitHub repo (gh repo view failed)") if REPO.empty?
-
-BRANCH = `git rev-parse --abbrev-ref HEAD`.strip
-DEFAULT_BRANCH = `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.strip
-unless BRANCH == DEFAULT_BRANCH
-  B.die("on branch '#{BRANCH}', not default '#{DEFAULT_BRANCH}'. " \
-        "The source manifest raw URL tracks '#{DEFAULT_BRANCH}'; switch branches first.")
+branch = `git rev-parse --abbrev-ref HEAD`.strip
+B.die("on branch '#{branch}', not '#{BRANCH}'; releases are cut from #{BRANCH}") unless branch == BRANCH
+B.die("xcodegen not found (brew install xcodegen)") unless system("command -v xcodegen >/dev/null")
+unless File.directory?(PUBLISH_DIR)
+  B.die("file_server files/ directory not found at #{PUBLISH_DIR} — it is what " \
+        "#{FILES_BASE} serves. Set PATATATUBE_PUBLISH_DIR if it moved.")
 end
-
-RAW_BASE      = "https://raw.githubusercontent.com/#{REPO}/#{DEFAULT_BRANCH}"
-RELEASE_BASE  = "https://github.com/#{REPO}/releases/download"
-MANIFEST_URL  = "#{RAW_BASE}/#{MANIFEST_REL}"
-ICON_URL      = "#{RAW_BASE}/#{ICON_REL}"
-MIN_OS        = File.read(PROJECT_YML)[/^\s*iOS:\s*"?([\d.]+)"?/, 1] || "17.0"
-
-# --- over-the-air install ----------------------------------------------------
-#
-# The second delivery route, alongside the AltStore source. `xcodebuild
-# -exportArchive` emits an OTA manifest describing the .ipa; iOS installs from
-# it when Safari opens an `itms-services://` link pointing at that manifest
-# over HTTPS.
-#
-# Both URLs below are **constant across releases** — the manifest always lives
-# at the same raw path on the default branch, and each deploy overwrites it in
-# place. That is the whole point: one bookmark on the Home Screen installs
-# whatever the current version is, forever, with no computer involved.
-#
-# The install page needs a host that serves real text/html (raw.githubusercontent
-# serves text/plain, so a link on it is not tappable), hence GitHub Pages out of
-# docs/. Setup and troubleshooting: ios/install.md.
-OWNER, REPO_NAME  = REPO.split("/")
-OTA_MANIFEST_REL  = "ios/manifest.plist"
-OTA_MANIFEST_URL  = "#{RAW_BASE}/#{OTA_MANIFEST_REL}"
-INSTALL_PAGE_REL  = "docs/install.html"
-INSTALL_PAGE_URL  = "https://#{OWNER}.github.io/#{REPO_NAME}/install.html"
-# The Safari route is served by files.chiq.me: the file_server service runs on
-# this machine and serves ../file_server/files, so publishing is a copy into that
-# directory, not an HTTP upload (large bodies stall in the Cloudflare tunnel —
-# see ../vvterm/scripts/deploy/uploader.rb). The install page and manifest
-# names are pinned so their URLs never change; each release overwrites them.
-FILES_BASE         = ENV.fetch("PATATATUBE_FILES_BASE", "https://files.chiq.me").sub(%r{/+\z}, "")
-PUBLISH_DIR        = ENV.fetch("PATATATUBE_PUBLISH_DIR", File.expand_path("../file_server/files", __dir__))
-PINNED_MANIFEST    = "patatatube-manifest.plist"
-PINNED_INSTALL     = "3cf25ffc-754e-4a19-b4e1-bcc84cf02bd4-Install_PatataTube.html"
-FILES_MANIFEST_URL = "#{FILES_BASE}/files/#{PINNED_MANIFEST}"
-FILES_INSTALL_URL  = "#{FILES_BASE}/files/#{PINNED_INSTALL}"
-ITMS_URL           = "itms-services://?action=download-manifest&url=#{FILES_MANIFEST_URL}"
-
-# Publishes `path` into the served directory under exactly `name`. Copies
-# beside the target and renames, so a device mid-download never reads a
-# half-written file while a pinned name is overwritten.
-def publish_file(path, name:)
-  target = File.join(PUBLISH_DIR, name)
-  staged = "#{target}.publishing-#{Process.pid}"
-  begin
-    FileUtils.cp(path, staged)
-    File.rename(staged, target)
-  ensure
-    FileUtils.rm_f(staged)
-  end
-  "#{FILES_BASE}/files/#{name}"
+B.die("icon not found at #{ICON_SOURCE}") unless File.file?(ICON_SOURCE)
+if ENV["PATATATUBE_UNSIGNED"] == "1"
+  B.die("PATATATUBE_UNSIGNED=1 builds an .ipa Safari cannot install, and OTA is the only route")
 end
 
 # --- version bump ------------------------------------------------------------
@@ -186,21 +135,15 @@ current  = B.marketing_version
 version  = bump(current, ARGV[0])
 tag      = "v#{version}"
 asset    = "#{APP_NAME}-#{version}.ipa"
-download = "#{RELEASE_BASE}/#{tag}/#{asset}"  # AltStore source
-ota_download = "#{FILES_BASE}/files/#{asset}" # OTA manifest (files.chiq.me)
+download = "#{FILES_BASE}/files/#{asset}"
 
-unless File.directory?(PUBLISH_DIR)
-  B.die("file_server files/ directory not found at #{PUBLISH_DIR} — it is what " \
-        "#{FILES_BASE} serves. Set PATATATUBE_PUBLISH_DIR if it moved.")
-end
-
-if `git tag -l #{tag}`.strip == tag || !`gh release view #{tag} 2>/dev/null`.empty?
+if `git tag -l #{tag.shellescape}`.strip == tag || File.exist?(File.join(PUBLISH_DIR, asset))
   B.die("release #{tag} already exists — bump to a new version")
 end
 
 # --- push --------------------------------------------------------------------
 
-# Push the branch, tolerating a push someone else already made for us.
+# Push the branch and tag, tolerating a push someone else already made for us.
 #
 # git-sync is installed as a global post-commit hook (core.hooksPath ->
 # ~/.gitsync/hooks) and pushes to this same remote the instant a commit lands.
@@ -210,31 +153,24 @@ end
 #   ! [remote rejected] main -> main (cannot lock ref 'refs/heads/main':
 #     is at <ours> but expected <parent>)
 #
-# Treating that as fatal is worse than useless here: it aborts one step before
-# `gh release create`, leaving a *pushed* manifest that advertises a download
-# URL for a release that does not exist. So on failure, ask the remote what it
-# actually holds. If that is our HEAD, the hook did our work and we carry on;
-# anything else is a genuine failure and still dies.
+# So on failure, ask the remote what it actually holds. If that is our HEAD,
+# the hook did our work and we carry on; anything else is a genuine failure.
 def push_branch(branch, chdir:)
-  cmd = "git push github #{branch}"
+  cmd = "git push #{REMOTE} #{branch}"
   puts "    $ #{cmd}"
   return if system(cmd, chdir: chdir)
 
   local  = `git -C #{chdir.shellescape} rev-parse HEAD`.strip
-  remote = `git -C #{chdir.shellescape} ls-remote github refs/heads/#{branch}`.split.first.to_s
+  remote = `git -C #{chdir.shellescape} ls-remote #{REMOTE} refs/heads/#{branch}`.split.first.to_s
   unless !local.empty? && local == remote
     B.die("command failed: #{cmd} (remote is at #{remote.empty? ? "nothing" : remote[0, 7]}, " \
-          "we are at #{local[0, 7]})")
+          "we are at #{local[0, 7]}). The release is already published; push by hand.")
   end
 
   puts B.green("    remote already at #{local[0, 7]} — pushed by the git-sync hook; continuing")
 end
 
 # --- release notes -----------------------------------------------------------
-# AltStore/SideStore render localizedDescription as the version's "What's New",
-# so a bare "Release X.Y.Z" tells the person on the iPad nothing. Bullets come
-# from --note, and failing that from the commit subjects since the last release
-# tag (the wrapper commits pending work before we run, so they are all in).
 
 # Merge/release/chore noise that says nothing about what changed on the iPad.
 NOTE_NOISE = /\A(Release iOS v|Merge |Commit pending changes|Bump |wip\b)/i
@@ -262,124 +198,59 @@ end
 
 DESCRIPTION = release_notes(version, INSTRUMENTED)
 
-yml   = File.read(PROJECT_YML)
-build = (yml[/^\s*CURRENT_PROJECT_VERSION:\s*"?(\d+)"?/, 1] || "0").to_i + 1
-yml   = yml.sub(/^(\s*MARKETING_VERSION:\s*)"?[\d.]+"?/, "\\1\"#{version}\"")
-yml   = yml.sub(/^(\s*CURRENT_PROJECT_VERSION:\s*)"?\d+"?/, "\\1\"#{build}\"")
-File.write(PROJECT_YML, yml)
+original_yml = File.read(PROJECT_YML)
+build = (original_yml[/^\s*CURRENT_PROJECT_VERSION:\s*"?(\d+)"?/, 1] || "0").to_i + 1
 
-puts B.bold("\n==> Releasing #{APP_NAME} #{current} -> #{version} (build #{build}) to #{REPO}")
-puts B.bold("\n    What's New (AltStore + GitHub release):")
+puts B.bold("\n==> Releasing #{APP_NAME} (OTA) #{current} -> #{version} (build #{build})")
+puts B.bold("\n    What's New:")
 DESCRIPTION.each_line { |l| puts "      #{l.chomp}" }
+puts "\n    Install page: #{INSTALL_URL}"
 
-# An instrumented build is a public GitHub Release like any other, and AltStore
-# will push it to the iPad automatically. Make that impossible to do by accident.
 if INSTRUMENTED && !ASSUME_YES
-  puts B.red(B.bold("\n  ⚠  This publishes an INSTRUMENTED build (DEVLOG) to the public AltStore source."))
-  puts "     The app will post runtime logs to your backend, and AltStore will"
-  puts "     auto-install it on the iPad. Ship a clean build over it afterwards."
+  puts B.red(B.bold("\n  ⚠  This publishes an INSTRUMENTED build (DEVLOG)."))
+  puts "     The app will post runtime logs to your backend. Ship a clean build over it afterwards."
   print "\n  Type 'yes' to continue: "
   B.die("aborted") unless $stdin.gets&.strip == "yes"
+elsif !ASSUME_YES
+  print "\n    Continue? [y/N] "
+  B.die("aborted") unless $stdin.gets.to_s.strip.downcase.start_with?("y")
 end
+
+# --- write the bump; restore it on any failure before the commit -------------
+
+committed = false
+at_exit { File.write(PROJECT_YML, original_yml) unless committed }
+
+yml = original_yml.sub(/^(\s*MARKETING_VERSION:\s*)"?[\d.]+"?/, "\\1\"#{version}\"")
+yml = yml.sub(/^(\s*CURRENT_PROJECT_VERSION:\s*)"?\d+"?/, "\\1\"#{build}\"")
+File.write(PROJECT_YML, yml)
 
 # --- build -------------------------------------------------------------------
 
-# tmp .ipa, dir owned by us to clean up. The OTA manifest is generated by the
-# export step (not by us) so it can never describe a different binary than the
-# one we are about to upload; `download` is already the URL that .ipa will have.
-ipa      = B.build(instrumented: INSTRUMENTED,
-                   manifest: { app_url: ota_download, icon_url: ICON_URL })
-work     = File.dirname(ipa)
-released = File.join(work, asset)
-File.rename(ipa, released)
-
+# The OTA manifest is generated by the export step (not by us) so it can never
+# describe a different binary than the one we are about to publish.
+ipa  = B.build(instrumented: INSTRUMENTED, manifest: { app_url: download, icon_url: ICON_URL })
+work = File.dirname(ipa)
 built_manifest = File.join(work, "manifest.plist")
+B.die("export produced no manifest.plist — cannot publish the OTA route") unless File.exist?(built_manifest)
+puts B.green("    #{asset} — #{(File.size(ipa) / 1_048_576.0).round(1)} MB")
 
-size   = File.size(released)
-sha256 = Digest::SHA256.file(released).hexdigest
-puts B.green("    #{asset} — #{(size / 1_048_576.0).round(1)} MB  sha256:#{sha256[0, 12]}…")
+# --- publish -----------------------------------------------------------------
 
-# --- source manifest (ios/apps.json) ----------------------------------------
-
-B.step "Updating AltStore source manifest (#{MANIFEST_REL})"
-
-manifest =
-  if File.exist?(APPS_JSON)
-    JSON.parse(File.read(APPS_JSON)) rescue {}
-  else
-    {}
+# Publishes `path` into the served directory under exactly `name`. Copies
+# beside the target and renames, so a device mid-download never reads a
+# half-written file while a pinned name is overwritten.
+def publish_file(path, name:)
+  target = File.join(PUBLISH_DIR, name)
+  staged = "#{target}.publishing-#{Process.pid}"
+  begin
+    FileUtils.cp(path, staged)
+    File.rename(staged, target)
+  ensure
+    FileUtils.rm_f(staged)
   end
-
-app = (manifest["apps"] || []).find { |a| a["bundleIdentifier"] == BUNDLE_ID } || {}
-history = app["versions"] || []
-
-new_version = {
-  "version"              => version,
-  "buildVersion"         => build.to_s,
-  "date"                 => Time.now.utc.iso8601,
-  # The "What's New" AltStore shows for this version. Instrumented builds are
-  # marked so they are identifiable on the iPad and in the source history, not
-  # just in whoever-ran-it's memory.
-  "localizedDescription" => DESCRIPTION,
-  "downloadURL"          => download,
-  "size"                 => size,
-  "sha256"               => sha256,
-  "minOSVersion"         => MIN_OS,
-}
-history.reject! { |v| v["version"] == version }
-history.unshift(new_version)
-
-app.merge!(
-  "name"                 => APP_NAME,
-  "bundleIdentifier"     => BUNDLE_ID,
-  "developerName"        => REPO.split("/").first,
-  "subtitle"             => "Self-hosted watch-later for videos.",
-  "localizedDescription" => app["localizedDescription"] ||
-    "PatataTube — a self-hosted watch-later. Browse, classify and play the " \
-    "videos your PatataTube server has downloaded, with offline caching.",
-  "iconURL"              => ICON_URL,
-  "tintColor"            => "1E88E5",
-  "screenshotURLs"       => app["screenshotURLs"] || [],
-  "versions"             => history,
-  # Legacy top-level fields for older AltStore builds that predate `versions`.
-  "version"              => version,
-  "versionDate"          => new_version["date"],
-  "versionDescription"   => new_version["localizedDescription"],
-  "downloadURL"          => download,
-  "size"                 => size,
-)
-
-source = {
-  "name"       => "PatataTube",
-  "identifier" => SOURCE_ID,
-  "sourceURL"  => MANIFEST_URL,
-  "apps"       => [app],
-  "news"       => [],
-}
-File.write(APPS_JSON, JSON.pretty_generate(source) + "\n")
-
-# --- OTA manifest + install page --------------------------------------------
-#
-# Committed to the default branch, so the raw URL in ITMS_URL always resolves to
-# the newest release.
-#
-# An unsigned build (PATATATUBE_UNSIGNED=1) produces no manifest, and the right
-# thing is to leave the existing one **untouched** rather than fail: an unsigned
-# .ipa cannot be installed over the air at all, so the last signed release
-# genuinely is still the newest OTA-installable one. The AltStore route below
-# publishes as normal. Overwriting or deleting the manifest would either point
-# Safari at a build it cannot install or break the install link outright.
-
-B.step "Updating OTA manifest (#{OTA_MANIFEST_REL}) + install page"
-
-ota = File.exist?(built_manifest)
-unless ota
-  puts B.red("    no manifest.plist from the export step — skipping the OTA route.")
-  puts "    #{OTA_MANIFEST_REL} still points at the last signed release, which is"
-  puts "    correct: an unsigned .ipa cannot be installed from Safari. This"
-  puts "    release ships over the AltStore source only."
+  "#{FILES_BASE}/files/#{name}"
 end
-FileUtils.cp(built_manifest, File.join(__dir__, OTA_MANIFEST_REL)) if ota
 
 def h(str)
   str.to_s.gsub("&", "&amp;").gsub("<", "&lt;").gsub(">", "&gt;").gsub('"', "&quot;")
@@ -450,63 +321,35 @@ install_page = <<~HTML
   </body>
   </html>
 HTML
+page = File.join(work, PINNED_INSTALL)
+File.write(page, install_page)
 
-FileUtils.mkdir_p(File.join(__dir__, "docs"))
-# Left at the previous version alongside the manifest it describes — the page's
-# Install button installs whatever that manifest points at, so advertising a
-# version the OTA route cannot serve is worse than showing a stale one.
-File.write(File.join(__dir__, INSTALL_PAGE_REL), install_page) if ota
-# Without this GitHub Pages runs the whole of docs/ through Jekyll, which both
-# slows the publish and can fail on the design docs' front-matter-looking text.
-FileUtils.touch(File.join(__dir__, "docs", ".nojekyll"))
-
-# --- commit, push, release ---------------------------------------------------
-
-if ota
-  B.step "Publishing to #{FILES_BASE} (#{PUBLISH_DIR})"
-  puts "    #{publish_file(released, name: asset)}"
-  puts "    #{publish_file(built_manifest, name: PINNED_MANIFEST)}"
-  puts "    #{publish_file(File.join(__dir__, INSTALL_PAGE_REL), name: PINNED_INSTALL)}"
-end
-
-B.step "Committing + pushing"
-# The OTA pair is skipped on an unsigned build and so may not exist at all on a
-# repo that has never published a signed release — stage only what is there,
-# rather than handing git a pathspec that matches nothing and aborting mid-run.
-staged = [PROJECT_YML, APPS_JSON, "docs/.nojekyll", OTA_MANIFEST_REL, INSTALL_PAGE_REL]
-         .select { |p| File.exist?(File.expand_path(p, __dir__)) }
-B.run("git add #{staged.map(&:inspect).join(' ')}", chdir: __dir__)
-B.run("git commit -m 'Release iOS #{tag}'", chdir: __dir__)
-push_branch(DEFAULT_BRANCH, chdir: __dir__)
-
-B.step "Creating GitHub release #{tag} + uploading .ipa"
-# Via a file, not --notes: the body is multi-line and would need shell escaping.
-notes_file = File.join(work, "notes.md")
-File.write(notes_file, "PatataTube iOS #{version}\n\n#{DESCRIPTION}\n")
-B.run(
-  "gh release create #{tag} #{released.inspect} " \
-  "--title #{tag.inspect} --notes-file #{notes_file.inspect}",
-  chdir: __dir__
-)
-
+# The .ipa first and the page last: each file points at the one before it, so a
+# device never follows a link to something not published yet.
+B.step "Publishing to #{FILES_BASE} (#{PUBLISH_DIR})"
+puts "    #{publish_file(ipa, name: asset)}"
+puts "    #{publish_file(ICON_SOURCE, name: PINNED_ICON)}"
+puts "    #{publish_file(built_manifest, name: PINNED_MANIFEST)}"
+puts "    #{publish_file(page, name: PINNED_INSTALL)}"
 FileUtils.remove_entry(work)
 
+# --- commit, tag, push -------------------------------------------------------
+
+B.step "Committing + pushing"
+B.run("git add #{PROJECT_YML.shellescape}", chdir: __dir__)
+B.run("git commit -m #{"Release iOS #{tag}".shellescape}", chdir: __dir__)
+committed = true
+B.run("git tag #{tag.shellescape}", chdir: __dir__)
+push_branch(BRANCH, chdir: __dir__)
+B.run("git push #{REMOTE} #{tag.shellescape}", chdir: __dir__)
+
 puts B.green("\n✓ Published #{APP_NAME} #{version}")
-if ota
-  puts "\n  Install / update on a device — open in Safari, tap Install:"
-  puts B.bold("    #{FILES_INSTALL_URL}")
-  puts "  (GitHub Pages mirror: #{INSTALL_PAGE_URL})"
-  puts "  (Home Screen bookmark it once; the URL never changes. Pages takes"
-  puts "   ~1 min to rebuild — the Install button itself works immediately.)"
-else
-  puts B.red("\n  ⚠  Not installable from Safari — this build is unsigned.")
-  puts "     #{INSTALL_PAGE_URL} still offers the last signed release."
-end
-puts "\n  AltStore source URL (the other route, add once under Sources -> + ):"
-puts B.bold("    #{MANIFEST_URL}")
+puts "\n  Install / update on a device — open in Safari, tap Install:"
+puts B.bold("    #{INSTALL_URL}")
+puts "  (Home Screen bookmark it once; the URL never changes.)"
 
 if INSTRUMENTED
-  puts B.red(B.bold("\n  ⚠  v#{version} is an INSTRUMENTED build (DEVLOG)."))
+  puts B.red(B.bold("\n  ⚠  #{tag} is an INSTRUMENTED build (DEVLOG)."))
   puts "     Logs land in log/ios.jsonl on the server. When you are done:"
   puts B.bold("       ./deploy patch")
   puts "     to ship a clean build over it."

@@ -499,37 +499,32 @@ logged in.
   reaching the last 30s stores 0, and auto-advance inside the player always
   starts the next item at 0.
 
-### Distribution — `./deploy` ships two routes from one build
+### Distribution — `./deploy` ships over the air only
 
 The `.ipa` is signed **ad hoc** against the paid Apple Developer team in
 `project.yml`'s `DEVELOPMENT_TEAM`, which `ipa_builder.rb` reads for both the
-archive and the export so the two can never disagree. From that one archive,
-`./deploy` publishes:
+archive and the export so the two can never disagree. `xcodebuild
+-exportArchive` emits the OTA `manifest.plist` itself (the `manifest` key in
+`ExportOptions.plist`), so it always describes the binary being published.
 
-1. **Over the air** — `xcodebuild -exportArchive` emits the OTA `manifest.plist`
-   itself (the `manifest` key in `ExportOptions.plist`), so it always describes
-   the binary being uploaded. It lands at `ios/manifest.plist` on the default
-   branch, and `docs/install.html` (GitHub Pages) offers an
-   `itms-services://` link to it. **Both URLs are constant across releases** —
-   that is what makes a Home Screen bookmark a permanent update button, so don't
-   version them.
-   The same release is also published to **files.chiq.me**: `deploy` copies the
-   `.ipa`, the manifest (`patatatube-manifest.plist`) and the install page
-   (`3cf25ffc-…-Install_PatataTube.html`) straight into `../file_to_s3/files`,
-   the directory that service serves from this machine. The manifest's `appURL`
-   and every install page's `itms-services://` link point there; AltStore keeps
-   downloading from the GitHub Release.
-2. **AltStore** — `ios/apps.json`, unchanged. AltStore re-signs on-device, so it
-   is indifferent to our signature.
+`./deploy` copies the `.ipa`, the icon (`patatatube-icon.png`), the manifest
+(`patatatube-manifest.plist`) and the install page
+(`3cf25ffc-…-Install_PatataTube.html`) straight into `../file_server/files`,
+the directory files.chiq.me's file_server serves from this machine (the
+macmini), then commits the version bump, tags `vX.Y.Z` and pushes. **The
+manifest and install page URLs are constant across releases** — that is what
+makes a Home Screen bookmark a permanent update button, so don't version them.
+
+There is no AltStore source and no GitHub Release any more, and nothing calls
+`gh`. `ios/apps.json`, `ios/manifest.plist` and `docs/install.html` are left
+from the old routes and no longer updated.
 
 An ad-hoc profile embeds the UDIDs registered on the portal **at build time**, so
 registering a device is only half the job — the app must be redeployed before
-that device can install it. `PATATATUBE_UNSIGNED=1` restores the old unsigned
-archive; that path deliberately leaves `ios/manifest.plist` and the install page
-alone rather than advertising a build Safari cannot install.
+that device can install it. `PATATATUBE_UNSIGNED=1` is refused, since an
+unsigned `.ipa` cannot be installed over the air.
 
-Full setup and troubleshooting: `ios/install.md` (`ios/altstore.md` for the
-secondary route).
+Full setup and troubleshooting: `ios/install.md`.
 
 ### Plex library (library rows)
 

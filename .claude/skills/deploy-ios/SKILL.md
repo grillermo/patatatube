@@ -1,138 +1,86 @@
 ---
 name: deploy-ios
-description: Deploy, ship, or release the PatataTube iOS app. Commits all pending git changes, pushes to the remote, then runs ./deploy to bump the version, build the .ipa, cut a GitHub Release and update the AltStore source with per-build release notes. Use when asked to deploy iOS, ship the app, release a new version, or publish to AltStore.
-model: sonnet
+description: Deploy, ship, or release the PatataTube iOS app. Commits all pending git changes, pushes to the remote, then runs ./deploy to bump the version, build the .ipa and publish it over the air on files.chiq.me with per-build release notes. Use when asked to deploy iOS, ship the app, release a new version, or publish an OTA build.
 ---
 
 # deploy-ios
 
-Ships a new PatataTube iOS build end to end. The repo's `./deploy` (Ruby)
-bumps the version, builds a fresh `.ipa`, cuts a GitHub Release and rewrites
-`ios/apps.json` — but it **only** commits `project.yml` + `apps.json`. Any
-other pending work (Swift changes, etc.) must be committed and pushed first
-or it never ships. This skill's driver does that, then hands off to `./deploy`.
+Ships a new PatataTube iOS build end to end, over the air only. The repo's
+`./deploy` (Ruby) bumps the version, builds an ad-hoc-signed `.ipa`, publishes
+it with its OTA manifest and install page to files.chiq.me, then commits, tags
+and pushes the bump — but it **only** commits `project.yml`. Any other pending
+work must be committed first or it is not in the build's history. This skill's
+driver does that, then hands off to `./deploy`.
+
+There is no AltStore source and no GitHub Release any more, so nothing needs
+`gh`. The push is plain git over SSH.
 
 Paths below are relative to the **repo root** (`/Users/grillermo/c/patatatube`).
 
 ## Prerequisites
 
-- `gh` CLI installed and authenticated (`gh auth status`).
-- Ruby (for `./deploy`), plus whatever `ios/ipa_builder.rb` needs to build the `.ipa` (macOS + Xcode toolchain).
-- On the **default branch** (`main`). `./deploy` refuses any other branch because the AltStore manifest raw URL tracks `main`.
+- Run on the macmini: files.chiq.me's file_server serves `../file_server/files`
+  on this machine, and publishing is a copy into it (`PATATATUBE_PUBLISH_DIR`
+  overrides the path).
+- Ruby, xcodegen and full Xcode (for `ios/ipa_builder.rb`).
+- On `main`.
 
 ## Run (agent path)
 
-One command does everything — commit pending changes, push, deploy:
-
 ```bash
-.claude/skills/deploy-ios/deploy-ios.sh              # patch bump (1.0.3 -> 1.0.4)
-.claude/skills/deploy-ios/deploy-ios.sh minor        # minor bump
-.claude/skills/deploy-ios/deploy-ios.sh 1.4.2        # explicit version
-.claude/skills/deploy-ios/deploy-ios.sh -m "Fix download button" minor
-```
-
-Always pass release notes (see below):
-
-```bash
-.claude/skills/deploy-ios/deploy-ios.sh minor \
+.claude/skills/deploy-ios/deploy-ios.sh --yes \
   --summary "Playback survives backgrounding" \
-  --note "Player restores the session once per launch, not per task restart" \
-  --note "Controls reveal themselves on a restored session"
+  --note "Player restores the session once per launch, not per task restart"
 ```
 
-**Preview first without touching anything** — runs all preflight checks and
-prints the plan, commits/pushes/deploys nothing:
+`--yes` is required from an agent: `./deploy` otherwise asks for confirmation
+on stdin. Other forms: `minor`, `major`, or an explicit `1.4.2` as the bump;
+`-m "msg"` for the pending-changes commit; `--dry-run` runs the preflight and
+prints the plan without touching anything.
 
-```bash
-.claude/skills/deploy-ios/deploy-ios.sh --dry-run minor
-```
+**The driver runs `git add -A`.** If the tree has unrelated changes the user
+has not asked to ship (check `git status` first), commit the intended files
+yourself and run `./deploy --yes ...` directly instead of the driver.
 
 The driver:
-1. Preflight: `gh` auth, remote `github` exists, on default branch, `./deploy` executable.
-2. `git add -A && git commit` (skipped if nothing pending; message via `-m`, default "Commit pending changes before iOS deploy").
-3. `git push github main`.
-4. `exec ./deploy [bump]` — which bumps the version, builds the `.ipa`, makes its own commit of `project.yml`/`apps.json`, pushes, and creates the GitHub Release.
+1. Preflight: remote `github` exists, on `main`, `./deploy` executable, xcodegen + Xcode.
+2. Picks a free version (skips past existing `v*` tags and published `.ipa`s).
+3. `git add -A && git commit` (skipped if nothing pending), `git push github main`.
+4. `exec ./deploy <version>` — bumps, builds, publishes `PatataTube-X.Y.Z.ipa`,
+   `patatatube-icon.png`, `patatatube-manifest.plist` and the install page,
+   then commits `Release iOS vX.Y.Z`, tags it and pushes.
 
-The AltStore source URL is printed at the end by `./deploy`.
+The install page URL is printed at the end and never changes:
+`https://files.chiq.me/files/3cf25ffc-754e-4a19-b4e1-bcc84cf02bd4-Install_PatataTube.html`
 
 ## Release notes — always write them
 
-AltStore and SideStore render each version's `localizedDescription` from
-`ios/apps.json` as **"What's New"** on the iPad. A bare `Release 1.1.63` there
-is useless, so `./deploy` builds a real description:
+They appear under "What's new" on the install page.
 
-    What's new in 1.1.63:
+- `--summary "..."` — the headline. Without it: `What's new in X.Y.Z:`.
+- `--note "..."` — one bullet, repeatable.
+- Without either, `./deploy` uses the commit subjects since the last `v*` tag.
 
-    • Player restores the session once per launch, not per task restart
-    • Controls reveal themselves on a restored session
-
-- `--summary "..."` — the headline line. Without it: `What's new in X.Y.Z:`.
-- `--note "..."` — one bullet, **repeatable**. A value with newlines (or leading
-  `-`/`*`/`•`) splits into several bullets.
-- Both flags go through the wrapper unchanged, in any order, and land in the
-  version entry of `ios/apps.json` *and* the GitHub Release body.
-
-**Fallback:** with no `--note`/`--summary`, `./deploy` derives bullets from the
-commit subjects since the last `v*` tag (max 8, merges and `Release iOS v…` /
-`Commit pending changes` noise filtered). That keeps a description from ever
-degrading to the version alone — but raw commit subjects read like commit
-subjects, so write the notes yourself.
-
-**How to write them as the agent:** before deploying, read what actually
-changed (`git log --oneline $(git describe --tags --abbrev=0 --match 'v*')..HEAD`
-plus any uncommitted diff) and turn it into 2–5 bullets phrased from the
-iPad user's side — what they will notice, not which file moved. Skip backend-only
-and tooling commits; they are invisible on the device. `./deploy` prints the
-final text before building, so it is visible in the run output.
+Read what changed (`git log --oneline $(git describe --tags --abbrev=0 --match 'v*')..HEAD`)
+and write 2–5 bullets from the iPad user's side. Skip backend-only and tooling commits.
 
 ## Instrumented builds (`--instrumented`)
 
-```bash
-.claude/skills/deploy-ios/deploy-ios.sh --instrumented        # patch bump, DEVLOG on
-.claude/skills/deploy-ios/deploy-ios.sh --instrumented minor
-```
-
-Compiles the app with the **`DEVLOG`** condition, which switches on `DevLog`
-(`ios/PatataTubeKit/Sources/PatataTubeKit/DevLog.swift`). The app then records
-taps, the AVPlayer state machine, StreamProxy requests, cache-state transitions
-and download lifecycle, and POSTs them to the backend's `/api/devlog`, which
-appends them to **`log/ios.jsonl`** on the server. Read that file to diagnose.
-
-Use it to reproduce a bug that only happens on the real iPad — playback failing
-intermittently is the case it was built for. Without the flag every call site
-compiles to nothing, so normal releases log nothing at all.
-
-`DEVLOG` is independent of Debug/Release: the `.ipa` is a Release build either
-way. `./deploy` prompts for confirmation before publishing one (skip with
-`--yes`), marks the version `[DEVLOG]` in `ios/apps.json`, and prints the
-command to ship a clean build afterwards.
+Compiles the app with **`DEVLOG`** (`ios/PatataTubeKit/Sources/PatataTubeKit/DevLog.swift`):
+it records taps, player state, proxy requests, cache transitions and downloads,
+and POSTs them to `/api/devlog` → **`log/ios.jsonl`** on the server. The
+install page marks the version `[DEVLOG]`. Ship a plain build over it once the
+bug is understood.
 
 ## Gotchas
 
-- **A push that "fails" may have succeeded.** `git-sync` is installed as a
-  global `post-commit` hook (`core.hooksPath` -> `~/.gitsync/hooks`) and pushes
-  to the same remote the instant a commit lands, so our own push can lose the
-  race and exit non-zero with `cannot lock ref 'refs/heads/main': is at X but
-  expected Y` — while the commit is safely on the remote. Both this driver and
-  `./deploy` now check the remote before failing, and continue when it already
-  holds our HEAD. This mattered: taking the exit code at face value aborted one
-  step before `gh release create`, twice, leaving a *pushed* `apps.json`
-  advertising a download URL for a release that did not exist.
-- **The remote is named `github`, not `origin`.** `git push origin` fails — there is no `origin`. Both this driver and `./deploy` push to `github`.
-- **Default-branch guard is hard.** `./deploy` calls `die` if you're not on `main`; the driver checks the same thing first so you fail fast before any commit.
-- **`./deploy` commits twice-over is expected.** This driver commits your pending work; `./deploy` then makes a *second* commit for the version bump + manifest. Two commits per release is normal.
-- **A real run is irreversible and outward-facing** — it cuts a public GitHub Release and publishes to the AltStore source. Use `--dry-run` to rehearse. There is no undo built in (delete the release + tag manually via `gh` if needed).
-- **Never leave the AltStore source on an instrumented build.** `--instrumented`
-  publishes to the same public source as any other release, and AltStore will
-  auto-install it on the iPad. Once the bug is understood, run a plain
-  `deploy-ios.sh` to ship a clean build over it.
-- **`.ipa` build needs the macOS/Xcode toolchain.** `./deploy` → `ios/ipa_builder.rb` shells out to the Xcode build; it won't produce a build on a headless Linux box.
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| `✗ gh not authenticated` | `gh auth login` |
-| `✗ on 'X', not default 'main'` | `git switch main` (the manifest raw URL tracks `main`) |
-| `✗ no git remote named 'github'` | `git remote add github git@github.com:grillermo/patatatube.git` |
-| `release vX.Y.Z already exists` (from `./deploy`) | bump to a new version — pass a higher `patch/minor/major` or explicit `X.Y.Z` |
+- **A push that "fails" may have succeeded.** git-sync's global post-commit
+  hook pushes the instant a commit lands, so our push can lose the race
+  (`cannot lock ref 'refs/heads/main'`). Both the driver and `./deploy` check
+  the remote before failing.
+- **The remote is named `github`, not `origin`.**
+- **Publishing happens before the commit.** If the push fails afterwards, the
+  build is already live; push the commit and tag by hand.
+- **Ad-hoc profiles embed device UDIDs at build time**: a newly registered
+  device needs a fresh deploy before it can install.
+- `PATATATUBE_UNSIGNED=1` is refused: an unsigned `.ipa` cannot be installed OTA.
