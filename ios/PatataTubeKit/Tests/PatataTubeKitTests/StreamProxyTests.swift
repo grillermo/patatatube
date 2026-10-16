@@ -183,6 +183,70 @@ final class StreamProxyTests: XCTestCase {
         XCTAssertEqual(cached, segment)
     }
 
+    /// Restarts the proxy with an offline root, which is also where
+    /// `downloadHLS` stages, and stages `files` as an in-flight download of 5.
+    private func stageDownload(_ files: [String: Data]) async throws -> URL {
+        await proxy.stop()
+        let videosRoot = root.appendingPathComponent("videos", isDirectory: true)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        proxy = StreamProxy(
+            cache: cache,
+            credentials: credentials,
+            session: URLSession(configuration: config),
+            offlineRoot: videosRoot
+        )
+        await proxy.start()
+        let staging = CacheManager.hlsStagingDir(
+            videosRoot: videosRoot, videoId: 5, versionId: nil
+        )
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        for (asset, data) in files {
+            try data.write(to: staging.appendingPathComponent(asset))
+        }
+        return try XCTUnwrap(proxy.hlsURL(videoId: 5, versionId: nil))
+            .deletingLastPathComponent()
+    }
+
+    func testHLSSegmentServedFromDownloadStagingWithoutUpstreamFetch() async throws {
+        let playlist = Data("#EXTM3U\n#EXTINF:6.0,\nsegment_00000.m4s\n#EXTINF:6.0,\nsegment_00001.m4s\n#EXT-X-ENDLIST\n".utf8)
+        let staged = Data(repeating: 7, count: 64)
+        MockURLProtocol.stub(path: "/videos/5/hls/video.m3u8", data: playlist)
+        MockURLProtocol.stub(path: "/videos/5/hls/segment_00000.m4s", data: Data(repeating: 1, count: 64))
+        MockURLProtocol.stub(path: "/videos/5/hls/segment_00001.m4s", data: Data(repeating: 2, count: 64))
+        let base = try await stageDownload([
+            "video.m3u8": playlist,
+            "segment_00000.m4s": staged,
+        ])
+        _ = try await get(base.appendingPathComponent("video.m3u8"))
+
+        let (first, response) = try await get(base.appendingPathComponent("segment_00000.m4s"))
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(first, staged)
+        XCTAssertEqual(MockURLProtocol.requestCount(path: "/videos/5/hls/segment_00000.m4s"), 0)
+
+        // Not downloaded yet: fetched upstream as before.
+        let (second, _) = try await get(base.appendingPathComponent("segment_00001.m4s"))
+        XCTAssertEqual(second, Data(repeating: 2, count: 64))
+        XCTAssertEqual(MockURLProtocol.requestCount(path: "/videos/5/hls/segment_00001.m4s"), 1)
+    }
+
+    func testHLSStagingFromAnotherPackageIsIgnored() async throws {
+        let playlist = Data("#EXTM3U\n#EXTINF:6.0,\nsegment_00000.m4s\n#EXT-X-ENDLIST\n".utf8)
+        let stalePlaylist = Data("#EXTM3U\n#EXTINF:4.0,\nsegment_00000.m4s\n#EXT-X-ENDLIST\n".utf8)
+        MockURLProtocol.stub(path: "/videos/5/hls/video.m3u8", data: playlist)
+        MockURLProtocol.stub(path: "/videos/5/hls/segment_00000.m4s", data: Data(repeating: 1, count: 64))
+        let base = try await stageDownload([
+            "video.m3u8": stalePlaylist,
+            "segment_00000.m4s": Data(repeating: 7, count: 64),
+        ])
+        _ = try await get(base.appendingPathComponent("video.m3u8"))
+
+        let (data, _) = try await get(base.appendingPathComponent("segment_00000.m4s"))
+        XCTAssertEqual(data, Data(repeating: 1, count: 64))
+        XCTAssertEqual(MockURLProtocol.requestCount(path: "/videos/5/hls/segment_00000.m4s"), 1)
+    }
+
     func testWrongSecretIs404() async throws {
         let good = proxy.hlsURL(videoId: 5, versionId: nil)!
         let bad = URL(string: good.absoluteString.replacingOccurrences(of: proxy.secret, with: "nope"))!

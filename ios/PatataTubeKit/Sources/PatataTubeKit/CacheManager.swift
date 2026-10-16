@@ -2746,6 +2746,10 @@ public final class CacheManager:
     }
 
     func cacheKey(videoId: Int, versionId: Int?) -> String {
+        Self.cacheKey(videoId: videoId, versionId: versionId)
+    }
+
+    static func cacheKey(videoId: Int, versionId: Int?) -> String {
         if let versionId {
             return "\(videoId):\(versionId)"
         }

@@ -500,6 +500,14 @@ public final class StreamProxy: @unchecked Sendable {
             return HTTPResponse(statusCode: .ok, headers: headers, body: cached)
         }
 
+        if let staged = stagedHLSAsset(params, hash: hash) {
+            DevLog.event(.proxy, "HLS asset served from download staging", [
+                "video_id": "\(params.videoId)", "asset": params.asset,
+                "bytes": "\(staged.count)",
+            ])
+            return HTTPResponse(statusCode: .ok, headers: headers, body: staged)
+        }
+
         guard let url = upstreamURL(
             path: "videos/\(params.videoId)/hls/\(params.asset)",
             versionId: params.versionId
@@ -534,6 +542,27 @@ public final class StreamProxy: @unchecked Sendable {
             ])
             return HTTPResponse(statusCode: .badGateway)
         }
+    }
+
+    /// A segment an in-flight `downloadHLS` has already written, so playing a
+    /// video mid-download doesn't fetch again what is on disk. Served only when
+    /// the staged `video.m3u8` is the package playback is on: segments from two
+    /// packagings of the same video don't splice. Any miss — no download, a
+    /// segment not written yet, the folder promoted or deleted under us — is
+    /// nil, and the caller fetches upstream as before.
+    private func stagedHLSAsset(_ params: RouteParams, hash: String) -> Data? {
+        guard let offlineRoot else { return nil }
+        let staging = CacheManager.hlsStagingDir(
+            videosRoot: offlineRoot,
+            videoId: params.videoId,
+            versionId: params.versionId
+        )
+        guard let playlist = try? Data(
+                contentsOf: staging.appendingPathComponent("video.m3u8")
+              ),
+              SegmentCache.packageHash(forPlaylist: playlist) == hash
+        else { return nil }
+        return try? Data(contentsOf: staging.appendingPathComponent(params.asset))
     }
 
     // MARK: - MP4

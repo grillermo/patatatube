@@ -1,6 +1,18 @@
 import Foundation
 
 extension CacheManager {
+    /// Where `downloadHLS` stages a package until every asset has landed.
+    /// `StreamProxy` reads segments from here too, so a video that is still
+    /// downloading plays from what is already on disk.
+    static func hlsStagingDir(videosRoot: URL, videoId: Int, versionId: Int?) -> URL {
+        videosRoot
+            .appendingPathComponent(".hls-tmp", isDirectory: true)
+            .appendingPathComponent(
+                cacheKey(videoId: videoId, versionId: versionId),
+                isDirectory: true
+            )
+    }
+
     /// Downloads a complete HLS package for offline playback, reusing
     /// streamed segments and promoting only a complete package.
     public func downloadHLS(
@@ -50,9 +62,11 @@ extension CacheManager {
                 }
             }
 
-            let temporaryDirectory = videosRoot
-                .appendingPathComponent(".hls-tmp", isDirectory: true)
-                .appendingPathComponent(key, isDirectory: true)
+            let temporaryDirectory = Self.hlsStagingDir(
+                videosRoot: videosRoot,
+                videoId: id,
+                versionId: versionId
+            )
             try? FileManager.default.removeItem(at: temporaryDirectory)
             try FileManager.default.createDirectory(
                 at: temporaryDirectory,
@@ -75,7 +89,9 @@ extension CacheManager {
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try data.write(to: url)
+            // Atomic: the stream proxy reads this directory while the
+            // download is still filling it, and must never see half a segment.
+            try data.write(to: url, options: .atomic)
         }
 
         let masterData = try await fetchHLSAsset(
