@@ -78,25 +78,27 @@ records two tracks at once.
 
 ## Design
 
-### 1. `tools/spotify-recorder/`: a small Rust CLI
+### 1. `tools/spotify-recorder/`: a Rust service that runs in `./serve`
 
-A Cargo project in the repo, built with `cargo build --release`, with two
-subcommands:
+A Cargo project in the repo with two subcommands:
 
 ```
-spotify-recorder login  --cache <dir>
-spotify-recorder record --cache <dir> --track <base62 id> --out <file.pcm>
+spotify-recorder serve --cache <dir> --listen 127.0.0.1:<port>
+spotify-recorder login --cache <dir>
 ```
 
-- **`login`**: device-code OAuth. It prints the verification URL and user code
-  to stdout, polls until confirmed, connects once, and saves the reusable
-  credentials in `<dir>`. It is run by hand on the macmini, once, and again only
-  if Spotify revokes the login.
-- **`record`**: loads the cached credentials (and exits 3 with a clear "run
-  `login`" message if there are none or they are rejected), fetches the track's
-  metadata with `librespot-metadata`, plays it into the pipe sink with `--out`
-  as the device, at 320 kbps, normalisation off, and waits for `EndOfTrack`. It
-  then prints **one JSON line to stdout**:
+**`serve`** is a long-running process, its own pane in `./serve` like caddy,
+convert and web (section 7). It holds **one** librespot `Session` for its whole
+life and reconnects it when it drops. Unlike a session per song, that means one
+login per server start, which looks less like a bot to Spotify. It listens on
+localhost only and serves a tiny HTTP API (the builder picks the crate; axum is
+the obvious one):
+
+- `POST /record` with `{"track": "<base62 id>", "out": "<absolute .pcm path>"}`.
+  It fetches the track's metadata with `librespot-metadata`, plays the track
+  into the pipe sink with `out` as the device, at 320 kbps with normalisation
+  off, and waits for `EndOfTrack`. The response comes only after the recording
+  is finished:
 
   ```json
   {"id":"4uLU6hMCjMI75M1A2tKUQC","title":"Never Gonna Give You Up",
@@ -105,8 +107,25 @@ spotify-recorder record --cache <dir> --track <base62 id> --out <file.pcm>
    "pcm_bytes":37676000,"sample_rate":44100,"channels":2,"format":"s16le"}
   ```
 
-  Exit codes: 0 ok, 2 unavailable (`Unavailable` event or no audio file), 3
-  auth, 1 anything else. Logs go to stderr and never include tokens.
+  Errors: **404** unavailable (an `Unavailable` event or no audio file), **401**
+  not logged in or credentials rejected (body says to run `login`), **500**
+  anything else. Each has a JSON `{"error": "..."}`.
+- **One at a time is enforced here.** Recording sits behind a single async
+  mutex, so concurrent requests queue inside the service, in arrival order, and
+  the session never plays two tracks at once. The whole server sends its
+  recordings to this one process, so that covers every gunicorn worker.
+- `GET /health` returns `{"logged_in": bool, "recording": "<id>"|null}`.
+- If there are no cached credentials at startup, it still starts and answers
+  `401` to `/record`. After a `login`, it loads the new credentials on the next
+  request, with no restart needed.
+- Logs go to stdout, one line per event (`record <id> start`,
+  `record <id> done secs=N bytes=N`, failures). The pane labels them and
+  mirrors them into `log/backend.log`. Never tokens.
+
+**`login`** runs device-code OAuth: it prints the verification URL and user
+code, polls until you confirm, connects once, and saves the reusable credentials
+in `<dir>`. It is run by hand on the macmini once, and again only if Spotify
+revokes the login. It works while `serve` is running.
 - **Crates:** the spotatui fork, `spotatui-librespot-*` `=0.8.6` with the
   `package =` rename that spotatui's `Cargo.toml` uses. It is upstream 0.8 plus
   the CDN-530 fallback for silent playback, which is our anti-goal. Only the
@@ -122,12 +141,14 @@ Env, read the way `YTDLP_BIN` and friends are:
 
 | Var | Default | Meaning |
 |---|---|---|
-| `SPOTIFY_RECORDER_BIN` | `tools/spotify-recorder/target/release/spotify-recorder` | the CLI |
-| `SPOTIFY_CACHE_DIR` | `data/spotify` | credentials + lock file; under gitignored `data/`, never on `MEDIA_ROOT` |
-| `SPOTIFY_RECORD_TIMEOUT` | `900` (seconds) | kill a stuck recording |
+| `SPOTIFY_RECORDER_BIN` | `tools/spotify-recorder/target/release/spotify-recorder` | the binary |
+| `SPOTIFY_RECORDER_PORT` | `3052` | the `serve` port on 127.0.0.1 (web is 3051, Caddy 3050) |
+| `SPOTIFY_CACHE_DIR` | `data/spotify` | credentials; under gitignored `data/`, never on `MEDIA_ROOT` |
+| `SPOTIFY_RECORD_TIMEOUT` | `900` (seconds) | the client-side timeout for one `/record`, queue wait included |
 
-`.env.example` documents them. A missing binary fails the download with a log
-line saying to build it, like the ffmpeg-not-found path.
+`.env.example` documents them, and `./serve` adds them to `FORWARD_VARS`. If
+the service is down (connection refused), the download fails with a log line
+naming the `spotify` pane.
 
 ### 3. URL classification (`router._classify_url`)
 
@@ -151,15 +172,14 @@ unchanged.
 
 A `spotify` branch, shaped like the YouTube one:
 
-1. Take the **recording lock**: `fcntl.flock(LOCK_EX)` on
-   `SPOTIFY_CACHE_DIR/record.lock`, taken in a worker thread so the event loop
-   is not blocked. A file lock works across gunicorn workers and is released if
-   the process dies, so the "one at a time" rule holds for the whole server. A
-   second request waits its turn while its row stays `downloading`.
-2. Run `spotify-recorder record` with `subprocess.run` in a worker thread,
-   writing to a temp `.pcm` file, with `SPOTIFY_RECORD_TIMEOUT`.
+1. Make a temp `.pcm` path. Use the system temp dir, which is the same machine
+   as the service.
+2. `POST http://127.0.0.1:$SPOTIFY_RECORDER_PORT/record` with an
+   `httpx.AsyncClient(trust_env=False, timeout=SPOTIFY_RECORD_TIMEOUT)`. This
+   is a plain async await, so no thread is held while the request waits its
+   turn in the service's queue, and the row stays `downloading` meanwhile.
 3. **Validate**, and fail (row deleted, as for every failed download) when:
-   - the exit code is not 0;
+   - the response is not 200, or the connection fails;
    - the PCM duration (`pcm_bytes / (44100 × 2 × 2)`) differs from
      `duration_ms` by more than 2 s;
    - the audio is silent: the builder picks a cheap check, e.g. the RMS of
@@ -177,13 +197,13 @@ A `spotify` branch, shaped like the YouTube one:
    `_announce_new_video`, `sd.enqueue_if_selected`. Temp PCM and cover files are
    removed on every path.
 
-The lock is held only for step 2. Validation and ffmpeg run after it is
-released, so the next track can start recording.
+The service is busy only during step 2. Validation and ffmpeg run after it
+answers, so the next track can start recording.
 
-A waiting request holds a default-executor thread while it waits. That is fine
-for songs pasted one at a time. If many queue up at once they would crowd out
-other `to_thread` work, and the fix then is a non-blocking `LOCK_NB` retry loop
-with `asyncio.sleep`. The builder can do that from the start if it is no harder.
+If the service is restarted mid-recording (`./serve` rerun, crash), the request
+gets a connection error and the row is deleted, the same as any failed download.
+Recordings are not resumed. Downloads are BackgroundTasks and are not durable
+today either.
 
 ### 5. The `spotify` converter job
 
@@ -222,49 +242,84 @@ checks rather than assumes:
 
 ### 7. Ops
 
-- `./serve` needs no new pane: recordings run inside the web workers'
-  BackgroundTasks, like yt-dlp. The new job kind lives in `converter.py`, so
-  it needs a full `./serve` restart (`--reload` does not restart the converter).
-- Setup on the macmini, once:
+**The recorder is a fourth `./serve` pane, role `spotify`, run exactly like
+`convert`:**
+
+- `run_spotify` in `./serve`:
+  `exec > >(colorize <color> spotify) 2>&1`, then
+  `until "$SPOTIFY_RECORDER_BIN" serve --cache … --listen 127.0.0.1:$SPOTIFY_RECORDER_PORT; do sleep 1; done`.
+  The until-loop respawns it on a crash, and a clean SIGTERM exit only comes
+  from `./serve` replacing the pane. Pick a label color the other panes don't
+  use (e.g. 92, bright green, Spotify's).
+- Before the loop, the pane runs
+  `cargo build --release --manifest-path tools/spotify-recorder/Cargo.toml`,
+  which does nothing when the binary is up to date. So a Rust change takes
+  effect on the next `./serve`, like a `converter.py` change. *(My call.)*
+  If the build fails or `cargo` is missing, the pane prints why and then
+  **stays alive idle** (e.g. `exec sleep 2147483647`). Spotify links then fail
+  cleanly with connection refused, and the rest of the server boots normally. A
+  missing Rust toolchain must never stop PatataTube from serving.
+- The `--pane` case statement gains `spotify)`. The launcher stops it with the
+  others (`for role in web convert spotify caddy`), starts it after `convert`
+  and before `web` (`start_pane spotify`, then `verify_pane spotify 3`), and
+  the final "Serving" line names it.
+- `stop_strays` also stops a stray `spotify-recorder serve` outside the
+  session: two would both bind the port, or fight over one Spotify account.
+- `FORWARD_VARS` gains `SPOTIFY_RECORDER_BIN SPOTIFY_RECORDER_PORT
+  SPOTIFY_CACHE_DIR`.
+- `./serve`'s header comment and CLAUDE.md's description of the session ("one
+  pane each for `caddy`, `convert` and `web`") are updated to four panes.
+
+Also:
+
+- The new `spotify` converter job lives in `converter.py`, so it needs a full
+  `./serve` restart (`--reload` does not restart the converter).
+- Setup on the macmini, once (after the first `./serve` has built the binary):
   ```
-  cd tools/spotify-recorder && cargo build --release
-  ./target/release/spotify-recorder login --cache ../../data/spotify
+  tools/spotify-recorder/target/release/spotify-recorder login --cache data/spotify
   ```
-- `log/backend.log` gets `[spotify] lock wait`, `[spotify] record <id>
-  secs=N`, and a failure reason line. No tokens.
+- `log/backend.log` gets the service's own lines under the `spotify` label,
+  plus the downloader's `[spotify] record <id> secs=N` and a failure reason
+  line. No tokens.
 
 ## Testing
 
-Python (pytest, no network, no Rust binary: a fake `SPOTIFY_RECORDER_BIN`
-script that writes a PCM fixture and prints the JSON):
+Python (pytest, no network, no Rust binary: the `/record` call is stubbed,
+e.g. an `httpx.MockTransport` or a monkeypatched client, and the stub writes a
+PCM fixture to `out` and returns the JSON):
 
 - `_classify_url`: track URL variants, `intl-xx`, `?si=`, the `spotify:track:`
   URI, a bad id length, and an album/playlist link → 400.
 - `upload` dedupe moves an existing completed `spotify` row.
 - `download_video` spotify branch: success enqueues a `spotify` job with the
-  right payload and ends `done`; exit 2/3, a short recording and a silent
-  recording each delete the row; a cover download failure still succeeds with
-  `cover_path=None`.
-- Lock: two concurrent recordings on separate threads never overlap (the fake
-  binary records start and end timestamps).
+  right payload and ends `done`; a 404, a 401, connection refused, a short
+  recording and a silent recording each delete the row; a cover download
+  failure still succeeds with `cover_path=None`.
 - Converter `spotify` job: builds the expected ffmpeg command (unit test on the
   command builder; one real-ffmpeg test on a 1 s PCM fixture is welcome if fast).
 
-Rust: no test suite. The spike plus a manual checklist (login, record a known
-track, an unavailable track, bad credentials).
+Rust: no test suite. The spike, plus a manual checklist:
+
+- login;
+- record a known track;
+- an unavailable track;
+- bad credentials;
+- two `/record` calls at once come out one after the other;
+- `./serve` twice in a row leaves exactly one `spotify-recorder serve`;
+- with `cargo` off `PATH`, `./serve` still boots and the pane idles.
 
 iOS: no change expected, so no iOS test runs.
 
 ## Spike first
 
-Before the plan's main tasks: build `record` against one real track and
+Before the plan's main tasks: build `/record` against one real track and
 measure:
 
 1. that it records at all with cached device-code credentials;
 2. **speed**: wall time against track length;
 3. that the PCM duration matches `duration_ms`.
 
-If it records in real time, nothing in the design changes (the lock and the
+If it records in real time, nothing in the design changes (the queue and the
 timeout already allow for it), but the timeout default may need to grow.
 
 ## Left to the builder
@@ -282,6 +337,9 @@ timeout already allow for it), but the timeout default may need to grow.
 - **The spotatui librespot fork** over upstream, for its silent-playback fix.
 - **AAC 256 kbps** from a 320 kbps Vorbis source.
 - **Track links only**; `spotify.link` short links are left out.
-- **A cross-process file lock**, not a converter job, for one-at-a-time.
-  Recording stays in the web worker like yt-dlp does.
+- **The recorder is a long-running service in its own `./serve` pane** (your
+  requirement). My calls inside it: it is reached over localhost HTTP, one
+  async mutex enforces one-at-a-time, one Spotify session is kept for its
+  whole life, and the pane builds the binary with `cargo` on start and idles,
+  instead of crashing the boot, when that fails.
 - **Validation** fails the download on a ±2 s duration mismatch or silence.
