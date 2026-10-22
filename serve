@@ -241,7 +241,9 @@ start_pane() {
     fi
     tmux set-option -p -t "$pane" @serve_role "$role"
   fi
-  tmux set-option -t "=$SESSION" remain-on-exit on >/dev/null
+  # A pane option: with a bare session target tmux looks for a *window* named
+  # after the session, prints "no such window" and sets nothing.
+  tmux set-option -p -t "$pane" remain-on-exit on >/dev/null
   tmux respawn-pane -k -t "$pane" "$(pane_cmd "$role")"
   tmux select-pane -t "$pane" -T "$role"
   tmux select-layout -t "=$SESSION:" even-vertical >/dev/null
