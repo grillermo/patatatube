@@ -1071,6 +1071,28 @@ async def api_update_group(group_id: int, body: GroupUpdateRequest, request: Req
     return serialize_group(group)
 
 
+@router.delete("/api/groups/{group_id}")
+async def api_delete_group(group_id: int, request: Request):
+    """Delete a group. Its videos are not deleted: they move to the inbox, the
+    same place an unfiled upload lands, so nothing disappears from the app.
+    The inbox itself can't be deleted, since it is where they would go."""
+    _check_token(request)
+    group = db.get_group(group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail="No such group")
+    inbox = db.get_group_by_name(db.DEFAULT_UPLOAD_GROUP)
+    if inbox is None:
+        raise HTTPException(status_code=409, detail="There is no inbox to move its videos to")
+    if inbox["id"] == group_id:
+        raise HTTPException(status_code=409, detail="The inbox can't be deleted")
+    moved = db.delete_group(group_id, move_to=inbox["id"])
+    print(
+        f"[groups] DELETE {group_id} ({group['name']}): moved {moved} video(s) to inbox",
+        flush=True,
+    )
+    return {"deleted": group_id, "moved": moved}
+
+
 def _validated_emoji(raw: str | None) -> str | None:
     emoji = (raw or "").strip()
     if len(emoji) > MAX_GROUP_EMOJI_CHARS:

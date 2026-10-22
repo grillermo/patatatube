@@ -970,6 +970,26 @@ def update_group(
         return dict(row)
 
 
+def delete_group(group_id: int, move_to: int) -> int | None:
+    """Delete a group, moving its videos into `move_to` first so no row is left
+    pointing at a group that no longer exists. Returns how many moved, or None
+    when there is no such group. If /sd was playing it, /sd goes back to having
+    no group selected rather than playing a dangling id."""
+    with _conn() as conn:
+        if not conn.execute("SELECT 1 FROM groups WHERE id = ?", (group_id,)).fetchone():
+            return None
+        moved = conn.execute(
+            "UPDATE videos SET group_id = ? WHERE group_id = ?", (move_to, group_id)
+        ).rowcount
+        conn.execute(
+            "UPDATE sd_state SET group_id = NULL, current_id = NULL, played = '[]' "
+            "WHERE group_id = ?",
+            (group_id,),
+        )
+        conn.execute("DELETE FROM groups WHERE id = ?", (group_id,))
+        return moved
+
+
 def get_video(video_id: int) -> dict | None:
     with _conn() as conn:
         row = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()

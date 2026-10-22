@@ -19,6 +19,7 @@ struct GroupsView: View {
     @State private var renaming: EditingGroup?
     @State private var describing: EditingGroup?
     @State private var creating = false
+    @State private var deleting: EditingGroup?
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
 
@@ -60,6 +61,16 @@ struct GroupsView: View {
                 create(label: label, emoji: emoji)
                 creating = false
             }
+        }
+        .confirmationDialog(
+            "Delete \(deleting?.group.label ?? "group")?",
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            titleVisibility: .visible,
+            presenting: deleting
+        ) { item in
+            Button("Delete Group", role: .destructive) { delete(item.group) }
+        } message: { _ in
+            Text("Its videos move to the inbox.")
         }
         .alert("Couldn't save", isPresented: .constant(saveError != nil)) {
             Button("OK") { saveError = nil }
@@ -148,6 +159,22 @@ struct GroupsView: View {
                     name: Self.slug(for: trimmed), label: trimmed,
                     emoji: Self.firstEmoji(in: emoji ?? "")
                 )
+                if let remote = try? await model.api.groups() {
+                    groups.apply(remote)
+                }
+            } catch {
+                saveError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Not optimistic, like `create`: the server moves the videos to the inbox,
+    /// so the list is re-fetched afterwards to pick up the inbox's new badge
+    /// count along with the missing card.
+    private func delete(_ group: VideoGroup) {
+        Task {
+            do {
+                try await model.api.deleteGroup(id: group.id)
                 if let remote = try? await model.api.groups() {
                     groups.apply(remote)
                 }
@@ -246,6 +273,14 @@ struct GroupsView: View {
             Button("Choose cover") { editing = EditingGroup(group: group) }
             if group.emoji != nil {
                 Button("Remove cover", role: .destructive) { save(nil, for: group) }
+            }
+            // The inbox is where a deleted group's videos go; the server
+            // refuses to delete it, so don't offer to.
+            if group.name != "inbox" {
+                Divider()
+                Button("Delete group", role: .destructive) {
+                    deleting = EditingGroup(group: group)
+                }
             }
         } label: {
             // 44pt circle: Apple's minimum touch target, and the whole circle

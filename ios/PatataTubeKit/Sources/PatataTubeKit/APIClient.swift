@@ -171,6 +171,12 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         catch { throw APIError.decoding(String(describing: error)) }
     }
 
+    /// The server moves the group's videos into the inbox before deleting it,
+    /// and refuses (409) to delete the inbox itself.
+    public func deleteGroup(id: Int) async throws {
+        _ = try await authedRequest("api/groups/\(id)", method: "DELETE")
+    }
+
     public func setGroup(id: Int, groupID: Int) async throws -> Bool {
         try await postOK("api/videos/\(id)/group", body: ["group_id": groupID])
     }

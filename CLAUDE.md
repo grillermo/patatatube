@@ -305,7 +305,7 @@ size and orientation. Don't reintroduce the per-device list.
 
 The `groups` table is the source of truth for video groups. `db.PLEX_KINDS` covers the separate Plex axis. The iOS Videos tab renders `GET /api/groups` and no longer hardcodes anything, so there is no list to keep in sync.
 
-Adding a group is `POST /api/groups`; there is deliberately no UI for it, and no delete endpoint.
+Adding a group is `POST /api/groups`. Deleting one is `DELETE /api/groups/{id}` (the card's `⋯` menu → Delete group): its videos are **moved into the inbox**, never deleted, and if `/sd` was playing it, `sd_state` falls back to no group. The inbox itself can't be deleted (409), and with no inbox at all every delete is refused, since there'd be nowhere to put the videos.
 
 **Per-group display settings live on the group row, not in a client's
 UserDefaults.** `groups.display_titles` (added by an idempotent `ALTER TABLE`

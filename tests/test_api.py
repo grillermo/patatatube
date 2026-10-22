@@ -889,6 +889,33 @@ def test_create_group_rejects_a_duplicate_or_plex_name(client, auth_headers):
     ).status_code == 400
 
 
+def test_delete_group_moves_its_videos_to_the_inbox(client, auth_headers):
+    import db
+    inbox = db.create_group(db.DEFAULT_UPLOAD_GROUP, "Inbox")
+    doomed = db.create_group("cooking", "Cooking")
+    vid = db.add_video("https://twitter.com/x/status/1", group_id=doomed["id"])
+    db.save_sd_state(doomed["id"], vid, [vid])
+
+    assert client.delete(f"/api/groups/{doomed['id']}").status_code == 401
+    resp = client.delete(f"/api/groups/{doomed['id']}", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": doomed["id"], "moved": 1}
+    assert db.get_group(doomed["id"]) is None
+    assert db.get_video(vid)["group_id"] == inbox["id"]
+    assert db.get_sd_state()["group_id"] is None
+
+
+def test_delete_group_refuses_the_inbox_and_unknown_ids(client, auth_headers):
+    import db
+    gid = client.get("/api/groups").json()["groups"][0]["id"]
+    # No inbox to move into: refused, nothing deleted.
+    assert client.delete(f"/api/groups/{gid}", headers=auth_headers).status_code == 409
+    assert db.get_group(gid) is not None
+    inbox = db.create_group(db.DEFAULT_UPLOAD_GROUP, "Inbox")
+    assert client.delete(f"/api/groups/{inbox['id']}", headers=auth_headers).status_code == 409
+    assert client.delete("/api/groups/9999", headers=auth_headers).status_code == 404
+
+
 def test_patch_group_sets_the_emoji(client, auth_headers):
     gid = client.get("/api/groups").json()["groups"][0]["id"]
     resp = client.patch(f"/api/groups/{gid}", json={"emoji": "🧒"}, headers=auth_headers)
