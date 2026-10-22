@@ -187,10 +187,6 @@ class SubtitleRequest(BaseModel):
     lang: str | None = None
 
 
-class RememberPositionRequest(BaseModel):
-    on: bool
-
-
 class PositionRequest(BaseModel):
     secs: FiniteFloat
 
@@ -217,6 +213,7 @@ class GroupUpdateRequest(BaseModel):
     emoji: str | None = None
     position: int | None = None
     display_titles: bool | None = None
+    remember_position: bool | None = None
     description: str | None = None
 
 
@@ -999,6 +996,7 @@ def serialize_group(group: dict) -> dict:
         "emoji": group["emoji"],
         "position": group["position"],
         "display_titles": bool(group["display_titles"]),
+        "remember_position": bool(group["remember_position"]),
         "description": group["description"],
         # Wire name kept from the days this was a boolean `unread` column; it
         # is the count of announced-but-never-played videos, `play_count = 0`.
@@ -1049,6 +1047,7 @@ async def api_update_group(group_id: int, body: GroupUpdateRequest, request: Req
         clear_emoji="emoji" in fields and not emoji,
         position=body.position,
         display_titles=body.display_titles,
+        remember_position=body.remember_position,
         description=description or None,
         # An explicit null or blank string clears it; an omitted key leaves it.
         clear_description="description" in fields and not description,
@@ -1059,7 +1058,9 @@ async def api_update_group(group_id: int, body: GroupUpdateRequest, request: Req
     # (or lands with different text than the app shows) must be visible here.
     changes = [
         f"{key} {before[key]!r} -> {group[key]!r}"
-        for key in ("label", "emoji", "position", "display_titles", "description")
+        for key in (
+            "label", "emoji", "position", "display_titles", "remember_position", "description"
+        )
         if before[key] != group[key]
     ]
     print(
@@ -1216,25 +1217,6 @@ async def api_mark_played(video_id: int, request: Request):
     if not video or video.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Video not found")
     return {"changed": db.record_play(video_id)}
-
-
-@router.post("/api/videos/{video_id}/remember-position")
-async def api_set_remember_position(
-    video_id: int, body: RememberPositionRequest, request: Request
-):
-    """Opt one video into the resume prompt.
-
-    Plex rows prompt unconditionally, so in practice this only matters for
-    group videos — the Videos tab is the only place the toggle is shown.
-    Turning it off does not clear `resume_secs`: the position keeps being
-    reported, so switching it back on resumes where playback got to.
-    """
-    _check_token(request)
-    video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Video not found")
-    db.set_remember_position(video_id, body.on)
-    return {"ok": True}
 
 
 @router.post("/api/video/{video_id}/delete")

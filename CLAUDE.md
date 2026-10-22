@@ -495,9 +495,15 @@ logged in.
   pause/background/dismiss/advance via `PlaybackPositionReporter`, mirroring
   each write into `UserDefaults` (`ResumePositionStore`) so offline playback
   still resumes and failed writes flush later. The Resume/Play-from-start
-  alert only appears for Plex items (`plex_kind` non-null) past 60s (`ResumeDecision`);
-  reaching the last 30s stores 0, and auto-advance inside the player always
-  starts the next item at 0.
+  alert only appears past 60s (`ResumeDecision`), and only for Plex items
+  (`plex_kind` non-null) or videos whose **group** has `groups.remember_position`
+  on — a per-group switch in the group's `⋯` menu, PATCHed alone like
+  `display_titles`, and read through `GroupStore.remembersPosition`. It used to
+  be a per-video toggle (`videos.remember_position`); the migration turned on
+  every group that held a video with it on, then dropped that column. Position
+  is recorded for every video either way, so the switch only decides whether it
+  is offered. Reaching the last 30s stores 0, and auto-advance inside the
+  player always starts the next item at 0.
 
 ### Distribution — `./deploy` ships over the air only
 

@@ -86,6 +86,7 @@ private struct OptionsMenuHeader: View {
             // episode and movie-detail menus share this header and get nothing.
             if case .feed(.group(let id)) = scope {
                 DisplayTitlesToggle(groups: model.groups, api: model.api, groupID: id)
+                RememberPositionToggle(groups: model.groups, api: model.api, groupID: id)
             }
         }
     }
@@ -121,6 +122,37 @@ struct DisplayTitlesToggle: View {
                 _ = try await api.setGroupDisplayTitles(id: groupID, on)
             } catch {
                 await MainActor.run { groups.setDisplayTitles(id: groupID, !on) }
+            }
+        }
+    }
+}
+
+/// The per-group "Remember position" switch: once on, every video in the
+/// group offers to resume where playback got to. Same shape as
+/// `DisplayTitlesToggle`, for the same reason.
+struct RememberPositionToggle: View {
+    @ObservedObject var groups: GroupStore
+    let api: APIClient
+    let groupID: Int
+
+    var body: some View {
+        if let group = groups.group(id: groupID) {
+            Toggle(isOn: Binding(
+                get: { group.rememberPosition },
+                set: { set($0) }
+            )) {
+                Label("Remember position", systemImage: "clock.arrow.circlepath")
+            }
+        }
+    }
+
+    private func set(_ on: Bool) {
+        groups.setRememberPosition(id: groupID, on)
+        Task {
+            do {
+                _ = try await api.setGroupRememberPosition(id: groupID, on)
+            } catch {
+                await MainActor.run { groups.setRememberPosition(id: groupID, !on) }
             }
         }
     }

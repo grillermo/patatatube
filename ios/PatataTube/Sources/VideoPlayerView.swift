@@ -538,7 +538,7 @@ struct VideoPlayerView: View {
     private func reportPosition(force: Bool = true) {
         guard let player else { return }
         let id = video.id
-        let secs = closedForIdle && !remembersPosition(video) ? 0 : player.currentTime().seconds
+        let secs = closedForIdle && !model.groups.remembersPosition(video) ? 0 : player.currentTime().seconds
         guard secs.isFinite else { return }
         let duration = player.currentItem?.duration.seconds
         Task { await model.positions.record(id: id, secs: secs,

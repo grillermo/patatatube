@@ -14,7 +14,7 @@ public enum ResumeDecision: Equatable, Sendable {
     public static let defaultMinimumSecs: Double = 60
 
     /// A Plex item always prompts. A group video prompts only when the user
-    /// turned "Remember position" on for it in the Videos tab — position is
+    /// turned "Remember position" on for its group (`GroupStore.remembersPosition`) — position is
     /// recorded for every video, so the flag is what decides whether that
     /// recorded position is allowed to interrupt the next tap.
     public static func decide(

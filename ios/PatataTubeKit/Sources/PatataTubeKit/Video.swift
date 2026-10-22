@@ -83,10 +83,6 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let audioLang: String?
     public let subtitleLang: String?
     public let resumeSecs: Double
-    /// Whether this video's `resumeSecs` may produce a resume prompt. Plex
-    /// rows prompt regardless; a group video prompts only once the user turns
-    /// this on from the Videos tab. Position is recorded either way.
-    public let rememberPosition: Bool
     /// Announced by the server and never played: what the red dot marks. The
     /// server decides (it is the same rule its group badge counts); the app
     /// only ever clears it, when playback starts.
@@ -101,7 +97,6 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         case audioLang
         case subtitleLang
         case resumeSecs
-        case rememberPosition
         case unwatched
     }
 
@@ -125,7 +120,6 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
             sourceFilename: String? = nil, audioLang: String? = nil,
             subtitleLang: String? = nil,
             resumeSecs: Double = 0,
-            rememberPosition: Bool = false,
             channel: String? = nil,
             unwatched: Bool = false) {
         self.id = id; self.url = url; self.title = title; self.platform = platform
@@ -140,7 +134,6 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.audioLang = audioLang
         self.subtitleLang = subtitleLang
         self.resumeSecs = resumeSecs
-        self.rememberPosition = rememberPosition
         self.channel = channel
         self.unwatched = unwatched
     }
@@ -176,7 +169,6 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.audioLang = try c.decodeIfPresent(String.self, forKey: .audioLang)
         self.subtitleLang = try c.decodeIfPresent(String.self, forKey: .subtitleLang)
         self.resumeSecs = try c.decodeIfPresent(Double.self, forKey: .resumeSecs) ?? 0
-        self.rememberPosition = try c.decodeIfPresent(Bool.self, forKey: .rememberPosition) ?? false
         self.channel = try c.decodeIfPresent(String.self, forKey: .channel)
         // Absent from lists cached before the field existed.
         self.unwatched = try c.decodeIfPresent(Bool.self, forKey: .unwatched) ?? false
@@ -206,7 +198,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               },
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs, rememberPosition: rememberPosition, channel: channel, unwatched: unwatched)
+              resumeSecs: resumeSecs, channel: channel, unwatched: unwatched)
     }
 
     func withGroupID(_ groupID: Int?) -> Video {
@@ -218,7 +210,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs, rememberPosition: rememberPosition, channel: channel, unwatched: unwatched)
+              resumeSecs: resumeSecs, channel: channel, unwatched: unwatched)
     }
 
     func withAudioLang(_ lang: String) -> Video {
@@ -230,7 +222,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: lang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs, rememberPosition: rememberPosition, channel: channel, unwatched: unwatched)
+              resumeSecs: resumeSecs, channel: channel, unwatched: unwatched)
     }
 
     func withSubtitleLang(_ lang: String?) -> Video {
@@ -242,19 +234,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
               chosenVersionId: chosenVersionId, versions: versions,
               hlsPath: hlsPath, subtitleTracks: subtitleTracks,
               sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: lang,
-              resumeSecs: resumeSecs, rememberPosition: rememberPosition, channel: channel, unwatched: unwatched)
-    }
-
-    func withRememberPosition(_ on: Bool) -> Video {
-        return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
-              previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: position,
-              status: status, errorMsg: errorMsg, streamPath: streamPath,
-              source: source, showTitle: showTitle, season: season,
-              episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
-              chosenVersionId: chosenVersionId, versions: versions,
-              hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-              sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs, rememberPosition: on, channel: channel, unwatched: unwatched)
+              resumeSecs: resumeSecs, channel: channel, unwatched: unwatched)
     }
 
     /// The subtitle language to force on the player, or `nil` to force nothing.

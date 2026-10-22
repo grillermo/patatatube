@@ -174,16 +174,6 @@ def init_db():
         # end of a video resets it to 0, so a finished video never prompts.
         if "resume_secs" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN resume_secs REAL NOT NULL DEFAULT 0")
-        # Whether this video's stored `resume_secs` may produce a resume
-        # prompt. Plex rows prompt unconditionally and ignore this column; a
-        # group video prompts only once the user switches it on for that
-        # video. Position keeps being recorded either way, so switching it
-        # back on resumes where playback actually got to.
-        if "remember_position" not in columns:
-            _add_column(
-                conn,
-                "ALTER TABLE videos ADD COLUMN remember_position INTEGER NOT NULL DEFAULT 0",
-            )
         # A video is either in a group or is a Plex item — never both, never
         # neither-but-meaningful. Nullability is the discriminator; there is no
         # `kind` column.
@@ -299,6 +289,30 @@ def init_db():
         # alike ("dormir" vs "videos musicales"). NULL falls back to the label.
         if "description" not in group_columns:
             _add_column(conn, "ALTER TABLE groups ADD COLUMN description TEXT")
+        # Whether a stored `resume_secs` may produce a resume prompt for the
+        # group's videos. Plex rows prompt unconditionally; a group video only
+        # when its group has this on. Position is recorded either way, so
+        # switching it back on resumes where playback actually got to. It used
+        # to be a per-video `videos.remember_position`: a group holding any
+        # video that had it on starts on, and the old column is dropped.
+        video_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()
+        }
+        if "remember_position" not in group_columns:
+            _add_column(
+                conn,
+                "ALTER TABLE groups ADD COLUMN remember_position INTEGER NOT NULL DEFAULT 0",
+            )
+            if "remember_position" in video_columns:
+                conn.execute(
+                    "UPDATE groups SET remember_position = 1 WHERE id IN "
+                    "(SELECT group_id FROM videos WHERE remember_position = 1)"
+                )
+        if "remember_position" in video_columns:
+            conn.execute("ALTER TABLE videos DROP COLUMN remember_position")
+        # The UPDATE above opened an implicit transaction, and the seed below
+        # starts its own BEGIN IMMEDIATE.
+        conn.commit()
         _seed_default_groups(conn)
         _seed_sd_state(conn)
         _migrate_classifications_to_groups(conn)
@@ -709,19 +723,6 @@ def set_resume_secs(video_id: int, secs: float) -> None:
         conn.execute("UPDATE videos SET resume_secs = ? WHERE id = ?", (value, video_id))
 
 
-def set_remember_position(video_id: int, on: bool) -> None:
-    """Whether this video's resume position may produce a resume prompt.
-
-    Deliberately does not touch `resume_secs`: turning the toggle off only
-    silences the prompt, so turning it back on resumes where playback got to.
-    """
-    with _conn() as conn:
-        conn.execute(
-            "UPDATE videos SET remember_position = ? WHERE id = ?",
-            (1 if on else 0, video_id),
-        )
-
-
 def set_version_audio_langs(version_id: int, audio_langs_json: str) -> None:
     with _conn() as conn:
         conn.execute(
@@ -927,6 +928,7 @@ def update_group(
     clear_emoji: bool = False,
     position: int | None = None,
     display_titles: bool | None = None,
+    remember_position: bool | None = None,
     description: str | None = None,
     clear_description: bool = False,
 ) -> dict | None:
@@ -949,6 +951,9 @@ def update_group(
     if display_titles is not None:
         sets.append("display_titles = ?")
         params.append(1 if display_titles else 0)
+    if remember_position is not None:
+        sets.append("remember_position = ?")
+        params.append(1 if remember_position else 0)
     if clear_description:
         sets.append("description = NULL")
     elif description is not None:

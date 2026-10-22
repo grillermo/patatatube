@@ -100,9 +100,6 @@ def serialize_video(video: dict) -> dict:
         "plex_kind": video.get("plex_kind"),
         "position": video.get("position"),
         "resume_secs": video.get("resume_secs") or 0,
-        # SQLite stores this as 0/1; the iOS client decodes a Swift Bool, so
-        # normalize here rather than leaking the integer into the API.
-        "remember_position": bool(video.get("remember_position")),
         "status": video["status"],
         # Announced and never played -- the same rule the group badge counts
         # (db._UNPLAYED_WHERE), so the dots in a group add up to its badge.

@@ -547,10 +547,7 @@ struct VideoGridView: View {
                             onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
                             onPromote: { kind in Task { await store.promote(id: video.id, kind: kind) } },
                             onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
-                            onDelete: { Task { await store.delete(id: video.id) } },
-                            onSetRememberPosition: { on in
-                                Task { await store.setRememberPosition(id: video.id, on) }
-                            }
+                            onDelete: { Task { await store.delete(id: video.id) } }
                         )
                     } else {
                         VideoCell(
@@ -574,10 +571,7 @@ struct VideoGridView: View {
                             onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
                             onPromote: { kind in Task { await store.promote(id: video.id, kind: kind) } },
                             onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
-                            onDelete: { Task { await store.delete(id: video.id) } },
-                            onSetRememberPosition: { on in
-                                Task { await store.setRememberPosition(id: video.id, on) }
-                            }
+                            onDelete: { Task { await store.delete(id: video.id) } }
                         )
                     }
                 }
@@ -1073,7 +1067,7 @@ struct VideoGridView: View {
         model.audio.stop()
         let secs = model.resumeStore.resolved(server: video.resumeSecs, for: video.id)
         switch ResumeDecision.decide(resumeSecs: secs, plexKind: video.plexKind,
-                                     remembersPosition: video.rememberPosition) {
+                                     remembersPosition: groups.remembersPosition(video)) {
         case .ask(let secs):
             pendingResume = PendingResume(
                 id: video.id,

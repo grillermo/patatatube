@@ -65,6 +65,40 @@ final class GroupStoreTests: XCTestCase {
     }
 
     /// A mirror written before the field existed decodes with it off.
+    func testSetRememberPositionUpdatesAndPersistsOneGroup() {
+        let defaults = makeDefaults()
+        let store = GroupStore(defaults: defaults)
+        store.apply(sample)
+
+        store.setRememberPosition(id: 2, true)
+
+        XCTAssertEqual(store.group(id: 2)?.rememberPosition, true)
+        XCTAssertEqual(store.group(id: 1)?.rememberPosition, false)
+        XCTAssertEqual(GroupStore(defaults: defaults).group(id: 2)?.rememberPosition, true)
+    }
+
+    func testRemembersPositionFollowsTheVideosGroup() {
+        let store = GroupStore(defaults: makeDefaults())
+        store.apply(sample)
+        store.setRememberPosition(id: 2, true)
+        func video(groupID: Int?, plexKind: PlexKind? = nil) -> Video {
+            Video(id: 1, url: "", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
+                  groupID: groupID, plexKind: plexKind, position: nil, status: "done",
+                  errorMsg: nil, streamPath: "")
+        }
+
+        XCTAssertTrue(store.remembersPosition(video(groupID: 2)))
+        XCTAssertFalse(store.remembersPosition(video(groupID: 1)))
+        XCTAssertFalse(store.remembersPosition(video(groupID: 99)))
+        XCTAssertTrue(store.remembersPosition(video(groupID: nil, plexKind: .tv)))
+    }
+
+    func testTheOtherCopyHelpersCarryRememberPositionThrough() {
+        let on = sample[0].withRememberPosition(true)
+        XCTAssertTrue(on.withDisplayTitles(true).rememberPosition)
+        XCTAssertTrue(on.withDescription("x").rememberPosition)
+    }
+
     func testDecodesALegacyMirrorWithoutDisplayTitles() throws {
         let defaults = makeDefaults()
         let legacy = #"[{"id":1,"name":"children","label":"Children","position":0}]"#

@@ -41,6 +41,15 @@ public final class GroupStore: ObservableObject, @unchecked Sendable {
         persist()
     }
 
+    /// Optimistic local flip of one group's "remember position", same contract
+    /// as `setDisplayTitles`.
+    public func setRememberPosition(id: Int, _ on: Bool) {
+        guard let index = groups.firstIndex(where: { $0.id == id }),
+              groups[index].rememberPosition != on else { return }
+        groups[index] = groups[index].withRememberPosition(on)
+        persist()
+    }
+
     /// Optimistic local edit of one group's description, same contract as
     /// `setDisplayTitles`: the caller PATCHes and restores the old value if that
     /// fails.
@@ -60,4 +69,13 @@ public final class GroupStore: ObservableObject, @unchecked Sendable {
     public func group(id: Int) -> VideoGroup? { groups.first { $0.id == id } }
 
     public func group(named name: String) -> VideoGroup? { groups.first { $0.name == name } }
+
+    /// Whether a video's stored position is offered as a resume point and
+    /// survives an idle reset: always for Plex items, and for a group video
+    /// when its group has "Remember position" on.
+    public func remembersPosition(_ video: Video) -> Bool {
+        if video.plexKind != nil { return true }
+        guard let id = video.groupID else { return false }
+        return group(id: id)?.rememberPosition ?? false
+    }
 }

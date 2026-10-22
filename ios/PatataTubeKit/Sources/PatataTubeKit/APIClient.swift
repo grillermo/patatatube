@@ -27,7 +27,6 @@ public protocol VideoAPI: Sendable {
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool
     func chooseAudio(id: Int, lang: String) async throws -> Bool
     func chooseSubtitle(id: Int, lang: String?) async throws -> Bool
-    func setRememberPosition(id: Int, on: Bool) async throws -> Bool
     func savePosition(id: Int, secs: Double) async throws
     func savePosition(
         id: Int, secs: Double, destinationServerIdentity: String
@@ -55,7 +54,6 @@ public extension VideoAPI {
     func setGroup(id: Int, groupID: Int) async throws -> Bool { false }
     func promote(id: Int, kind: PlexKind) async throws -> Bool { false }
     func chooseSubtitle(id: Int, lang: String?) async throws -> Bool { false }
-    func setRememberPosition(id: Int, on: Bool) async throws -> Bool { false }
 
     func savePosition(
         id: Int, secs: Double, destinationServerIdentity: String
@@ -151,6 +149,15 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         catch { throw APIError.decoding(String(describing: error)) }
     }
 
+    /// Same reason as `setGroupDisplayTitles`: sends this one field alone.
+    public func setGroupRememberPosition(id: Int, _ on: Bool) async throws -> VideoGroup {
+        let data = try await authedRequest(
+            "api/groups/\(id)", method: "PATCH", body: ["remember_position": on]
+        )
+        do { return try Self.makeDecoder().decode(VideoGroup.self, from: data) }
+        catch { throw APIError.decoding(String(describing: error)) }
+    }
+
     /// Also its own call: `updateGroup` always sends `emoji`, so routing this
     /// through it would clear the cover. Nil or blank clears the description
     /// server-side.
@@ -182,10 +189,6 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
 
     public func chooseSubtitle(id: Int, lang: String?) async throws -> Bool {
         try await postOK("api/videos/\(id)/subtitle", body: ["lang": lang ?? NSNull()])
-    }
-
-    public func setRememberPosition(id: Int, on: Bool) async throws -> Bool {
-        try await postOK("api/videos/\(id)/remember-position", body: ["on": on])
     }
 
     /// Reports where playback got to. The server answers 204 with no body, so

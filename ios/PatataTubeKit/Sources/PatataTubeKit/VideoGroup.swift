@@ -12,6 +12,10 @@ public struct VideoGroup: Codable, Identifiable, Hashable, Sendable {
     /// Server-owned (`groups.display_titles`), so it follows the group across
     /// devices instead of living in one device's UserDefaults.
     public let displayTitles: Bool
+    /// Let a stored playback position prompt "resume" for every video in this
+    /// group (`groups.remember_position`). Position is recorded either way;
+    /// this only decides whether it is offered.
+    public let rememberPosition: Bool
     /// What the group is *for*, in the owner's words. The server's classifier
     /// reads it to file new uploads (`groups.description`); nothing in the app
     /// renders it outside the editor. Nil when unset.
@@ -22,19 +26,20 @@ public struct VideoGroup: Codable, Identifiable, Hashable, Sendable {
     public let unreadCount: Int
 
     public init(id: Int, name: String, label: String, emoji: String?, position: Int,
-                displayTitles: Bool = false, description: String? = nil,
-                unreadCount: Int = 0) {
+                displayTitles: Bool = false, rememberPosition: Bool = false,
+                description: String? = nil, unreadCount: Int = 0) {
         self.id = id
         self.name = name
         self.label = label
         self.emoji = emoji
         self.position = position
         self.displayTitles = displayTitles
+        self.rememberPosition = rememberPosition
         self.description = description
         self.unreadCount = unreadCount
     }
 
-    /// Hand-rolled so a payload without `displayTitles` (or `description`, or `unreadCount`)
+    /// Hand-rolled so a payload without `displayTitles` (or `rememberPosition`, `description`, `unreadCount`)
     /// decodes as off/nil rather than throwing: `GroupStore`'s UserDefaults
     /// mirror holds blobs written by builds that predate the fields, and dropping the whole mirror on upgrade
     /// would empty the offline-first group screen.
@@ -46,18 +51,27 @@ public struct VideoGroup: Codable, Identifiable, Hashable, Sendable {
         emoji = try c.decodeIfPresent(String.self, forKey: .emoji)
         position = try c.decode(Int.self, forKey: .position)
         displayTitles = try c.decodeIfPresent(Bool.self, forKey: .displayTitles) ?? false
+        rememberPosition = try c.decodeIfPresent(Bool.self, forKey: .rememberPosition) ?? false
         description = try c.decodeIfPresent(String.self, forKey: .description)
         unreadCount = try c.decodeIfPresent(Int.self, forKey: .unreadCount) ?? 0
     }
 
     public func withDisplayTitles(_ on: Bool) -> VideoGroup {
         VideoGroup(id: id, name: name, label: label, emoji: emoji, position: position,
-                   displayTitles: on, description: description, unreadCount: unreadCount)
+                   displayTitles: on, rememberPosition: rememberPosition,
+                   description: description, unreadCount: unreadCount)
+    }
+
+    public func withRememberPosition(_ on: Bool) -> VideoGroup {
+        VideoGroup(id: id, name: name, label: label, emoji: emoji, position: position,
+                   displayTitles: displayTitles, rememberPosition: on,
+                   description: description, unreadCount: unreadCount)
     }
 
     public func withDescription(_ text: String?) -> VideoGroup {
         VideoGroup(id: id, name: name, label: label, emoji: emoji, position: position,
-                   displayTitles: displayTitles, description: text, unreadCount: unreadCount)
+                   displayTitles: displayTitles, rememberPosition: rememberPosition,
+                   description: text, unreadCount: unreadCount)
     }
 
     public var feed: Feed { .group(id: id) }

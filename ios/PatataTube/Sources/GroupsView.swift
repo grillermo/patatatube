@@ -77,7 +77,7 @@ struct GroupsView: View {
         groups.apply(groups.groups.map {
             $0.id == group.id
                 ? VideoGroup(id: $0.id, name: $0.name, label: $0.label, emoji: emoji,
-                             position: $0.position, displayTitles: $0.displayTitles,
+                             position: $0.position, displayTitles: $0.displayTitles, rememberPosition: $0.rememberPosition,
                              description: $0.description, unreadCount: $0.unreadCount)
                 : $0
         })
@@ -100,7 +100,7 @@ struct GroupsView: View {
         groups.apply(groups.groups.map {
             $0.id == group.id
                 ? VideoGroup(id: $0.id, name: $0.name, label: trimmed, emoji: $0.emoji,
-                             position: $0.position, displayTitles: $0.displayTitles,
+                             position: $0.position, displayTitles: $0.displayTitles, rememberPosition: $0.rememberPosition,
                              description: $0.description, unreadCount: $0.unreadCount)
                 : $0
         })

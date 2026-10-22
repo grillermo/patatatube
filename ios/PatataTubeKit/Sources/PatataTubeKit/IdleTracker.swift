@@ -46,9 +46,3 @@ public final class IdleTracker: @unchecked Sendable {
         return now().timeIntervalSince(last) > threshold
     }
 }
-
-/// Whether a video's position survives an idle reset. The same rule
-/// `ResumeDecision` uses to decide whether a stored position is offered at all.
-public func remembersPosition(_ video: Video) -> Bool {
-    video.plexKind != nil || video.rememberPosition
-}

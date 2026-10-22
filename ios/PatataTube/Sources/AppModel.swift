@@ -235,7 +235,7 @@ final class AppModel: ObservableObject {
     }
 
     func resetPositionIfForgotten(_ video: Video) {
-        guard !remembersPosition(video) else { return }
+        guard !groups.remembersPosition(video) else { return }
         let id = video.id
         Task { await positions.record(id: id, secs: 0, duration: nil, force: true) }
     }

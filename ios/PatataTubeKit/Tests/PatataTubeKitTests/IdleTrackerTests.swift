@@ -38,15 +38,4 @@ final class IdleTrackerTests: XCTestCase {
         clock.now += 3000
         XCTAssertFalse(tracker.isStale())
     }
-
-    func testRemembersPositionForPlexAndOptedInRows() {
-        func video(plexKind: PlexKind?, remember: Bool) -> Video {
-            Video(id: 1, url: "", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
-                  groupID: nil, plexKind: plexKind, position: nil, status: "done",
-                  errorMsg: nil, streamPath: "", rememberPosition: remember)
-        }
-        XCTAssertTrue(remembersPosition(video(plexKind: .tv, remember: false)))
-        XCTAssertTrue(remembersPosition(video(plexKind: nil, remember: true)))
-        XCTAssertFalse(remembersPosition(video(plexKind: nil, remember: false)))
-    }
 }

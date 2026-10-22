@@ -314,6 +314,45 @@ def test_migration_adds_display_titles_to_an_existing_groups_table(tmp_path, mon
     assert db_module.get_group_by_name("children")["display_titles"] == 0
 
 
+def test_groups_start_with_remember_position_off(fresh_db):
+    assert all(g["remember_position"] == 0 for g in fresh_db.list_groups())
+
+
+def test_update_group_toggles_remember_position(fresh_db):
+    gid = fresh_db.list_groups()[0]["id"]
+    assert fresh_db.update_group(gid, remember_position=True)["remember_position"] == 1
+    assert fresh_db.update_group(gid, remember_position=False)["remember_position"] == 0
+
+
+def test_migration_moves_remember_position_from_videos_to_their_group(tmp_path, monkeypatch):
+    """A group holding a video that had the old per-video flag on starts on;
+    the videos column is dropped."""
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "pre-group-remember.sqlite"))
+    import db as db_module
+
+    importlib.reload(db_module)
+    db_module.init_db()
+    on, off = db_module.list_groups()[:2]
+    with db_module._conn() as conn:
+        conn.execute("ALTER TABLE groups DROP COLUMN remember_position")
+        conn.execute(
+            "ALTER TABLE videos ADD COLUMN remember_position INTEGER NOT NULL DEFAULT 0"
+        )
+    first = db_module.add_video("https://x.com/i/status/1", "twitter")
+    second = db_module.add_video("https://x.com/i/status/2", "twitter")
+    db_module.set_video_group(first, on["id"])
+    db_module.set_video_group(second, off["id"])
+    with db_module._conn() as conn:
+        conn.execute("UPDATE videos SET remember_position = 1 WHERE id = ?", (first,))
+
+    db_module.init_db()
+
+    assert db_module.get_group(on["id"])["remember_position"] == 1
+    assert db_module.get_group(off["id"])["remember_position"] == 0
+    assert "remember_position" not in db_module.get_video(first)
+    db_module.init_db()
+
+
 def test_migration_backfills_group_id_from_classification(legacy_db):
     legacy_db.init_db()
     groups = {g["name"]: g["id"] for g in legacy_db.list_groups()}
