@@ -27,6 +27,13 @@ public final class GroupStore: ObservableObject, @unchecked Sendable {
     /// longer lists disappears here too — that is how a deletion made
     /// elsewhere propagates.
     public func apply(_ remote: [VideoGroup]) {
+        for group in remote {
+            if let local = self.group(id: group.id), local.rememberPosition != group.rememberPosition {
+                DevLog.event(.state, "group remember position replaced by server",
+                             ["group_id": "\(group.id)", "local": "\(local.rememberPosition)",
+                              "server": "\(group.rememberPosition)"])
+            }
+        }
         groups = remote.sorted { $0.position < $1.position }
         persist()
     }

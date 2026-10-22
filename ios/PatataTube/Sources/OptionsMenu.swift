@@ -147,11 +147,16 @@ struct RememberPositionToggle: View {
     }
 
     private func set(_ on: Bool) {
+        let id = groupID
+        DevLog.event(.tap, "remember position toggled", ["group_id": "\(id)", "on": "\(on)"])
         groups.setRememberPosition(id: groupID, on)
         Task {
             do {
-                _ = try await api.setGroupRememberPosition(id: groupID, on)
+                let saved = try await api.setGroupRememberPosition(id: id, on)
+                DevLog.event(.net, "remember position saved",
+                             ["group_id": "\(id)", "sent": "\(on)", "server": "\(saved.rememberPosition)"])
             } catch {
+                DevLog.error(error, "remember position PATCH failed", ["group_id": "\(id)", "on": "\(on)"])
                 await MainActor.run { groups.setRememberPosition(id: groupID, !on) }
             }
         }

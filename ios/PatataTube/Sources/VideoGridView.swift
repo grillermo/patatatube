@@ -1066,6 +1066,9 @@ struct VideoGridView: View {
     private func startPlayback(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false, caller: String = "?") {
         model.audio.stop()
         let secs = model.resumeStore.resolved(server: video.resumeSecs, for: video.id)
+        DevLog.event(.play, "resume decision",
+                     ["video_id": "\(video.id)", "group_id": "\(video.groupID.map(String.init) ?? "nil")",
+                      "remembers": "\(groups.remembersPosition(video))", "secs": "\(secs)"])
         switch ResumeDecision.decide(resumeSecs: secs, plexKind: video.plexKind,
                                      remembersPosition: groups.remembersPosition(video)) {
         case .ask(let secs):
