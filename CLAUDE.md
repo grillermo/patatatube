@@ -21,6 +21,7 @@ python -m pytest tests/test_api.py::test_upload_success   # one test
 - Run the suite with `MEDIA_ROOT=.` if `.env` points `MEDIA_ROOT` elsewhere: a handful of tests 404 for an unrelated fixture mismatch under an external `MEDIA_ROOT` and can mask a real regression behind that same-looking failure.
 - The venv is `python_env/` (gitignored, not checked in). `./serve` hardcodes `python3.13 python_env/bin/uvicorn`. Create it and `pip install -r requirements.txt` before first run.
 - `.env` holds `UPLOAD_TOKEN` (see `.env.example`). Loaded via `python-dotenv`.
+- **`./serve` runs everything in the tmux session `patatatube-server`**, one pane each for `caddy`, `convert` and `web` (found by the pane option `@serve_role`). Rerunning it stops what those panes run and respawns them in place, then reclaims `$PORT` and stops any stray `converter.py`/`caddy_access.py` outside them, so a second run replaces the first. It switches to (or attaches) the session when done.
 - **Debugging: read `log/backend.log`.** `./serve` mirrors every labeled stream (`dev`/`web`/`caddy`/`access`/`app`/`convert`) to it, uncolored, alongside the terminal output. Same interleaved view, persisted. Override path with `LOG_FILE=...` (dir is gitignored).
 
 ### iOS (`ios/`)
@@ -236,8 +237,9 @@ call `db.enqueue_job` and return immediately. The runner claims jobs
 ordered by `priority` then `id`; `priority=100` is the iOS Download-all path and
 queues behind interactive taps at `priority=0`.
 
-`./serve` starts it as a supervised child (`until ... do sleep 1; done`) that
-exits with its parent via `--watch-pid`. Queue depth is visible in
+`./serve` runs it in its own tmux pane under `until ... do sleep 1; done`,
+which respawns it on a crash; a clean exit (SIGTERM) only comes from `./serve`
+replacing the pane. Queue depth is visible in
 `log/backend.log`:
 
     [job] +1 kind=convert id=812 priority=100 queued=225

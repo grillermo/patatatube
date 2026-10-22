@@ -130,11 +130,13 @@ def test_cli_exits_when_watched_process_exits(tmp_path):
     assert process.wait(timeout=2) == 0
 
 
-def test_serve_wires_caddy_follower_before_dev_and_production_branches():
+def test_serve_runs_the_caddy_follower_in_its_own_pane():
+    """The follower has its own tmux pane in both DEV and production, so it is
+    wired in run_caddy rather than ahead of the web server's DEV branch."""
     source = Path("serve").read_text()
-    start = source.index('"$LOG_PYTHON_BIN" -u caddy_access.py')
-    dev_branch = source.index('if [ "$DEV" = "1" ]')
-    assert start < dev_branch
+    run_caddy = source[source.index("run_caddy() {"):]
+    run_caddy = run_caddy[: run_caddy.index("\n}\n")]
+    assert 'colorize 35 caddy' in run_caddy
+    assert '"$LOG_PYTHON_BIN" -u caddy_access.py "$CADDY_ACCESS_LOG"' in run_caddy
     assert 'CADDY_ACCESS_LOG="${CADDY_ACCESS_LOG:-log/caddy_access.log}"' in source
-    assert 'colorize 35 caddy >&3' in source
-    assert '--watch-pid "$$"' in source
+    assert "caddy) run_caddy ;;" in source

@@ -1,112 +1,320 @@
 #!/bin/bash
 # Production: multiple worker processes for higher throughput.
-#   WEB_CONCURRENCY=4 ./serve   # override worker count (default 2)
+#   WEB_CONCURRENCY=4 ./serve   # override worker count (default 6)
 # Development: DEV=1 ./serve     # single process + hot reload (workers ignored)
+#
+# End state: ONE tmux session "$SESSION" with three panes, one per process:
+#   caddy   : caddy_access.py, the live tail of Caddy's access log
+#   convert : converter.py, the only process that spawns ffmpeg
+#   web     : gunicorn (or uvicorn --reload under DEV=1) on $PORT
+#
+# Rerunning ./serve stops what each pane is running and respawns it in place,
+# so a second run REPLACES the first instead of fighting it. It used to start
+# everything as children of whatever terminal ran it, and a second run killed
+# the first run's converter (its pkill) but not its gunicorn (renamed
+# "[PatataTube]" by gunicorn_conf.py, so the pkill pattern missed it), then
+# died on "Address already in use" — leaving the old web server up with no
+# converter behind it. Nothing ran ffmpeg for two days that way (2026-10-12),
+# and every new download sat in "downloading" with its stream 404ing.
 
-# Kill any existing services before starting new ones
-pkill -f caddy_access.py 2>/dev/null || true
-pkill -f converter.py 2>/dev/null || true
-pkill -f "uvicorn main:app" 2>/dev/null || true
-pkill -f "gunicorn main:app" 2>/dev/null || true
-sleep 0.5  # brief pause to let processes terminate
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$APP_DIR" || exit 1
 
+SESSION="${SERVE_SESSION:-patatatube-server}"
 # Caddy owns the client-facing :3050 and serves static assets / HLS segments /
 # downloaded MP4s from disk (see ~/c/server/Caddyfile); the app sits behind it.
 PORT="${PORT:-3051}"
 PYTHON_BIN="${PYTHON_BIN:-python_env/bin/python}"
 CADDY_ACCESS_LOG="${CADDY_ACCESS_LOG:-log/caddy_access.log}"
 LOG_PYTHON_BIN="${LOG_PYTHON_BIN:-$PYTHON_BIN}"
-
 # Every labeled stream is mirrored here (uncolored) for later debugging while
-# still printing to the terminal. Override with LOG_FILE=... ; log/ is gitignored.
+# still printing to its pane. Override with LOG_FILE=... ; log/ is gitignored.
 LOG_FILE="${LOG_FILE:-log/backend.log}"
-mkdir -p "$(dirname "$LOG_FILE")"
-# Truncate on every start so each run's log begins from scratch.
-: > "$LOG_FILE"
-
 # The iOS app's DEVLOG records land here, posted to /api/devlog by instrumented
-# builds (see devlog.py). Truncated alongside backend.log so both cover the same
-# window — correlating the two is the point of having them. Exported so devlog.py
-# resolves the same path this script just cleared.
+# builds (see devlog.py). Exported so devlog.py resolves the same path this
+# script clears.
 export IOS_LOG_FILE="${IOS_LOG_FILE:-log/ios.jsonl}"
-mkdir -p "$(dirname "$IOS_LOG_FILE")"
-: > "$IOS_LOG_FILE"
-# devlog.py rotates to "<name>.1" at its size cap; drop that generation too, or
-# a fresh run still sits next to the previous run's overflow.
-rm -f "$IOS_LOG_FILE.1"
-
-# Truncation happens here, not in main.py's lifespan: lifespan runs once per
-# gunicorn worker (6 by default) and again on every dev --reload, so it would
-# wipe the log repeatedly, including mid-session.
-
-# macOS launchd hands processes a 256-fd soft limit. Video streaming, HLS
-# segment bursts, preview fetches and SQLite each hold fds, so raise the soft
-# limit toward the hard cap. Defense in depth on top of closing connections.
-ulimit -n "${FD_LIMIT:-8192}" 2>/dev/null || true
-
-# Prefix every line with a colored label so interleaved streams are tellable
-# apart. $1: ANSI color code, $2: label. awk (not sed) for line buffering.
-# Each line is also appended, uncolored, to $LOG_FILE so the same interleaved
-# view survives to disk. O_APPEND + per-line fflush keeps concurrent colorize
-# processes from clobbering each other.
 # gunicorn logs "Handling signal: winch" on every terminal resize (SIGWINCH);
-# it is pure noise, so it is dropped from both the terminal and the log file.
+# it is pure noise, so it is dropped from both the pane and the log file.
 NOISE_RE="${NOISE_RE:-Handling signal: winch}"
+# How long a pane gets to exit after SIGTERM before it is SIGKILLed. gunicorn's
+# graceful_timeout defaults to 30s; converter.py joins its workers for 10s each.
+STOP_TIMEOUT="${STOP_TIMEOUT:-35}"
+
+# tmux panes do NOT inherit this script's environment: a pane gets the tmux
+# server's (stale) one. So every pane command carries PATH and the overrides
+# this script honours. App config itself comes from .env (python-dotenv).
+FORWARD_VARS="PATH DEV PORT WEB_CONCURRENCY PYTHON_BIN LOG_PYTHON_BIN LOG_FILE
+  IOS_LOG_FILE CADDY_ACCESS_LOG NOISE_RE FD_LIMIT FFMPEG_JOB_LIMIT MEDIA_ROOT"
+
+# Prefix every line with a colored label so streams are tellable apart. $1:
+# ANSI color code, $2: label. awk (not sed) for line buffering. Each line is
+# also appended, uncolored, to $LOG_FILE, so the panes' streams survive to disk
+# interleaved in one file. O_APPEND + per-line fflush keeps the panes' awks from
+# clobbering each other.
+# awk ignores SIGTERM: stopping a pane TERMs its whole process group, and awk
+# must outlive the process it labels to record that process's shutdown lines.
+# It still exits on EOF, once whatever it labels is gone.
 colorize() {
-  awk -v p="$(printf '\033[1;%sm%-7s|\033[0m' "$1" "$2")" \
-      -v plain="$(printf '%-7s|' "$2")" \
-      -v logf="$LOG_FILE" \
-      -v noise="$NOISE_RE" \
-      '$0 ~ noise { next }
-       { print p, $0; fflush(); print plain, $0 >> logf; fflush(logf) }'
+  (
+    trap '' TERM
+    exec awk -v p="$(printf '\033[1;%sm%-7s|\033[0m' "$1" "$2")" \
+        -v plain="$(printf '%-7s|' "$2")" \
+        -v logf="$LOG_FILE" \
+        -v noise="$NOISE_RE" \
+        '$0 ~ noise { next }
+         { print p, $0; fflush(); print plain, $0 >> logf; fflush(logf) }'
+  )
 }
 
-# fd 3 preserves the real stdout so Caddy lines bypass the dev/web labels.
-exec 3>&1
-"$LOG_PYTHON_BIN" -u caddy_access.py \
-  "$CADDY_ACCESS_LOG" \
-  --watch-pid "$$" \
-  | colorize 35 caddy >&3 &
+# ---------------------------------------------------------------------------
+# Pane side: `./serve --pane <role>` is what each pane runs.
+# ---------------------------------------------------------------------------
 
-# converter.py is the only process that spawns ffmpeg; web workers only enqueue.
-# It starts before the web server so the jobs table exists and the queue is
-# draining by the time requests arrive. The until-loop respawns it on crash:
-# unlike gunicorn's workers, a bare background child that died would stall the
-# whole queue silently. $$ survives the exec below, so --watch-pid works in both
-# the DEV and production paths, exactly as the caddy_access.py line above does.
-( until "$PYTHON_BIN" -u converter.py --watch-pid "$$"; do sleep 1; done ) 2>&1 \
-  | colorize 31 convert >&3 &
+run_caddy() {
+  exec > >(colorize 35 caddy) 2>&1
+  exec "$LOG_PYTHON_BIN" -u caddy_access.py "$CADDY_ACCESS_LOG"
+}
 
-if [ "$DEV" = "1" ]; then
-  exec > >(colorize 36 web) 2>&1
-  exec "$PYTHON_BIN" -m uvicorn main:app \
-    --host 0.0.0.0 \
-    --port "$PORT" \
-    --reload \
-    --reload-dir . \
-    --reload-include '*.py' \
-    --reload-exclude '.git/*' \
-    --reload-exclude '.venv/*' \
-    --reload-exclude 'python_env/*' \
-    --reload-exclude 'videos/*' \
-    --reload-exclude 'assets/splash/*' \
-    --proxy-headers \
-    --forwarded-allow-ips='*'
+# The until-loop respawns the converter on crash: unlike gunicorn's workers, a
+# bare process that died would stall the whole queue silently. A clean exit
+# (SIGTERM) ends it; that only happens when this pane is being replaced.
+run_convert() {
+  exec > >(colorize 31 convert) 2>&1
+  until "$PYTHON_BIN" -u converter.py; do sleep 1; done
+}
+
+run_web() {
+  # macOS launchd hands processes a 256-fd soft limit. Video streaming, HLS
+  # segment bursts, preview fetches and SQLite each hold fds, so raise the soft
+  # limit toward the hard cap. Defense in depth on top of closing connections.
+  ulimit -n "${FD_LIMIT:-8192}" 2>/dev/null || true
+
+  if [ "$DEV" = "1" ]; then
+    exec > >(colorize 36 web) 2>&1
+    exec "$PYTHON_BIN" -m uvicorn main:app \
+      --host 0.0.0.0 \
+      --port "$PORT" \
+      --reload \
+      --reload-dir . \
+      --reload-include '*.py' \
+      --reload-exclude '.git/*' \
+      --reload-exclude '.venv/*' \
+      --reload-exclude 'python_env/*' \
+      --reload-exclude 'videos/*' \
+      --reload-exclude 'assets/splash/*' \
+      --proxy-headers \
+      --forwarded-allow-ips='*'
+  fi
+
+  # gunicorn manages the worker lifecycle (respawn on crash, graceful reload via
+  # SIGHUP, staged shutdown); uvicorn workers do the actual ASGI serving.
+  # Access and error logs get their own colors via process substitution but
+  # share the "web" label; anything workers print directly also gets it.
+  exec 3>&1
+  exec > >(colorize 34 web) 2>&1
+  # gunicorn_conf.py names the process once in the arbiter, before any fork,
+  # and disarms gunicorn's own post-fork naming. Dropping --config silently
+  # reverts to unnamed processes and re-arms the macOS EXC_GUARD worker kill.
+  exec "$PYTHON_BIN" -m gunicorn main:app \
+    --config gunicorn_conf.py \
+    --worker-class uvicorn_worker.UvicornWorker \
+    --workers "${WEB_CONCURRENCY:-6}" \
+    --bind "0.0.0.0:$PORT" \
+    --forwarded-allow-ips='*' \
+    --access-logfile >(colorize 32 web >&3) \
+    --error-logfile >(colorize 33 web >&3)
+}
+
+if [ "$1" = "--pane" ]; then
+  case "$2" in
+    caddy) run_caddy ;;
+    convert) run_convert ;;
+    web) run_web ;;
+    *) echo "unknown pane role: $2" >&2; exit 2 ;;
+  esac
+  exit $?
 fi
 
-# gunicorn manages the worker lifecycle (respawn on crash, graceful reload via
-# SIGHUP, staged shutdown); uviorn workers do the actual ASGI serving.
-# Access and error logs get their own colors via process substitution but share
-# the "web" label; anything workers print directly (stdout/stderr) also gets it.
-exec > >(colorize 34 web) 2>&1
-# gunicorn_conf.py names the process once in the arbiter, before any fork, and
-# disarms gunicorn's own post-fork naming. Dropping --config silently reverts
-# to unnamed processes and re-arms the macOS EXC_GUARD worker kill.
-exec "$PYTHON_BIN" -m gunicorn main:app \
-  --config gunicorn_conf.py \
-  --worker-class uvicorn_worker.UvicornWorker \
-  --workers "${WEB_CONCURRENCY:-6}" \
-  --bind "0.0.0.0:$PORT" \
-  --forwarded-allow-ips='*' \
-  --access-logfile >(colorize 32 web >&3) \
-  --error-logfile >(colorize 33 web >&3)
+# ---------------------------------------------------------------------------
+# Launcher side: (re)place each pane.
+# ---------------------------------------------------------------------------
+
+pane_cmd() {
+  local cmd="cd $(printf '%q' "$APP_DIR")" var
+  for var in $FORWARD_VARS; do
+    [ -n "${!var+x}" ] && cmd+=" && export $var=$(printf '%q' "${!var}")"
+  done
+  echo "$cmd && exec ./serve --pane $1"
+}
+
+# Panes are found by a pane option rather than their title: whatever runs in a
+# pane can rewrite its title with an escape sequence.
+pane_for() {
+  tmux has-session -t "=$SESSION" 2>/dev/null || return 0
+  tmux list-panes -s -t "=$SESSION" -F '#{@serve_role} #{pane_id}' 2>/dev/null \
+    | awk -v r="$1" '$1==r{print $2; exit}'
+}
+
+# True when the pane exists but its command has exited (needs remain-on-exit).
+pane_dead() {
+  [ "$(tmux display-message -p -t "$1" '#{pane_dead}' 2>/dev/null)" = "1" ]
+}
+
+# Stop what a pane is running and wait for it to be gone. tmux makes each
+# pane's process a session leader, so its pid is also the pgid of everything it
+# started: gunicorn's workers, the converter's ffmpeg, the label awks. TERM the
+# whole group (gunicorn and converter.py both shut down gracefully on it), and
+# only KILL what is still there after $STOP_TIMEOUT.
+stop_pane() {
+  local pane="$1" pid
+  pane_dead "$pane" && return 0
+  pid=$(tmux display-message -p -t "$pane" '#{pane_pid}' 2>/dev/null)
+  [ -n "$pid" ] || return 0
+  echo "==> Stopping $(tmux display-message -p -t "$pane" '#{@serve_role}') (pid $pid)"
+  kill -TERM -- "-$pid" 2>/dev/null || return 0
+  for _ in $(seq 1 $((STOP_TIMEOUT * 2))); do
+    kill -0 -- "-$pid" 2>/dev/null || return 0
+    sleep 0.5
+  done
+  echo "WARNING: pid $pid did not stop in ${STOP_TIMEOUT}s; killing it"
+  kill -KILL -- "-$pid" 2>/dev/null || true
+}
+
+port_listeners() {
+  lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null || true
+}
+
+# Anything still on $PORT is a server this session does not own: one started by
+# the pre-tmux ./serve, or by hand. Its port is ours, so reclaim it.
+free_port() {
+  local pids
+  pids=$(port_listeners "$PORT")
+  [ -n "$pids" ] || return 0
+  echo "==> Port $PORT still held by PID(s): $(echo "$pids" | tr '\n' ' ')- stopping"
+  # shellcheck disable=SC2086
+  kill $pids 2>/dev/null || true
+  for _ in $(seq 1 $((STOP_TIMEOUT * 2))); do
+    [ -n "$(port_listeners "$PORT")" ] || return 0
+    sleep 0.5
+  done
+  pids=$(port_listeners "$PORT")
+  # shellcheck disable=SC2086
+  [ -z "$pids" ] || kill -9 $pids 2>/dev/null || true
+  sleep 1
+  if [ -n "$(port_listeners "$PORT")" ]; then
+    echo "ERROR: could not free port $PORT."
+    return 1
+  fi
+}
+
+# Two converters would both claim jobs and both reset the other's 'running'
+# rows as orphans at startup, so one outside the session must go too. Same for
+# a second caddy_access.py, which would print every request twice.
+stop_strays() {
+  local name pids
+  for name in converter.py caddy_access.py; do
+    pids=$(pgrep -f "$name") || continue
+    echo "==> Stopping stray $name (PID(s): $(echo "$pids" | tr '\n' ' '))"
+    pkill -f "$name" 2>/dev/null || true
+  done
+  for _ in $(seq 1 $((STOP_TIMEOUT * 2))); do
+    pgrep -f 'converter.py|caddy_access.py' >/dev/null || return 0
+    sleep 0.5
+  done
+  pkill -9 -f 'converter.py|caddy_access.py' 2>/dev/null || true
+}
+
+# Start or replace the pane holding $1. remain-on-exit keeps a pane whose
+# command crashed on boot around, holding its output, instead of tmux reaping
+# it (and with the last pane, the whole session).
+start_pane() {
+  local role="$1" pane
+  pane=$(pane_for "$role")
+  if [ -z "$pane" ]; then
+    if tmux has-session -t "=$SESSION" 2>/dev/null; then
+      pane=$(tmux split-window -P -F '#{pane_id}' -t "=$SESSION:")
+    else
+      # Explicit geometry: a detached session defaults to 80x24.
+      tmux new-session -d -s "$SESSION" -n main -x 200 -y 50
+      pane=$(tmux list-panes -t "=$SESSION:" -F '#{pane_id}' | head -1)
+    fi
+    tmux set-option -p -t "$pane" @serve_role "$role"
+  fi
+  tmux set-option -t "=$SESSION" remain-on-exit on >/dev/null
+  tmux respawn-pane -k -t "$pane" "$(pane_cmd "$role")"
+  tmux select-pane -t "$pane" -T "$role"
+  tmux select-layout -t "=$SESSION:" even-vertical >/dev/null
+}
+
+dump_pane() {
+  echo "----- last lines of $1 pane -----"
+  tmux capture-pane -p -S -500 -t "$2" 2>/dev/null | grep -v '^$' | tail -n 25 || true
+  echo "---------------------------------"
+}
+
+# $1 role, $2 seconds. Waits for the web port to listen when checking web;
+# for the others, just that the pane is still alive after a few seconds.
+verify_pane() {
+  local role="$1" pane
+  pane=$(pane_for "$role")
+  for _ in $(seq 1 "$2"); do
+    sleep 1
+    if pane_dead "$pane"; then
+      echo "ERROR: $role exited on boot."
+      dump_pane "$role" "$pane"
+      return 1
+    fi
+    if [ "$role" = web ] && [ -n "$(port_listeners "$PORT")" ]; then
+      echo "==> web listening on $PORT"
+      return 0
+    fi
+  done
+  if [ "$role" = web ]; then
+    echo "ERROR: web is not listening on $PORT after $2s."
+    dump_pane "$role" "$pane"
+    return 1
+  fi
+  echo "==> $role running"
+}
+
+# 1. Stop everything first, the panes this session owns and then whatever
+#    else still holds the port or runs our processes, so no old process is
+#    left draining the queue or serving next to the new ones.
+for role in web convert caddy; do
+  pane=$(pane_for "$role")
+  [ -n "$pane" ] && stop_pane "$pane"
+done
+free_port || exit 1
+stop_strays
+
+# 2. Truncate the logs on every start so each run's begin from scratch, and so
+#    a run's iOS and server logs cover the same window — correlating the two is
+#    the point of having them. Here, not in main.py's lifespan: that runs once
+#    per gunicorn worker and again on every dev --reload.
+mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$IOS_LOG_FILE")"
+: > "$LOG_FILE"
+: > "$IOS_LOG_FILE"
+# devlog.py rotates to "<name>.1" at its size cap; drop that generation too.
+rm -f "$IOS_LOG_FILE.1"
+
+# 3. The converter starts before the web server so the jobs table exists and
+#    the queue is draining by the time requests arrive.
+start_pane caddy
+start_pane convert
+verify_pane convert 3 || exit 1
+start_pane web
+verify_pane web 30 || exit 1
+verify_pane caddy 1 || exit 1
+
+echo "==> Serving. Session '$SESSION': caddy, convert, web on $PORT."
+
+# 4. Attach so the output is visible live: switch-client if already inside
+#    tmux, plain attach otherwise, nothing without a TTY.
+if [ -n "${TMUX:-}" ]; then
+  tmux switch-client -t "=$SESSION"
+elif [ -t 1 ]; then
+  tmux attach-session -t "=$SESSION"
+else
+  echo "==> No TTY; not attaching. Run: tmux attach -t $SESSION"
+fi
