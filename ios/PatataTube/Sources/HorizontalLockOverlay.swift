@@ -51,7 +51,7 @@ struct HorizontalLockOverlay: View {
 
     var body: some View {
         GeometryReader { geometry in
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: .topLeading) {
                 if isVisible && !isBlocked {
                     VStack(spacing: 12) {
                         Button {
@@ -98,12 +98,12 @@ struct HorizontalLockOverlay: View {
                             .accessibilityLabel(isShuffleOn ? "Turn shuffle off" : "Turn shuffle on")
                         }
                     }
-                    .padding(.trailing, 16)
+                    .padding(.leading, 16)
                     .padding(.top, geometry.size.height * Self.verticalOffsetFraction)
                     .transition(.opacity)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
