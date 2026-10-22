@@ -355,53 +355,56 @@ struct VideoGridView: View {
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showUpload) { UploadView() }
-            .alert(
-                "Download all",
-                isPresented: Binding(
-                    get: { pendingDownloadAll != nil },
-                    set: { if !$0 { pendingDownloadAll = nil } }
-                ),
-                presenting: pendingDownloadAll
-            ) { request in
-                Button("Cancel", role: .cancel) { pendingDownloadAll = nil }
-                Button("Download") {
-                    let targets = request.targets
-                    pendingDownloadAll = nil
-                    // Push Downloads so the confirm lands on the progress list.
-                    path.append(.downloads)
-                    Task { await runDownloadAll(targets) }
-                }
-            } message: { request in
-                Text(Self.downloadAllMessage(count: request.targets.count, freeBytes: request.freeBytes))
-            }
-            .alert(
-                "Resume playback",
-                isPresented: Binding(
-                    get: { pendingResume != nil },
-                    set: { if !$0 { pendingResume = nil } }
-                ),
-                presenting: pendingResume
-            ) { request in
-                Button("Resume from \(ResumeDecision.timestamp(request.secs))") {
-                    pendingResume = nil
-                    begin(request.video, queueSnapshot: request.queueSnapshot,
-                          sleepMode: request.sleepMode, startSecs: request.secs,
-                          caller: "resume-alert")
-                }
-                Button("Play from start") {
-                    pendingResume = nil
-                    begin(request.video, queueSnapshot: request.queueSnapshot,
-                          sleepMode: request.sleepMode, startSecs: 0,
-                          caller: "resume-alert-start")
-                }
-                Button("Cancel", role: .cancel) { pendingResume = nil }
-            } message: { request in
-                Text("You stopped at \(ResumeDecision.timestamp(request.secs)).")
-            }
             .fullScreenCover(item: $playing) { request in
                 playerCover(request)
             }
             .overlay { if let error = store.errorText { errorBanner(error) } }
+        }
+        // On the stack, not its root: an alert on the root is held back while
+        // a group (or any other route) is pushed over it, so a resume prompt
+        // raised inside a group only appeared after navigating back out.
+        .alert(
+            "Download all",
+            isPresented: Binding(
+                get: { pendingDownloadAll != nil },
+                set: { if !$0 { pendingDownloadAll = nil } }
+            ),
+            presenting: pendingDownloadAll
+        ) { request in
+            Button("Cancel", role: .cancel) { pendingDownloadAll = nil }
+            Button("Download") {
+                let targets = request.targets
+                pendingDownloadAll = nil
+                // Push Downloads so the confirm lands on the progress list.
+                path.append(.downloads)
+                Task { await runDownloadAll(targets) }
+            }
+        } message: { request in
+            Text(Self.downloadAllMessage(count: request.targets.count, freeBytes: request.freeBytes))
+        }
+        .alert(
+            "Resume playback",
+            isPresented: Binding(
+                get: { pendingResume != nil },
+                set: { if !$0 { pendingResume = nil } }
+            ),
+            presenting: pendingResume
+        ) { request in
+            Button("Resume from \(ResumeDecision.timestamp(request.secs))") {
+                pendingResume = nil
+                begin(request.video, queueSnapshot: request.queueSnapshot,
+                      sleepMode: request.sleepMode, startSecs: request.secs,
+                      caller: "resume-alert")
+            }
+            Button("Play from start") {
+                pendingResume = nil
+                begin(request.video, queueSnapshot: request.queueSnapshot,
+                      sleepMode: request.sleepMode, startSecs: 0,
+                      caller: "resume-alert-start")
+            }
+            Button("Cancel", role: .cancel) { pendingResume = nil }
+        } message: { request in
+            Text("You stopped at \(ResumeDecision.timestamp(request.secs)).")
         }
         .environment(preparationTracker)
         .environment(jobsStore)
