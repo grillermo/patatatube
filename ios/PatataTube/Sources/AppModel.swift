@@ -7,6 +7,9 @@ import PatataTubeKit
 @MainActor
 final class AppModel: ObservableObject {
     let credentials: CredentialStore
+    /// Points `credentials.baseURL` at the LAN server while it answers, the
+    /// remote URL otherwise. Nil when the store isn't routed (tests).
+    let serverPicker: ServerPicker?
     let cache: CacheManager
     let streamCache: StreamCache
     let streamProxy: StreamProxy
@@ -45,6 +48,7 @@ final class AppModel: ObservableObject {
     private let simultaneousSettings: SimultaneousDownloadSettings
 
     @Published var baseURLText: String
+    @Published var lanURLText: String
     @Published var tokenText: String
     @Published var downloadStreamCount: Int
     @Published var downloadConcurrency: Int
@@ -139,16 +143,18 @@ final class AppModel: ObservableObject {
     }
 
     init(
-        credentials: CredentialStore = KeychainCredentialStore(),
+        credentials: CredentialStore = RoutedCredentialStore(inner: KeychainCredentialStore()),
         cacheRoot: URL? = nil,
         downloadSettings: DownloadStreamSettings = DownloadStreamSettings(),
         simultaneousSettings: SimultaneousDownloadSettings = SimultaneousDownloadSettings()
     ) {
         let api = APIClient(store: credentials)
-        let resumeStore = ResumePositionStore(serverURL: credentials.baseURL)
+        let resumeStore = ResumePositionStore(serverURL: credentials.identityURL)
         let streamCache = StreamCache()
         let cache = CacheManager(root: cacheRoot, streamCache: streamCache)
         self.credentials = credentials
+        let routed = credentials as? RoutedCredentialStore
+        self.serverPicker = routed.map(ServerPicker.init(store:))
         self.streamCache = streamCache
         self.cache = cache
         self.streamProxy = StreamProxy(
@@ -170,13 +176,14 @@ final class AppModel: ObservableObject {
         self.simultaneousSettings = simultaneousSettings
         self.downloadStreamCount = downloadSettings.load()
         self.downloadConcurrency = simultaneousSettings.load()
-        self.baseURLText = credentials.baseURL?.absoluteString ?? ""
+        self.baseURLText = credentials.identityURL?.absoluteString ?? ""
+        self.lanURLText = routed?.lanURLText ?? ""
         self.tokenText = credentials.token ?? ""
         cache.setMaxConcurrentDownloads(self.downloadConcurrency)
         loadCellSizes()
         // On a real device the backend is DevLog's only sink, so nothing is
         // recorded until it knows where to post. No-op without DEVLOG.
-        DevLog.connect(baseURL: credentials.baseURL, token: credentials.token)
+        DevLog.connect(baseURL: credentials.identityURL, token: credentials.token)
         Task { await streamProxy.start() }
         // Cold launch: nothing is on screen yet. `VideoGridView.initialLoad`
         // reads this to skip re-presenting the saved player, and resets its
@@ -244,8 +251,13 @@ final class AppModel: ObservableObject {
     func saveSettings() {
         credentials.baseURL = URL(string: baseURLText.trimmingCharacters(in: .whitespaces))
         credentials.token = tokenText.isEmpty ? nil : tokenText
-        resumeStore.useServer(credentials.baseURL)
-        DevLog.connect(baseURL: credentials.baseURL, token: credentials.token)
+        if let routed = credentials as? RoutedCredentialStore {
+            routed.lanURLText = lanURLText
+            lanURLText = routed.lanURLText
+        }
+        serverPicker?.settingsChanged()
+        resumeStore.useServer(credentials.identityURL)
+        DevLog.connect(baseURL: credentials.identityURL, token: credentials.token)
         downloadStreamCount = min(
             max(downloadStreamCount, DownloadStreamSettings.allowedCounts.lowerBound),
             DownloadStreamSettings.allowedCounts.upperBound

@@ -94,6 +94,9 @@ struct PatataTubeApp: App {
                     // whenever we come back to the foreground (and on launch).
                     if phase == .active {
                         model.appDidBecomeActive()
+                        // The Wi-Fi may have changed while suspended, and the
+                        // path monitor doesn't report what it missed.
+                        if let picker = model.serverPicker { Task { await picker.probe() } }
                         model.cache.resumeInterrupted(bearerToken: model.credentials.token)
                         // iOS reclaims the loopback listener while the app is
                         // suspended, and a proxy that came back dead takes every

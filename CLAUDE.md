@@ -371,6 +371,24 @@ logged in.
 
 - `ios/PatataTubeKit/` — a local SwiftPM package holding all logic (`APIClient`, `CacheManager`, `VideoStore`, `Video`, `CredentialStore`). This is the testable core; build/isolate bugs here with `swift build`.
 - `ios/PatataTube/` — the SwiftUI app shell (`Sources/*.swift`), an XcodeGen target. `Video` decodes the server's snake_case JSON; `CacheManager` downloads MP4s for offline playback; `VideoStore` does optimistic group/upload against `APIClient`.
+- **The app talks to the LAN server when it can, the remote URL otherwise.**
+  `AppModel.credentials` is a `RoutedCredentialStore` (PatataTubeKit,
+  `ServerRoute.swift`) wrapping the Keychain store: its `baseURL` returns the
+  Settings "Home URL" (default `http://192.168.1.1:3050`, blank turns it off)
+  while `ServerPicker` has it marked reachable, and the configured remote URL
+  otherwise. Everything that builds a server URL (APIClient, StreamProxy,
+  image and stream URLs) reads `baseURL` live, so that one getter is the whole
+  switch. The picker probes `GET /check-auth` with the token (1s, must be 200,
+  so another network's 192.168.1.1 never counts) at launch, on every
+  `NWPathMonitor` change and on foreground. `APIClient.send` falls back on its
+  own: a LAN request that fails to connect flips the route to remote and is
+  resent once through it (a POST only on a pure connect failure, never after a
+  timeout, since it may have reached the server), and the picker re-probes 5s
+  later. **Per-server state keys on `identityURL`, not `baseURL`** — it stays
+  the remote URL on either route, or resume positions would look like they
+  belonged to another server (`APIError.serverChanged`) every time the route
+  flipped. Streams already in flight (AVPlayer, downloads) are not migrated
+  when the route changes; the next request picks up the new base.
 - **Navigation is a `TabView` over `MediaTab` (videos/tv/movies).** `RootTabView`
   builds one `VideoGridView` per tab, each with its own `NavigationStack`;
   `VideoStore.feed` is the single source of what's loaded, and tab selection

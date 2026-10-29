@@ -100,7 +100,7 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         var comps = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
         let items = feed.queryItems
         comps.queryItems = items.isEmpty ? nil : items
-        let (data, response) = try await session.data(from: comps.url!)
+        let (data, response) = try await send(URLRequest(url: comps.url!))
         try Self.check(response)
         do {
             return try Self.makeDecoder().decode([Video].self, from: data)
@@ -110,8 +110,8 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
     }
 
     public func groups() async throws -> [VideoGroup] {
-        let (data, response) = try await session.data(
-            from: try base().appendingPathComponent("api/groups")
+        let (data, response) = try await send(
+            URLRequest(url: try base().appendingPathComponent("api/groups"))
         )
         try Self.check(response)
         struct Envelope: Decodable { let groups: [VideoGroup] }
@@ -200,7 +200,8 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
     /// Reports where playback got to. The server answers 204 with no body, so
     /// there is nothing to decode — a throw is the only failure signal.
     public func savePosition(id: Int, secs: Double) async throws {
-        let destination = ResumePositionStore.normalizedServerIdentity(try base())
+        _ = try base()
+        let destination = ResumePositionStore.normalizedServerIdentity(store.identityURL)
         try await savePosition(
             id: id, secs: secs, destinationServerIdentity: destination
         )
@@ -282,7 +283,7 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         guard let token = store.token, !token.isEmpty else { throw APIError.notConfigured }
         var request = URLRequest(url: try base().appendingPathComponent("check-auth"))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (_, response) = try await session.data(for: request)
+        let (_, response) = try await send(request)
         try Self.check(response)
         return true
     }
@@ -318,7 +319,7 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         guard let token = store.token, !token.isEmpty else { throw APIError.notConfigured }
         let baseURL = try base()
         if let destinationServerIdentity,
-           ResumePositionStore.normalizedServerIdentity(baseURL) != destinationServerIdentity {
+           ResumePositionStore.normalizedServerIdentity(store.identityURL) != destinationServerIdentity {
             throw APIError.serverChanged
         }
         guard let url = URL(string: path, relativeTo: baseURL.appendingPathComponent("/")) else {
@@ -331,8 +332,36 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await send(request)
         try Self.check(response)
         return data
+    }
+
+    /// Sends a request built on the server's base URL. When the LAN route was
+    /// in use and the request failed while connecting (or, for a GET, timed
+    /// out), the route falls back to remote and the request is sent once more
+    /// through the remote URL — a POST that may already have reached the
+    /// server is not resent.
+    private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        let routed = store as? RoutedCredentialStore
+        let lan = routed?.activeLANURL
+        do {
+            return try await session.data(for: request)
+        } catch {
+            let idempotent = (request.httpMethod ?? "GET") == "GET"
+            guard let routed, let lan, let url = request.url,
+                  ServerRouting.isRetryableConnectFailure(error, idempotent: idempotent),
+                  let remote = routed.identityURL,
+                  let retryURL = ServerRouting.rebase(url, from: lan, to: remote)
+            else { throw error }
+            DevLog.event(.net, "lan failed, retrying remote", [
+                "code": "\((error as? URLError)?.code.rawValue ?? 0)",
+                "path": url.path,
+            ])
+            routed.lanFailed(from: lan)
+            var retry = request
+            retry.url = retryURL
+            return try await session.data(for: retry)
+        }
     }
 }

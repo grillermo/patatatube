@@ -22,6 +22,13 @@ struct SettingsView: View {
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                         .onChange(of: model.baseURLText) { invalidateTest() }
+                    if let picker = model.serverPicker {
+                        TextField("Home URL (\(ServerRouting.defaultLANURL))", text: $model.lanURLText)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                        ServerRouteRow(picker: picker)
+                    }
                     SecureField("Upload token", text: $model.tokenText)
                         .onChange(of: model.tokenText) { invalidateTest() }
                     Button {
@@ -166,5 +173,15 @@ struct SettingsView: View {
             value += " — \(bytes) of \(budget)"
         }
         return value
+    }
+}
+
+/// Which URL requests go to right now. Its own view so it can observe the
+/// picker; `SettingsView` only observes the model.
+private struct ServerRouteRow: View {
+    @ObservedObject var picker: ServerPicker
+
+    var body: some View {
+        LabeledContent("In use", value: picker.route == .lan ? "Home (LAN)" : "Remote")
     }
 }

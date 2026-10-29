@@ -3,6 +3,14 @@ import Foundation
 public protocol CredentialStore: AnyObject {
     var baseURL: URL? { get set }
     var token: String? { get set }
+    /// The server this store's data belongs to, for keying per-server state.
+    /// Differs from `baseURL` only when the route switches between URLs of
+    /// one server (`RoutedCredentialStore`).
+    var identityURL: URL? { get }
+}
+
+public extension CredentialStore {
+    var identityURL: URL? { baseURL }
 }
 
 public final class InMemoryCredentialStore: CredentialStore {
