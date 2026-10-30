@@ -7,12 +7,18 @@ struct GridUnlockTests {
     private typealias C = GridUnlock.Cell
 
     @Test func checkersPatternUnlocks() {
+        // #expect can't call a mutating method, so each tap is taken first.
         var u = GridUnlock()
-        #expect(!u.tap(C(column: 0, row: 0)))   // top-left
-        #expect(!u.tap(C(column: 0, row: 2)))   // bottom-left
-        #expect(!u.tap(C(column: 2, row: 2)))   // bottom-right
-        #expect(!u.tap(C(column: 2, row: 0)))   // top-right
-        #expect(u.tap(C(column: 1, row: 1)))    // centre
+        let topLeft = u.tap(C(column: 0, row: 0))
+        let bottomLeft = u.tap(C(column: 0, row: 2))
+        let bottomRight = u.tap(C(column: 2, row: 2))
+        let topRight = u.tap(C(column: 2, row: 0))
+        let centre = u.tap(C(column: 1, row: 1))
+        #expect(!topLeft)
+        #expect(!bottomLeft)
+        #expect(!bottomRight)
+        #expect(!topRight)
+        #expect(centre)
     }
 
     @Test func sequenceIsExactlyTheCheckersSquares() {
@@ -24,9 +30,11 @@ struct GridUnlockTests {
     @Test func edgeSquareIsWrongAndResets() {
         var u = GridUnlock()
         _ = u.tap(C(column: 0, row: 0))
-        #expect(!u.tap(C(column: 0, row: 1)))
+        let edge = u.tap(C(column: 0, row: 1))
+        #expect(!edge)
         #expect(u.lit.isEmpty)
-        #expect(!u.tap(C(column: 0, row: 2)))
+        let outOfOrder = u.tap(C(column: 0, row: 2))
+        #expect(!outOfOrder)
         #expect(u.lit.isEmpty)
     }
 
