@@ -184,6 +184,13 @@ public enum DevLog {
         guard enabled else { return }
         core.flush()
     }
+
+    /// Sends a file to the `./deploy --devlog` server (log/screens/<name>).
+    /// No-op without that server, and `data` is not even built (`@autoclosure`).
+    public static func upload(_ name: String, _ data: @autoclosure () -> Data) {
+        guard enabled, let uploader = core.currentUploader else { return }
+        uploader.upload(name: name, data: data())
+    }
 }
 
 // MARK: - Core
@@ -216,6 +223,8 @@ final class DevLogCore: @unchecked Sendable {
     private var build = ""
     /// Set by `connectEndpoint`; backend credentials can no longer replace it.
     private var fixedEndpoint = false
+    /// Files for the `./deploy --devlog` server; nil without one.
+    private var uploader: DevLogUploader?
 
     private let queue = DispatchQueue(label: "com.patatatube.devlog", qos: .utility)
     private let mirror = Logger(subsystem: "com.patatatube.app", category: "devlog")
@@ -293,10 +302,13 @@ final class DevLogCore: @unchecked Sendable {
         fixedEndpoint = true
         httpTarget = url.absoluteString
         httpSink = DevLogHTTPSink(endpoint: url, token: nil, sessionID: session)
+        uploader = DevLogUploader(endpoint: url)
         lock.unlock()
         emit(kind: .lifecycle, message: "devlog sink -> \(url.absoluteString)",
              meta: [:], file: #fileID, line: #line, function: #function)
     }
+
+    var currentUploader: DevLogUploader? { lock.withLock { uploader } }
 
     var httpEndpointForTesting: URL? { lock.withLock { httpSink?.endpointForTesting } }
 
