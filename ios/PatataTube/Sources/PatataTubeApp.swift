@@ -9,6 +9,18 @@ import Capture
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // Touch-and-hold on the icon offers Install Latest only in ./deploy
+        // builds. Assigning [] also clears an item left by an earlier OTA build.
+        application.shortcutItems = QuickAction
+            .dynamicActions(infoDictionary: Bundle.main.infoDictionary)
+            .compactMap(\.dynamicShortcutItem)
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?
     ) -> UIInterfaceOrientationMask {
         HorizontalLockRegistry.shared.supportedOrientations(
