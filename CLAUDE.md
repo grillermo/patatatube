@@ -31,6 +31,7 @@ cd ios/PatataTube && xcodegen generate && open PatataTube.xcodeproj   # project.
 cd ios/PatataTubeKit && swift build                                   # build the logic package standalone
 cd ios/PatataTubeKit && swift test                                    # debug: DEVLOG on
 cd ios/PatataTubeKit && swift test -c release                         # release: DEVLOG off (silence guarantee)
+for f in scripts/deploy/test/*_test.rb; do ruby "$f"; done             # deploy helper tests (repo root)
 
 # app target's own tests (SwiftUI/UIKit; swift-testing + ViewInspector)
 cd ios/PatataTube && xcodebuild -project PatataTube.xcodeproj -scheme PatataTube \
@@ -100,6 +101,10 @@ silent.
   `POST /api/devlog` (Bearer `UPLOAD_TOKEN`) and `devlog.py` appends them to the
   same file, rotating to `ios.jsonl.1` at 32 MB. Nothing is recorded until
   `DevLog.connect` gets credentials — `AppModel` calls it at init and on save.
+  A `./deploy --devlog` build instead carries `PatataTubeDevLogURL` in
+  Info.plist and sends to `scripts/devlog/server.py` on the Mac (port 19485,
+  `log/devlog.jsonl`, uploads from `DevLog.upload` in `log/screens/`); that
+  endpoint takes precedence over `DevLog.connect`'s backend sink.
 
 `./serve` truncates `log/ios.jsonl` (and drops `ios.jsonl.1`) on every start,
 exactly like `log/backend.log`, so a run's iOS and server logs cover the same
@@ -128,7 +133,8 @@ Getting `DEVLOG` set is the fiddly part, and it is deliberately independent of
   its own `Package.swift`** — an Xcode project-level setting does not reach
   SwiftPM package targets, and most instrumented code (`CacheManager`,
   `StreamProxy`) lives in the package. Both are needed.
-- **Release**: off, unless built via `./deploy --instrumented`, which passes
+- **Release**: off, unless built via `./deploy --devlog` (`--instrumented` is
+  the old name, still accepted), which passes
   `SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) DEVLOG'` on the
   `xcodebuild` command line — the one place that does reach every target.
 
@@ -528,16 +534,22 @@ logged in.
 ### Distribution — `./deploy` ships over the air only
 
 The `.ipa` is signed **ad hoc** against the paid Apple Developer team in
-`project.yml`'s `DEVELOPMENT_TEAM`, which `ipa_builder.rb` reads for both the
-archive and the export so the two can never disagree. `xcodebuild
+`ios/PatataTube/Config/Local.xcconfig` (gitignored; `PATATATUBE_BUNDLE_ID` and
+`DEVELOPMENT_TEAM`, over the committed placeholders in
+`Config/PatataTube.xcconfig`), which `scripts/deploy/ipa_builder.rb` reads for
+both the archive and the export so the two can never disagree. The helpers live
+in `scripts/deploy/` (tested with minitest), and `PATATATUBE_UPLOAD_BASE` comes
+from `.env`. `xcodebuild
 -exportArchive` emits the OTA `manifest.plist` itself (the `manifest` key in
 `ExportOptions.plist`), so it always describes the binary being published.
 
-`./deploy` copies the `.ipa`, the icon (`patatatube-icon.png`), the manifest
-(`patatatube-manifest.plist`) and the install page
-(`3cf25ffc-…-Install_PatataTube.html`) straight into `../file_server/files`,
-the directory files.chiq.me's file_server serves from this machine (the
-macmini), then commits the version bump, tags `vX.Y.Z` and pushes. **The
+`./deploy` refuses a dirty tree. It copies the `.ipa`, the icon
+(`patatatube-icon.png`, from `AppIcon.appiconset/icon-1024.png`), the manifest
+(`patatatube-manifest.plist`) and the install page (`patatatube-install.html`,
+plus the legacy `3cf25ffc-…-Install_PatataTube.html` name for old bookmarks)
+straight into `../file_server/files`, the directory files.chiq.me's file_server
+serves from this machine (the macmini), then commits the version bump, tags
+`patatatube-ota-vX.Y.Z` (releases up to 2.7.31 were `vX.Y.Z`) and pushes. **The
 manifest and install page URLs are constant across releases** — that is what
 makes a Home Screen bookmark a permanent update button, so don't version them.
 
@@ -547,8 +559,14 @@ from the old routes and no longer updated.
 
 An ad-hoc profile embeds the UDIDs registered on the portal **at build time**, so
 registering a device is only half the job — the app must be redeployed before
-that device can install it. `PATATATUBE_UNSIGNED=1` is refused, since an
-unsigned `.ipa` cannot be installed over the air.
+that device can install it. `PATATATUBE_UNSIGNED=1 ./deploy` only builds: it
+writes `ios/build/PatataTube-X.Y.Z-unsigned.ipa` and publishes, commits and tags
+nothing, since an unsigned `.ipa` cannot be installed over the air.
+
+Builds made by `./deploy` carry `PatataTubeOTAManifestURL` in Info.plist (an
+xcodebuild command-line setting; any other build leaves it empty). With it, the
+app registers a dynamic **Install Latest** quick action at launch, which opens
+the `itms-services://` link and exits 1.5 s later so iOS can replace the bundle.
 
 Full setup and troubleshooting: `ios/install.md`.
 

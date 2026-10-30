@@ -13,7 +13,7 @@
 #   deploy-ios.sh 1.4.2                    # forward explicit version to ./deploy
 #   deploy-ios.sh -m "message" minor      # custom commit message for pending changes
 #   deploy-ios.sh --dry-run [args]        # run preflight checks only; commit nothing
-#   deploy-ios.sh --instrumented [args]   # build with DEVLOG runtime logging
+#   deploy-ios.sh --devlog [args]         # diagnostics build (DevLog -> scripts/devlog/server.py)
 #   deploy-ios.sh --yes [args]            # without ./deploy's confirmation prompt
 #   deploy-ios.sh --summary "Faster downloads" --note "Fixed X" --note "Added Y"
 #
@@ -21,9 +21,10 @@
 # "What's new" (--note repeatable, one bullet each). Pass them: without them
 # ./deploy falls back to the commit subjects since the last tag.
 #
-# --instrumented compiles DevLog into the .ipa so the app records what it does
-# at runtime and posts it to the backend (POST /api/devlog -> log/ios.jsonl).
-# Ship a clean build over it when done.
+# --devlog (--instrumented is the old name) compiles DevLog into the .ipa and
+# bakes in the URL of scripts/devlog/server.py on this Mac (port 19485), which
+# writes log/devlog.jsonl. Start that server first; ship a clean build over it
+# when done.
 #
 # Remote is named `github` (there is no `origin`); ./deploy pushes there too.
 
@@ -115,21 +116,25 @@ bump_version() {
   esac
 }
 
+# Releases are tagged patatatube-ota-vX.Y.Z; up to 2.7.31 they were vX.Y.Z.
+# Either one means the version is taken.
 version_taken() {
-  local tag="v$1"
-  [ -e "${PATATATUBE_PUBLISH_DIR:-$root/../file_server/files}/PatataTube-$1.ipa" ] && return 0
-  [ -n "$(git tag -l "$tag")" ] && return 0
-  [ -n "$(git ls-remote --tags "$remote" "refs/tags/$tag" 2>/dev/null)" ] && return 0
+  local v="$1" t
+  [ -e "${PATATATUBE_PUBLISH_DIR:-$root/../file_server/files}/PatataTube-$v.ipa" ] && return 0
+  for t in "patatatube-ota-v$v" "v$v"; do
+    [ -n "$(git tag -l "$t")" ] && return 0
+    [ -n "$(git ls-remote --tags "$remote" "refs/tags/$t" 2>/dev/null)" ] && return 0
+  done
   return 1
 }
 
 if [[ "$bump" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   candidate="$bump"
-  version_taken "$candidate" && fail "release v$candidate already exists — pick a different version"
+  version_taken "$candidate" && fail "release $candidate already exists — pick a different version"
 else
   candidate="$(bump_version "$current_version" "${bump:-patch}")"
   while version_taken "$candidate"; do
-    echo "release v$candidate already exists — bumping past it"
+    echo "release $candidate already exists — bumping past it"
     candidate="$(bump_version "$candidate" patch)"
   done
 fi
@@ -137,7 +142,7 @@ bump="$candidate"
 ok "target version v$bump (from v$current_version)"
 
 deploy_cmd=(./deploy "$bump")
-[ "$instrumented" -eq 1 ] && deploy_cmd+=(--instrumented)
+[ "$instrumented" -eq 1 ] && deploy_cmd+=(--devlog)
 [ "$assume_yes" -eq 1 ] && deploy_cmd+=(--yes)
 [ ${#notes_args[@]} -gt 0 ] && deploy_cmd+=("${notes_args[@]}")
 
@@ -146,7 +151,7 @@ if [ ${#notes_args[@]} -eq 0 ]; then
 fi
 
 if [ "$instrumented" -eq 1 ]; then
-  printf '\033[31m⚠  INSTRUMENTED build (DEVLOG): the app will post runtime logs to the backend.\033[0m\n'
+  printf '\033[31m⚠  DIAGNOSTICS build (DevLog): the app sends records to scripts/devlog/server.py.\033[0m\n'
   printf '\033[31m   Ship a clean build over it when done.\033[0m\n'
 fi
 

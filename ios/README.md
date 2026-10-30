@@ -291,3 +291,75 @@ On first launch grid is empty / errors — need server config:
   episode, pull down to dismiss. The player must stay dismissed, and a single
   tap on the nav-bar back button must return to the shows list. (Regression
   test for the restoration task re-entry loop, 2026-08-02.)
+
+## Releasing over the air (`./deploy`)
+
+`./deploy` (Ruby, repo root; helpers in `scripts/deploy/`) builds an ad-hoc
+signed `.ipa`, publishes it on files.chiq.me and tags the release. No App
+Store, TestFlight or cable. Full Apple-side setup: `install.md`.
+
+### One-time setup
+
+- `ios/PatataTube/Config/Local.xcconfig` (gitignored; it overrides the committed
+  `Config/PatataTube.xcconfig`, whose placeholder bundle ID keeps a fresh clone
+  building):
+
+  ```
+  PATATATUBE_BUNDLE_ID = com.patatatube.app
+  DEVELOPMENT_TEAM = <team id>
+  ```
+
+- In the repo `.env` (gitignored, shared with the backend):
+  `PATATATUBE_UPLOAD_BASE=https://files.chiq.me`, and optionally
+  `PATATATUBE_PUBLISH_DIR` if file_server's `files/` is not at
+  `../file_server/files`. `./deploy` never overrides an exported variable.
+- Register the App ID and every device on developer.apple.com, and sign in to
+  Xcode → Settings → Accounts.
+
+### Usage
+
+```bash
+./deploy                       # patch bump
+./deploy minor|major|X.Y.Z
+./deploy --yes                 # no confirmation prompt
+./deploy --summary "Headline" --note "One bullet" --note "Another"
+./deploy --devlog              # diagnostics build (see below)
+```
+
+Environment: `PATATATUBE_UNSIGNED=1` builds `ios/build/PatataTube-X.Y.Z-unsigned.ipa`
+and publishes nothing; `PATATATUBE_TEAM_ID` overrides the team for one run;
+`PATATATUBE_DEVLOG_URL` / `PATATATUBE_DEVLOG_PORT` move the DevLog server.
+
+### What a run does
+
+1. Preflight: on `main`, clean tree, `patatatube-ota-vX.Y.Z` (and legacy
+   `vX.Y.Z`) tag unused, publish directory present, signing config present,
+   codesign able to sign (it unlocks the login keychain if needed).
+2. Bumps `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` in `project.yml`;
+   any failure before the commit puts them back.
+3. Archives and exports with `release-testing`; xcodebuild writes the OTA
+   manifest itself.
+4. Copies into file_server's directory: `PatataTube-X.Y.Z.ipa`,
+   `patatatube-icon.png`, `patatatube-manifest.plist`,
+   `patatatube-install.html`, and the same page under its old
+   `3cf25ffc-…-Install_PatataTube.html` name.
+5. Commits `Release PatataTube OTA patatatube-ota-vX.Y.Z`, tags it, pushes to
+   `github`.
+
+### Installing
+
+Open https://files.chiq.me/files/patatatube-install.html in Safari, tap
+Install, and add the page to the Home Screen: it always installs the newest
+release. Builds made by `./deploy` also offer **Install Latest** when you touch
+and hold the app icon.
+
+### Diagnostics (`--devlog`)
+
+A `--devlog` build sends DevLog records to `scripts/devlog/server.py` on this
+Mac (port 19485), which writes `log/devlog.jsonl` and stores uploads in
+`log/screens/`. Start it before installing the build:
+
+```bash
+scripts/devlog/server.py &
+curl http://$(scutil --get LocalHostName).local:19485/api/devlog/health
+```
