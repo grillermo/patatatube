@@ -24,7 +24,7 @@ public final class DevLogHTTPSink: DevLogSink, @unchecked Sendable {
     public static let maxRecordsPerRequest = 512
 
     private let endpoint: URL
-    private let token: String
+    private let token: String?
     private let session: URLSession
     private let sessionID: String
 
@@ -32,22 +32,36 @@ public final class DevLogHTTPSink: DevLogSink, @unchecked Sendable {
     private var backlog: [[DevLogRecord]] = []
     private var inFlight = false
 
+    /// Posts to an absolute endpoint, e.g. `./deploy --devlog`'s
+    /// `http://<mac>.local:19485/api/devlog` (scripts/devlog/server.py, no auth).
+    public init(
+        endpoint: URL,
+        token: String?,
+        sessionID: String,
+        configuration: URLSessionConfiguration = DevLogHTTPSink.defaultConfiguration()
+    ) {
+        self.endpoint = endpoint
+        self.token = token
+        self.sessionID = sessionID
+        self.session = URLSession(configuration: configuration)
+    }
+
     /// - Parameters:
     ///   - baseURL: the backend root, e.g. `https://patatatube.example`.
     ///   - token: `UPLOAD_TOKEN`, sent as a bearer token.
     ///   - sessionID: `DevLog.session`, echoed in the payload.
     ///   - configuration: overridable for tests; defaults to `defaultConfiguration()`.
-    public init(
+    public convenience init(
         baseURL: URL,
         token: String,
         sessionID: String,
         configuration: URLSessionConfiguration = DevLogHTTPSink.defaultConfiguration()
     ) {
-        self.endpoint = baseURL.appendingPathComponent("api/devlog")
-        self.token = token
-        self.sessionID = sessionID
-        self.session = URLSession(configuration: configuration)
+        self.init(endpoint: baseURL.appendingPathComponent("api/devlog"), token: token,
+                  sessionID: sessionID, configuration: configuration)
     }
+
+    var endpointForTesting: URL { endpoint }
 
     public static func defaultConfiguration() -> URLSessionConfiguration {
         let config = URLSessionConfiguration.ephemeral
@@ -93,7 +107,7 @@ public final class DevLogHTTPSink: DevLogSink, @unchecked Sendable {
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
 

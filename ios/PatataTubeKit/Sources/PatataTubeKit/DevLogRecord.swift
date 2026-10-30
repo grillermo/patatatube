@@ -20,6 +20,8 @@ public struct DevLogRecord: Equatable, Sendable {
     /// `#function` of the call site.
     public let fn: String
     public let meta: [String: String]
+    /// App version and build, e.g. "2.7.32 (214)". Empty in tests.
+    public let build: String
 
     public init(
         ts: Date,
@@ -29,7 +31,8 @@ public struct DevLogRecord: Equatable, Sendable {
         msg: String,
         src: String,
         fn: String,
-        meta: [String: String]
+        meta: [String: String],
+        build: String = ""
     ) {
         self.ts = ts
         self.seq = seq
@@ -39,6 +42,7 @@ public struct DevLogRecord: Equatable, Sendable {
         self.src = src
         self.fn = fn
         self.meta = meta
+        self.build = build
     }
 }
 
@@ -90,6 +94,7 @@ public extension DevLogRecord {
         out += ",\"src\":\(q(src))"
         out += ",\"fn\":\(q(fn))"
         out += ",\"session\":\(q(session))"
+        out += ",\"build\":\(q(build))"
         out += ",\"meta\":{"
         out += meta.keys.sorted().map { "\(q($0)):\(q(meta[$0]!))" }.joined(separator: ",")
         out += "}}"

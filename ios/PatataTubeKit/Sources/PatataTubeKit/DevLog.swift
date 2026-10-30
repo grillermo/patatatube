@@ -144,10 +144,16 @@ public enum DevLog {
     // MARK: - Lifecycle
 
     /// Installs the sinks and records the launch marker. Safe to call when
-    /// disabled (does nothing) and safe to call more than once.
-    public static func start() {
+    /// disabled (does nothing) and safe to call more than once. With a
+    /// `PatataTubeDevLogURL` in Info.plist (`./deploy --devlog`), records go to
+    /// scripts/devlog/server.py on the Mac.
+    public static func start(infoDictionary: [String: Any]? = Bundle.main.infoDictionary) {
         guard enabled else { return }
+        core.configure(build: DevLogEndpoint.build(infoDictionary: infoDictionary))
         core.installDefaultSinks()
+        if let url = DevLogEndpoint.url(infoDictionary: infoDictionary) {
+            core.connectEndpoint(url)
+        }
         core.emit(kind: .lifecycle, message: "=== launch ===",
                   meta: ["session": core.session],
                   file: #fileID, line: #line, function: #function)
@@ -165,6 +171,8 @@ public enum DevLog {
     /// Records emitted before this are not lost: they sit in the ring buffer and
     /// go out with the first batch, unless the buffer overflows first (which is
     /// reported as a drop marker).
+    ///
+    /// Ignored when Info.plist carries a `PatataTubeDevLogURL`.
     public static func connect(baseURL: URL?, token: String?) {
         guard enabled, let baseURL, let token, !token.isEmpty else { return }
         core.connectHTTP(baseURL: baseURL, token: token)
@@ -204,6 +212,10 @@ final class DevLogCore: @unchecked Sendable {
     /// the old endpoint instead of stacking a second one.
     private var httpSink: DevLogHTTPSink?
     private var httpTarget: String?
+    /// "2.7.32 (214)", stamped on every record.
+    private var build = ""
+    /// Set by `connectEndpoint`; backend credentials can no longer replace it.
+    private var fixedEndpoint = false
 
     private let queue = DispatchQueue(label: "com.patatatube.devlog", qos: .utility)
     private let mirror = Logger(subsystem: "com.patatatube.app", category: "devlog")
@@ -233,7 +245,7 @@ final class DevLogCore: @unchecked Sendable {
         seq &+= 1
         record = DevLogRecord(
             ts: Date(), seq: seq, session: session, kind: kind, msg: message,
-            src: "\(file):\(line)", fn: function, meta: meta
+            src: "\(file):\(line)", fn: function, meta: meta, build: build
         )
         ring.append(record)
         if kind == .error || ring.pendingCount >= Self.flushThreshold {
@@ -260,6 +272,7 @@ final class DevLogCore: @unchecked Sendable {
     func connectHTTP(baseURL: URL, token: String) {
         let target = "\(baseURL.absoluteString)|\(token.hashValue)"
         lock.lock()
+        guard !fixedEndpoint else { lock.unlock(); return }
         guard httpTarget != target else { lock.unlock(); return }
         httpTarget = target
         httpSink = DevLogHTTPSink(baseURL: baseURL, token: token, sessionID: session)
@@ -268,6 +281,24 @@ final class DevLogCore: @unchecked Sendable {
         emit(kind: .lifecycle, message: "devlog sink -> \(baseURL.absoluteString)",
              meta: [:], file: #fileID, line: #line, function: #function)
     }
+
+    func configure(build: String) {
+        lock.withLock { self.build = build }
+    }
+
+    /// The `./deploy --devlog` server. Once set, backend credentials from
+    /// `connectHTTP` no longer replace it: the build was made to report here.
+    func connectEndpoint(_ url: URL) {
+        lock.lock()
+        fixedEndpoint = true
+        httpTarget = url.absoluteString
+        httpSink = DevLogHTTPSink(endpoint: url, token: nil, sessionID: session)
+        lock.unlock()
+        emit(kind: .lifecycle, message: "devlog sink -> \(url.absoluteString)",
+             meta: [:], file: #fileID, line: #line, function: #function)
+    }
+
+    var httpEndpointForTesting: URL? { lock.withLock { httpSink?.endpointForTesting } }
 
     func installDefaultSinks() {
         lock.lock()
@@ -303,6 +334,7 @@ final class DevLogCore: @unchecked Sendable {
         guard !currentSinks.isEmpty else { lock.unlock(); return }
 
         let (records, dropped) = ring.drain()
+        let build = self.build
         lock.unlock()
 
         guard !records.isEmpty || dropped > 0 else { return }
@@ -316,7 +348,7 @@ final class DevLogCore: @unchecked Sendable {
                 ts: Date(), seq: 0, session: session, kind: .lifecycle,
                 msg: "dropped \(dropped) record(s) — ring buffer overflow",
                 src: "DevLog.swift", fn: "drainAndWrite()",
-                meta: ["dropped": "\(dropped)"]
+                meta: ["dropped": "\(dropped)"], build: build
             ))
         }
         batch.append(contentsOf: records)
