@@ -86,8 +86,8 @@ targets:
       base:
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "2.7.31"
-        CURRENT_PROJECT_VERSION: "213"
+        MARKETING_VERSION: "2.7.32"
+        CURRENT_PROJECT_VERSION: "214"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "6.0"
   PatataTubeTests:
