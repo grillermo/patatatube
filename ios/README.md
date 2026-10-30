@@ -22,7 +22,7 @@ SwiftUI app, backend-driven video grid. Talks to PatataTube FastAPI server (repo
 - Pull-down-to-dismiss gesture (the close "X" was removed in favor of gestures)
 
 ### Per-video actions
-- Move a download to another group or promote it into Plex TV/Movies
+- Move a download to another group (the menu's Categorize submenu)
 - Delete videos
 - Download a single video for offline playback, with visual feedback on the download button
 
@@ -110,7 +110,7 @@ On first launch grid is empty / errors — need server config:
 - **Grid loads**: after saving settings, pull-to-refresh or relaunch → videos populate grid
 - **Tab bar**: Videos / TV / Movies — tap one, its content loads; under Videos, tap a group card to load that group
 - **Play video**: tap a cell → fullscreen player opens, autoplays, closes automatically on end-of-video; X button also dismisses
-- **Move**: use a cell's menu → pick another group and confirm the video leaves the current grid; promote a download with the separate Move to Plex section
+- **Move**: use a cell's menu → Categorize → pick another group and confirm the video leaves the current grid
 - **Download/cache**: tap download on a cell → check cache state changes (icon/indicator); play same video again → should stream from local cache (test by killing network access to server and replaying)
 - [ ] Set Streams per video to 4, download a large video, and confirm the
       server receives four disjoint byte ranges while the existing circular

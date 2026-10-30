@@ -27,7 +27,7 @@ struct VideoRowAudioTests {
                 currentCacheState: { .notCached }, groups: [],
                 audioState: state,
                 onPlay: {}, onPlaySleep: {}, onDownload: { true }, onCancel: {},
-                onDeleteCache: {}, onSetGroup: { _ in }, onPromote: { _ in },
+                onDeleteCache: {}, onSetGroup: { _ in },
                 onChooseVersion: { _ in }, onDelete: {}
             )
             #expect(row.audioState == state)

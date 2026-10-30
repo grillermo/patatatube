@@ -30,7 +30,6 @@ struct VideoRow: View {
     let onCancel: () -> Void
     let onDeleteCache: () -> Void
     let onSetGroup: (Int) -> Void
-    let onPromote: (PlexKind) -> Void
     let onChooseVersion: (Int) -> Void
     let onDelete: () -> Void
 
@@ -145,11 +144,6 @@ struct VideoRow: View {
                 Menu("Categorize", systemImage: "folder") {
                     ForEach(groups) { group in
                         Button(group.label) { onSetGroup(group.id) }
-                    }
-                }
-                Section("Move to Plex") {
-                    ForEach(PlexKind.allCases, id: \.self) { kind in
-                        Button(kind == .tv ? "TV" : "Movies") { onPromote(kind) }
                     }
                 }
             }

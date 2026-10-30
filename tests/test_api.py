@@ -1043,35 +1043,6 @@ def test_set_group_requires_token(client):
     assert resp.status_code == 401
 
 
-def test_promote_endpoint_rejects_an_unknown_kind(client, auth_headers):
-    import db
-    vid = db.add_video("https://example.com/v3")
-    resp = client.post(
-        f"/api/videos/{vid}/promote", json={"kind": "podcasts"}, headers=auth_headers
-    )
-    assert resp.status_code == 400
-
-
-def test_promote_requires_token(client):
-    import db
-    vid = db.add_video("https://twitter.com/x/status/1")
-    assert client.post(f"/api/videos/{vid}/promote", json={"kind": "tv"}).status_code == 401
-
-
-def test_promote_endpoint_returns_409_on_promotion_error(client, auth_headers, monkeypatch):
-    import db
-    import promote
-
-    def boom(video, kind):
-        raise promote.PromotionError("volume not mounted")
-
-    monkeypatch.setattr(promote, "promote_to_plex", boom)
-    vid = db.add_video("https://example.com/v4")
-    resp = client.post(f"/api/videos/{vid}/promote", json={"kind": "tv"}, headers=auth_headers)
-    assert resp.status_code == 409
-    assert "volume not mounted" in resp.json()["detail"]
-
-
 def test_api_delete_requires_token(client):
     import db
     vid = db.add_video("https://twitter.com/x/status/1")
@@ -2014,73 +1985,6 @@ def test_hls_rejects_path_traversal(client, monkeypatch, tmp_path):
         assert resp2.status_code == 404
     finally:
         p.unlink(missing_ok=True)
-
-
-def test_promote_to_movies_moves_the_file(client, monkeypatch, tmp_path):
-    import db
-    import promote
-    videos_dir = tmp_path / "videos"
-    videos_dir.mkdir()
-    movies_dir = tmp_path / "movies"
-    movies_dir.mkdir()
-    monkeypatch.setattr(promote, "VIDEOS_DIR", videos_dir)
-    monkeypatch.setenv("LIBRARY_MOVIES_DIR", str(movies_dir))
-    monkeypatch.setattr(promote, "_refresh_plex", lambda kind: None)
-    video_id = db.add_video("https://youtu.be/abc", platform="youtube", title="Akira")
-    (videos_dir / f"{video_id}.mp4").write_bytes(b"bytes")
-    db.update_video(video_id, "done", filename=f"{video_id}.mp4")
-
-    resp = client.post(
-        f"/api/videos/{video_id}/promote",
-        json={"kind": "movies"},
-        headers={"Authorization": "Bearer test-secret"},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "promoted": True}
-    assert (movies_dir / "Akira.mp4").exists()
-    assert db.get_video(video_id) is None
-
-
-def test_promote_returns_409_when_the_move_fails(client, monkeypatch, tmp_path):
-    import db
-    import promote
-    videos_dir = tmp_path / "videos"
-    videos_dir.mkdir()
-    monkeypatch.setattr(promote, "VIDEOS_DIR", videos_dir)
-    monkeypatch.setenv("LIBRARY_MOVIES_DIR", str(tmp_path / "not-mounted"))
-    video_id = db.add_video("https://youtu.be/abc", platform="youtube", title="Akira")
-    (videos_dir / f"{video_id}.mp4").write_bytes(b"bytes")
-    db.update_video(video_id, "done", filename=f"{video_id}.mp4")
-    resp = client.post(
-        f"/api/videos/{video_id}/promote",
-        json={"kind": "movies"},
-        headers={"Authorization": "Bearer test-secret"},
-    )
-
-    assert resp.status_code == 409
-    assert (videos_dir / f"{video_id}.mp4").exists()
-
-
-def test_ssr_promote_returns_409_when_the_move_fails(client, monkeypatch, tmp_path):
-    import db
-    import promote
-    videos_dir = tmp_path / "videos"
-    videos_dir.mkdir()
-    monkeypatch.setattr(promote, "VIDEOS_DIR", videos_dir)
-    monkeypatch.setenv("LIBRARY_MOVIES_DIR", str(tmp_path / "not-mounted"))
-    video_id = db.add_video("https://youtu.be/abc", platform="youtube", title="Akira")
-    (videos_dir / f"{video_id}.mp4").write_bytes(b"bytes")
-    db.update_video(video_id, "done", filename=f"{video_id}.mp4")
-
-    resp = client.post(
-        f"/videos/{video_id}/promote",
-        data={"kind": "movies"},
-        follow_redirects=False,
-    )
-
-    assert resp.status_code == 409
-    assert db.get_video(video_id) is not None
 
 
 def test_upload_file_no_longer_rejects_plex_kinds(client, auth_headers, monkeypatch):

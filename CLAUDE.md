@@ -282,13 +282,13 @@ shuffle (every video once per round, no stored order) live in the single-row
 clears `sd_ready` first to rebuild every rendition, not just missing ones). The page's
 script is ES5 and swaps `src` on the one `<video>` element — iOS 5 only lets a
 tapped element keep playing, so reloading the page between videos would need a
-tap each time. Delete and promote remove the `.sd.mp4` with the mp4.
+tap each time. Delete removes the `.sd.mp4` with the mp4.
 Spec: `docs/superpowers/specs/2026-09-18-sd-page-design.md`.
 
 ### Layering — the SSR page and the JSON API share logic, don't duplicate it
 
 - `db.py` — the only SQLite layer. Single `videos` table. `init_db()` is an **idempotent migration runner**: it does `CREATE TABLE IF NOT EXISTS`, then additive `ALTER TABLE` guards for each newer column, then backfills (`_backfill_positions`, `_backfill_youtube_preview_urls`) and cleanup. Schema changes go here as new idempotent guards, not a migrations framework.
-- `services.py` — mutation logic (`set_group`, `promote`) called by **both** the HTML form endpoints and the JSON API endpoints in `main.py`. Put shared write logic here.
+- `services.py` — mutation logic (`set_group`, `choose_version`, `classify_download`) called by **both** the HTML form endpoints and the JSON API endpoints in `main.py`. Put shared write logic here.
 - `views/serializers.py` — `serialize_video` is the canonical video-to-dict presenter for the JSON API. Keep the API shape here.
 - `views/render.py` + `views/templates/*.html` — the server-rendered HTML page.
 
@@ -350,7 +350,7 @@ That is what left every counter at zero on rollout. Plex rows have no badge.
 
 ### Auth
 
-Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` compared with `secrets.compare_digest`. If `UPLOAD_TOKEN` is unset the server returns 503 (upload disabled). The SSR endpoints are `/videos/{id}/group` and `/videos/{id}/promote`; the group endpoint is **not** token-gated, matching the old behavior.
+Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` compared with `secrets.compare_digest`. If `UPLOAD_TOKEN` is unset the server returns 503 (upload disabled). The SSR endpoint `/videos/{id}/group` is **not** token-gated, matching the old behavior.
 
 **The web page authenticates with a cookie, the iOS app with a Bearer header.**
 `POST /login` (a single form field) sets an HttpOnly `upload_token` cookie
@@ -567,13 +567,14 @@ Full setup and troubleshooting: `ios/install.md`.
 - **A packaged playlist is not invalidated by anything else, so the re-probe does it.** After writing `subtitle_langs`, `library._invalidate_stale_hls` compares the computed languages against `hls.packaged_subtitle_languages(video_id)` (parsed out of the on-disk `master.m3u8`) and calls `hls.invalidate` on a mismatch; `None` means nothing is packaged, which is not a mismatch. Without this a package built before its tracks were known serves that empty rendition set forever — the app's picker reads the fresh DB, the player reads the stale playlist, and the two disagree permanently. `hls` imports `library`, so the import is function-local.
 - **HLS packaging searches the original file for subtitles, not the file it streams.** A converted library row streams our own sibling mp4, and `library.convert_library_video` passes `-sn`, so that mp4 has no subtitle streams at all. `router` sends the version's `source_path` as the job payload's `subtitle_source_path`, and `hls.build_hls_package` searches it instead (costing one extra ffprobe when the two differ). Package from the converted file alone and every embedded track disappears exactly at the point it would have shipped.
 
-### Promoting downloads into Plex
+### Library rows are never moved by PatataTube
 
-- `POST /api/videos/{id}/promote` hands a **download** row to Plex: `promote.py` copies `videos/{id}.mp4` to `<LIBRARY_TV_DIR|LIBRARY_MOVIES_DIR>/<sanitized title>.mp4` (flat, no folders), unlinks the source, invalidates HLS, **hard-deletes the row**, and best-effort triggers a Plex section rescan. The video reappears later as a library row via `scan_library`. Setting a group never promotes it.
-- The copy is deliberate: `videos/` and `/Volumes/Media` are different filesystems, so `os.rename` raises `EXDEV`. It copies to a hidden `.name.part` inside the destination, then `os.replace`s it — same-volume and atomic, so Plex never scans a partial file.
-- Any failure (volume unmounted, collision, permissions) raises `promote.PromotionError` → **409**, and nothing changes: no move, no delete.
-- **Library** rows never move. Their `plex_kind` comes from the Plex section they live in (`plex.py`), and is refreshed by the next scan.
-- `/upload/file` takes a `group_id`; its former `tv`/`movies` rejection is gone because that case is structurally impossible.
+- There is no way to hand a download to Plex: the old "Move to Plex" promote
+  feature (`promote.py`, `POST /api/videos/{id}/promote`) was removed on
+  2026-10-30. **Library** rows only enter through `scan_library`; their
+  `plex_kind` comes from the Plex section they live in (`plex.py`), and is
+  refreshed by the next scan.
+- `/upload/file` takes a `group_id`; it never accepts `tv`/`movies`.
 
 ## Conventions
 

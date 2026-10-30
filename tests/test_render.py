@@ -124,14 +124,12 @@ def test_card_menu_posts_to_the_group_endpoint():
     html = build_videos_page([_video()], GROUPS, 1, None)
 
     assert "/group" in html
-    assert "/promote" in html
 
 
-def test_plex_card_does_not_offer_group_or_promote_actions():
+def test_plex_card_does_not_offer_group_actions():
     html = build_videos_page([_video(group_id=None, plex_kind="tv")], GROUPS, None, "tv")
 
     assert "/group" not in html
-    assert "/promote" not in html
 
 
 def test_title_overlay_is_absent_when_the_group_has_it_off():

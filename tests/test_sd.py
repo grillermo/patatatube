@@ -322,24 +322,6 @@ def test_api_delete_removes_the_sd_file(tmp_db, monkeypatch, tmp_path):
     assert not (videos / f"{vid}.sd.mp4").exists()
 
 
-def test_promote_removes_the_sd_file(tmp_db, monkeypatch, tmp_path):
-    import promote
-    videos = tmp_path / "vids"
-    videos.mkdir()
-    movies = tmp_path / "movies"
-    movies.mkdir()
-    monkeypatch.setattr(promote, "VIDEOS_DIR", videos)
-    monkeypatch.setenv("LIBRARY_MOVIES_DIR", str(movies))
-    monkeypatch.setattr(promote, "_refresh_plex", lambda kind: None)
-    vid = _done_video(tmp_db, _children(tmp_db), sd_ready=True)
-    (videos / f"{vid}.mp4").write_bytes(b"x")
-    (videos / f"{vid}.sd.mp4").write_bytes(b"x")
-
-    promote.promote_to_plex(tmp_db.get_video(vid), "movies")
-
-    assert not (videos / f"{vid}.sd.mp4").exists()
-
-
 def test_sd_stream_serves_ranges_when_ready(tmp_db, monkeypatch, tmp_path):
     import router
     videos = tmp_path / "vids"

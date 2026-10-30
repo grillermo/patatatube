@@ -6,9 +6,6 @@ import logging
 import classifier
 import db
 import hls
-# Aliased: this module defines a function called `promote`, which would
-# otherwise shadow the import and break every `promote.…` reference below.
-import promote as plex_promote
 import sd
 
 logger = logging.getLogger(__name__)
@@ -17,9 +14,7 @@ logger = logging.getLogger(__name__)
 def set_group(video_id: int, group_id: int) -> bool:
     """Put a video in a group. False when the group does not exist.
 
-    This is a pure column write. Handing a download to Plex is `promote()` —
-    a different verb with different consequences (the file moves, the row is
-    deleted), and it used to be spelled as a value of this same call.
+    This is a pure column write.
     """
     video = db.get_video(video_id)
     if db.get_group(group_id) is None or not video or video.get("plex_kind") is not None:
@@ -29,22 +24,6 @@ def set_group(video_id: int, group_id: int) -> bool:
     # trigger points that should queue an SD rendition — otherwise it never
     # gets one until someone reselects the group or reruns the backfill.
     sd.enqueue_if_selected(video_id)
-    return True
-
-
-def promote(video_id: int, kind: str) -> bool:
-    """Move a downloaded file into Plex. The row is deleted on success.
-
-    False for an unknown kind, a missing video, or a library row (those already
-    live in Plex and never move). Raises promote.PromotionError when the move
-    itself fails — nothing is written then.
-    """
-    if kind not in plex_promote.PLEX_KINDS:
-        return False
-    video = db.get_video(video_id)
-    if not video or video.get("source") == "library":
-        return False
-    plex_promote.promote_to_plex(video, kind)
     return True
 
 

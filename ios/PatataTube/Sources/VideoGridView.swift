@@ -548,7 +548,6 @@ struct VideoGridView: View {
                             onCancel: { cache.cancel(id: videoId, versionId: versionId) },
                             onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
                             onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
-                            onPromote: { kind in Task { await store.promote(id: video.id, kind: kind) } },
                             onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
                             onDelete: { Task { await store.delete(id: video.id) } }
                         )
@@ -572,7 +571,6 @@ struct VideoGridView: View {
                             onCancel: { cache.cancel(id: videoId, versionId: versionId) },
                             onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
                             onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
-                            onPromote: { kind in Task { await store.promote(id: video.id, kind: kind) } },
                             onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
                             onDelete: { Task { await store.delete(id: video.id) } }
                         )

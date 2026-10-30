@@ -28,13 +28,6 @@
 <button type="submit" class="menu-btn{{ ' active-cls' if g.id == v.group_id else '' }}">{{ g.label }}</button>
 </form>
 {%- endfor -%}
-{%- for kind, label in [('tv', 'Move to TV'), ('movies', 'Move to Movies')] -%}
-<form method="post" action="/videos/{{ v.id }}/promote">
-<input type="hidden" name="current_group_id" value="{{ current_group_id or '' }}">
-<input type="hidden" name="kind" value="{{ kind }}">
-<button type="submit" class="menu-btn promote-btn">{{ label }}</button>
-</form>
-{%- endfor -%}
 </div>
 </details>
 {%- endmacro %}

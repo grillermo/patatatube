@@ -1,7 +1,7 @@
 """Route the app's own `logging` calls to stdout, where ./serve labels them.
 
 Nothing configured logging before this, so every `logger.info` in classifier,
-downloader, services, sd and promote went nowhere -- and warnings only reached
+downloader, services and sd went nowhere -- and warnings only reached
 stderr through logging's bare last-resort handler. Only the app's loggers are
 attached, not the root one, so httpx's per-request INFO lines stay quiet.
 """
@@ -9,7 +9,7 @@ attached, not the root one, so httpx's per-request INFO lines stay quiet.
 import logging
 import sys
 
-APP_LOGGERS = ("classifier", "downloader", "promote", "sd", "services")
+APP_LOGGERS = ("classifier", "downloader", "sd", "services")
 
 
 def configure() -> None:

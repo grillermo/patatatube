@@ -199,16 +199,6 @@ struct APIClientTests {
             #expect(group.description == nil)
         }
 
-        @Test func promotePostsTheKind() async throws {
-            MockURLProtocol.handler = { req in
-                #expect(req.url?.path == "/api/videos/5/promote")
-                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: String]
-                #expect(json["kind"] == "tv")
-                return (jsonResponse(req.url!), #"{"ok":true,"promoted":true}"#.data(using: .utf8)!)
-            }
-            #expect(try await makeClient().promote(id: 5, kind: .tv))
-        }
-
         @Test func chooseAudioSendsLanguage() async throws {
             MockURLProtocol.handler = { req in
                 #expect(req.url?.path == "/api/videos/3/audio")
@@ -233,7 +223,7 @@ struct APIClientTests {
 
         @Test func writeThrowsWithoutToken() async {
             await #expect(throws: APIError.notConfigured) {
-                _ = try await makeClient(token: nil).promote(id: 1, kind: .tv)
+                _ = try await makeClient(token: nil).setGroup(id: 1, groupID: 1)
             }
         }
     }

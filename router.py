@@ -23,7 +23,6 @@ import devlog
 import hls
 import library
 import plex
-import promote
 import sd
 import services
 from downloader import (
@@ -169,10 +168,6 @@ class UploadRequest(BaseModel):
 
 class SetGroupRequest(BaseModel):
     group_id: int
-
-
-class PromoteRequest(BaseModel):
-    kind: str
 
 
 class VersionRequest(BaseModel):
@@ -967,18 +962,6 @@ async def set_video_group_endpoint(
     return RedirectResponse(url=redirect_url, status_code=303)
 
 
-@router.post("/videos/{video_id}/promote")
-async def promote_video_endpoint(
-    video_id: int, kind: str = Form(...), current_group_id: int | None = Form(default=None)
-):
-    try:
-        await asyncio.to_thread(services.promote, video_id, kind)
-    except promote.PromotionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    redirect_url = f"/?group_id={current_group_id}" if current_group_id else "/"
-    return RedirectResponse(url=redirect_url, status_code=303)
-
-
 @router.post("/videos/{video_id}/version")
 async def choose_video_version_endpoint(
     video_id: int, version_id: int = Form(...), group_id: int | None = Form(default=None)
@@ -1114,19 +1097,6 @@ async def api_set_video_group(video_id: int, body: SetGroupRequest, request: Req
     if not await asyncio.to_thread(services.set_group, video_id, body.group_id):
         raise HTTPException(status_code=400, detail="No such group")
     return {"ok": True}
-
-
-@router.post("/api/videos/{video_id}/promote")
-async def api_promote_video(video_id: int, body: PromoteRequest, request: Request):
-    """Hand a downloaded file to Plex; it returns later as a library row after scanning."""
-    _check_token(request)
-    try:
-        promoted = await asyncio.to_thread(services.promote, video_id, body.kind)
-    except promote.PromotionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if not promoted:
-        raise HTTPException(status_code=400, detail="Not a promotable video or kind")
-    return {"ok": True, "promoted": True}
 
 
 @router.post("/api/videos/{video_id}/version")

@@ -331,24 +331,6 @@ public final class VideoStore: ObservableObject {
         }
     }
 
-    /// Promoting moves the file into Plex and deletes the row, so drop it from
-    /// the list and purge its download before refreshing the persisted list.
-    public func promote(id: Int, kind: PlexKind) async {
-        guard videos.contains(where: { $0.id == id }) else { return }
-        do {
-            guard try await api.promote(id: id, kind: kind) else { return }
-            mediaCache?.removeAllCached(id: id)
-            await removeDeletedVideo(id: id)
-            // Server hard-deletes the row on promotion, so re-fetch + re-persist
-            // the list now -- otherwise the on-disk cache still contains this
-            // video and a future bootLoad() renders it as a ghost card whose
-            // stream 404s and whose local file was just purged above.
-            await load()
-        } catch {
-            report(error)
-        }
-    }
-
     public func chooseVersion(id: Int, versionId: Int) async {
         guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
         let previous = videos[index]

@@ -23,7 +23,6 @@ public protocol VideoAPI: Sendable {
     func createGroup(name: String, label: String, emoji: String?) async throws -> VideoGroup
     func updateGroup(id: Int, label: String?, emoji: String?) async throws -> VideoGroup
     func setGroup(id: Int, groupID: Int) async throws -> Bool
-    func promote(id: Int, kind: PlexKind) async throws -> Bool
     func chooseVersion(id: Int, versionId: Int) async throws -> Bool
     func chooseAudio(id: Int, lang: String) async throws -> Bool
     func chooseSubtitle(id: Int, lang: String?) async throws -> Bool
@@ -52,7 +51,6 @@ public extension VideoAPI {
         throw APIError.notConfigured
     }
     func setGroup(id: Int, groupID: Int) async throws -> Bool { false }
-    func promote(id: Int, kind: PlexKind) async throws -> Bool { false }
     func chooseSubtitle(id: Int, lang: String?) async throws -> Bool { false }
 
     func savePosition(
@@ -179,10 +177,6 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
 
     public func setGroup(id: Int, groupID: Int) async throws -> Bool {
         try await postOK("api/videos/\(id)/group", body: ["group_id": groupID])
-    }
-
-    public func promote(id: Int, kind: PlexKind) async throws -> Bool {
-        try await postOK("api/videos/\(id)/promote", body: ["kind": kind.rawValue])
     }
 
     public func chooseVersion(id: Int, versionId: Int) async throws -> Bool {
