@@ -12,7 +12,7 @@
 #
 # Usage: ruby ios/refresh-ipa.rb
 
-require_relative "ipa_builder"
+require_relative "../scripts/deploy/ipa_builder"
 require "time"
 
 DEST_DIR = File.expand_path(
