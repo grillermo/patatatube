@@ -2,3 +2,7 @@ PatataTube/PatataTube.xcodeproj/
 .build/
 xcuserdata/
 *.xcworkspace/xcuserdata/
+# Personal signing values (bundle ID, team); overrides Config/PatataTube.xcconfig
+PatataTube/Config/Local.xcconfig
+# Unsigned builds from `PATATATUBE_UNSIGNED=1 ./deploy`
+/build/

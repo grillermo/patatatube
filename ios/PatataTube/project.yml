@@ -1,6 +1,5 @@
 name: PatataTube
 options:
-  bundleIdPrefix: com.patatatube
   deploymentTarget:
     iOS: "18.0"
 # Project-level build settings. These reach the SwiftPM package targets
@@ -10,7 +9,7 @@ options:
 # DEVLOG turns on DevLog (see PatataTubeKit/Sources/PatataTubeKit/DevLog.swift).
 # Debug only, so a plain Xcode Run in the Simulator is always instrumented while
 # a normal Release archive stays silent. Instrumented *Release* .ipas come from
-# `./deploy --instrumented`, which injects the same condition on the xcodebuild
+# `./deploy --devlog`, which injects the same condition on the xcodebuild
 # command line.
 settings:
   configs:
@@ -39,6 +38,9 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - Sources
+    configFiles:
+      Debug: Config/PatataTube.xcconfig
+      Release: Config/PatataTube.xcconfig
     info:
       path: Sources/Info.plist
       properties:
@@ -51,9 +53,6 @@ targets:
           - UIApplicationShortcutItemType: com.patatatube.clearAll
             UIApplicationShortcutItemTitle: Clear All
             UIApplicationShortcutItemIconSymbolName: trash
-          - UIApplicationShortcutItemType: com.patatatube.app.install-latest
-            UIApplicationShortcutItemTitle: Install Latest
-            UIApplicationShortcutItemIconSymbolName: arrow.down.app
         UILaunchStoryboardName: LaunchScreen
         "UISupportedInterfaceOrientations~iphone":
           - UIInterfaceOrientationPortrait
@@ -66,6 +65,11 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # Filled by ./deploy on the xcodebuild command line; empty in any other
+        # build. The first enables the Install Latest quick action, the second
+        # points DevLog at scripts/devlog/server.py (./deploy --devlog).
+        PatataTubeOTAManifestURL: $(PATATATUBE_OTA_MANIFEST_URL)
+        PatataTubeDevLogURL: $(PATATATUBE_DEVLOG_URL)
         NSLocalNetworkUsageDescription: To stream videos straight from the server when you're on the home Wi-Fi.
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
@@ -80,9 +84,7 @@ targets:
       - package: Clocks
     settings:
       base:
-        DEVELOPMENT_TEAM: Q3WS4MWCW3
         CODE_SIGN_STYLE: Automatic
-        PRODUCT_BUNDLE_IDENTIFIER: com.patatatube.app
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: "2.7.31"
         CURRENT_PROJECT_VERSION: "213"

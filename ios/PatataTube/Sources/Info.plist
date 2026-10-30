@@ -27,6 +27,10 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>To stream videos straight from the server when you're on the home Wi-Fi.</string>
+	<key>PatataTubeDevLogURL</key>
+	<string>$(PATATATUBE_DEVLOG_URL)</string>
+	<key>PatataTubeOTAManifestURL</key>
+	<string>$(PATATATUBE_OTA_MANIFEST_URL)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -43,14 +47,6 @@
 			<string>Clear All</string>
 			<key>UIApplicationShortcutItemType</key>
 			<string>com.patatatube.clearAll</string>
-		</dict>
-		<dict>
-			<key>UIApplicationShortcutItemIconSymbolName</key>
-			<string>arrow.down.app</string>
-			<key>UIApplicationShortcutItemTitle</key>
-			<string>Install Latest</string>
-			<key>UIApplicationShortcutItemType</key>
-			<string>com.patatatube.app.install-latest</string>
 		</dict>
 	</array>
 	<key>UIBackgroundModes</key>

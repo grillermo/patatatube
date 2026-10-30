@@ -1,0 +1,17 @@
+// Settings that identify whoever builds and signs the app. These defaults keep
+// a fresh clone building; put your own values in Config/Local.xcconfig, which
+// is gitignored and overrides them. See ios/install.md.
+PATATATUBE_BUNDLE_ID = com.example.patatatube
+DEVELOPMENT_TEAM =
+PRODUCT_BUNDLE_IDENTIFIER = $(PATATATUBE_BUNDLE_ID)
+
+// ./deploy passes the OTA manifest URL on the xcodebuild command line (xcconfig
+// would read the // in a URL as a comment). Builds made any other way leave it
+// empty, so they offer no Install Latest quick action.
+PATATATUBE_OTA_MANIFEST_URL =
+
+// ./deploy --devlog passes the DevLog server URL the same way. Empty, DevLog
+// has no server to send to.
+PATATATUBE_DEVLOG_URL =
+
+#include? "Local.xcconfig"
