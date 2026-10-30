@@ -1,0 +1,83 @@
+# scripts/deploy/install_page.rb
+# frozen_string_literal: true
+
+# The one self-contained page a device opens in Safari. Its URL never changes
+# (../../deploy publishes it under fixed names), so a Home Screen bookmark of it
+# installs the newest release forever. Everything interpolated is HTML-escaped.
+
+module InstallPage
+  module_function
+
+  def h(str)
+    str.to_s.gsub("&", "&amp;").gsub("<", "&lt;").gsub(">", "&gt;").gsub('"', "&quot;")
+  end
+
+  def render(version:, build:, icon_url:, itms_url:, notes:, min_os:)
+    <<~HTML
+      <!doctype html>
+      <html lang="en">
+      <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+      <title>Install PatataTube</title>
+      <style>
+        :root { color-scheme: dark; }
+        body {
+          margin: 0; padding: 2.5rem 1.25rem 4rem;
+          background: #111; color: #f2f2f2;
+          font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+          display: flex; flex-direction: column; align-items: center;
+        }
+        main { width: 100%; max-width: 26rem; }
+        img.icon { width: 88px; height: 88px; border-radius: 20px; display: block; margin: 0 auto 1.25rem; }
+        h1 { font-size: 1.6rem; margin: 0 0 .25rem; text-align: center; }
+        .version { text-align: center; color: #9a9a9a; margin: 0 0 2rem; font-size: .95rem; }
+        a.install {
+          display: block; background: #1E88E5; color: #fff; text-decoration: none;
+          font-weight: 600; font-size: 1.05rem; text-align: center;
+          padding: 1rem; border-radius: 14px; margin-bottom: 1.5rem;
+        }
+        a.install:active { background: #1667b0; }
+        section { border-top: 1px solid #2a2a2a; padding-top: 1.25rem; margin-top: 1.25rem; }
+        h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: #8a8a8a; margin: 0 0 .6rem; }
+        pre.notes { white-space: pre-wrap; margin: 0; font: inherit; color: #d8d8d8; }
+        p { color: #b0b0b0; font-size: .9rem; }
+        code { background: #1c1c1c; padding: .15em .4em; border-radius: 5px; font-size: .85em; word-break: break-all; }
+      </style>
+      </head>
+      <body>
+      <main>
+        <img class="icon" src="#{h(icon_url)}" alt="">
+        <h1>PatataTube</h1>
+        <p class="version">Version #{h(version)} (build #{h(build)})</p>
+
+        <a class="install" href="#{h(itms_url)}">Install PatataTube</a>
+
+        <p>Open this page in <strong>Safari</strong> — other browsers cannot start an
+        install. Then confirm on the Home Screen prompt.</p>
+
+        <section>
+          <h2>What&rsquo;s new</h2>
+          <pre class="notes">#{h(notes)}</pre>
+        </section>
+
+        <section>
+          <h2>Updating later</h2>
+          <p>Add this page to your Home Screen (Share &rarr; Add to Home Screen). The
+          Install button always installs the newest release, so one tap updates the
+          app in place — your downloads and settings are kept. Touch and hold the app
+          icon for the same <strong>Install Latest</strong> action.</p>
+        </section>
+
+        <section>
+          <h2>Requirements</h2>
+          <p>Your device must be registered on the developer account before a build
+          is made. A device added afterwards needs a fresh <code>./deploy</code>
+          before it can install. iOS #{h(min_os)} or later.</p>
+        </section>
+      </main>
+      </body>
+      </html>
+    HTML
+  end
+end
