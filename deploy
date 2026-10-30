@@ -3,212 +3,143 @@
 
 # deploy
 #
-# One-shot over-the-air release of the PatataTube iOS app, the same route as
-# ../my-claude-usage/deploy-ios:
+# One-command over-the-air release of the PatataTube iOS app: no App Store, no
+# TestFlight, no cable. (The rest of this repo is the Python server; ./serve
+# runs that. This script only ships the iOS app.)
 #
-#   1. bump MARKETING_VERSION (+ build number) in ios/PatataTube/project.yml
-#   2. build an ad-hoc-signed .ipa + OTA manifest   (ios/ipa_builder.rb)
-#   3. publish the .ipa, icon, manifest and install page to files.chiq.me
-#   4. commit the bump, tag it, and push to the `github` remote
-#
-# Nothing here talks to the GitHub API: no `gh`, no GitHub Release, no AltStore
-# source. The push is plain git over SSH, and only records the version bump.
+#   1. preflight: on main, clean tree, release tag unused, publish dir present,
+#      signing config present, codesign able to sign
+#   2. bump MARKETING_VERSION + CURRENT_PROJECT_VERSION in ios/PatataTube/project.yml
+#      (XcodeGen's source of truth; the .xcodeproj is generated and gitignored)
+#   3. build an ad-hoc-signed .ipa + its OTA manifest  (scripts/deploy/ipa_builder.rb)
+#   4. publish .ipa, icon, manifest, install page      (scripts/deploy/uploader.rb)
+#   5. commit "Release PatataTube OTA patatatube-ota-vX.Y.Z", tag it, push to `github`
 #
 # Usage:
-#   ./deploy                 # bump patch  (1.0.0 -> 1.0.1)
+#   ./deploy                   # bump patch (2.7.31 -> 2.7.32)
 #   ./deploy patch|minor|major
-#   ./deploy 1.4.2           # set an explicit version
-#   ./deploy --instrumented  # ^ any of the above, but with DEVLOG compiled in
-#   ./deploy --yes           # skip the confirmation prompt
-#
-# Release notes (shown on the install page):
-#
+#   ./deploy 2.8.0             # explicit version
+#   ./deploy --yes             # skip the confirmation prompt
+#   ./deploy --devlog          # diagnostics build: DevLog -> scripts/devlog/server.py
+#                              # (--instrumented is the old name for the same flag)
 #   ./deploy minor --summary "Faster offline downloads" \
-#            --note "Download-all now queues behind interactive taps" \
-#            --note "Fixed playback stalling after backgrounding"
+#            --note "Download-all queues behind taps" --note "Fixed a stall"
 #
-# --summary is a one-line headline, --note is repeatable and becomes a bullet.
-# With neither, the notes are derived from the commit subjects since the last
-# release tag.
+# --summary is the headline and --note (repeatable) adds a bullet. With neither,
+# the notes are the commit subjects since the last release tag, minus noise.
 #
-# --instrumented builds the .ipa with the DEVLOG condition, so the app records
-# what it is doing at runtime and posts it to the backend (POST /api/devlog ->
-# log/ios.jsonl). Use it to reproduce a bug on the real iPad, then ship a clean
-# build over it. See docs/ios-devlog-instrumentation-plan.md.
+# Configuration:
+#   .env at the repo root (gitignored, shared with the backend; never overrides
+#   an exported variable):
+#     PATATATUBE_UPLOAD_BASE=https://files.chiq.me   public URL of file_server (required)
+#     PATATATUBE_PUBLISH_DIR=/path/to/files          the directory it serves
+#                                                     (default ../file_server/files)
+#   ios/PatataTube/Config/Local.xcconfig (gitignored):
+#     PATATATUBE_BUNDLE_ID = com.patatatube.app
+#     DEVELOPMENT_TEAM = <team id>
+#   Environment:
+#     PATATATUBE_UNSIGNED=1   unsigned build only: written to ios/build/, nothing
+#                             is published, committed or tagged
+#     PATATATUBE_TEAM_ID=...  one-off team override
+#     PATATATUBE_DEVLOG_URL=  overrides --devlog's http://<LocalHostName>.local:19485/api/devlog
+#     PATATATUBE_DEVLOG_PORT= DevLog port for --devlog's URL and scripts/devlog/server.py (default 19485)
 #
-# The install page URL never changes, so a Home Screen bookmark always installs
-# the newest release. It is printed at the end.
+# The manifest and install page have fixed URLs, so a Home Screen bookmark of
+# https://files.chiq.me/files/patatatube-install.html installs the newest release
+# forever. The app's "Install Latest" quick action opens the same manifest.
 
+require_relative "scripts/deploy/release"
 require_relative "scripts/deploy/ipa_builder"
+require_relative "scripts/deploy/uploader"
+require_relative "scripts/deploy/install_page"
 require "fileutils"
+require "net/http"
 require "shellwords"
 
-B = IpaBuilder # build helpers (step/run/die/colors) live here
+B = IpaBuilder
+R = Release
+REPO_ROOT = B::REPO_ROOT
+REMOTE = "github"
+BRANCH = "main"
 
-APP_NAME    = IpaBuilder::APP_NAME
-PROJECT_YML = IpaBuilder::PROJECT_YML
-REMOTE      = "github"
-BRANCH      = "main"
+R.load_dotenv(File.join(REPO_ROOT, ".env"))
 
-# The file_server service behind files.chiq.me runs on this machine and serves
-# ../file_server/files, so publishing is a copy into that directory, not an HTTP
-# upload (large bodies stall in the Cloudflare tunnel). The manifest, icon and
-# install page names are pinned so their URLs never change; each release
-# overwrites them.
-FILES_BASE      = ENV.fetch("PATATATUBE_FILES_BASE", "https://files.chiq.me").sub(%r{/+\z}, "")
-PUBLISH_DIR     = ENV.fetch("PATATATUBE_PUBLISH_DIR", File.expand_path("../file_server/files", __dir__))
 PINNED_MANIFEST = "patatatube-manifest.plist"
 PINNED_ICON     = "patatatube-icon.png"
-PINNED_INSTALL  = "3cf25ffc-754e-4a19-b4e1-bcc84cf02bd4-Install_PatataTube.html"
-ICON_SOURCE     = File.join(__dir__, "apple-touch-icon.png")
-MANIFEST_URL    = "#{FILES_BASE}/files/#{PINNED_MANIFEST}"
-ICON_URL        = "#{FILES_BASE}/files/#{PINNED_ICON}"
-INSTALL_URL     = "#{FILES_BASE}/files/#{PINNED_INSTALL}"
-ITMS_URL        = "itms-services://?action=download-manifest&url=#{MANIFEST_URL}"
-MIN_OS          = File.read(PROJECT_YML)[/^\s*iOS:\s*"?([\d.]+)"?/, 1] || "17.0"
+PINNED_INSTALL  = "patatatube-install.html"
+# The install page's name before 2.7.32. Devices have it bookmarked, so every
+# release republishes the same page under it too.
+LEGACY_INSTALL  = "3cf25ffc-754e-4a19-b4e1-bcc84cf02bd4-Install_PatataTube.html"
+ICON_SOURCE     = File.join(B::PROJECT_DIR, "Sources/Assets.xcassets/AppIcon.appiconset/icon-1024.png")
+MIN_OS          = File.read(B::PROJECT_YML)[/^\s*iOS:\s*"?([\d.]+)"?/, 1] || "18.0"
+
+def git(args) = `git -C #{REPO_ROOT.shellescape} #{args}`
+
+def usage!
+  yield
+rescue R::UsageError => e
+  B.die(e.message)
+end
 
 # --- flags -------------------------------------------------------------------
-# Pulled out of ARGV before the version argument is read, so they can appear
-# anywhere on the command line.
 
-ASSUME_YES   = !ARGV.delete("--yes").nil?
-INSTRUMENTED = !(ARGV.delete("--instrumented") || ARGV.delete("--devlog")).nil? ||
-               ENV["PATATATUBE_DEVLOG"] == "1"
+ASSUME_YES = !ARGV.delete("--yes").nil?
+DEVLOG = [ARGV.delete("--devlog"), ARGV.delete("--instrumented")].any? || ENV["PATATATUBE_DEVLOG"] == "1"
+SUMMARY = usage! { R.take_option(ARGV, "--summary", "-s").last }
+NOTES   = usage! { R.clean_notes(R.take_option(ARGV, "--note", "--notes", "-n")) }
 
-# Repeatable "--flag value" / "--flag=value" options, pulled out of ARGV the
-# same way, so the version argument stays positional wherever it sits.
-def take_option(argv, *names)
-  values = []
-  i = 0
-  while i < argv.length
-    arg = argv[i]
-    if names.include?(arg)
-      value = argv[i + 1]
-      B.die("#{arg} needs a value") if value.nil? || value.start_with?("--")
-      values << value
-      argv.slice!(i, 2)
-    elsif (eq = arg.match(/\A(--[a-z-]+)=(.*)\z/m)) && names.include?(eq[1])
-      values << eq[2]
-      argv.slice!(i, 1)
-    else
-      i += 1
-    end
-  end
-  values
-end
+# --- preflight (nothing here changes the working tree) -----------------------
 
-SUMMARY = take_option(ARGV, "--summary", "-s").last
-NOTES   = take_option(ARGV, "--note", "--notes", "-n")
-          .flat_map { |n| n.split("\n") }
-          .map { |n| n.strip.sub(/\A[-*•]\s*/, "") }
-          .reject(&:empty?)
-
-# --- preflight ---------------------------------------------------------------
-
-branch = `git rev-parse --abbrev-ref HEAD`.strip
+branch = git("rev-parse --abbrev-ref HEAD").strip
 B.die("on branch '#{branch}', not '#{BRANCH}'; releases are cut from #{BRANCH}") unless branch == BRANCH
+
+dirty = git("status --porcelain")
+B.die("working tree is dirty -- commit or stash before releasing:\n#{dirty}") unless dirty.strip.empty?
+
 B.die("xcodegen not found (brew install xcodegen)") unless system("command -v xcodegen >/dev/null")
-unless File.directory?(PUBLISH_DIR)
-  B.die("file_server files/ directory not found at #{PUBLISH_DIR} — it is what " \
-        "#{FILES_BASE} serves. Set PATATATUBE_PUBLISH_DIR if it moved.")
-end
 B.die("icon not found at #{ICON_SOURCE}") unless File.file?(ICON_SOURCE)
-if ENV["PATATATUBE_UNSIGNED"] == "1"
-  B.die("PATATATUBE_UNSIGNED=1 builds an .ipa Safari cannot install, and OTA is the only route")
-end
 
-# --- version bump ------------------------------------------------------------
+BASE = Uploader.base_url
+MANIFEST_URL = Uploader.url_for(PINNED_MANIFEST)
+ICON_URL     = Uploader.url_for(PINNED_ICON)
+INSTALL_URL  = Uploader.url_for(PINNED_INSTALL)
+ITMS_URL     = "itms-services://?action=download-manifest&url=#{MANIFEST_URL}"
 
-def bump(current, arg)
-  return arg if arg =~ /\A\d+\.\d+\.\d+\z/ # explicit version
+current = B.marketing_version
+version = usage! { R.bump(current, ARGV[0]) }
+tag     = R.tag_for(version)
+asset   = "#{B::APP_NAME}-#{version}.ipa"
+download = Uploader.url_for(asset)
 
-  major, minor, patch = current.split(".").map(&:to_i)
-  case arg
-  when "major" then "#{major + 1}.0.0"
-  when "minor" then "#{major}.#{minor + 1}.0"
-  when "patch", nil then "#{major}.#{minor}.#{patch + 1}"
-  else B.die("bad argument '#{arg}' (use patch|minor|major or an X.Y.Z version)")
-  end
-end
+# The release tag is what guarantees a version is never released twice. The
+# legacy vX.Y.Z tags (up to 2.7.31) count as taken too.
+taken = [tag, R.legacy_tag_for(version)].find { |t| git("tag -l #{t.shellescape}").strip == t }
+B.die("tag #{taken} already exists -- #{version} was already released; bump to a new version") if taken
 
-current  = B.marketing_version
-version  = bump(current, ARGV[0])
-tag      = "v#{version}"
-asset    = "#{APP_NAME}-#{version}.ipa"
-download = "#{FILES_BASE}/files/#{asset}"
+publish_dir = Uploader.check_publish_dir!
+B.die("#{asset} is already published in #{publish_dir} -- bump to a new version") if File.exist?(File.join(publish_dir, asset))
 
-if `git tag -l #{tag.shellescape}`.strip == tag || File.exist?(File.join(PUBLISH_DIR, asset))
-  B.die("release #{tag} already exists — bump to a new version")
-end
-
-# --- push --------------------------------------------------------------------
-
-# Push the branch and tag, tolerating a push someone else already made for us.
-#
-# git-sync is installed as a global post-commit hook (core.hooksPath ->
-# ~/.gitsync/hooks) and pushes to this same remote the instant a commit lands.
-# So by the time we run our own push, the ref may already be where we wanted to
-# put it, and git reports that as a failure:
-#
-#   ! [remote rejected] main -> main (cannot lock ref 'refs/heads/main':
-#     is at <ours> but expected <parent>)
-#
-# So on failure, ask the remote what it actually holds. If that is our HEAD,
-# the hook did our work and we carry on; anything else is a genuine failure.
-def push_branch(branch, chdir:)
-  cmd = "git push #{REMOTE} #{branch}"
-  puts "    $ #{cmd}"
-  return if system(cmd, chdir: chdir)
-
-  local  = `git -C #{chdir.shellescape} rev-parse HEAD`.strip
-  remote = `git -C #{chdir.shellescape} ls-remote #{REMOTE} refs/heads/#{branch}`.split.first.to_s
-  unless !local.empty? && local == remote
-    B.die("command failed: #{cmd} (remote is at #{remote.empty? ? "nothing" : remote[0, 7]}, " \
-          "we are at #{local[0, 7]}). The release is already published; push by hand.")
-  end
-
-  puts B.green("    remote already at #{local[0, 7]} — pushed by the git-sync hook; continuing")
-end
+B.check_signing_config!
+# Last, because it may prompt for the login password.
+B.ensure_codesign_can_sign!
 
 # --- release notes -----------------------------------------------------------
 
-# Merge/release/chore noise that says nothing about what changed on the iPad.
-NOTE_NOISE = /\A(Release iOS v|Merge |Commit pending changes|Bump |wip\b)/i
+last_tag = git("describe --tags --abbrev=0 --match '#{R::TAG_PREFIX}*' --match 'v[0-9]*' 2>/dev/null").strip
+range = last_tag.empty? ? "-n 20 HEAD" : "#{last_tag}..HEAD"
+subjects = git("log --no-merges --pretty=%s #{range}").lines
+DESCRIPTION = R.release_notes(version: version, summary: SUMMARY, notes: NOTES, subjects: subjects, devlog: DEVLOG)
 
-def notes_from_git
-  last = `git describe --tags --abbrev=0 --match 'v*' 2>/dev/null`.strip
-  range = last.empty? ? "HEAD -n 20" : "#{last}..HEAD"
-  subjects = `git log --no-merges --pretty=%s #{range}`.lines.map(&:strip)
-  subjects.reject { |s| s.empty? || s =~ NOTE_NOISE }.uniq.first(8)
-end
+build = B.current_project_version.to_i + 1
 
-def release_notes(version, instrumented)
-  bullets = NOTES.empty? ? notes_from_git : NOTES
-  headline = SUMMARY || (bullets.empty? ? "Release #{version}." : "What's new in #{version}:")
-  headline = "[DEVLOG] #{headline}" if instrumented
-  lines = [headline]
-  lines << "" unless bullets.empty?
-  lines.concat(bullets.map { |b| "• #{b}" })
-  if instrumented
-    lines << ""
-    lines << "Instrumented build — posts runtime logs to the PatataTube backend."
-  end
-  lines.join("\n")
-end
-
-DESCRIPTION = release_notes(version, INSTRUMENTED)
-
-original_yml = File.read(PROJECT_YML)
-build = (original_yml[/^\s*CURRENT_PROJECT_VERSION:\s*"?(\d+)"?/, 1] || "0").to_i + 1
-
-puts B.bold("\n==> Releasing #{APP_NAME} (OTA) #{current} -> #{version} (build #{build})")
+puts B.bold("\n==> Releasing #{B::APP_NAME} (OTA) #{current} -> #{version} (build #{build})#{B.unsigned? ? ' [UNSIGNED, build only]' : ''}")
 puts B.bold("\n    What's New:")
 DESCRIPTION.each_line { |l| puts "      #{l.chomp}" }
 puts "\n    Install page: #{INSTALL_URL}"
 
-if INSTRUMENTED && !ASSUME_YES
-  puts B.red(B.bold("\n  ⚠  This publishes an INSTRUMENTED build (DEVLOG)."))
-  puts "     The app will post runtime logs to your backend. Ship a clean build over it afterwards."
+if DEVLOG && !ASSUME_YES
+  puts B.red(B.bold("\n  !  This publishes a DIAGNOSTICS build (DevLog)."))
+  puts "     It sends runtime records to scripts/devlog/server.py. Ship a clean build over it afterwards."
   print "\n  Type 'yes' to continue: "
   B.die("aborted") unless $stdin.gets&.strip == "yes"
 elsif !ASSUME_YES
@@ -216,141 +147,111 @@ elsif !ASSUME_YES
   B.die("aborted") unless $stdin.gets.to_s.strip.downcase.start_with?("y")
 end
 
-# --- write the bump; restore it on any failure before the commit -------------
+# --- write the bump; restore it on any exit before the commit ----------------
+#
+# From here on the tree is modified. A run that dies before the commit (a failed
+# build, a failed publish, Ctrl-C, an exception) must put it back: a leftover
+# bump would fail the NEXT run's clean-tree check, with an error pointing nowhere
+# near this run. B.die calls exit, so at_exit covers every way out. Info.plist is
+# included because the build runs xcodegen, which rewrites it.
 
+MUTATED = [B::PROJECT_YML, B::INFO_PLIST].freeze
+originals = MUTATED.to_h { |p| [p, File.read(p)] }
 committed = false
-at_exit { File.write(PROJECT_YML, original_yml) unless committed }
+at_exit { originals.each { |file, content| File.write(file, content) } unless committed }
 
-yml = original_yml.sub(/^(\s*MARKETING_VERSION:\s*)"?[\d.]+"?/, "\\1\"#{version}\"")
-yml = yml.sub(/^(\s*CURRENT_PROJECT_VERSION:\s*)"?\d+"?/, "\\1\"#{build}\"")
-File.write(PROJECT_YML, yml)
+File.write(B::PROJECT_YML, usage! { R.bump_project_yml(originals[B::PROJECT_YML], version: version, build: build) })
 
 # --- build -------------------------------------------------------------------
 
-# The OTA manifest is generated by the export step (not by us) so it can never
-# describe a different binary than the one we are about to publish.
-ipa  = B.build(instrumented: INSTRUMENTED, manifest: { app_url: download, icon_url: ICON_URL })
+devlog_url = nil
+if DEVLOG
+  override = ENV["PATATATUBE_DEVLOG_URL"].to_s
+  # Each app on the macmini has its own DevLog port (vvterm 19480, patatatube 19485), so
+  # the servers run side by side. PATATATUBE_DEVLOG_PORT moves both this URL and the server.
+  port = ENV.fetch("PATATATUBE_DEVLOG_PORT", "19485")
+  devlog_url = override.empty? ? "http://#{`scutil --get LocalHostName`.strip}.local:#{port}/api/devlog" : override
+  puts "    DevLog: #{devlog_url}"
+  begin
+    res = Net::HTTP.get_response(URI("#{devlog_url}/health"))
+    raise "HTTP #{res.code}" unless res.is_a?(Net::HTTPSuccess)
+  rescue StandardError => e
+    puts B.red("    devlog server not answering (#{e.message}); start it before installing: scripts/devlog/server.py")
+  end
+end
+
+ipa = B.build(manifest: { app_url: download, icon_url: ICON_URL },
+              ota_manifest_url: MANIFEST_URL, devlog_url: devlog_url, instrumented: DEVLOG)
 work = File.dirname(ipa)
+
+if B.unsigned?
+  out_dir = File.join(REPO_ROOT, "ios", "build")
+  FileUtils.mkdir_p(out_dir)
+  out = File.join(out_dir, "#{B::APP_NAME}-#{version}-unsigned.ipa")
+  FileUtils.mv(ipa, out)
+  FileUtils.remove_entry(work)
+  puts B.green("\n✓ Unsigned build: #{out} (#{(File.size(out) / 1_048_576.0).round(1)} MB)")
+  puts "  Not published, committed or tagged; the version bump has been undone."
+  puts "  Safari cannot install an unsigned .ipa; it needs a re-signing tool."
+  exit 0
+end
+
 built_manifest = File.join(work, "manifest.plist")
-B.die("export produced no manifest.plist — cannot publish the OTA route") unless File.exist?(built_manifest)
+B.die("export produced no manifest.plist -- cannot publish the OTA route") unless File.exist?(built_manifest)
 puts B.green("    #{asset} — #{(File.size(ipa) / 1_048_576.0).round(1)} MB")
 
 # --- publish -----------------------------------------------------------------
+#
+# Order matters: the manifest points at the .ipa and the icon, and the page
+# points at the manifest, so each goes up only after what it references.
 
-# Publishes `path` into the served directory under exactly `name`. Copies
-# beside the target and renames, so a device mid-download never reads a
-# half-written file while a pinned name is overwritten.
-def publish_file(path, name:)
-  target = File.join(PUBLISH_DIR, name)
-  staged = "#{target}.publishing-#{Process.pid}"
-  begin
-    FileUtils.cp(path, staged)
-    File.rename(staged, target)
-  ensure
-    FileUtils.rm_f(staged)
-  end
-  "#{FILES_BASE}/files/#{name}"
-end
-
-def h(str)
-  str.to_s.gsub("&", "&amp;").gsub("<", "&lt;").gsub(">", "&gt;").gsub('"', "&quot;")
-end
-
-install_page = <<~HTML
-  <!doctype html>
-  <html lang="en">
-  <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Install PatataTube</title>
-  <style>
-    :root { color-scheme: dark; }
-    body {
-      margin: 0; padding: 2.5rem 1.25rem 4rem;
-      background: #111; color: #f2f2f2;
-      font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-      display: flex; flex-direction: column; align-items: center;
-    }
-    main { width: 100%; max-width: 26rem; }
-    img.icon { width: 88px; height: 88px; border-radius: 20px; display: block; margin: 0 auto 1.25rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 .25rem; text-align: center; }
-    .version { text-align: center; color: #9a9a9a; margin: 0 0 2rem; font-size: .95rem; }
-    a.install {
-      display: block; background: #1E88E5; color: #fff; text-decoration: none;
-      font-weight: 600; font-size: 1.05rem; text-align: center;
-      padding: 1rem; border-radius: 14px; margin-bottom: 1.5rem;
-    }
-    a.install:active { background: #1667b0; }
-    section { border-top: 1px solid #2a2a2a; padding-top: 1.25rem; margin-top: 1.25rem; }
-    h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: #8a8a8a; margin: 0 0 .6rem; }
-    pre.notes { white-space: pre-wrap; margin: 0; font: inherit; color: #d8d8d8; }
-    p { color: #b0b0b0; font-size: .9rem; }
-    code { background: #1c1c1c; padding: .15em .4em; border-radius: 5px; font-size: .85em; word-break: break-all; }
-  </style>
-  </head>
-  <body>
-  <main>
-    <img class="icon" src="#{h(ICON_URL)}" alt="">
-    <h1>PatataTube</h1>
-    <p class="version">Version #{h(version)} (build #{h(build)})</p>
-
-    <a class="install" href="#{h(ITMS_URL)}">Install PatataTube</a>
-
-    <p>Open this page in <strong>Safari</strong> — other browsers cannot start an
-    install. Then confirm on the Home Screen prompt.</p>
-
-    <section>
-      <h2>What&rsquo;s new</h2>
-      <pre class="notes">#{h(DESCRIPTION)}</pre>
-    </section>
-
-    <section>
-      <h2>Updating later</h2>
-      <p>Add this page to your Home Screen (Share &rarr; Add to Home Screen). The
-      Install button always installs the newest release, so one tap updates the
-      app in place — your downloads and settings are kept.</p>
-    </section>
-
-    <section>
-      <h2>Requirements</h2>
-      <p>Your device must be registered on the developer account before a build
-      is made. A device added afterwards needs a fresh <code>./deploy</code>
-      before it can install. iOS #{h(MIN_OS)} or later.</p>
-    </section>
-  </main>
-  </body>
-  </html>
-HTML
 page = File.join(work, PINNED_INSTALL)
-File.write(page, install_page)
+File.write(page, InstallPage.render(version: version, build: build, icon_url: ICON_URL,
+                                    itms_url: ITMS_URL, notes: DESCRIPTION, min_os: MIN_OS))
 
-# The .ipa first and the page last: each file points at the one before it, so a
-# device never follows a link to something not published yet.
-B.step "Publishing to #{FILES_BASE} (#{PUBLISH_DIR})"
-puts "    #{publish_file(ipa, name: asset)}"
-puts "    #{publish_file(ICON_SOURCE, name: PINNED_ICON)}"
-puts "    #{publish_file(built_manifest, name: PINNED_MANIFEST)}"
-puts "    #{publish_file(page, name: PINNED_INSTALL)}"
+B.step "Publishing to #{BASE} (#{publish_dir})"
+puts "    #{Uploader.upload(ipa, name: asset)}"
+puts "    #{Uploader.upload(ICON_SOURCE, name: PINNED_ICON)}"
+puts "    #{Uploader.upload(built_manifest, name: PINNED_MANIFEST)}"
+puts "    #{Uploader.upload(page, name: PINNED_INSTALL)}"
+puts "    #{Uploader.upload(page, name: LEGACY_INSTALL)}"
 FileUtils.remove_entry(work)
 
 # --- commit, tag, push -------------------------------------------------------
 
 B.step "Committing + pushing"
-B.run("git add #{PROJECT_YML.shellescape}", chdir: __dir__)
-B.run("git commit -m #{"Release iOS #{tag}".shellescape}", chdir: __dir__)
-committed = true
-B.run("git tag #{tag.shellescape}", chdir: __dir__)
-push_branch(BRANCH, chdir: __dir__)
-B.run("git push #{REMOTE} #{tag.shellescape}", chdir: __dir__)
+rel = ->(p) { p.delete_prefix("#{REPO_ROOT}/").shellescape }
+B.run("git add #{rel.(B::PROJECT_YML)} #{rel.(B::INFO_PLIST)}", chdir: REPO_ROOT)
+B.run("git commit -m #{"Release #{B::APP_NAME} OTA #{tag}".shellescape}", chdir: REPO_ROOT)
+committed = true # the bump lives in a commit now; at_exit must not undo it
+B.run("git tag #{tag.shellescape}", chdir: REPO_ROOT)
 
-puts B.green("\n✓ Published #{APP_NAME} #{version}")
+# git-sync's global post-commit hook pushes to the same remote the instant the
+# commit lands, so our push can lose the race ("cannot lock ref ... is at X but
+# expected Y") after the work is already done. On failure, ask the remote: if it
+# holds our HEAD, that counts as success. Then make sure the tag got there too.
+cmd = "git push #{REMOTE} #{BRANCH} refs/tags/#{tag}"
+puts "    $ #{cmd}"
+unless system(cmd, chdir: REPO_ROOT)
+  local  = git("rev-parse HEAD").strip
+  remote = git("ls-remote #{REMOTE} refs/heads/#{BRANCH}").split.first.to_s
+  unless !local.empty? && local == remote
+    B.die("command failed: #{cmd} (remote is at #{remote.empty? ? 'nothing' : remote[0, 7]}, we are at " \
+          "#{local[0, 7]}). The release is already published; push by hand: git push #{REMOTE} #{BRANCH} #{tag}")
+  end
+  puts B.green("    remote already at #{local[0, 7]} — pushed by the git-sync hook; continuing")
+  if git("ls-remote #{REMOTE} refs/tags/#{tag}").strip.empty?
+    B.run("git push #{REMOTE} refs/tags/#{tag}", chdir: REPO_ROOT)
+  end
+end
+
+puts B.green("\n✓ Published #{B::APP_NAME} #{version} (#{tag})")
 puts "\n  Install / update on a device — open in Safari, tap Install:"
 puts B.bold("    #{INSTALL_URL}")
-puts "  (Home Screen bookmark it once; the URL never changes.)"
-
-if INSTRUMENTED
-  puts B.red(B.bold("\n  ⚠  #{tag} is an INSTRUMENTED build (DEVLOG)."))
-  puts "     Logs land in log/ios.jsonl on the server. When you are done:"
+puts "  Direct install link (for the ntfy tap target):"
+puts "    #{ITMS_URL}"
+if DEVLOG
+  puts B.red(B.bold("\n  !  #{tag} is a DIAGNOSTICS build (DevLog)."))
+  puts "     Records land in log/devlog.jsonl via scripts/devlog/server.py. When done:"
   puts B.bold("       ./deploy patch")
-  puts "     to ship a clean build over it."
 end
