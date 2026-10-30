@@ -147,8 +147,10 @@ struct VideoCell: View {
                 Menu {
                     Button("Info", systemImage: "info.circle") { showingInfo = true }
                     if !video.isPlexItem {
-                        ForEach(groups) { group in
-                            Button(group.label) { onSetGroup(group.id) }
+                        Menu("Categorize", systemImage: "folder") {
+                            ForEach(groups) { group in
+                                Button(group.label) { onSetGroup(group.id) }
+                            }
                         }
                         Section("Move to Plex") {
                             ForEach(PlexKind.allCases, id: \.self) { kind in
