@@ -37,6 +37,7 @@ public protocol VideoAPI: Sendable {
     func video(id: Int) async throws -> Video
     func imageData(path: String) async throws -> Data
     func jobs() async throws -> JobsSnapshot
+    func sendToYoto(id: Int) async throws
 }
 
 public extension VideoAPI {
@@ -51,6 +52,7 @@ public extension VideoAPI {
         throw APIError.notConfigured
     }
     func setGroup(id: Int, groupID: Int) async throws -> Bool { false }
+    func sendToYoto(id: Int) async throws { throw APIError.notConfigured }
     func chooseSubtitle(id: Int, lang: String?) async throws -> Bool { false }
 
     func savePosition(
@@ -219,6 +221,12 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         struct Result: Decodable { let changed: Bool }
         do { return try Self.makeDecoder().decode(Result.self, from: data).changed }
         catch { throw APIError.decoding(String(describing: error)) }
+    }
+
+    /// Hands the video to yosubee (same host as the server), which converts it
+    /// to MP3 for the Yoto card. Fire and forget: success only means queued.
+    public func sendToYoto(id: Int) async throws {
+        _ = try await authedPost("api/videos/\(id)/yoto", body: [:])
     }
 
     public func delete(id: Int) async throws -> Bool {

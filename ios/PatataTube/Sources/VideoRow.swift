@@ -32,6 +32,8 @@ struct VideoRow: View {
     let onSetGroup: (Int) -> Void
     let onChooseVersion: (Int) -> Void
     let onDelete: () -> Void
+    /// nil hides "Send to Yoto de Elisa" (Plex items never get it).
+    var onSendToYoto: (() -> Void)? = nil
 
     @State private var confirmingDelete = false
     @State private var showingInfo = false
@@ -145,6 +147,9 @@ struct VideoRow: View {
                     ForEach(groups) { group in
                         Button(group.label) { onSetGroup(group.id) }
                     }
+                }
+                if let onSendToYoto, video.status == "done" {
+                    Button("Send to Yoto de Elisa", systemImage: "headphones") { onSendToYoto() }
                 }
             }
 

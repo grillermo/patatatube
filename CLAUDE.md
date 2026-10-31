@@ -291,6 +291,19 @@ tapped element keep playing, so reloading the page between videos would need a
 tap each time. Delete removes the `.sd.mp4` with the mp4.
 Spec: `docs/superpowers/specs/2026-09-18-sd-page-design.md`.
 
+### Send to Yoto
+
+The iOS video menu's "Send to Yoto de Elisa" (not on TV/Movies) calls
+`POST /api/videos/{id}/yoto`, which POSTs `{path, title}` to
+`YOSUBEE_LOCAL_URL`, yosubee (`~/c/yosubee`) on this same machine, with
+`X-Local-Token: YOSUBEE_LOCAL_TOKEN`. Only the **path** crosses: yosubee
+reads the mp4 off the shared disk and converts it to MP3 itself, so this adds
+no ffmpeg call site here. The URL targets yosubee's Caddy port 3200, because
+its Rails slots alternate between 3201 and 3202 across deploys. The query string
+picks the yosubee user and the card (matched by title). It's fire and forget:
+202 means yosubee queued it. The run then waits in yosubee's UI for an icon pick.
+Unset URL -> 503.
+
 ### Layering — the SSR page and the JSON API share logic, don't duplicate it
 
 - `db.py` — the only SQLite layer. Single `videos` table. `init_db()` is an **idempotent migration runner**: it does `CREATE TABLE IF NOT EXISTS`, then additive `ALTER TABLE` guards for each newer column, then backfills (`_backfill_positions`, `_backfill_youtube_preview_urls`) and cleanup. Schema changes go here as new idempotent guards, not a migrations framework.
