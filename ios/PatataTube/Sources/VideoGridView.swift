@@ -565,7 +565,6 @@ struct VideoGridView: View {
                                 cache.storePreview(data, for: videoId, path: path)
                             },
                             localFileURL: cache.localURL(for: videoId, versionId: versionId),
-                            showsTitle: showsTitles,
                             groups: groups.groups,
                             onPlay: { play(video, caller: "grid-cell") },
                             onPlaySleep: { play(video, sleepMode: true, caller: "grid-cell-sleep") },
@@ -889,13 +888,6 @@ struct VideoGridView: View {
     /// list mode to watch something.
     private var audioOnlyMode: Bool {
         currentGroupID != nil && displayMode == .list
-    }
-
-    /// The open group's "Display titles" setting. A group setting, so the
-    /// tv/movies tabs (no `currentGroupID`) never overlay titles.
-    private var showsTitles: Bool {
-        guard let id = currentGroupID else { return false }
-        return groups.group(id: id)?.displayTitles ?? false
     }
 
     private var showsVideoGrid: Bool {

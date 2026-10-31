@@ -15,8 +15,6 @@ struct VideoCell: View {
     var onPreviewLoaded: ((Data) -> Void)? = nil
     /// Local file URL of the cached MP4 (may not exist on disk yet).
     var localFileURL: URL? = nil
-    /// The group's "Display titles" setting: overlay the title on the poster.
-    var showsTitle: Bool = false
     let groups: [VideoGroup]
     let onPlay: () -> Void
     /// Children-only corner button: play this one video, then sleep-lock.
@@ -49,11 +47,6 @@ struct VideoCell: View {
             Button(action: onPlay) {
                 ZStack {
                     Rectangle().fill(.black)
-                    Text(video.title ?? video.url)
-                        .font(.subheadline)
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 12)
                     if video.previewUrl != nil || cachedPreviewURL != nil {
                         // scaledToFill previews report their covering size as their
                         // frame, which can exceed the cell; sizing the ZStack from the
@@ -72,22 +65,8 @@ struct VideoCell: View {
                         Text(video.status).font(.caption).padding(4)
                             .background(.thinMaterial).cornerRadius(4)
                     }
-                    VStack(spacing: 6) {
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 40)).foregroundStyle(.white.opacity(0.9))
-                        // The group's "Display titles" caption. Not hit-testable
-                        // so it never steals the play tap it sits on top of.
-                        if showsTitle {
-                            Text(video.title ?? video.url)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
-                                .padding(.horizontal, 12)
-                                .allowsHitTesting(false)
-                        }
-                    }
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 40)).foregroundStyle(.white.opacity(0.9))
                 }
                 .aspectRatio(16.0/9.0, contentMode: .fit)
                 .clipped()
@@ -98,27 +77,32 @@ struct VideoCell: View {
             .overlay(alignment: .topTrailing) {
                 if video.unwatched { UnwatchedDot().padding(8) }
             }
-            .overlay(alignment: .bottomTrailing) {
-                if isChildrenVideo {
-                    Button(action: onPlaySleep) {
-                        ZStack(alignment: .bottomTrailing) {
-                            BottomRightTriangle().fill(.black.opacity(0.55))
-                            HStack(spacing: 2) {
-                                Image(systemName: "play.fill")
-                                Image(systemName: "moon.fill")
-                            }
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.trailing, 8)
-                            .padding(.bottom, 6)
-                        }
-                        .frame(width: 64, height: 64)
-                        .contentShape(BottomRightTriangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
+            .overlay(alignment: .bottom) { controlsStripe }
 
+            Text(video.title ?? video.url)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
+                .padding(.bottom, 4)
+        }
+        .padding(8)
+        .background(.background.secondary)
+        .cornerRadius(12)
+        .confirmationDialog("Delete this video?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { onDelete() }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showingInfo) {
+            VideoInfoView(video: video, groups: groups, cacheState: cacheState,
+                          cachedPreviewURL: cachedPreviewURL, localFileURL: localFileURL)
+        }
+    }
+
+    /// The grey band along the poster's bottom edge. Only its buttons take
+    /// taps: the band itself is not hit-testable, so the rest of it still plays.
+    private var controlsStripe: some View {
+        ZStack {
             HStack {
                 DownloadButton(
                     identity: DownloadButtonIdentity(
@@ -160,26 +144,34 @@ struct VideoCell: View {
                     Divider()
                     Button("Delete video", role: .destructive) { confirmingDelete = true }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 30))
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 20, weight: .bold))
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
             }
+            if isChildrenVideo {
+                Button(action: onPlaySleep) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "play.fill")
+                        Image(systemName: "moon.fill")
+                    }
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 64, height: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .padding(8)
-        .background(.background.secondary)
-        .cornerRadius(12)
-        .confirmationDialog("Delete this video?", isPresented: $confirmingDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) { onDelete() }
-            Button("Cancel", role: .cancel) {}
-        }
-        .sheet(isPresented: $showingInfo) {
-            VideoInfoView(video: video, groups: groups, cacheState: cacheState,
-                          cachedPreviewURL: cachedPreviewURL, localFileURL: localFileURL)
+        .tint(.white)
+        .padding(.horizontal, 6)
+        .frame(height: 56)
+        .background {
+            Color(red: 60.0/255, green: 60.0/255, blue: 67.0/255).opacity(0.6)
+                .allowsHitTesting(false)
         }
     }
-
 }
 
 /// A modal listing every locally-known field about a video, plus its on-disk
@@ -327,15 +319,3 @@ struct VideoInfoView: View {
     }
 }
 
-/// Right triangle filling the bottom-right half of its frame — both the visual
-/// wedge and the hit area of the play-and-sleep corner button.
-struct BottomRightTriangle: Shape {
-    func path(in rect: CGRect) -> Path {
-        var p = Path()
-        p.move(to: CGPoint(x: rect.maxX, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        p.closeSubpath()
-        return p
-    }
-}

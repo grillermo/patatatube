@@ -329,9 +329,9 @@ Adding a group is `POST /api/groups`. Deleting one is `DELETE /api/groups/{id}` 
 **Per-group display settings live on the group row, not in a client's
 UserDefaults.** `groups.display_titles` (added by an idempotent `ALTER TABLE`
 guard, default 0) overlays each video's title on its player in that group's
-view — white with a small black shadow — and both clients read it: the iOS grid
-via `VideoGroup.displayTitles`, the web page via a `.title-overlay` div in the
-`card` macro (`pointer-events: none`, hidden while the video plays). Only iOS
+web view — white with a small black shadow — via a `.title-overlay` div in the
+`card` macro (`pointer-events: none`, hidden while the video plays). The iOS
+grid ignores it: `VideoCell` always shows the title under the poster. Only iOS
 can *set* it, through the `⋯` menu's "Display titles" toggle, which PATCHes
 `display_titles` **alone** — `APIClient.updateGroup` always sends `emoji`, so
 reusing it here would clear the group's cover. `VideoGroup` decodes the field
