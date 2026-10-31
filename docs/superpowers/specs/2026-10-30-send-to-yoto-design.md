@@ -101,10 +101,3 @@ body `{"path": "...", "title": "..."}`, header `X-Local-Token`.
   503 unset token; 404 unknown user; 422 no/ambiguous card; 422 path outside
   the media root.
 - Service spec for `LocalAudioConvertService` with a stub ffmpeg.
-
-## Open: uncommitted work in yosubee
-
-yosubee's checkout has uncommitted Pixellab icon-generation work in
-`upload_run.rb`, `complete_upload_job.rb`, `routes.rb`, `db/schema.rb` —
-the same files this needs. Options: wait for it to be committed; do the
-yosubee half in a worktree off `main`; or edit around it in place.
