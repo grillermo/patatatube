@@ -359,6 +359,7 @@ struct VideoGridView: View {
                 playerCover(request)
             }
             .overlay { if let error = store.errorText { errorBanner(error) } }
+            .overlay { if let notice = store.noticeText { noticeBanner(notice) } }
         }
         // On the stack, not its root: an alert on the root is held back while
         // a group (or any other route) is pushed over it, so a resume prompt
@@ -549,7 +550,8 @@ struct VideoGridView: View {
                             onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
                             onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
                             onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
-                            onDelete: { Task { await store.delete(id: video.id) } }
+                            onDelete: { Task { await store.delete(id: video.id) } },
+                            onSendToYoto: { Task { await store.sendToYoto(id: video.id) } }
                         )
                     } else {
                         VideoCell(
@@ -572,7 +574,8 @@ struct VideoGridView: View {
                             onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
                             onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
                             onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
-                            onDelete: { Task { await store.delete(id: video.id) } }
+                            onDelete: { Task { await store.delete(id: video.id) } },
+                            onSendToYoto: { Task { await store.sendToYoto(id: video.id) } }
                         )
                     }
                 }
@@ -1236,6 +1239,23 @@ struct VideoGridView: View {
             // sit queued while its cache state changes underneath it.
             guard model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached else { return }
             await download(video, bulk: true)
+        }
+    }
+
+    private func noticeBanner(_ text: String) -> some View {
+        VStack {
+            Spacer()
+            Text(text)
+                .font(.caption)
+                .padding()
+                .background(.green.opacity(0.85))
+                .foregroundStyle(.white)
+                .cornerRadius(8)
+                .padding()
+        }
+        .task(id: text) {
+            try? await Task.sleep(for: .seconds(2))
+            if store.noticeText == text { store.noticeText = nil }
         }
     }
 
