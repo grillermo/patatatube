@@ -32,6 +32,8 @@ public final class VideoStore: ObservableObject {
     }
     @Published public private(set) var isLoading = false
     @Published public var errorText: String?
+    /// A short confirmation for the grid to show and clear (not an error).
+    @Published public var noticeText: String?
 
     private let api: VideoAPI
     private let cache: VideoListCaching?
@@ -395,6 +397,15 @@ public final class VideoStore: ObservableObject {
                 await removeDeletedVideo(id: id)
             }
             await load()
+        } catch {
+            report(error)
+        }
+    }
+
+    public func sendToYoto(id: Int) async {
+        do {
+            try await api.sendToYoto(id: id)
+            noticeText = "Sent to Yoto de Elisa"
         } catch {
             report(error)
         }
