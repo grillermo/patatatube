@@ -46,9 +46,9 @@ YOSUBEE_LOCAL_TOKEN=<shared secret>
 ### iOS
 
 - `APIClient.sendToYoto(videoID:)` → `POST /api/videos/{id}/yoto`.
-- A **Send to Yoto** item in the video's menu, shown only when
+- A **Send to Yoto de Elisa** item in the video's menu, shown only when
   `plexKind == nil`.
-- Toast "Sent to Yoto" on 202; error toast with the message on failure.
+- Toast "Sent to Yoto de Elisa" on 202; error toast with the message on failure.
 - Needs a `./deploy`.
 
 ### Tests
