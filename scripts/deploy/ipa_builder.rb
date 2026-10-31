@@ -132,6 +132,9 @@ module IpaBuilder
     FileUtils.cp("/usr/bin/true", probe)
     sign = "codesign -f -s 'Apple Development' #{Shellwords.escape(probe)} >/dev/null 2>&1"
     return if system(sign)
+    # Unattended unlock with the login password stored on this Mac (agents-configs),
+    # so an agent can deploy over SSH; the prompt below is the fallback.
+    return if system(File.expand_path("~/c/agents-configs/bin/unlock-codesign-keychain.sh"))
 
     puts red("    codesign cannot use your signing key -- the login keychain is locked.")
     keychain = File.expand_path("~/Library/Keychains/login.keychain-db")
