@@ -25,6 +25,7 @@ import library
 import plex
 import sd
 import services
+import yosubee
 from downloader import (
     backfill_channels,
     download_video,
@@ -1209,6 +1210,34 @@ async def api_mark_played(video_id: int, request: Request):
     if not video or video.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Video not found")
     return {"changed": db.record_play(video_id)}
+
+
+@router.post("/api/videos/{video_id}/yoto", status_code=202)
+async def api_send_to_yoto(video_id: int, request: Request):
+    """Send a finished video's audio to the Yoto card yosubee is configured for.
+
+    Fire and forget: yosubee only enqueues (convert, upload, wait for an icon
+    pick in its own UI), so a 202 here means "accepted", not "on the card".
+    Plex rows are refused because the menu never offers them for TV/Movies.
+    """
+    _check_token(request)
+    if not yosubee.configured():
+        raise HTTPException(status_code=503, detail="Yoto not configured")
+    video = db.get_video(video_id)
+    if not video or video.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.get("source") == "library" or video.get("plex_kind"):
+        raise HTTPException(status_code=409, detail="Library videos can't be sent to Yoto")
+    if video.get("status") != "done" or not video.get("filename"):
+        raise HTTPException(status_code=409, detail="Video isn't downloaded yet")
+    path = (VIDEOS_DIR / video["filename"]).resolve()
+    if not path.is_file():
+        raise HTTPException(status_code=409, detail="Video file is missing")
+    try:
+        await yosubee.send(str(path), video.get("title") or path.stem)
+    except yosubee.YosubeeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"status": "sent"}
 
 
 @router.post("/api/video/{video_id}/delete")

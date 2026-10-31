@@ -2464,3 +2464,91 @@ def test_patching_a_group_still_reports_its_unread_count(client, auth_headers):
     resp = client.patch(f"/api/groups/{group_id}", json={"display_titles": True}, headers=auth_headers)
 
     assert resp.json()["unread_count"] == 1
+
+
+# --- Send to Yoto ---------------------------------------------------------
+
+@pytest.fixture()
+def yoto_sent(monkeypatch, tmp_path):
+    """Captures yosubee.send calls and points VIDEOS_DIR at tmp_path."""
+    import router
+    import yosubee
+
+    calls = []
+
+    async def fake_send(path, title, transport=None):
+        calls.append((path, title))
+
+    monkeypatch.setenv("YOSUBEE_LOCAL_URL", "http://localhost:3200/upload-from-video")
+    monkeypatch.setattr(yosubee, "send", fake_send)
+    monkeypatch.setattr(router, "VIDEOS_DIR", tmp_path)
+    return calls
+
+
+def _done_video(tmp_path, title="Song"):
+    import db
+
+    vid = db.add_video("https://youtube.com/watch?v=abc", title=title)
+    db.update_video(vid, status="done", filename=f"{vid}.mp4")
+    (tmp_path / f"{vid}.mp4").write_bytes(b"mp4")
+    return vid
+
+
+def test_send_to_yoto_posts_absolute_path_and_title(client, auth_headers, yoto_sent, tmp_path):
+    vid = _done_video(tmp_path, title="Twinkle")
+    resp = client.post(f"/api/videos/{vid}/yoto", headers=auth_headers)
+    assert resp.status_code == 202
+    assert resp.json() == {"status": "sent"}
+    assert yoto_sent == [(str((tmp_path / f"{vid}.mp4").resolve()), "Twinkle")]
+
+
+def test_send_to_yoto_requires_token(client, yoto_sent, tmp_path):
+    vid = _done_video(tmp_path)
+    assert client.post(f"/api/videos/{vid}/yoto").status_code == 401
+
+
+def test_send_to_yoto_503_when_unconfigured(client, auth_headers, yoto_sent, tmp_path, monkeypatch):
+    monkeypatch.delenv("YOSUBEE_LOCAL_URL")
+    vid = _done_video(tmp_path)
+    assert client.post(f"/api/videos/{vid}/yoto", headers=auth_headers).status_code == 503
+
+
+def test_send_to_yoto_404_unknown(client, auth_headers, yoto_sent):
+    assert client.post("/api/videos/999999/yoto", headers=auth_headers).status_code == 404
+
+
+def test_send_to_yoto_409_while_downloading(client, auth_headers, yoto_sent):
+    import db
+
+    vid = db.add_video("https://youtube.com/watch?v=abc")
+    assert client.post(f"/api/videos/{vid}/yoto", headers=auth_headers).status_code == 409
+    assert yoto_sent == []
+
+
+def test_send_to_yoto_409_for_library_rows(client, auth_headers, yoto_sent, tmp_path):
+    import db
+
+    vid = _done_video(tmp_path)
+    with db._conn() as conn:
+        conn.execute("UPDATE videos SET source = 'library', plex_kind = 'movie' WHERE id = ?", (vid,))
+    assert client.post(f"/api/videos/{vid}/yoto", headers=auth_headers).status_code == 409
+    assert yoto_sent == []
+
+
+def test_send_to_yoto_409_when_file_missing(client, auth_headers, yoto_sent, tmp_path):
+    vid = _done_video(tmp_path)
+    (tmp_path / f"{vid}.mp4").unlink()
+    assert client.post(f"/api/videos/{vid}/yoto", headers=auth_headers).status_code == 409
+
+
+def test_send_to_yoto_502_when_yosubee_fails(client, auth_headers, yoto_sent, tmp_path, monkeypatch):
+    import yosubee
+
+    async def failing(path, title, transport=None):
+        raise yosubee.YosubeeError("yosubee 422: No card named English")
+
+    monkeypatch.setattr(yosubee, "send", failing)
+    vid = _done_video(tmp_path)
+    resp = client.post(f"/api/videos/{vid}/yoto", headers=auth_headers)
+    assert resp.status_code == 502
+    assert "No card named English" in resp.json()["detail"]
