@@ -1,6 +1,4 @@
-Status: DRAFT
-
-# Streaming MP4 playback — design
+# Streaming MP4 playback and a shared per-video store — design
 
 ## Problem
 
@@ -67,6 +65,8 @@ The remove-HLS branch (`remove-hls`, 2.9.0, not deployed) keeps the same
 - **Data flow (section 2) approved** as written below. (Owner, 2026-11-21.)
 - **Errors and concurrency (section 3) approved** as written below. (Owner,
   2026-11-21.)
+- **Testing and rollout (section 4) approved** as written below. (Owner,
+  2026-11-21.)
 
 ## Architecture
 
@@ -86,6 +86,9 @@ Storage:
 - Entries live in `Documents/videos/.store/<key>/`, excluded from backup.
 - Unpinned partial entries (watched, not downloaded) are LRU-evicted under the
   existing 50 GB budget. Pinned entries and finished mp4s are never evicted.
+  So a video watched to the end becomes a permanent download: it shows as
+  downloaded and stays until deleted, like one fetched with the download
+  button.
 - First launch of the new version: the old `Caches/stream` cache, segmented part
   files and `.resume` files are deleted. Each paused download becomes a paused,
   pinned entry that starts from zero bytes once.
@@ -155,3 +158,42 @@ retries) and downloads restart.
 - **Backgrounding.** Unchanged: foreground sessions stop when the app is
   suspended, `resumeInterrupted` restarts pinned, unpaused jobs on activation,
   and `ensureRunning` restarts the listener.
+
+## Testing
+
+Kit (`swift test` runs on macOS, so AVFoundation is real):
+
+- **`MediaStore`:** commits and ranges; non-overlapping claims; a waiter woken
+  by a commit; promotion when the last hole closes; LRU never evicting pinned
+  entries; an identity mismatch resetting the entry; the first-launch
+  migration.
+- **`RangeFetcher`** (against `MockURLProtocol` delivering a body in pieces):
+  commits every chunk; stops at committed bytes; suspends at the read-ahead
+  lead (a small lead in tests); retries from its last commit; reports an ETag
+  mismatch.
+- **`StreamProxy`, the regression test:** a request for `bytes=0-<end>` gets a
+  `Content-Length` equal to the whole range, not 8 MB. Also: a mixed range
+  (part committed, part fetched, part being fetched by a download) comes back
+  byte-identical to the source; a client hang-up cancels only that reader's
+  fetcher.
+- **AVPlayer smoke test:** a small mp4 fixture with a tiny commit size, played
+  through the real proxy, reaches `readyToPlay` and its time advances.
+- **Download job:** pause keeps bytes; resume fetches only holes; cancel during
+  a playback read defers the delete; a download and playback of the same video
+  fetch each byte once; the download gate ignores playback.
+
+App target: `xcodebuild build-for-testing`; its download and pause UI tests are
+updated where internals change.
+
+Per CLAUDE.md the iOS test suites run only when the owner asks; the plan stops
+and asks.
+
+## Rollout
+
+- One release, **2.9.0**, built on the `remove-hls` branch (2ff3cf6). The
+  remove-HLS plan's B6 deploy waits for this work, and its A6 Steps 6–7 (HLS
+  folder deletion, Caddyfile) wait for 2.9.0 to be confirmed on the phone.
+- On-device check before the deploy counts as done: a 1-hour video starts at
+  once and seeks; download then play immediately starts at once; airplane mode
+  plays what was watched; pause and resume a download; background audio keeps
+  playing across a locked screen; AirPlay works.
