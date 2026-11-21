@@ -80,3 +80,12 @@ struct ByteRangeSet: Codable, Equatable, Sendable {
         runs.first { $0.end >= offset }.map { max($0.start, offset) }
     }
 }
+
+/// An inclusive byte range, as in an HTTP `Range` header.
+struct DownloadByteRange: Codable, Equatable, Sendable {
+    let start: Int64
+    let end: Int64
+
+    var length: Int64 { end - start + 1 }
+    var headerValue: String { "bytes=\(start)-\(end)" }
+}

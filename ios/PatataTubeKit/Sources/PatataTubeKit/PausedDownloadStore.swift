@@ -51,11 +51,10 @@ public struct PausedDownload: Codable, Equatable, Identifiable, Sendable {
     public var id: String { versionID.map { "\(videoID):\($0)" } ?? "\(videoID)" }
 }
 
-/// Paused downloads, persisted as `paused-downloads.json` in the cache root.
-///
-/// Mirrors `DownloadCompletionHistoryStore`: load in `init`, rewrite the whole
-/// file on every mutation, best-effort throughout. No capacity cap — entries
-/// only ever appear and disappear by explicit user action.
+/// 2.8's paused downloads (`paused-downloads.json`). Read only by
+/// `LegacyCacheMigration`, which turns each entry into a paused, pinned
+/// `MediaStore` entry and empties the file; it also still records 2.8 HLS
+/// pauses for `CacheManager.removeLegacyHLSPackages`.
 struct PausedDownloadStore {
     private let url: URL
     private let fileManager: FileManager
