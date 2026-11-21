@@ -74,4 +74,9 @@ struct ByteRangeSet: Codable, Equatable, Sendable {
         else { return 0 }
         return min(run.end - start + 1, limit)
     }
+
+    /// The first stored byte at or after `offset`, or nil when none follows.
+    func nextCovered(atOrAfter offset: Int64) -> Int64? {
+        runs.first { $0.end >= offset }.map { max($0.start, offset) }
+    }
 }
