@@ -505,6 +505,12 @@ logged in.
   to the paused-permit table instead of releasing, and every stored entry
   re-reserves one at launch, so pausing everything means nothing downloads until
   the user acts.
+- **2.9.0 removed HLS.** `PlaybackSource` has four branches: `local_mp4`,
+  `airplay_mp4`, `proxy_mp4` and `direct_mp4`. On activation
+  `AppModel.migrateLegacyHLSDownloads` deletes 2.8's offline HLS packages
+  (`hls-<id>`, `.hls-tmp`) and paused HLS downloads, and re-downloads those
+  videos as mp4. Pending ids live in `UserDefaults` (`legacyHLSRedownloads`)
+  until each download finishes or fails for good.
 - **The in-app web bridge has an address bar.** `WebBridgeView` opens on the
   last committed page (`WebHistoryStore.lastURL`, `UserDefaults` key
   `webBridgeHistory`, 200 entries) rather than a hardcoded URL. Typing
