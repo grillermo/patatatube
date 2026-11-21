@@ -6,7 +6,7 @@ import Testing
 private func video(_ id: Int) -> Video {
     Video(
         id: id, url: "/videos/\(id)", title: "Video \(id)", platform: nil,
-        sourceKey: nil, previewUrl: nil, groupID: 7, plexKind: nil,
+        sourceKey: nil, previewUrl: nil, groupID: 7,
         position: id, status: "done", errorMsg: nil,
         streamPath: "/videos/\(id)/stream"
     )

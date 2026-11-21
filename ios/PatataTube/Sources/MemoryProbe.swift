@@ -8,7 +8,7 @@ import os
 /// WatchdogTermination, PATATATUBE-2 App Hang). The device reporting these had
 /// ~1.36 GB app footprint with only ~88 MB free, so we need to see WHERE the
 /// footprint climbs — chiefly the full-resolution poster/thumbnail decodes in
-/// `AuthedImage` (no downsampling) across a large library grid.
+/// `AuthedImage` (no downsampling) across a large grid.
 ///
 /// `phys_footprint` is the exact metric iOS jetsam / the watchdog compare
 /// against the memory limit, and `os_proc_available_memory()` is the remaining

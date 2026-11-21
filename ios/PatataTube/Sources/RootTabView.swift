@@ -2,66 +2,24 @@
 import SwiftUI
 import PatataTubeKit
 
-/// The app's root: three media types, each with its own navigation stack.
-///
-/// `VideoStore.feed` is still the one source of truth for what is loaded, so
-/// selecting a tab does exactly what the old segmented picker did — it calls
-/// `switchFeed`. The Videos tab is the exception: its root is a group screen
-/// that loads nothing, so it only switches the feed when a group is already
-/// open beneath it.
+/// The app's root: the Videos grid with its own navigation stack, and the
+/// audio mini player docked under it.
 struct RootTabView: View {
     @EnvironmentObject var model: AppModel
-    @EnvironmentObject var store: VideoStore
-    @State private var selection: MediaTab = .videos
-    @State private var activation: MediaTab?
-
-    /// Standard iPhone tab-bar content height, independent of the safe-area
-    /// (home-indicator) inset that a bottom-aligned `ZStack` child already
-    /// respects on its own.
-    ///
-    /// Not `.safeAreaInset(edge: .bottom)` on the `TabView`: that only
-    /// reserves room correctly when the inset view is present at the
-    /// `TabView`'s first layout pass. The bar starts absent (no audio yet)
-    /// and appears later once playback starts, and SwiftUI's native
-    /// UITabBar-backed chrome doesn't re-layout for that late arrival — the
-    /// bar rendered on top of, not above, the tab icons instead of pushing
-    /// them up.
-    private static let tabBarHeight: CGFloat = 49
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            TabView(selection: selectionBinding) {
-                VideoGridView(tab: .videos, groups: model.groups, api: model.api, selectedTab: selection, activation: activation)
-                    .tabItem { Label("Videos", systemImage: "play.rectangle.on.rectangle") }
-                    .tag(MediaTab.videos)
-                VideoGridView(tab: .tv, groups: model.groups, api: model.api, selectedTab: selection, activation: activation)
-                    .tabItem { Label("TV", systemImage: "tv") }
-                    .tag(MediaTab.tv)
-                VideoGridView(tab: .movies, groups: model.groups, api: model.api, selectedTab: selection, activation: activation)
-                    .tabItem { Label("Movies", systemImage: "film") }
-                    .tag(MediaTab.movies)
-            }
+            VideoGridView(groups: model.groups, api: model.api)
             AudioMiniPlayerBar(audio: model.audio)
-                .padding(.bottom, Self.tabBarHeight)
         }
         // The restore button on the PiP float re-opens the full-screen player.
-        // It lives at the root rather than in a grid because all three grids
-        // exist at once and only one presentation may answer.
         .modifier(PictureInPictureRestoreCover(pip: model.pip, audio: model.audio))
-        // Covers tabs and the mini player bar alike. An open full-screen player
-        // draws its own copy above this one.
+        // Covers the grid and the mini player bar alike. An open full-screen
+        // player draws its own copy above this one.
         .overlay {
             if model.sleepScreenShown {
                 SleepScreen { model.sleepScreenShown = false }
             }
-        }
-        .onAppear {
-            selection = model.restorationStore.load().tab ?? .videos
-        }
-        .onChange(of: selection) { _, newValue in
-            DevLog.event(.nav, "tab selected", ["tab": newValue.rawValue])
-            guard let feed = newValue.feed, store.feed != feed else { return }
-            Task { await store.switchFeed(to: feed) }
         }
     }
 
@@ -103,14 +61,4 @@ struct RootTabView: View {
         }
     }
 
-    private var selectionBinding: Binding<MediaTab> {
-        Binding(
-            get: { selection },
-            set: { newValue in
-                guard newValue != selection else { return }
-                selection = newValue
-                activation = newValue
-            }
-        )
-    }
 }

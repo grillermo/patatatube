@@ -19,7 +19,6 @@ private func sampleVideo(id: Int) -> Video {
         sourceKey: nil,
         previewUrl: nil,
         groupID: nil,
-        plexKind: .movies,
         position: id,
         status: "done",
         errorMsg: nil,
@@ -211,9 +210,9 @@ struct DownloadsViewConvertingTests {
     @Test func listsConvertingJobsWithTheirPercent() async throws {
         let store = JobsStore(api: StubJobsAPI(snapshot: JobsSnapshot(
             running: [ConversionJob(id: 1, videoID: 7, versionID: nil, kind: "convert",
-                                    progress: 0.47, title: "Blade Runner", showTitle: nil)],
+                                    progress: 0.47, title: "Blade Runner")],
             queued: [ConversionJob(id: 2, videoID: 8, versionID: nil, kind: "convert",
-                                   progress: nil, title: "Dune", showTitle: nil)],
+                                   progress: nil, title: "Dune")],
             queuedTotal: 1)))
         await store.refreshNow()
         let sut = try await hostedDownloadsView(store: store)
@@ -227,7 +226,7 @@ struct DownloadsViewConvertingTests {
     @Test func showsTheOverflowCountWhenTheQueueIsCapped() async throws {
         let queued = (1...20).map {
             ConversionJob(id: $0, videoID: $0, versionID: nil, kind: "convert",
-                          progress: nil, title: "Video \($0)", showTitle: nil)
+                          progress: nil, title: "Video \($0)")
         }
         let store = JobsStore(api: StubJobsAPI(snapshot: JobsSnapshot(
             running: [], queued: queued, queuedTotal: 203)))

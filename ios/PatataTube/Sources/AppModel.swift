@@ -53,7 +53,7 @@ final class AppModel: ObservableObject {
     @Published var downloadStreamCount: Int
     @Published var downloadConcurrency: Int
 
-    /// Keyed by `Feed.storageKey` ("all" / "group:3" / "plex:tv"), so a
+    /// Keyed by `Feed.storageKey` ("all" / "group:3"), so a
     /// preference set on one group leaves the others alone. New key names on
     /// purpose: the old dictionaries were keyed by classification name and
     /// their entries mean nothing now.
@@ -73,16 +73,12 @@ final class AppModel: ObservableObject {
     private static let cellSizeDefaultsKey = "gridCellSizes"
     private static let legacyCellSizeKey = "gridCellSize"
 
-    /// Scope key for one TV show's episode list. Prefixed so a show titled
-    /// "movies" can never share a bucket with the movies tab.
-    static func showScope(_ title: String) -> String { "show:\(title)" }
-
     /// Autoplay is **on until switched off**: nothing is persisted, so every
     /// launch starts every scope at the default, and that default is on.
     func autoplay(for feed: Feed) -> Bool { autoplayByFeed[feed.storageKey] ?? true }
 
-    /// Episode queues keep their existing per-show scope; feeds use the typed
-    /// overload above.
+    /// For a scope key already resolved to a string (the player's
+    /// `autoplayScope`); feeds use the typed overload above.
     func autoplay(for scope: String?) -> Bool {
         scope.flatMap { autoplayByFeed[$0] } ?? true
     }
@@ -224,13 +220,11 @@ final class AppModel: ObservableObject {
     /// run: a count that ignores replays is not a play count. What is not a new
     /// play is a *handover* of an already-playing item between the mini player
     /// and the full-screen player, and those call sites skip this instead.
-    /// Plex items have no badge and are not counted at all.
     ///
     /// Only the play that empties the badge answers `changed`, and only then is
     /// the group list refetched — rather than edited locally, so the badge is
     /// always exactly what the server counts.
     func markPlayed(_ video: Video) {
-        guard video.plexKind == nil else { return }
         let id = video.id
         store.markWatched(id: id)
         Task {

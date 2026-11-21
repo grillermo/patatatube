@@ -7,7 +7,6 @@ import SwiftUI
 struct DownloadButtonIdentity: Hashable, Sendable {
     let videoID: Int
     let versionID: Int?
-    let audioLanguage: String?
 }
 
 @MainActor
@@ -145,9 +144,6 @@ struct DownloadButton: View {
     var didAppear: ((Self) -> Void)? = nil
 
     @Environment(\.continuousClock) private var clock
-    // Optional: a missing tracker means "nothing preparing" rather than a trap,
-    // so the button renders anywhere in the hierarchy (including inspection).
-    @Environment(VideoPreparationTracker.self) private var preparationTracker: VideoPreparationTracker?
     @Environment(JobsStore.self) private var jobsStore: JobsStore?
     @State private var state: DownloadButtonState
 
@@ -205,12 +201,10 @@ struct DownloadButton: View {
 
     @ViewBuilder
     private var control: some View {
-        // The server may be converting this video even if this device did not
-        // ask for it, so the job row counts as much as the local tracker.
+        // The server may be packaging this video; its job row drives the ring.
         if case .running(let fraction) = jobsStore?.state(videoID: identity.videoID) {
             ConversionRing(fraction: fraction)
-        } else if preparationTracker?.isPreparing(videoID: identity.videoID) == true
-                    || jobsStore?.state(videoID: identity.videoID) == .queued {
+        } else if jobsStore?.state(videoID: identity.videoID) == .queued {
             ProgressView()
                 .frame(width: 44, height: 44)
                 .accessibilityLabel("Preparing video")
@@ -285,8 +279,8 @@ struct DownloadButton: View {
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
-            // Required: inside a List row (EpisodesView) an automatic-styled
-            // button hands activation to the cell and the action never fires.
+            // Required: inside a List row an automatic-styled button hands
+            // activation to the cell and the action never fires.
             .buttonStyle(.plain)
             .logTap("download-start", ["video_id": "\(identity.videoID)"])
             .accessibilityLabel("Download")

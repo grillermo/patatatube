@@ -105,7 +105,7 @@ private struct StubJobsAPI: JobsAPI {
         snapshot = JobsSnapshot(
             running: [ConversionJob(
                 id: 1, videoID: videoID, versionID: nil, kind: "convert",
-                progress: progress, title: nil, showTitle: nil
+                progress: progress, title: nil
             )],
             queued: [],
             queuedTotal: 0
@@ -117,7 +117,7 @@ private struct StubJobsAPI: JobsAPI {
             running: [],
             queued: [ConversionJob(
                 id: 1, videoID: videoID, versionID: nil, kind: "convert",
-                progress: nil, title: nil, showTitle: nil
+                progress: nil, title: nil
             )],
             queuedTotal: 1
         )
@@ -180,7 +180,6 @@ private func makeDownloadButton(
     state: DownloadButtonState,
     cache: CacheStateSource = CacheStateSource(.notCached),
     refreshToken: Int = 0,
-    tracker: VideoPreparationTracker = VideoPreparationTracker(),
     clock: any Clock<Duration> = ContinuousClock(),
     onDownload: @escaping () async -> Bool = { false },
     onCancel: @escaping () -> Void = {},
@@ -189,7 +188,7 @@ private func makeDownloadButton(
 ) async throws -> DownloadButton {
     return try await withCheckedThrowingContinuation { continuation in
         var button = DownloadButton(
-            identity: DownloadButtonIdentity(videoID: 7, versionID: 3, audioLanguage: "eng"),
+            identity: DownloadButtonIdentity(videoID: 7, versionID: 3),
             refreshToken: refreshToken,
             currentCacheState: { cache.read() },
             onDownload: onDownload,
@@ -208,7 +207,6 @@ private func makeDownloadButton(
         }
         ViewHosting.host(
             view: button
-                .environment(tracker)
                 .environment(\.continuousClock, clock),
             function: function
         )
@@ -228,7 +226,7 @@ private func hostedDownloadButtonWithJobsStore(
 ) async throws -> DownloadButton {
     return try await withCheckedThrowingContinuation { continuation in
         var button = DownloadButton(
-            identity: DownloadButtonIdentity(videoID: videoID, versionID: nil, audioLanguage: nil),
+            identity: DownloadButtonIdentity(videoID: videoID, versionID: nil),
             currentCacheState: { .notCached },
             onDownload: { true },
             onCancel: {},
@@ -250,64 +248,6 @@ private func hostedDownloadButtonWithJobsStore(
 @Suite("Download button view", .serialized)
 @MainActor
 struct DownloadButtonViewTests {
-    @Test func matchingPreparationReplacesControlWithBufferingSpinner() async throws {
-        let tracker = VideoPreparationTracker()
-        let sut = try await makeDownloadButton(
-            state: DownloadButtonState(),
-            tracker: tracker
-        )
-
-        tracker.begin(videoID: 7)
-
-        let spinner = try sut.inspect().find(ViewType.ProgressView.self)
-        #expect(try spinner.accessibilityLabel().string() == "Preparing video")
-        #expect(try spinner.fixedWidth() == 44)
-        #expect(try spinner.fixedHeight() == 44)
-        #expect((try? sut.inspect().find(ViewType.Button.self)) == nil)
-    }
-
-    @Test func preparationForAnotherVideoDoesNotReplaceControl() async throws {
-        let tracker = VideoPreparationTracker()
-        let sut = try await makeDownloadButton(
-            state: DownloadButtonState(),
-            tracker: tracker
-        )
-
-        tracker.begin(videoID: 99)
-
-        let button = try sut.inspect().find(ViewType.Button.self)
-        #expect(try button.accessibilityLabel().string() == "Download")
-    }
-
-    @Test func completedPreparationRevealsCacheDownloadProgress() async throws {
-        let tracker = VideoPreparationTracker()
-        let state = DownloadButtonState(initialCacheState: .downloading(0.35))
-        let sut = try await makeDownloadButton(state: state, tracker: tracker)
-
-        tracker.begin(videoID: 7)
-        #expect((try? sut.inspect().find(ViewType.ProgressView.self)) != nil)
-
-        tracker.end(videoID: 7)
-        let button = try sut.inspect().find(ViewType.Button.self)
-        #expect(try button.accessibilityLabel().string() == "Cancel download")
-        #expect(try button.accessibilityValue().string() == "35%")
-    }
-
-    @Test func failedPreparationRestoresIdleDownloadControl() async throws {
-        let tracker = VideoPreparationTracker()
-        let state = DownloadButtonState()
-        let attemptID = state.begin()
-        let sut = try await makeDownloadButton(state: state, tracker: tracker)
-
-        tracker.begin(videoID: 7)
-        #expect((try? sut.inspect().find(ViewType.ProgressView.self)) != nil)
-
-        tracker.end(videoID: 7)
-        state.finish(attemptID: attemptID, succeeded: false)
-        let button = try sut.inspect().find(ViewType.Button.self)
-        #expect(try button.accessibilityLabel().string() == "Download")
-    }
-
     @Test func rendersAccessibleIdleActiveAndCachedStates() async throws {
         let state = DownloadButtonState()
         let sut = try await makeDownloadButton(state: state)

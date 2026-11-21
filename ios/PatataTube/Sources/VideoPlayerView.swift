@@ -421,8 +421,6 @@ struct VideoPlayerView: View {
     ) async {
         playbackProbe.attach(item: item, player: player, video: video, source: source)
         playWhenReady(item: item, on: player)
-        Task { await applyAudioSelection(item: item, lang: video.audioLang) }
-        Task { await applySubtitleSelection(item: item, lang: video.subtitleLang) }
         nowPlaying.onNext = { advance(by: 1) }
         nowPlaying.onPrevious = { handlePrevious() }
         nowPlaying.attach(player: player, title: title(of: video))
@@ -554,7 +552,7 @@ struct VideoPlayerView: View {
         readyTimeoutTask?.cancel()
         itemReady = false
 
-        let markReady = { (trigger: String) in
+        let markReady: @MainActor (String) -> Void = { trigger in
             guard self.player === player, !self.itemReady else { return }
             self.itemReady = true
             DevLog.event(.play, "mounted and playing", [
@@ -612,7 +610,7 @@ struct VideoPlayerView: View {
     }
 
     private func title(of video: Video) -> String {
-        video.title ?? video.sourceFilename ?? "PatataTube"
+        video.title ?? "PatataTube"
     }
 
     /// Rebind end-of-item handling to the current item. `applicationState` and
@@ -679,8 +677,6 @@ struct VideoPlayerView: View {
         player.replaceCurrentItem(with: item)
         bindPauseTransitions(player: player, item: item, videoID: video.id)
         playbackProbe.attach(item: item, player: player, video: video, source: source)
-        Task { await applyAudioSelection(item: item, lang: video.audioLang) }
-        Task { await applySubtitleSelection(item: item, lang: video.subtitleLang) }
         bindPlayToEnd()
         Task {
             if resumeAt.seconds.isFinite, resumeAt.seconds >= 1 {
@@ -726,8 +722,6 @@ struct VideoPlayerView: View {
         bindPauseTransitions(player: player, item: item, videoID: videos[nextIndex].id)
         model.markPlayed(videos[nextIndex])
         playbackProbe.attach(item: item, player: player, video: videos[nextIndex], source: source)
-        Task { await applyAudioSelection(item: item, lang: videos[nextIndex].audioLang) }
-        Task { await applySubtitleSelection(item: item, lang: videos[nextIndex].subtitleLang) }
         bindPlayToEnd()
         playWhenReady(item: item, on: player)
         nowPlaying.updateTitle(title(of: video))
@@ -768,52 +762,6 @@ struct VideoPlayerView: View {
         nowPlaying.setArtwork(data, for: expectedPlayer)
     }
 
-    /// Selects the audible option matching the server-side language choice.
-    /// mp4 assets carry every allowlisted track; HLS already serves only the
-    /// chosen one. No match (or no selection group) leaves the default track.
-    private func applyAudioSelection(item: AVPlayerItem, lang: String?) async {
-        guard let lang,
-              let group = try? await item.asset.loadMediaSelectionGroup(for: .audible) else { return }
-        let target = normalizedLanguage(lang)
-        guard let option = group.options.first(where: { option in
-            guard let tag = option.extendedLanguageTag ?? option.locale?.identifier else { return false }
-            return normalizedLanguage(tag) == target
-        }) else { return }
-        item.select(option, in: group)
-    }
-
-    /// Applies the user's stored subtitle choice, if there is one.
-    ///
-    /// - `nil` (never chosen): does nothing at all, leaving AVKit's own
-    ///   auto-select to honour the playlist's DEFAULT=YES/AUTOSELECT=YES and
-    ///   the viewer's system captions preference.
-    /// - `""` (explicitly off): deselects the legible group, which is the only
-    ///   way to beat that same auto-select.
-    /// - a language tag: selects the matching option; no match leaves the
-    ///   selection untouched.
-    ///
-    /// Live in-player switching is handled by AVKit's own captions menu, not
-    /// this app.
-    private func applySubtitleSelection(item: AVPlayerItem, lang: String?) async {
-        guard let lang,
-              let group = try? await item.asset.loadMediaSelectionGroup(for: .legible) else { return }
-        if lang.isEmpty {
-            item.select(nil, in: group)
-            return
-        }
-        let target = normalizedLanguage(lang)
-        guard let option = group.options.first(where: { option in
-            guard let tag = option.extendedLanguageTag ?? option.locale?.identifier else { return false }
-            return normalizedLanguage(tag) == target
-        }) else { return }
-        item.select(option, in: group)
-    }
-
-    /// "spa" (server, ISO 639-2) and "es-419" (asset, BCP-47) both → "es".
-    private func normalizedLanguage(_ code: String) -> String {
-        let base = code.split(separator: "-").first.map(String.init) ?? code.lowercased()
-        return Locale.LanguageCode(base).identifier(.alpha2) ?? base.lowercased()
-    }
 
     /// A `.playback` session is what lets audio continue in the background and
     /// AVPlayer send full video (not just audio) over AirPlay.

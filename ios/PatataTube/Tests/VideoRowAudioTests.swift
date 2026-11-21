@@ -28,7 +28,7 @@ struct VideoRowAudioTests {
                 audioState: state,
                 onPlay: {}, onPlaySleep: {}, onDownload: { true }, onCancel: {},
                 onDeleteCache: {}, onSetGroup: { _ in },
-                onChooseVersion: { _ in }, onDelete: {}
+                onDelete: {}
             )
             #expect(row.audioState == state)
         }
@@ -36,7 +36,7 @@ struct VideoRowAudioTests {
 
     static let video = Video(
         id: 42, url: "/videos/42", title: "Video 42", platform: nil, sourceKey: nil,
-        previewUrl: nil, groupID: 1, plexKind: nil, position: nil, status: "done",
+        previewUrl: nil, groupID: 1, position: nil, status: "done",
         errorMsg: nil, streamPath: "/videos/42/stream"
     )
 }

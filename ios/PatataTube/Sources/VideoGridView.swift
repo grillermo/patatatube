@@ -24,9 +24,6 @@ struct PendingResume: Identifiable {
 /// modifier chain, they pushed the type checker past its time budget.
 private struct RestorationTracking: ViewModifier {
     let path: [Route]
-    let tab: MediaTab
-    let selectedTab: MediaTab
-    let activation: MediaTab?
     let feed: Feed?
     let activeSearch: String
     let playing: PlaybackQueue?
@@ -36,12 +33,10 @@ private struct RestorationTracking: ViewModifier {
     @Binding var gridAnchorDebounceTask: Task<Void, Never>?
     @Binding var searchDebounceTask: Task<Void, Never>?
     let currentGridOrder: [String]
-    let activateGroup: (Int) -> Void
 
     func body(content: Content) -> some View {
         content
             .onChange(of: activeSearch) { _, newValue in
-                guard selectedTab == tab else { return }
                 model.restorationStore.mutate { $0.search = newValue }
             }
             .onChange(of: path) { oldValue, newValue in
@@ -49,42 +44,15 @@ private struct RestorationTracking: ViewModifier {
                     "from": RestorationTracking.describe(oldValue),
                     "to": RestorationTracking.describe(newValue),
                 ])
-                guard selectedTab == tab else { return }
-                model.restorationStore.mutate {
-                    $0.tab = tab
-                    $0.path = newValue
-                }
+                model.restorationStore.mutate { $0.path = newValue }
             }
             .onChange(of: feed) { _, newValue in
-                guard selectedTab == tab else { return }
                 model.restorationStore.mutate { $0.feed = newValue }
-            }
-            .onChange(of: activation) { _, selectedTab in
-                guard selectedTab == tab else { return }
-                let selectedFeed: Feed?
-                if tab == .videos, case .group(let id)? = path.first {
-                    selectedFeed = .group(id: id)
-                } else {
-                    selectedFeed = tab.feed
-                }
-                model.restorationStore.mutate {
-                    $0.tab = tab
-                    $0.feed = selectedFeed
-                    $0.path = path
-                    $0.search = selectedFeed == nil ? "" : activeSearch
-                }
-                if tab == .videos, case .group(let id)? = selectedFeed { activateGroup(id) }
-            }
-            .onChange(of: selectedTab) { _, newValue in
-                guard newValue != tab else { return }
-                searchDebounceTask?.cancel()
-                gridAnchorDebounceTask?.cancel()
             }
             .onChange(of: currentGridOrder) { _, newValue in
                 gridTracker.setOrder(newValue)
             }
             .onChange(of: playing) { oldValue, newValue in
-                guard selectedTab == tab else { return }
                 DevLog.event(.nav, "grid playing changed", [
                     "from": oldValue.map { "\($0.videos[$0.startIndex].id)" } ?? "nil",
                     "to": newValue.map { "\($0.videos[$0.startIndex].id)" } ?? "nil",
@@ -97,7 +65,6 @@ private struct RestorationTracking: ViewModifier {
                 }
             }
             .onChange(of: scenePhase) { _, newValue in
-                guard selectedTab == tab else { return }
                 guard newValue != .active else { return }
                 // Flush the debounced anchor write immediately — the app can
                 // be suspended before the 0.5s debounce fires.
@@ -113,8 +80,6 @@ private struct RestorationTracking: ViewModifier {
         path.map { route in
             switch route {
             case .group(let id): return "group(\(id))"
-            case .show(let title): return "show(\(title))"
-            case .movie(let id): return "movie(\(id))"
             case .downloads: return "downloads"
             }
         }.joined(separator: ">")
@@ -123,44 +88,29 @@ private struct RestorationTracking: ViewModifier {
 
 private extension View {
     func restorationTracking(
-        path: [Route], tab: MediaTab, selectedTab: MediaTab,
-        activation: MediaTab?,
+        path: [Route],
         feed: Feed?, activeSearch: String,
         playing: PlaybackQueue?, scenePhase: ScenePhase,
         model: AppModel, gridTracker: VisibleItemsTracker,
         gridAnchorDebounceTask: Binding<Task<Void, Never>?>,
         searchDebounceTask: Binding<Task<Void, Never>?>,
-        currentGridOrder: [String], activateGroup: @escaping (Int) -> Void
+        currentGridOrder: [String]
     ) -> some View {
         modifier(RestorationTracking(
-            path: path, tab: tab, selectedTab: selectedTab,
-            activation: activation,
+            path: path,
             feed: feed, activeSearch: activeSearch,
             playing: playing, scenePhase: scenePhase,
             model: model, gridTracker: gridTracker,
             gridAnchorDebounceTask: gridAnchorDebounceTask,
             searchDebounceTask: searchDebounceTask,
-            currentGridOrder: currentGridOrder, activateGroup: activateGroup
+            currentGridOrder: currentGridOrder
         ))
     }
 }
 
 struct VideoGridView: View {
-    /// Which tab this instance is the content of. Fixed for the lifetime of the
-    /// view — `RootTabView` builds one instance per tab.
-    let tab: MediaTab
-    /// Set only for a user-initiated tab selection. Launch restoration changes
-    /// `RootTabView.selection` directly so an empty stack cannot overwrite it.
-    let activation: MediaTab?
-    /// Current tab-bar selection, used to reject delayed writes from retained
-    /// inactive stacks.
-    let selectedTab: MediaTab
-
-    init(tab: MediaTab, groups: GroupStore, api: APIClient, selectedTab: MediaTab? = nil, activation: MediaTab? = nil) {
-        self.tab = tab
+    init(groups: GroupStore, api: APIClient) {
         _groups = ObservedObject(wrappedValue: groups)
-        self.selectedTab = selectedTab ?? tab
-        self.activation = activation
         // Same APIClient the store uses -- reached via the caller (model.api)
         // since model itself isn't available until after init.
         _jobsStore = State(initialValue: JobsStore(api: api))
@@ -185,15 +135,10 @@ struct VideoGridView: View {
     /// presenting from separate state raced the boot load and could hand the
     /// player an empty queue on the first cold-launch tap (index crash).
     @State private var playing: PlaybackQueue?
-    /// Set when a tv/movies tap has a resume point worth asking about; the
-    /// alert below turns it into either a seek or a fresh start.
+    /// Set when a tap on a remembering group's video has a resume point worth
+    /// asking about; the alert below turns it into either a seek or a fresh start.
     @State private var pendingResume: PendingResume?
-    @State private var preparationTracker = VideoPreparationTracker()
     @State private var jobsStore: JobsStore
-    /// Conversions this device asked for that should download themselves when
-    /// the server finishes. Persisted, so a conversion that outlives the
-    /// process still lands on disk. See `startPendingAutoDownloads`.
-    @State private var pendingAutoDownloads = PendingAutoDownloadStore()
     @State private var downloadingAll = false
     @State private var pendingDownloadAll: DownloadAllRequest?
     @State private var errorBannerOffset: CGFloat = 0
@@ -278,11 +223,10 @@ struct VideoGridView: View {
     }
 
     static func downloadVideo(id: Int, versionID: Int?, videos: [Video]) -> Video? {
-        guard let stored = videos.first(where: { $0.id == id }) else { return nil }
-        guard let versionID else { return stored.withChosenVersion(nil) }
-        return stored.versions.contains(where: { $0.id == versionID })
-            ? stored.withChosenVersion(versionID)
-            : nil
+        // Only unversioned downloads exist now; an entry left over from a
+        // library version resolves to nothing.
+        guard versionID == nil else { return nil }
+        return videos.first(where: { $0.id == id })
     }
 
     private var columns: [GridItem] {
@@ -303,11 +247,7 @@ struct VideoGridView: View {
         let query = normalized(activeSearch)
         return store.videos.filter { video in
             if let title = video.title, normalized(title).contains(query) { return true }
-            if let showTitle = video.showTitle, normalized(showTitle).contains(query) { return true }
             if let channel = video.channel, normalized(channel).contains(query) { return true }
-            if let summary = video.summary, normalized(summary).contains(query) { return true }
-            if video.versions.contains(where: { normalized($0.label ?? "").contains(query) }) { return true }
-            if let filename = video.sourceFilename, normalized(filename).contains(query) { return true }
             return false
         }
     }
@@ -332,19 +272,16 @@ struct VideoGridView: View {
                 }
             }
             .restorationTracking(
-                path: path, tab: tab, selectedTab: selectedTab,
-                activation: activation,
+                path: path,
                 feed: store.feed, activeSearch: activeSearch,
                 playing: playing, scenePhase: scenePhase,
                 model: model, gridTracker: gridTracker,
                 gridAnchorDebounceTask: $gridAnchorDebounceTask,
                 searchDebounceTask: $searchDebounceTask,
-                currentGridOrder: currentGridOrder,
-                activateGroup: { id in Task { await loadGroup(id) } }
+                currentGridOrder: currentGridOrder
             )
             .toolbar { optionsToolbar }
             .onChange(of: path) { _, newPath in
-                guard tab == .videos else { return }
                 guard case .group(let id)? = newPath.first else {
                     searchDebounceTask?.cancel()
                     searchText = ""
@@ -407,35 +344,16 @@ struct VideoGridView: View {
         } message: { request in
             Text("You stopped at \(ResumeDecision.timestamp(request.secs)).")
         }
-        .environment(preparationTracker)
         .environment(jobsStore)
         // Task.never() (ConcurrencyExtras) isn't linkable from this target --
         // it isn't a direct dependency here, only transitively via test-only
         // packages -- so subscribe/unsubscribe follow view appearance instead.
-        .onAppear {
-            jobsStore.subscribe()
-            startPendingAutoDownloads()
-        }
+        .onAppear { jobsStore.subscribe() }
         .onDisappear { jobsStore.unsubscribe() }
-        // Every poll is a chance for a tracked conversion to have left the job
-        // list -- that disappearance is the "conversion done" signal for the
-        // ones this process did not start (or no longer awaits).
-        .onChange(of: jobsStore.snapshot) { _, _ in startPendingAutoDownloads() }
     }
 
-    @ViewBuilder
     private var tabRoot: some View {
-        if tab == .videos {
-            rootScrollView.refreshable { await refreshGroups() }
-        } else {
-            rootScrollView
-                // `.always` pins the field to the navigation bar; the default
-                // (.automatic) tucks it into a drawer that scrolls away.
-                .searchable(text: $searchText,
-                            placement: .navigationBarDrawer(displayMode: .always),
-                            prompt: "Search videos")
-                .refreshable { await store.refresh() }
-        }
+        rootScrollView.refreshable { await refreshGroups() }
     }
 
     private func refreshGroups() async {
@@ -446,28 +364,7 @@ struct VideoGridView: View {
 
     private var rootScrollView: some View {
         ScrollView {
-            if store.isLoading && filteredVideos.isEmpty && tab != .videos {
-                SkeletonGrid(columns: columns, aspectRatio: 2.0/3.0,
-                             showsTextBars: tab == .tv,
-                             isList: displayMode == .list)
-            } else {
-                switch tab {
-                case .videos:
-                    GroupsView(groups: groups)
-                case .tv:
-                    ShowsView(
-                        videos: filteredVideos,
-                        onPlay: { video, queue in
-                            play(video, queueSnapshot: queue, caller: "shows")
-                        },
-                        onDownload: { await download($0) },
-                        onItemAppear: { gridItemAppeared($0) },
-                        onItemDisappear: { gridItemDisappeared($0) }
-                    )
-                case .movies:
-                    moviesGrid
-                }
-            }
+            GroupsView(groups: groups)
         }
         .gesture(pinchGesture)
     }
@@ -488,32 +385,6 @@ struct VideoGridView: View {
                                startSecs: request.startSecs,
                                startPaused: request.startPaused,
                                autoplayScope: playbackScope)
-    }
-
-    /// Split out of `body` alongside `defaultGrid` — inlined, the combined
-    /// expression pushed the type checker past its time budget.
-    private var moviesGrid: some View {
-        LazyVGrid(columns: columns, spacing: gridSpacing) {
-            ForEach(filteredVideos) { video in
-                Group {
-                    if case .list = displayMode {
-                        MovieRow(
-                            video: video,
-                            cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl)
-                        )
-                    } else {
-                        MovieCell(
-                            video: video,
-                            cachedPreviewURL: model.cache.cachedPreviewURL(for: video.id, path: video.previewUrl)
-                        )
-                    }
-                }
-                .id(String(video.id))
-                .onAppear { gridItemAppeared(String(video.id)) }
-                .onDisappear { gridItemDisappeared(String(video.id)) }
-            }
-        }
-        .padding()
     }
 
     private var defaultGrid: some View {
@@ -549,7 +420,6 @@ struct VideoGridView: View {
                             onCancel: { cache.cancel(id: videoId, versionId: versionId) },
                             onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
                             onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
-                            onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
                             onDelete: { Task { await store.delete(id: video.id) } },
                             onSendToYoto: { Task { await store.sendToYoto(id: video.id) } }
                         )
@@ -572,7 +442,6 @@ struct VideoGridView: View {
                             onCancel: { cache.cancel(id: videoId, versionId: versionId) },
                             onDeleteCache: { cache.removeCached(id: videoId, versionId: versionId) },
                             onSetGroup: { groupID in Task { await store.setGroup(id: video.id, groupID: groupID) } },
-                            onChooseVersion: { versionId in Task { await store.chooseVersion(id: video.id, versionId: versionId) } },
                             onDelete: { Task { await store.delete(id: video.id) } },
                             onSendToYoto: { Task { await store.sendToYoto(id: video.id) } }
                         )
@@ -585,11 +454,11 @@ struct VideoGridView: View {
         }
         .padding()
         // Extra bottom space so the last video row/card isn't covered by
-        // AudioMiniPlayerBar when docked above the tab bar.
+        // AudioMiniPlayerBar when docked at the bottom.
         .padding(.bottom, 200)
     }
 
-    /// The same trailing bar for the tab root and for a pushed group, so the
+    /// The same trailing bar for the group list and for a pushed group, so the
     /// ellipsis sits on the row that carries the Back button instead of
     /// vanishing the moment a group opens.
     @ToolbarContentBuilder
@@ -643,10 +512,8 @@ struct VideoGridView: View {
         }
     }
 
-    /// Resolved late, against the list actually on screen: a route holds only
-    /// an id, so a renamed or deleted show resolves to nothing instead of a
-    /// phantom screen. Split out of `body` — inlined as one giant switch it
-    /// pushed the type checker past its time budget.
+    /// Split out of `body` — inlined as one giant switch it pushed the type
+    /// checker past its time budget.
     @ViewBuilder
     private func destination(for route: Route) -> some View {
         switch route {
@@ -674,25 +541,6 @@ struct VideoGridView: View {
                         prompt: "Search videos")
             .refreshable { await store.refresh() }
             .toolbar { optionsToolbar }
-        case .show(let title):
-            if let show = ShowGroup.group(filteredVideos).first(where: { $0.id == title }) {
-                EpisodesView(show: show,
-                             onPlay: { video, queue in play(video, queueSnapshot: queue, caller: "episodes") },
-                             onDownload: { await download($0) },
-                             showDownloads: { path.append(.downloads) })
-            } else {
-                EmptyView().onAppear {
-                    DevLog.event(.nav, "show route unresolved", ["title": title])
-                }
-            }
-        case .movie(let id):
-            if let video = store.videos.first(where: { $0.id == id }) {
-                MovieDetailView(video: video,
-                                onPlay: { play($0, caller: "movie-detail") },
-                                onDownload: { await download($0) },
-                                showDownloads: { path.append(.downloads) },
-                                groups: groups.groups)
-            }
         case .downloads:
             DownloadsView(
                 active: { model.cache.activeDownloads() },
@@ -709,7 +557,7 @@ struct VideoGridView: View {
                         for: activity.videoID, versionID: activity.versionID
                     ) else {
                         // The Downloads view lists every transfer, including
-                        // ones started from another tab or group whose video
+                        // ones started from another group whose video
                         // isn't in this feed's `store.videos`. Pause can't
                         // resolve its parameters there and silently does
                         // nothing; make that visible in the log at least.
@@ -727,9 +575,7 @@ struct VideoGridView: View {
                         remote: parameters.remote,
                         isHLS: parameters.isHLS,
                         streamCount: parameters.streamCount,
-                        preview: parameters.preview,
-                        showPosterKey: parameters.posterKey,
-                        showPoster: parameters.poster
+                        preview: parameters.preview
                     )
                 },
                 onResume: { activity in
@@ -761,36 +607,22 @@ struct VideoGridView: View {
     /// time its view re-enters the hierarchy, and dismissing the player's
     /// `fullScreenCover` does exactly that — ungated, each dismissal re-ran
     /// this function against a snapshot read before its `await`s and
-    /// re-presented the player it had just dismissed, or cleared `path` and
-    /// popped `EpisodesView` under the user's tap
-    /// (`docs/restoration-buggy.md`).
+    /// re-presented the player it had just dismissed, or cleared `path` under
+    /// the user's tap (`docs/restoration-buggy.md`).
     private func initialLoad(scrollProxy: ScrollViewProxy) async {
-        let restoredTab = model.restorationStore.load().tab ?? .videos
-        guard tab == restoredTab else {
-            DevLog.event(.nav, "initial load skipped", ["reason": "other tab", "tab": tab.rawValue])
-            return
-        }
         guard model.restorationGate.claim() else {
             DevLog.event(.nav, "initial load skipped", ["reason": "already restored"])
             return
         }
 
         let restored = model.restorationStore.load()
-        // Videos tab restored at its root has no feed to fetch.
+        // Restored at the group list, there is no feed to fetch.
         let restoredGroup: Int? = {
             if case .group(let id)? = restored.path.first { return id }
             return nil
         }()
-        if tab == .videos {
-            if let restoredGroup {
-                await loadGroup(restoredGroup)
-            }
-        } else {
-            if let feed = tab.feed, store.feed != feed {
-                await store.switchFeed(to: feed)
-            } else {
-                await store.bootLoad()
-            }
+        if let restoredGroup {
+            await loadGroup(restoredGroup)
         }
 
         searchText = restored.search
@@ -834,7 +666,7 @@ struct VideoGridView: View {
 
         gridTracker.setOrder(currentGridOrder)
         if let anchor = restored.scrollAnchors[RestorationState.gridKey(feed: store.feed)] {
-            if tab == .videos, restoredGroup != nil {
+            if restoredGroup != nil {
                 restoredGroupAnchor = anchor
             } else {
                 // LazyVGrid/List need a render pass after the data lands before
@@ -861,25 +693,19 @@ struct VideoGridView: View {
     }
 
     private var currentGridOrder: [String] {
-        if store.feed == .plex(.tv) {
-            return ShowGroup.group(filteredVideos).map { $0.id }
-        }
-        return filteredVideos.map { String($0.id) }
+        filteredVideos.map { String($0.id) }
     }
 
-    /// The group whose grid is on screen, or nil on the tv/movies tabs.
     /// Bucket the playback settings (autoplay, randomize) are read from: the
-    /// open show when one is pushed, otherwise the tab/group feed. Read at
-    /// presentation time — the path cannot change under a full-screen player.
+    /// group feed. Read at presentation time — the path cannot change under a
+    /// full-screen player.
     private var playbackScope: String? {
-        for route in path.reversed() {
-            if case .show(let title) = route { return AppModel.showScope(title) }
-        }
-        return store.feed.storageKey
+        store.feed.storageKey
     }
 
+    /// The group whose grid is on screen, or nil at the group list.
     private var currentGroupID: Int? {
-        guard tab == .videos, case .group(let id)? = path.first else { return nil }
+        guard case .group(let id)? = path.first else { return nil }
         return id
     }
 
@@ -891,7 +717,6 @@ struct VideoGridView: View {
     }
 
     private var showsVideoGrid: Bool {
-        guard tab == .videos else { return true }
         if case .group? = path.first { return true }
         return false
     }
@@ -917,12 +742,6 @@ struct VideoGridView: View {
     }
 
     private func scheduleGridAnchorSave() {
-        // Retained inactive stacks keep delivering onDisappear after a tab
-        // switch, and `key` comes from the *shared* store feed — which has
-        // already flipped to the incoming tab. Ungated, the outgoing tab's
-        // topmost id lands under the incoming tab's key and clobbers its
-        // anchor. Same scoping every other restoration write uses.
-        guard selectedTab == tab else { return }
         let key = RestorationState.gridKey(feed: store.feed)
         gridAnchorDebounceTask?.cancel()
         gridAnchorDebounceTask = Task {
@@ -940,45 +759,7 @@ struct VideoGridView: View {
 
     private func play(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false, caller: String = "?") {
         DevLog.event(.nav, "play requested", ["video_id": "\(video.id)", "caller": caller])
-        // Already downloaded to device: play the local file directly, no network.
-        // ensureReady() would hit /prepare and fail offline (-1009) even though
-        // the cached MP4 is ready to play. VideoPlayerView plays from cache too.
-        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached {
-            startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, caller: caller)
-            return
-        }
-        guard video.isLibrary, video.status != "done" else {
-            startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, caller: caller)
-            return
-        }
-        // Playing an unconverted row is this device asking for a conversion, so
-        // its output is ours to download once ffmpeg is done.
-        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached {
-            pendingAutoDownloads.add(video.id)
-        }
-        Task {
-            do {
-                guard let readyVideo = try await preparationTracker.trackIfIdle(
-                    videoID: video.id,
-                    operation: {
-                        try await store.ensureReady(id: video.id)
-                    }
-                ) else {
-                    return
-                }
-                autoDownloadIfPending(readyVideo)
-                startPlayback(
-                    readyVideo,
-                    queueSnapshot: queueSnapshot,
-                    sleepMode: sleepMode,
-                    caller: caller
-                )
-            } catch {
-                // A conversion that never completed has nothing to download.
-                pendingAutoDownloads.remove(video.id)
-                store.errorText = String(describing: error)
-            }
-        }
+        startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, caller: caller)
     }
 
     /// Row tap in audio mode: the current item toggles, anything else starts.
@@ -990,82 +771,25 @@ struct VideoGridView: View {
         }
     }
 
-    /// Start audio for `video` with the on-screen list as its queue. Mirrors
-    /// `play`'s readiness handling — a library row that isn't converted still
-    /// needs `/prepare` first — but ends in audio instead of a presentation.
+    /// Start audio for `video` with the on-screen list as its queue.
     private func startAudio(_ video: Video, sleepMode: Bool = false) {
         let queueSnapshot = filteredVideos
         DevLog.event(.nav, "audio requested", ["video_id": "\(video.id)"])
-        let begin: (Video) -> Void = { ready in
-            let index = queueSnapshot.firstIndex(where: { $0.id == ready.id }) ?? 0
-            let queue = queueSnapshot.isEmpty ? [ready] : queueSnapshot
-            model.audio.start(videos: queue, startIndex: index, scope: playbackScope,
-                              sleepMode: sleepMode, model: model)
-        }
-        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .cached
-            || !(video.isLibrary && video.status != "done") {
-            begin(video)
-            return
-        }
-        if model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached {
-            pendingAutoDownloads.add(video.id)
-        }
-        model.audio.markLoading(id: video.id)
-        Task {
-            do {
-                guard let readyVideo = try await preparationTracker.trackIfIdle(
-                    videoID: video.id,
-                    operation: { try await store.ensureReady(id: video.id) }
-                ) else {
-                    model.audio.markLoading(id: nil)
-                    return
-                }
-                autoDownloadIfPending(readyVideo)
-                begin(readyVideo)
-            } catch {
-                pendingAutoDownloads.remove(video.id)
-                model.audio.markLoading(id: nil)
-                store.errorText = String(describing: error)
-            }
-        }
+        let index = queueSnapshot.firstIndex(where: { $0.id == video.id }) ?? 0
+        let queue = queueSnapshot.isEmpty ? [video] : queueSnapshot
+        model.audio.start(videos: queue, startIndex: index, scope: playbackScope,
+                          sleepMode: sleepMode, model: model)
     }
 
-    /// Downloads a converted video this device had asked to convert, once.
-    /// Claiming the pending entry before starting is what keeps a second caller
-    /// (another tab's watcher, a re-fired poll) from downloading it twice.
-    private func autoDownloadIfPending(_ video: Video) {
-        guard pendingAutoDownloads.contains(video.id) else { return }
-        pendingAutoDownloads.remove(video.id)
-        guard model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached else { return }
-        DevLog.event(.download, "auto-download after conversion", ["video_id": "\(video.id)"])
-        Task { await download(video) }
-    }
-
-    /// Fires the auto-downloads whose conversion the server has finished: an id
-    /// this device tracked that no longer has a job and whose row reads `done`.
-    /// A row still converting (or reverted to `unconverted` by a failure) is
-    /// left alone -- the next snapshot re-evaluates it.
-    private func startPendingAutoDownloads() {
-        let pending = pendingAutoDownloads.ids
-        guard !pending.isEmpty else { return }
-        for video in store.videos where pending.contains(video.id) {
-            guard jobsStore.state(videoID: video.id) == nil else { continue }
-            guard !preparationTracker.isPreparing(videoID: video.id) else { continue }
-            guard video.status == "done" else { continue }
-            autoDownloadIfPending(video)
-        }
-    }
-
-    /// Starts playback from the tap-time queue snapshot. `video` may be the
-    /// ensureReady-updated copy, so it replaces its stale row in the snapshot.
-    /// tv/movies rows, and Videos rows that remember, stop here and ask first.
+    /// Starts playback from the tap-time queue snapshot. Videos rows that
+    /// remember their position stop here and ask first.
     private func startPlayback(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false, caller: String = "?") {
         model.audio.stop()
         let secs = model.resumeStore.resolved(server: video.resumeSecs, for: video.id)
         DevLog.event(.play, "resume decision",
                      ["video_id": "\(video.id)", "group_id": "\(video.groupID.map(String.init) ?? "nil")",
                       "remembers": "\(groups.remembersPosition(video))", "secs": "\(secs)"])
-        switch ResumeDecision.decide(resumeSecs: secs, plexKind: video.plexKind,
+        switch ResumeDecision.decide(resumeSecs: secs,
                                      remembersPosition: groups.remembersPosition(video)) {
         case .ask(let secs):
             pendingResume = PendingResume(
@@ -1102,25 +826,13 @@ struct VideoGridView: View {
     /// Downloads a video for offline playback. Returns true only when the MP4
     /// actually landed on disk, so the caller's checkmark reflects reality.
     @discardableResult
-    private func download(_ video: Video, bulk: Bool = false) async -> Bool {
-        var target = video
-        if video.isLibrary, video.status != "done" {
-            do {
-                target = try await preparationTracker.track(videoID: video.id) {
-                    try await store.ensureReady(id: video.id, bulk: bulk)
-                }
-            } catch {
-                store.errorText = String(describing: error)
-                return false
-            }
-        }
+    private func download(_ video: Video) async -> Bool {
+        let target = video
         guard let url = model.streamURL(for: target) else {
             store.errorText = "No server URL configured"
             return false
         }
         let preview = resolveImageURL(target.previewUrl)
-        let posterKey = target.showPreviewUrl
-        let poster = resolveImageURL(posterKey)
         let master = model.hlsURL(for: target)
         let takesHLS = master != nil && target.hlsPath?.isEmpty == false
         // The ring reads `cache.state`, so recording it next to the branch is what
@@ -1131,7 +843,6 @@ struct VideoGridView: View {
             "branch": takesHLS ? "hls" : "mp4",
             "status": target.status,
             "hls_path": target.hlsPath ?? "-",
-            "bulk": "\(bulk)",
             "state": DevLog.describe(model.cache.state(for: target.id, versionId: target.chosenVersionId)),
         ])
         do {
@@ -1139,12 +850,11 @@ struct VideoGridView: View {
                 try await model.cache.downloadHLS(
                     id: target.id, versionId: target.chosenVersionId,
                     masterURL: master,
-                    preview: preview, showPosterKey: posterKey, showPoster: poster,
+                    preview: preview,
                     bearerToken: model.credentials.token
                 )
             } else {
                 try await model.cache.download(id: target.id, versionId: target.chosenVersionId, from: url, preview: preview,
-                                               showPosterKey: posterKey, showPoster: poster,
                                                bearerToken: model.credentials.token,
                                                streamCount: model.downloadStreamCount)
             }
@@ -1163,21 +873,18 @@ struct VideoGridView: View {
     private func pauseParameters(
         for videoID: Int, versionID: Int?
     ) -> (remote: URL, isHLS: Bool, streamCount: Int,
-          preview: URL?, posterKey: String?, poster: URL?)? {
+          preview: URL?)? {
         guard let target = Self.downloadVideo(
             id: videoID, versionID: versionID, videos: store.videos
         ) else { return nil }
         let master = model.hlsURL(for: target)
         let takesHLS = master != nil && target.hlsPath?.isEmpty == false
         guard let remote = takesHLS ? master : model.streamURL(for: target) else { return nil }
-        let posterKey = target.showPreviewUrl
         return (
             remote: remote,
             isHLS: takesHLS,
             streamCount: model.downloadStreamCount,
-            preview: resolveImageURL(target.previewUrl),
-            posterKey: posterKey,
-            poster: resolveImageURL(posterKey)
+            preview: resolveImageURL(target.previewUrl)
         )
     }
 
@@ -1219,10 +926,8 @@ struct VideoGridView: View {
     private func runDownloadAll(_ targets: [Video]) async {
         downloadingAll = true
         defer { downloadingAll = false }
-        // The CacheManager gate bounds transfers, NOT this. `download` calls
-        // ensureReady -> POST /prepare and then polls every 2s, all before the
-        // gate is acquired. One task per video is what sent 226 simultaneous
-        // prepare calls at the server on 2026-07-31.
+        // Bounded here as well as by the CacheManager gate: one task per video
+        // is what sent 226 simultaneous calls at the server on 2026-07-31.
         await withBoundedTaskGroup(
             limit: model.cache.maxConcurrentDownloads,
             over: targets
@@ -1230,7 +935,7 @@ struct VideoGridView: View {
             // Re-checked per item at seed time, not snapshotted: an item can
             // sit queued while its cache state changes underneath it.
             guard model.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached else { return }
-            await download(video, bulk: true)
+            await download(video)
         }
     }
 

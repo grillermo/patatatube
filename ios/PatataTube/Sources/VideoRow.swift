@@ -30,9 +30,8 @@ struct VideoRow: View {
     let onCancel: () -> Void
     let onDeleteCache: () -> Void
     let onSetGroup: (Int) -> Void
-    let onChooseVersion: (Int) -> Void
     let onDelete: () -> Void
-    /// nil hides "Send to Yoto de Elisa" (Plex items never get it).
+    /// nil hides "Send to Yoto de Elisa".
     var onSendToYoto: (() -> Void)? = nil
 
     @State private var confirmingDelete = false
@@ -90,8 +89,7 @@ struct VideoRow: View {
         }
     }
 
-    /// Fixed 78x44 box for both aspect ratios, so titles line up across feeds.
-    /// Plex posters are 2:3 and letterbox inside it rather than centre-cropping.
+    /// Fixed 78x44 box, so titles line up across feeds.
     /// In audio mode the thumbnail keeps rendering and takes a dimmed overlay
     /// carrying the play/pause glyph — the row's only playback control.
     private var thumbnail: some View {
@@ -101,7 +99,7 @@ struct VideoRow: View {
                 Rectangle().fill(.clear)
                     .overlay {
                         AuthedImage(path: video.previewUrl, localFileURL: cachedPreviewURL,
-                                    fill: !video.isPlexItem,
+                                    fill: true,
                                     onNetworkLoad: onPreviewLoaded)
                     }
                     .clipped()
@@ -142,33 +140,13 @@ struct VideoRow: View {
 
             Button("Info", systemImage: "info.circle") { showingInfo = true }
 
-            if !video.isPlexItem {
-                Menu("Categorize", systemImage: "folder") {
-                    ForEach(groups) { group in
-                        Button(group.label) { onSetGroup(group.id) }
-                    }
-                }
-                if let onSendToYoto, video.status == "done" {
-                    Button("Send to Yoto de Elisa", systemImage: "headphones") { onSendToYoto() }
+            Menu("Categorize", systemImage: "folder") {
+                ForEach(groups) { group in
+                    Button(group.label) { onSetGroup(group.id) }
                 }
             }
-
-            if video.versions.count > 1 {
-                Section("Version") {
-                    ForEach(video.versions) { version in
-                        let chosen = version.id == (video.chosenVersionId ?? video.versions.first?.id)
-                        Button {
-                            onChooseVersion(version.id)
-                        } label: {
-                            if chosen {
-                                Label(version.label ?? "Version \(version.id)",
-                                      systemImage: "checkmark")
-                            } else {
-                                Text(version.label ?? "Version \(version.id)")
-                            }
-                        }
-                    }
-                }
+            if let onSendToYoto, video.status == "done" {
+                Button("Send to Yoto de Elisa", systemImage: "headphones") { onSendToYoto() }
             }
 
             if video.status != "done" {

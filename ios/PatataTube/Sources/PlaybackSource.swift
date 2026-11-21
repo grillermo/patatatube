@@ -40,7 +40,6 @@ enum PlaybackSource {
                 "local_exists": "\(localExists)",
                 "local_bytes": Self.fileSize(at: local),
                 "status": video.status ?? "-",
-                "is_library": "\(video.isLibrary)",
                 "has_hls": "\(!(video.hlsPath ?? "").isEmpty)",
                 // Discriminates the two ways a downloaded video ends up streaming.
                 // Proxy down (port nil) kills the offline HLS route as well as the
@@ -64,7 +63,7 @@ enum PlaybackSource {
         }
         // Everything below is the proxy or needs a header, neither of which an
         // Apple TV can use, so an AirPlay route streams the MP4 from the server.
-        if external, !(video.isLibrary && video.status != "done"),
+        if external,
            let url = model.airPlayStreamURL(for: video) {
             return chose("airplay_mp4", AVPlayerItem(url: url))
         }
@@ -81,15 +80,6 @@ enum PlaybackSource {
                     "local": local.path,
                 ])
             }
-        }
-        // Library rows that haven't been converted server-side have no streamable file yet.
-        if video.isLibrary && video.status != "done" {
-            if log {
-                DevLog.event(.play, "source -> none (library not converted)", [
-                    "video_id": "\(video.id)", "status": video.status ?? "-",
-                ])
-            }
-            return nil
         }
         if let proxied = model.proxiedHLSURL(for: video) {
             // Proxied HLS: read-through cache, native subtitle tracks, no headers needed.

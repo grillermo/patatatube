@@ -2,26 +2,22 @@
 import SwiftUI
 import PatataTubeKit
 
-/// Where a menu's Autoplay/Randomize toggles are stored. A tab-level screen
-/// keys them by its `Feed`; a per-show screen keys them by a named scope
-/// (`AppModel.showScope`) so one show's settings don't leak into the tab's.
+/// Where a menu's Autoplay/Randomize toggles are stored: keyed by the
+/// screen's `Feed`.
 enum OptionsScope {
     case feed(Feed)
-    case named(String)
 }
 
 extension AppModel {
     func autoplayBinding(for scope: OptionsScope) -> Binding<Bool> {
         switch scope {
         case .feed(let feed): autoplayBinding(for: feed)
-        case .named(let name): autoplayBinding(for: name)
         }
     }
 
     func randomizeBinding(for scope: OptionsScope) -> Binding<Bool> {
         switch scope {
         case .feed(let feed): randomizeBinding(for: feed)
-        case .named(let name): randomizeBinding(for: name)
         }
     }
 }
@@ -42,9 +38,8 @@ struct OptionsMenuActions {
     }
 }
 
-/// A Download-all entry: the action plus whether it can run right now. The two
-/// list screens compute eligibility differently (grid over the whole feed,
-/// episodes over one show), so they hand the resolved answer in.
+/// A Download-all entry: the action plus whether it can run right now. The
+/// screen computes eligibility, so it hands the resolved answer in.
 struct DownloadAllOption {
     var isEnabled: Bool
     var accessibilityLabel: String?
@@ -60,8 +55,8 @@ struct DownloadAllOption {
 // MARK: - Shared item blocks
 
 /// The items every options menu opens with. **Add or remove a shared item
-/// here, not in the call sites** — `ListOptionsMenu` and `SingleOptionsMenu`
-/// are the only two shapes, and both build from these blocks.
+/// here, not in the call sites** — `ListOptionsMenu` builds from these
+/// blocks.
 private struct OptionsMenuHeader: View {
     let scope: OptionsScope
     let actions: OptionsMenuActions
@@ -82,8 +77,7 @@ private struct OptionsMenuHeader: View {
                 Label("Randomize", systemImage: "shuffle")
             }
 
-            // A group setting, so only a group feed has one — the TV, Movies,
-            // episode and movie-detail menus share this header and get nothing.
+            // A group setting, so only a group feed has one.
             if case .feed(.group(let id)) = scope {
                 DisplayTitlesToggle(groups: model.groups, api: model.api, groupID: id)
                 RememberPositionToggle(groups: model.groups, api: model.api, groupID: id)
@@ -202,10 +196,10 @@ private struct OptionsMenuFooter<Extras: View>: View {
     }
 }
 
-// MARK: - The two shapes
+// MARK: - The menu
 
-/// Options menu for a screen showing a *list* of videos (the grid, a group, a
-/// show's episodes). Carries Download all; `extras` is for items only one list
+/// Options menu for a screen showing a *list* of videos (the grid, a group).
+/// Carries Download all; `extras` is for items only one list
 /// has, like the grid's cell-size steps.
 struct ListOptionsMenu<Extras: View>: View {
     let scope: OptionsScope
@@ -240,35 +234,6 @@ extension ListOptionsMenu where Extras == EmptyView {
                   downloadAll: downloadAll,
                   isBusy: isBusy,
                   extras: { EmptyView() })
-    }
-}
-
-/// Options menu for a screen showing a *single* video (movie detail). No
-/// Download all — there is nothing to download in bulk — and `extras` carries
-/// the per-item entries, like Delete cached.
-struct SingleOptionsMenu<Extras: View>: View {
-    let scope: OptionsScope
-    let actions: OptionsMenuActions
-    @ViewBuilder var extras: Extras
-
-    @State private var showingAbout = false
-
-    var body: some View {
-        Menu {
-            OptionsMenuHeader(scope: scope, actions: actions)
-            Divider()
-            OptionsMenuFooter(actions: actions, downloadAll: nil,
-                              about: { showingAbout = true }) { extras }
-        } label: {
-            OptionsMenuLabel()
-        }
-        .sheet(isPresented: $showingAbout) { AboutView() }
-    }
-}
-
-extension SingleOptionsMenu where Extras == EmptyView {
-    init(scope: OptionsScope, actions: OptionsMenuActions) {
-        self.init(scope: scope, actions: actions, extras: { EmptyView() })
     }
 }
 

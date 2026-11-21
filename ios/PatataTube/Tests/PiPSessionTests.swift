@@ -6,7 +6,7 @@ import Testing
 private func video(_ id: Int) -> Video {
     Video(
         id: id, url: "/videos/\(id)", title: "Video \(id)", platform: nil,
-        sourceKey: nil, previewUrl: nil, groupID: nil, plexKind: .movies,
+        sourceKey: nil, previewUrl: nil, groupID: nil,
         position: id, status: "done", errorMsg: nil,
         streamPath: "/videos/\(id)/stream"
     )
@@ -25,7 +25,7 @@ struct PiPSessionTests {
     ) -> AVPlayer {
         sut.prepare(
             player: player, positionObserver: nil, videos: [video(1), video(2)],
-            index: index, sleepMode: false, scope: "plex:movies", randomize: true,
+            index: index, sleepMode: false, scope: "group:3", randomize: true,
             onStart: onStart
         )
         return player
@@ -75,7 +75,7 @@ struct PiPSessionTests {
         #expect(request?.id == 2)
         #expect(request?.videos.count == 2)
         // The restored presentation needs both, and PlaybackQueue carries neither.
-        #expect(sut.restoreScope == "plex:movies")
+        #expect(sut.restoreScope == "group:3")
         #expect(sut.restoreRandomize)
         // Released by the restore itself, so the incoming player view's own
         // controller isn't dropped on top of a live one.

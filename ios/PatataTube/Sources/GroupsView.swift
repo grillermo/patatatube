@@ -2,8 +2,8 @@
 import SwiftUI
 import PatataTubeKit
 
-/// Root of the Videos tab: one poster card per group, sized like `ShowsView`'s
-/// show cards (2:3, adaptive 160pt columns). Tapping pushes that group's grid.
+/// Root of the app: one poster card per group (2:3, adaptive 160pt columns).
+/// Tapping pushes that group's grid.
 ///
 /// Cards issue no requests: art is the emoji the group mirror holds, and a
 /// group without one shows a placeholder tile.

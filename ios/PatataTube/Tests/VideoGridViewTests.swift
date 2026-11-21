@@ -38,7 +38,7 @@ struct VideoGridViewErrorBannerTests {
         ))
     }
 
-    @Test func unversionedDownloadResolvesUnversionedPlaybackIdentity() {
+    @Test func downloadResolvesOnlyUnversionedEntries() {
         let stored = Video(
             id: 42,
             url: "/videos/42",
@@ -47,30 +47,14 @@ struct VideoGridViewErrorBannerTests {
             sourceKey: nil,
             previewUrl: nil,
             groupID: nil,
-            plexKind: .movies,
             position: nil,
             status: "done",
             errorMsg: nil,
-            streamPath: "/videos/42/stream",
-            chosenVersionId: 3,
-            versions: [
-                VideoVersion(
-                    id: 3,
-                    label: "Chosen",
-                    status: "done",
-                    isChosen: true
-                )
-            ]
+            streamPath: "/videos/42/stream"
         )
 
-        let resolved = VideoGridView.downloadVideo(
-            id: stored.id,
-            versionID: nil,
-            videos: [stored]
-        )
-
-        #expect(resolved?.id == stored.id)
-        #expect(resolved?.chosenVersionId == nil)
-        #expect(resolved?.versions.allSatisfy { !$0.isChosen } == true)
+        #expect(VideoGridView.downloadVideo(id: 42, versionID: nil, videos: [stored])?.id == 42)
+        // An entry left over from a library version has nothing to resolve to.
+        #expect(VideoGridView.downloadVideo(id: 42, versionID: 3, videos: [stored]) == nil)
     }
 }

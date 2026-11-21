@@ -132,7 +132,7 @@ struct AudioMiniPlayerBar: View {
         ZStack {
             Rectangle().fill(.black)
             if video.previewUrl != nil {
-                AuthedImage(path: video.previewUrl, fill: !video.isPlexItem)
+                AuthedImage(path: video.previewUrl, fill: true)
                     .id(video.id)
             }
         }

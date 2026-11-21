@@ -15,7 +15,6 @@ private let sampleVideo = Video(
     sourceKey: nil,
     previewUrl: nil,
     groupID: nil,
-    plexKind: .movies,
     position: 1,
     status: "done",
     errorMsg: nil,

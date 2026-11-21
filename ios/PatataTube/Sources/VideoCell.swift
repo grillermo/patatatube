@@ -24,18 +24,12 @@ struct VideoCell: View {
     let onCancel: () -> Void
     let onDeleteCache: () -> Void
     let onSetGroup: (Int) -> Void
-    let onChooseVersion: (Int) -> Void
     let onDelete: () -> Void
-    /// nil hides "Send to Yoto de Elisa" (Plex items never get it).
+    /// nil hides "Send to Yoto de Elisa".
     var onSendToYoto: (() -> Void)? = nil
 
     @State private var confirmingDelete = false
     @State private var showingInfo = false
-
-    /// tv/movies previews are tall Plex posters; letterbox them instead of cropping.
-    private var isPoster: Bool {
-        video.isPlexItem
-    }
 
     /// Play-and-sleep only makes sense on playable children's videos.
     private var isChildrenVideo: Bool {
@@ -51,12 +45,10 @@ struct VideoCell: View {
                         // scaledToFill previews report their covering size as their
                         // frame, which can exceed the cell; sizing the ZStack from the
                         // black rectangle and clipping here keeps every cell 16:9.
-                        // tv/movies use tall Plex posters — letterbox (fit) them so
-                        // they aren't center-cropped; everything else fills the frame.
                         Rectangle().fill(.clear)
                             .overlay {
                                 AuthedImage(path: video.previewUrl, localFileURL: cachedPreviewURL,
-                                            fill: !isPoster,
+                                            fill: true,
                                             onNetworkLoad: onPreviewLoaded)
                             }
                             .clipped()
@@ -107,8 +99,7 @@ struct VideoCell: View {
                 DownloadButton(
                     identity: DownloadButtonIdentity(
                         videoID: video.id,
-                        versionID: video.chosenVersionId,
-                        audioLanguage: video.audioLang
+                        versionID: video.chosenVersionId
                     ),
                     currentCacheState: currentCacheState,
                     onDownload: onDownload,
@@ -116,30 +107,15 @@ struct VideoCell: View {
                     onDeleteCache: onDeleteCache
                 )
                 Spacer()
-                if video.versions.count > 1 {
-                    Picker("Version", selection: Binding(
-                        get: { video.chosenVersionId ?? video.versions.first?.id ?? 0 },
-                        set: { onChooseVersion($0) }
-                    )) {
-                        ForEach(video.versions) { version in
-                            Text(version.label ?? "Version \(version.id)")
-                                .tag(version.id)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                }
                 Menu {
                     Button("Info", systemImage: "info.circle") { showingInfo = true }
-                    if !video.isPlexItem {
-                        Menu("Categorize", systemImage: "folder") {
-                            ForEach(groups) { group in
-                                Button(group.label) { onSetGroup(group.id) }
-                            }
+                    Menu("Categorize", systemImage: "folder") {
+                        ForEach(groups) { group in
+                            Button(group.label) { onSetGroup(group.id) }
                         }
-                        if let onSendToYoto, video.status == "done" {
-                            Button("Send to Yoto de Elisa", systemImage: "headphones") { onSendToYoto() }
-                        }
+                    }
+                    if let onSendToYoto, video.status == "done" {
+                        Button("Send to Yoto de Elisa", systemImage: "headphones") { onSendToYoto() }
                     }
                     Divider()
                     Button("Delete video", role: .destructive) { confirmingDelete = true }
@@ -201,45 +177,17 @@ struct VideoInfoView: View {
                     // Only YouTube downloads carry one, and `row` hides an
                     // empty value, so uploads simply show no Channel line.
                     row("Channel", video.channel)
-                    row("Source", video.source)
                     row("Source key", video.sourceKey)
-                    row("Source filename", video.sourceFilename)
                     row("Group", groups.first { $0.id == video.groupID }?.label ?? "Unsorted")
                     row("Position", video.position.map { "\($0)" })
                     row("Status", video.status)
                     row("Error", video.errorMsg)
                 }
 
-                Section("Show") {
-                    row("Show title", video.showTitle)
-                    row("Season", video.season.map { "\($0)" })
-                    row("Episode", video.episode.map { "\($0)" })
-                    row("Summary", video.summary)
-                }
-
                 Section("Playback") {
                     row("Stream path", video.streamPath)
                     row("HLS path", video.hlsPath)
                     row("Preview URL", video.previewUrl)
-                    row("Show preview URL", video.showPreviewUrl)
-                    row("Chosen version", video.chosenVersionId.map { "\($0)" })
-                }
-
-                if !video.versions.isEmpty {
-                    Section("Versions") {
-                        ForEach(video.versions) { v in
-                            row(v.label ?? "Version \(v.id)",
-                                "\(v.status)\(v.isChosen ? " (chosen)" : "")")
-                        }
-                    }
-                }
-
-                if !video.subtitleTracks.isEmpty {
-                    Section("Subtitles") {
-                        ForEach(video.subtitleTracks, id: \.language) { t in
-                            row(t.language, subtitleDetail(t))
-                        }
-                    }
                 }
 
                 Section("Local storage") {
@@ -302,13 +250,6 @@ struct VideoInfoView: View {
         case .notCached: return "Not cached"
         case .downloading(let p): return "Downloading (\(Int(p * 100))%)"
         }
-    }
-
-    private func subtitleDetail(_ t: SubtitleTrack) -> String {
-        var parts = [t.name]
-        if t.default { parts.append("default") }
-        if t.forced { parts.append("forced") }
-        return parts.joined(separator: ", ")
     }
 
     private func fileSize(_ url: URL?) -> String? {
