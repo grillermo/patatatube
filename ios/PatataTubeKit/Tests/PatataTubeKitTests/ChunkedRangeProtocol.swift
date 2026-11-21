@@ -24,11 +24,15 @@ final class ChunkedRangeProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var plans: [String: Plan] = [:]
     nonisolated(unsafe) private static var rangesByPath: [String: [String]] = [:]
+    nonisolated(unsafe) private static var stoppedByPath: [String: [String]] = [:]
+    nonisolated(unsafe) private static var deliveredByPath: [String: Int] = [:]
 
     static func stub(path: String, plan: Plan) {
         lock.withLock {
             plans[path] = plan
             rangesByPath[path] = []
+            stoppedByPath[path] = []
+            deliveredByPath[path] = 0
         }
     }
 
@@ -38,10 +42,22 @@ final class ChunkedRangeProtocol: URLProtocol {
         lock.withLock { rangesByPath[path] ?? [] }
     }
 
+    /// Range headers whose response the client cancelled before it ended.
+    static func stoppedRanges(path: String) -> [String] {
+        lock.withLock { stoppedByPath[path] ?? [] }
+    }
+
+    /// Body bytes handed to clients for `path`, probes (`bytes=0-0`) excluded.
+    static func deliveredByteCount(path: String) -> Int {
+        lock.withLock { deliveredByPath[path] ?? 0 }
+    }
+
     static func reset(path: String) {
         lock.withLock {
             plans[path] = nil
             rangesByPath[path] = nil
+            stoppedByPath[path] = nil
+            deliveredByPath[path] = nil
         }
     }
 
@@ -100,11 +116,21 @@ final class ChunkedRangeProtocol: URLProtocol {
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
 
+        DispatchQueue.global().async { [self] in deliver(body: body, header: header, path: path, plan: plan) }
+    }
+
+    private func deliver(body: Data, header: String, path: String, plan: Plan) {
         var offset = 0
         while offset < body.count {
-            if cancelLock.withLock({ isCancelled }) { return }
+            if cancelLock.withLock({ isCancelled }) {
+                Self.lock.withLock { Self.stoppedByPath[path, default: []].append(header) }
+                return
+            }
             let end = min(offset + plan.chunkSize, body.count)
             client?.urlProtocol(self, didLoad: body.subdata(in: offset..<end))
+            if header != "bytes=0-0" {
+                Self.lock.withLock { Self.deliveredByPath[path, default: 0] += end - offset }
+            }
             offset = end
             // Client callbacks reach the session's delegate queue
             // asynchronously. Without a pause this loop outruns that queue and
