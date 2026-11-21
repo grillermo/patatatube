@@ -31,20 +31,13 @@ def test_serialize_video_full_shape():
         "error_msg": None,
         "stream_path": "/videos/7/stream",
         "channel": None,
-        "hls_path": "/videos/7/hls/master.m3u8",
     }
 
 
-def test_done_download_row_exposes_hls_path():
-    row = {"id": 4, "url": "https://x.com/s/1", "status": "done"}
-    data = serialize_video(row)
-    assert data["hls_path"] == "/videos/4/hls/master.m3u8"
-
-
-def test_unready_row_omits_hls_path():
-    row = {"id": 5, "url": "https://x.com/s/1", "status": "queued"}
-    data = serialize_video(row)
-    assert "hls_path" not in data
+def test_serialized_video_never_has_hls_path():
+    for status in ("done", "queued", "downloading"):
+        data = serialize_video({"id": 4, "url": "https://x.com/s/1", "status": status})
+        assert "hls_path" not in data
 
 
 def test_serialize_video_emits_group_id():
@@ -180,4 +173,4 @@ def test_serialized_video_has_no_library_fields():
                 "audio_lang", "subtitle_lang", "source_filename"):
         assert key not in data
     assert data["unwatched"] is True
-    assert data["hls_path"] == "/videos/1/hls/master.m3u8"
+    assert "hls_path" not in data
