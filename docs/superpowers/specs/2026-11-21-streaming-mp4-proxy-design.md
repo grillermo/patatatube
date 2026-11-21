@@ -65,6 +65,8 @@ The remove-HLS branch (`remove-hls`, 2.9.0, not deployed) keeps the same
   AVAssetResourceLoader was offered and declined. (Owner, 2026-11-21.)
 - **Architecture (section 1) approved** as written below. (Owner, 2026-11-21.)
 - **Data flow (section 2) approved** as written below. (Owner, 2026-11-21.)
+- **Errors and concurrency (section 3) approved** as written below. (Owner,
+  2026-11-21.)
 
 ## Architecture
 
@@ -123,3 +125,33 @@ next request is served from the mp4.
 ETag and size. Every fetcher checks its 206's ETag and `Content-Range`. A
 mismatch resets the entry: open playback responses end (AVPlayer errors and
 retries) and downloads restart.
+
+## Errors and concurrency
+
+- **Download gate.** The max-concurrent-downloads gate counts download jobs
+  only. Playback fetchers never wait for a slot. A paused download keeps its
+  slot, as today.
+- **Transient errors, downloads.** A download fetcher retries in place up to 3
+  times from its last commit, re-reading `baseURL` each time (so a LAN→remote
+  switch is picked up). Then the job fails; the entry stays pinned with its
+  bytes, and the next tap or `resumeInterrupted` continues from what is
+  committed.
+- **Transient errors, playback.** A playback fetcher retries twice, then the
+  response ends early; AVPlayer reports an error and its retry (or the user's)
+  resumes from the store.
+- **Offline.** Committed bytes still play. Playback fetchers use a session with
+  `waitsForConnectivity = false` and a 10 s timeout, so a hole errors instead
+  of hanging. Downloads keep today's `waitsForConnectivity = true`.
+- **Crash or kill.** Data is written and synced before `entry.json` records it;
+  the manifest is rewritten at most every 2 s or 1 MB, as today. A crash loses
+  only bytes the manifest never recorded, which are fetched again.
+- **Disk full.** Evict the oldest unpinned entry and retry once, as today. If it
+  still fails, a playback reader keeps streaming to AVPlayer without storing
+  (pass-through) and a download fails with the error.
+- **Cancel.** Stops the job and unpins the entry; its bytes are deleted once no
+  open player response is reading them, so cancelling mid-watch doesn't cut
+  playback.
+- **Delete a downloaded video** (`removeCached`): removes the mp4 and any entry.
+- **Backgrounding.** Unchanged: foreground sessions stop when the app is
+  suspended, `resumeInterrupted` restarts pinned, unpaused jobs on activation,
+  and `ensureRunning` restarts the listener.
