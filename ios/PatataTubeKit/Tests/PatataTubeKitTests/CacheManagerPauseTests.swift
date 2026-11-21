@@ -18,7 +18,6 @@ struct CacheManagerPauseTests {
             videoID: videoID,
             versionID: versionID,
             remoteURL: URL(string: "https://example.com/\(videoID).mp4")!,
-            isHLS: false,
             streamCount: 2,
             previewURL: nil,
             showPosterKey: nil,
@@ -164,7 +163,7 @@ extension CacheManagerPauseTests {
         try await Task.sleep(for: .milliseconds(200))
 
         manager.pause(
-            id: 7, versionId: nil, remote: remote, isHLS: false, streamCount: 1,
+            id: 7, versionId: nil, remote: remote, streamCount: 1,
             preview: nil, showPosterKey: nil, showPoster: nil
         )
         _ = try? await download.value
@@ -225,7 +224,7 @@ extension CacheManagerPauseTests {
         try await Task.sleep(for: .milliseconds(300))
 
         manager.pause(
-            id: 7, versionId: nil, remote: remote, isHLS: false, streamCount: 2,
+            id: 7, versionId: nil, remote: remote, streamCount: 2,
             preview: nil, showPosterKey: nil, showPoster: nil
         )
         _ = try? await download.value
@@ -296,7 +295,7 @@ extension CacheManagerPauseTests {
         try await Task.sleep(for: .milliseconds(200))
 
         manager.pause(
-            id: 7, versionId: nil, remote: remote, isHLS: false, streamCount: 1,
+            id: 7, versionId: nil, remote: remote, streamCount: 1,
             preview: nil, showPosterKey: nil, showPoster: nil
         )
         _ = try? await download.value
@@ -346,7 +345,7 @@ extension CacheManagerPauseTests {
         try await Task.sleep(for: .milliseconds(200))
 
         manager.pause(
-            id: 7, versionId: nil, remote: remote, isHLS: false, streamCount: 1,
+            id: 7, versionId: nil, remote: remote, streamCount: 1,
             preview: nil, showPosterKey: nil, showPoster: nil
         )
         _ = try? await download.value
@@ -519,7 +518,7 @@ extension CacheManagerPauseTests {
         let download = Task { try await manager.download(id: 91, from: remote, streamCount: 1) }
         #expect(await awaitPartByteCount(root: root, cacheKey: "91", atLeast: 262_144))
         manager.pause(
-            id: 91, versionId: nil, remote: remote, isHLS: false,
+            id: 91, versionId: nil, remote: remote,
             streamCount: 1, preview: nil, showPosterKey: nil, showPoster: nil
         )
         cut.signal()

@@ -28,7 +28,6 @@ final class CacheStatisticsCollectorTests: XCTestCase {
         let tmp = makeRoot()
 
         try write(videos.appendingPathComponent("1.mp4"))
-        try write(videos.appendingPathComponent("hls-2/master.m3u8"))
         try write(videos.appendingPathComponent("3.preview.abc.jpg"))
         try write(videos.appendingPathComponent("poster.def.png"))
         try write(videos.appendingPathComponent(".downloads/key1/manifest.json"))
@@ -37,7 +36,6 @@ final class CacheStatisticsCollectorTests: XCTestCase {
         try write(videos.appendingPathComponent("download-completions.json"))
         try write(videos.appendingPathComponent("mystery.dat"))
 
-        try write(stream.appendingPathComponent("hls/10/seg.m4s"))
         try write(stream.appendingPathComponent("mp4/3:9/data.bin"))
 
         try write(lists.appendingPathComponent("all.json"))
@@ -68,15 +66,11 @@ final class CacheStatisticsCollectorTests: XCTestCase {
         let stats = await collector.collect()
         let unit = Int64(blockSize)
 
-        XCTAssertEqual(stat(stats, "proxy.hls").byteCount, unit)
-        XCTAssertEqual(stat(stats, "proxy.hls").itemCount, 1)
         XCTAssertEqual(stat(stats, "proxy.mp4").byteCount, unit)
         XCTAssertEqual(stat(stats, "proxy.mp4").itemCount, 1)
 
         XCTAssertEqual(stat(stats, "videos.mp4").byteCount, unit)
         XCTAssertEqual(stat(stats, "videos.mp4").itemCount, 1)
-        XCTAssertEqual(stat(stats, "videos.hls").byteCount, unit)
-        XCTAssertEqual(stat(stats, "videos.hls").itemCount, 1)
         XCTAssertEqual(stat(stats, "videos.covers").byteCount, unit * 2)
         XCTAssertEqual(stat(stats, "videos.covers").itemCount, 2)
         XCTAssertEqual(stat(stats, "videos.partial").byteCount, unit * 3)
@@ -163,11 +157,11 @@ final class CacheStatisticsCollectorTests: XCTestCase {
         XCTAssertEqual(proxyTotal.budgetBytes, StreamCache.defaultBudgetBytes)
         XCTAssertEqual(
             proxyTotal.byteCount,
-            stat(stats, "proxy.hls").byteCount + stat(stats, "proxy.mp4").byteCount
+            stat(stats, "proxy.mp4").byteCount
         )
         XCTAssertEqual(
             proxyTotal.itemCount,
-            stat(stats, "proxy.hls").itemCount + stat(stats, "proxy.mp4").itemCount
+            stat(stats, "proxy.mp4").itemCount
         )
     }
 }

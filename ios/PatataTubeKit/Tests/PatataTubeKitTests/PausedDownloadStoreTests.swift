@@ -14,7 +14,6 @@ struct PausedDownloadStoreTests {
             videoID: videoID,
             versionID: versionID,
             remoteURL: URL(string: "https://example.com/\(videoID).mp4")!,
-            isHLS: false,
             streamCount: 2,
             previewURL: nil,
             showPosterKey: nil,
@@ -37,13 +36,34 @@ struct PausedDownloadStoreTests {
         #expect(reopened.entry("7:2")?.streamCount == 2)
     }
 
+    @Test func dropsEntriesThatPausedAnHLSDownload() throws {
+        let root = temporaryRoot()
+        var store = PausedDownloadStore(root: root)
+        store.insert(sample(videoID: 8, versionID: nil))
+        // Rewrite the file as 2.8 left it: a second entry paused on a playlist.
+        let file = root.appendingPathComponent("paused-downloads.json")
+        var raw = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: file)) as! [[String: Any]]
+        var hls = raw[0]
+        hls["videoID"] = 7
+        hls["remoteURL"] = "https://h/videos/7/hls/master.m3u8"
+        hls["isHLS"] = true
+        raw.append(hls)
+        try JSONSerialization.data(withJSONObject: raw).write(to: file)
+
+        let reopened = PausedDownloadStore(root: root)
+
+        #expect(reopened.entries.map(\.videoID) == [8])
+        #expect(PausedDownloadStore.droppedHLSVideoIDs(root: root) == [7])
+    }
+
     @Test func insertReplacesTheEntryForTheSameKey() {
         var store = PausedDownloadStore(root: temporaryRoot())
         store.insert(sample(videoID: 7))
         var updated = sample(videoID: 7)
         updated = PausedDownload(
             videoID: 7, versionID: nil,
-            remoteURL: updated.remoteURL, isHLS: false, streamCount: 2,
+            remoteURL: updated.remoteURL, streamCount: 2,
             previewURL: nil, showPosterKey: nil, showPosterURL: nil,
             progress: 0.9, transferredByteCount: 900, totalByteCount: 1_000
         )

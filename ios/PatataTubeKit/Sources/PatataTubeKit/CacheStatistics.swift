@@ -22,7 +22,6 @@ public struct CacheStat: Sendable, Identifiable, Equatable {
 /// filename conventions `CacheManager` uses to find/clear its own files.
 enum CacheEntryKind: Equatable {
     case mp4
-    case hls
     case cover
     case partial
     case history
@@ -32,7 +31,6 @@ enum CacheEntryKind: Equatable {
         if name == "download-completions.json" { return .history }
         if name == ".downloads" { return .partial }
         if name.hasSuffix(".resume") { return .partial }
-        if name.hasPrefix("hls-") { return .hls }
         if name.hasSuffix(".mp4") { return .mp4 }
         if name.contains(".preview.") || name.hasPrefix("poster.") { return .cover }
         return .other
@@ -53,7 +51,6 @@ public actor CacheStatisticsCollector {
 
     private struct VideoRows {
         var mp4 = Accumulator()
-        var hls = Accumulator()
         var covers = Accumulator()
         var partial = Accumulator()
         var history = Accumulator()
@@ -84,7 +81,6 @@ public actor CacheStatisticsCollector {
     }
 
     public func collect() -> [CacheStat] {
-        let proxyHLS = scanProxyRoot(streamRoot.appendingPathComponent("hls", isDirectory: true))
         let proxyMP4 = scanProxyRoot(streamRoot.appendingPathComponent("mp4", isDirectory: true))
         let videos = scanVideosRoot()
         let lists = scanFlatDirectory(videoListRoot, matchingExtension: "json")
@@ -92,20 +88,12 @@ public actor CacheStatisticsCollector {
 
         var stats: [CacheStat] = [
             CacheStat(
-                id: "proxy.hls", label: "Proxy — HLS segments",
-                byteCount: proxyHLS.byteCount, itemCount: proxyHLS.itemCount, budgetBytes: nil
-            ),
-            CacheStat(
                 id: "proxy.mp4", label: "Proxy — MP4 ranges",
                 byteCount: proxyMP4.byteCount, itemCount: proxyMP4.itemCount, budgetBytes: nil
             ),
             CacheStat(
                 id: "videos.mp4", label: "Offline videos",
                 byteCount: videos.mp4.byteCount, itemCount: videos.mp4.itemCount, budgetBytes: nil
-            ),
-            CacheStat(
-                id: "videos.hls", label: "Offline HLS packages",
-                byteCount: videos.hls.byteCount, itemCount: videos.hls.itemCount, budgetBytes: nil
             ),
             CacheStat(
                 id: "videos.covers", label: "Covers",
@@ -141,8 +129,8 @@ public actor CacheStatisticsCollector {
         stats.insert(
             CacheStat(
                 id: "proxy.total", label: "Proxy cache total",
-                byteCount: proxyHLS.byteCount + proxyMP4.byteCount,
-                itemCount: proxyHLS.itemCount + proxyMP4.itemCount,
+                byteCount: proxyMP4.byteCount,
+                itemCount: proxyMP4.itemCount,
                 budgetBytes: proxyBudgetBytes
             ),
             at: 2
@@ -180,9 +168,6 @@ public actor CacheStatisticsCollector {
             case .mp4:
                 rows.mp4.byteCount += bytes
                 rows.mp4.itemCount += 1
-            case .hls:
-                rows.hls.byteCount += bytes
-                rows.hls.itemCount += 1
             case .cover:
                 rows.covers.byteCount += bytes
                 rows.covers.itemCount += 1

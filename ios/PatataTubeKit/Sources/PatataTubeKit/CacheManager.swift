@@ -170,24 +170,10 @@ public final class CacheManager:
     private var session: URLSession!
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
-    // Backoff between HLS asset retries. A stored hook so tests can drive the
-    // retry loop without waiting real seconds.
-    var hlsRetrySleep: @Sendable (Duration) async throws -> Void = {
-        try await Task.sleep(for: $0)
-    }
-    /// How many 409s a cold `master.m3u8` may answer with before the download
-    /// fails. Unlike a transport error, every 409 re-enqueues an hls job server
-    /// side, so this loop is bounded: 120 polls at the 16s backoff cap is ~30
-    /// minutes, past any packaging run this app queues.
-    var maxHLSPackagingPolls = 120
     private let lock = NSLock()
     private let cancellationFence: any CacheManagerCancellationFencing
     let concurrencyGate: any DownloadConcurrencyGating
-    private let beforeExternalPromotion: @Sendable () async -> Void
     private var inFlight = InFlightActivities()
-    private var externalActivityKeys: Set<String> = []
-    private var externalCancellationRequests: Set<String> = []
-    private var externalTasks: [String: Task<Void, Error>] = [:]
     private var completionHistory: DownloadCompletionHistoryStore
     private var pausedStore: PausedDownloadStore
     /// In-memory mirror of `pausedStore`'s keys, read under `lock` on the hot
@@ -247,7 +233,7 @@ public final class CacheManager:
 
     /// Default session config for app use. `waitsForConnectivity` lets a retry
     /// started during an outage park inside URLSession instead of failing
-    /// instantly, so the HLS retry loop doesn't spin while offline.
+    /// instantly, so a retry doesn't spin while offline.
     public static func defaultConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.default
         configuration.waitsForConnectivity = true
@@ -277,15 +263,13 @@ public final class CacheManager:
             CacheManagerCancellationFence(),
         concurrencyGate: any DownloadConcurrencyGating =
             DownloadConcurrencyGate(limit: 3),
-        streamCache: (any StreamCacheSeeding)? = nil,
-        beforeExternalPromotion: @escaping @Sendable () async -> Void = {}
+        streamCache: (any StreamCacheSeeding)? = nil
     ) {
         self.fileManager = fileManager
         self.now = now
         self.cancellationFence = cancellationFence
         self.concurrencyGate = concurrencyGate
         self.streamCache = streamCache
-        self.beforeExternalPromotion = beforeExternalPromotion
         self.root = root ?? fileManager
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("videos")
@@ -331,151 +315,10 @@ public final class CacheManager:
         root.appendingPathComponent(filename(videoId: id, versionId: versionId))
     }
 
-    /// Directory containing a promoted offline HLS package.
-    public func offlineHLSDir(for id: Int, versionId: Int? = nil) -> URL {
-        let suffix = versionId.map { "_v\($0)" } ?? ""
-        return root.appendingPathComponent(
-            "hls-\(id)\(suffix)",
-            isDirectory: true
-        )
-    }
-
-    /// The offline package's master playlist, or nil when not downloaded.
-    public func offlineHLSMasterURL(
-        for id: Int,
-        versionId: Int? = nil
-    ) -> URL? {
-        let url = offlineHLSDir(for: id, versionId: versionId)
-            .appendingPathComponent("master.m3u8")
-        return fileManager.fileExists(atPath: url.path) ? url : nil
-    }
-
     /// Root permanent video store, suitable for StreamProxy's offline root.
     public var videosRoot: URL { root }
 
     var urlSession: URLSession { session }
-
-    var streamSegmentCache: SegmentCache? {
-        (streamCache as? StreamCache)?.segments
-    }
-
-    func waitBeforeExternalPromotion() async {
-        await beforeExternalPromotion()
-    }
-
-    @discardableResult
-    func beginExternalActivity(
-        key: String,
-        videoId: Int,
-        versionId: Int?,
-        totalUnits: Int64
-    ) -> Bool {
-        lock.withLock {
-            guard inFlight[key] == nil,
-                  !pausedKeys.contains(key),
-                  !externalActivityKeys.contains(key)
-            else { return false }
-            externalActivityKeys.insert(key)
-            externalCancellationRequests.remove(key)
-            inFlight[key] = DownloadActivityAccumulator(
-                videoID: videoId,
-                versionID: versionId,
-                totalByteCount: totalUnits
-            )
-            return true
-        }
-    }
-
-    /// Report an external transfer's progress.
-    ///
-    /// `completedUnits` is an **abstract** progress unit out of the `totalUnits`
-    /// given to `beginExternalActivity` — the offline-HLS packager counts
-    /// assets, in permille, because an HLS package's byte size isn't known
-    /// until it has been fetched. `transferredByteCount` is the real cumulative
-    /// bytes pulled off the network for this key. The two must stay separate:
-    /// feeding permille units to the speed meter capped a whole movie at 10 kB
-    /// and pinned the Downloads readout at "0.0 MB/s".
-    func updateExternalActivity(
-        key: String,
-        completedUnits: Int64,
-        transferredByteCount: Int64
-    ) {
-        lock.withLock {
-            externalProgressCallCount += 1
-            guard var accumulator = inFlight[key] else { return }
-            let totalUnits = accumulator.activity.totalByteCount ?? 0
-            let progress = totalUnits > 0
-                ? Double(completedUnits) / Double(totalUnits)
-                : 0
-            accumulator.record(
-                transferredByteCount: transferredByteCount,
-                progress: progress,
-                totalByteCount: totalUnits
-            )
-            inFlight[key] = accumulator
-        }
-    }
-
-    func endExternalActivity(key: String) {
-        lock.withLock {
-            inFlight[key] = nil
-            externalActivityKeys.remove(key)
-            externalCancellationRequests.remove(key)
-            externalTasks[key] = nil
-        }
-    }
-
-    func registerExternalTask(
-        key: String,
-        task: Task<Void, Error>
-    ) {
-        let shouldCancel = lock.withLock {
-            guard externalActivityKeys.contains(key) else { return true }
-            externalTasks[key] = task
-            return externalCancellationRequests.contains(key)
-        }
-        if shouldCancel {
-            task.cancel()
-        }
-    }
-
-    func cancelExternalActivity(key: String) {
-        let task = lock.withLock {
-            guard externalActivityKeys.contains(key) else {
-                return nil as Task<Void, Error>?
-            }
-            externalCancellationRequests.insert(key)
-            inFlight[key] = nil
-            return externalTasks[key]
-        }
-        task?.cancel()
-    }
-
-    func throwIfExternalActivityCancelled(key: String) throws {
-        if lock.withLock({
-            externalCancellationRequests.contains(key)
-        }) {
-            throw CancellationError()
-        }
-    }
-
-    func promoteExternalActivity(
-        key: String,
-        _ promotion: () throws -> Void
-    ) throws {
-        try lock.withLock {
-            guard externalActivityKeys.contains(key),
-                  !externalCancellationRequests.contains(key)
-            else {
-                throw CancellationError()
-            }
-            try promotion()
-            inFlight[key] = nil
-            externalActivityKeys.remove(key)
-            externalCancellationRequests.remove(key)
-            externalTasks[key] = nil
-        }
-    }
 
     /// Local file URL of a cached preview image, or nil if none is cached.
     ///
@@ -522,7 +365,6 @@ public final class CacheManager:
     public func state(for id: Int, versionId: Int? = nil) -> CacheState {
         let key = cacheKey(videoId: id, versionId: versionId)
         if fileManager.fileExists(atPath: localURL(for: id, versionId: versionId).path) { return .cached }
-        if offlineHLSMasterURL(for: id, versionId: versionId) != nil { return .cached }
         return lock.withLock {
             if let activity = inFlight[key]?.activity {
                 return .downloading(activity.progress)
@@ -552,15 +394,10 @@ public final class CacheManager:
         var stale: [String] = []
         var paused: [DownloadActivity] = []
         for entry in entries where !liveKeys.contains(entry.id) {
-            // Both shapes count as landed: a plain/segmented download leaves an
-            // mp4, an HLS download leaves a package — `state(for:)` treats
-            // either as `.cached`, and so must this.
+            // A finished mp4 means the pause raced a completion.
             let landed = fileManager.fileExists(
                 atPath: localURL(for: entry.videoID, versionId: entry.versionID).path
-            ) || offlineHLSMasterURL(
-                for: entry.videoID,
-                versionId: entry.versionID
-            ) != nil
+            )
             if landed {
                 stale.append(entry.id)
                 continue
@@ -598,7 +435,6 @@ public final class CacheManager:
             DevLog.event(.download, "byte counter read", {
                 var meta = inFlight.counterMeta
                 meta["seg_progress_calls"] = "\(segmentProgressCallCount)"
-                meta["ext_progress_calls"] = "\(externalProgressCallCount)"
                 meta["plain_progress_calls"] = "\(plainProgressCallCount)"
                 return meta
             }())
@@ -612,7 +448,6 @@ public final class CacheManager:
     /// two very different bugs, distinguished by comparing these against
     /// `InFlightActivities.updateWriteCount`.
     private var segmentProgressCallCount = 0
-    private var externalProgressCallCount = 0
     private var plainProgressCallCount = 0
 
     public func recentDownloads() -> [DownloadCompletion] {
@@ -700,36 +535,22 @@ public final class CacheManager:
         DevLog.event(.download, "resume", [
             "video_id": "\(id)",
             "version_id": versionId.map(String.init) ?? "-",
-            "hls": "\(entry.isHLS)",
             "progress": String(format: "%.3f", entry.progress),
         ])
         defer {
             // The permit was reserved for the paused entry; hand it back now
             // that the transfer has ended, however it ended.
             releasePausedPermit(for: key)
-            // The HLS path has no segments to consume the flag, and a segmented
-            // transfer that never reached `startIncompleteSegments` leaves it
-            // set. Either way it must not outlive this resume.
+            // A segmented transfer that never reached `startIncompleteSegments`
+            // leaves it set; it must not outlive this resume.
             _ = consumePauseTeardownTimeout(for: key)
         }
-        if entry.isHLS {
-            try await downloadHLS(
-                id: id, versionId: versionId,
-                masterURL: entry.remoteURL,
-                preview: entry.previewURL,
-                showPosterKey: entry.showPosterKey,
-                showPoster: entry.showPosterURL,
-                bearerToken: bearerToken,
-                acquiresPermit: false
-            )
-        } else {
-            try await performDownload(
-                id: id, versionId: versionId, from: entry.remoteURL,
-                preview: entry.previewURL,
-                showPosterKey: entry.showPosterKey, showPoster: entry.showPosterURL,
-                bearerToken: bearerToken, streamCount: entry.streamCount
-            )
-        }
+        try await performDownload(
+            id: id, versionId: versionId, from: entry.remoteURL,
+            preview: entry.previewURL,
+            showPosterKey: entry.showPosterKey, showPoster: entry.showPosterURL,
+            bearerToken: bearerToken, streamCount: entry.streamCount
+        )
     }
 
     /// Restarts downloads interrupted by app suspension. Call when the app
@@ -773,8 +594,7 @@ public final class CacheManager:
                       tasksByKey[key] == nil,
                       probeAttempts[key] == nil,
                       inFlight[key] == nil,
-                      !pausedKeys.contains(key),
-                      !externalActivityKeys.contains(key)
+                      !pausedKeys.contains(key)
                 else { return false }
                 segmentedAttempts[key] = attempt
                 inFlight[key] = activityAccumulator(
@@ -807,7 +627,6 @@ public final class CacheManager:
                 || probeAttempts[key] != nil
                 || inFlight[key] != nil
                 || pausedKeys.contains(key)
-                || externalActivityKeys.contains(key)
         }) {
                 continue
             }
@@ -818,8 +637,7 @@ public final class CacheManager:
                       segmentedAttempts[key] == nil,
                       probeAttempts[key] == nil,
                       inFlight[key] == nil,
-                      !pausedKeys.contains(key),
-                      !externalActivityKeys.contains(key)
+                      !pausedKeys.contains(key)
                 else { return false }
                 inFlight[key] = DownloadActivityAccumulator(
                     videoID: id,
@@ -976,14 +794,12 @@ public final class CacheManager:
     /// permit. Deliberately not `cancel(id:)`: that path exists to wipe resume
     /// state so a re-tap starts clean, which is the opposite of a pause.
     ///
-    /// The download parameters are taken as arguments and stored, because the
-    /// HLS path leaves nothing on disk to recover them from and a resume may
-    /// happen in a later process.
+    /// The download parameters are taken as arguments and stored, because a
+    /// resume may happen in a later process.
     public func pause(
         id: Int,
         versionId: Int? = nil,
         remote: URL,
-        isHLS: Bool,
         streamCount: Int,
         preview: URL? = nil,
         showPosterKey: String? = nil,
@@ -999,7 +815,6 @@ public final class CacheManager:
                 videoID: id,
                 versionID: versionId,
                 remoteURL: remote,
-                isHLS: isHLS,
                 streamCount: streamCount,
                 previewURL: preview,
                 showPosterKey: showPosterKey,
@@ -1015,7 +830,6 @@ public final class CacheManager:
             "video_id": "\(id)",
             "version_id": versionId.map(String.init) ?? "-",
             "progress": snapshot.map { String(format: "%.3f", $0.progress) } ?? "-",
-            "hls": "\(isHLS)",
         ])
         // Order matters: the probe is the earliest stage, and tearing it down
         // first means a probe that lands mid-pause can only turn into a
@@ -1023,7 +837,6 @@ public final class CacheManager:
         // inserted above, and every registration path checks it, so nothing new
         // can be registered for this key from here on either way.
         pauseProbe(key: key)
-        pauseExternal(key: key)
         pauseSegmented(key: key)
         pausePlain(key: key)
     }
@@ -1050,13 +863,6 @@ public final class CacheManager:
         guard let claim else { return }
         claim.task?.cancel()
         claim.continuation?.resume(throwing: DownloadPausedError())
-    }
-
-    /// HLS packaging keeps no partial state, so pausing it is a cancel; the
-    /// stored entry is what makes the row survive, and resuming restarts at 0.
-    private func pauseExternal(key: String) {
-        guard lock.withLock({ externalActivityKeys.contains(key) }) else { return }
-        cancelExternalActivity(key: key)
     }
 
     /// Cancels the segment tasks outright. Nothing has to be extracted from
@@ -1143,9 +949,7 @@ public final class CacheManager:
             releasePausedPermit(for: key)
             segmentedStore.remove(cacheKey: key)
             try? fileManager.removeItem(at: resumeURL(for: key))
-            try? fileManager.removeItem(at: offlineHLSDir(for: id, versionId: versionId))
         }
-        cancelExternalActivity(key: key)
         cancellationFence.beginCancellation(cacheKey: key)
         defer {
             cancellationFence.endCancellation(cacheKey: key)
@@ -1195,18 +999,14 @@ public final class CacheManager:
             "video_id": "\(id)", "version_id": versionId.map(String.init) ?? "-",
         ])
         try? fileManager.removeItem(at: localURL(for: id, versionId: versionId))
-        try? fileManager.removeItem(
-            at: offlineHLSDir(for: id, versionId: versionId)
-        )
     }
 
-    /// True when any cached MP4 or HLS package exists for this video.
+    /// True when any cached MP4 exists for this video.
     public func hasAnyCached(id: Int) -> Bool {
         !cachedVideoFilenames(id: id).isEmpty
-            || !offlineHLSDirectoryNames(id: id).isEmpty
     }
 
-    /// Deletes every cached MP4, HLS package, and resume file for this video.
+    /// Deletes every cached MP4 and resume file for this video.
     /// Preview images and show posters are kept — small, still useful offline.
     public func removeAllCached(id: Int) {
         DevLog.event(.cache, "removeAllCached", ["video_id": "\(id)"])
@@ -1214,10 +1014,7 @@ public final class CacheManager:
         let resumes = contents.filter {
             $0 == "\(id).resume" || ($0.hasPrefix("\(id):") && $0.hasSuffix(".resume"))
         }
-        for name in cachedVideoFilenames(id: id)
-            + resumes
-            + offlineHLSDirectoryNames(id: id)
-        {
+        for name in cachedVideoFilenames(id: id) + resumes {
             try? fileManager.removeItem(at: root.appendingPathComponent(name))
         }
         for manifest in segmentedStore.manifests() where manifest.videoId == id {
@@ -1226,7 +1023,7 @@ public final class CacheManager:
     }
 
     /// Clears every downloaded video: cancels in-flight downloads, removes all
-    /// MP4s + HLS packages + resume files + manifests + completion history. Preview
+    /// MP4s (and any 2.8-era `hls-*` folders) + resume files + manifests + completion history. Preview
     /// images and show posters are kept (see `clearAllCovers()`).
     public func clearAllVideos() {
         DevLog.event(.cache, "clearAllVideos", [
@@ -1269,14 +1066,6 @@ public final class CacheManager:
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         return contents.filter {
             $0 == "\(id).mp4" || ($0.hasPrefix("\(id).v") && $0.hasSuffix(".mp4"))
-        }
-    }
-
-    private func offlineHLSDirectoryNames(id: Int) -> [String] {
-        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
-        let base = "hls-\(id)"
-        return contents.filter {
-            $0 == base || $0.hasPrefix("\(base)_v")
         }
     }
 
@@ -1763,8 +1552,7 @@ public final class CacheManager:
             guard segmentedAttempts[key] == nil,
                   probeAttempts[key] == nil,
                   inFlight[key] == nil,
-                  !pausedKeys.contains(key),
-                  !externalActivityKeys.contains(key)
+                  !pausedKeys.contains(key)
             else { return false }
             probeAttempts[key] = probeAttempt
             inFlight[key] = DownloadActivityAccumulator(
@@ -1940,8 +1728,7 @@ public final class CacheManager:
                 guard segmentedAttempts[manifest.cacheKey] == nil,
                       probeAttempts[manifest.cacheKey] == nil,
                       inFlight[manifest.cacheKey] == nil,
-                      !pausedKeys.contains(manifest.cacheKey),
-                      !externalActivityKeys.contains(manifest.cacheKey)
+                      !pausedKeys.contains(manifest.cacheKey)
                 else { return false }
                 segmentedAttempts[manifest.cacheKey] = attempt
                 inFlight[manifest.cacheKey] = activityAccumulator(
@@ -2265,8 +2052,7 @@ public final class CacheManager:
             let task = session.downloadTask(withResumeData: resumeData)
             let registered = lock.withLock {
                 guard inFlight[key] == nil,
-                      !pausedKeys.contains(key),
-                      !externalActivityKeys.contains(key)
+                      !pausedKeys.contains(key)
                 else { return false }
                 inFlight[key] = DownloadActivityAccumulator(
                     videoID: videoId(from: key),

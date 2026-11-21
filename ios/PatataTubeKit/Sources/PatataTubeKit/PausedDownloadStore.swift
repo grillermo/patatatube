@@ -8,15 +8,11 @@ public struct DownloadPausedError: Error, Equatable, Sendable {
 }
 
 /// A download the user paused. Carries everything needed to restart the
-/// transfer, because the HLS path keeps no partial state on disk to recover
-/// its parameters from.
+/// transfer.
 public struct PausedDownload: Codable, Equatable, Identifiable, Sendable {
     public let videoID: Int
     public let versionID: Int?
     public let remoteURL: URL
-    /// True when `remoteURL` is an HLS master playlist and resuming must go
-    /// through `downloadHLS` rather than `download`.
-    public let isHLS: Bool
     public let streamCount: Int
     public let previewURL: URL?
     public let showPosterKey: String?
@@ -30,7 +26,6 @@ public struct PausedDownload: Codable, Equatable, Identifiable, Sendable {
         videoID: Int,
         versionID: Int?,
         remoteURL: URL,
-        isHLS: Bool,
         streamCount: Int,
         previewURL: URL?,
         showPosterKey: String?,
@@ -42,7 +37,6 @@ public struct PausedDownload: Codable, Equatable, Identifiable, Sendable {
         self.videoID = videoID
         self.versionID = versionID
         self.remoteURL = remoteURL
-        self.isHLS = isHLS
         self.streamCount = streamCount
         self.previewURL = previewURL
         self.showPosterKey = showPosterKey
@@ -70,9 +64,39 @@ struct PausedDownloadStore {
     init(root: URL, fileManager: FileManager = .default) {
         self.url = root.appendingPathComponent("paused-downloads.json")
         self.fileManager = fileManager
-        self.entries = (try? Data(contentsOf: url)).flatMap {
+        let decoded = (try? Data(contentsOf: url)).flatMap {
             try? JSONDecoder().decode([PausedDownload].self, from: $0)
         } ?? []
+        // A 2.8-era pause of an HLS download stored its master playlist URL.
+        // There is no HLS path any more: drop those entries and record their
+        // ids, which CacheManager.removeLegacyHLSPackages re-downloads.
+        let isHLS: (PausedDownload) -> Bool = { $0.remoteURL.pathExtension == "m3u8" }
+        self.entries = decoded.filter { !isHLS($0) }
+        let dropped = decoded.filter(isHLS).map(\.videoID)
+        if !dropped.isEmpty {
+            Self.recordDroppedHLS(dropped, root: root)
+            persist()
+        }
+    }
+
+    private static func droppedURL(root: URL) -> URL {
+        root.appendingPathComponent("paused-hls-dropped.json")
+    }
+
+    private static func recordDroppedHLS(_ ids: [Int], root: URL) {
+        let merged = Set(droppedHLSVideoIDs(root: root)).union(ids)
+        guard let data = try? JSONEncoder().encode(merged.sorted()) else { return }
+        try? data.write(to: droppedURL(root: root), options: .atomic)
+    }
+
+    /// Video ids whose paused HLS download was dropped at load, ascending.
+    static func droppedHLSVideoIDs(root: URL) -> [Int] {
+        (try? Data(contentsOf: droppedURL(root: root)))
+            .flatMap { try? JSONDecoder().decode([Int].self, from: $0) } ?? []
+    }
+
+    static func clearDroppedHLS(root: URL) {
+        try? FileManager.default.removeItem(at: droppedURL(root: root))
     }
 
     func contains(_ key: String) -> Bool {

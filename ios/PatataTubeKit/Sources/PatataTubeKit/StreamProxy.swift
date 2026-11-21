@@ -12,7 +12,6 @@ public final class StreamProxy: @unchecked Sendable {
     private let cache: StreamCache
     private let credentials: CredentialStore
     private let session: URLSession
-    private let offlineRoot: URL?
     private let lock = NSLock()
     private var _port: UInt16?
     private var serverTask: Task<Void, Never>?
@@ -26,11 +25,6 @@ public final class StreamProxy: @unchecked Sendable {
         configuration.timeoutIntervalForRequest = 2
         return URLSession(configuration: configuration)
     }()
-    /// Video/version scope to its latest fetched media-playlist hash.
-    private var currentHash: [PlaylistScope: String] = [:]
-    /// Playlists fetched before `video.m3u8` establishes their package hash.
-    private var pendingPlaylists: [PlaylistScope: [String: Data]] = [:]
-    private let singleFlight = SingleFlight<Data>()
     private let probeSingleFlight = SingleFlight<DownloadProbe>()
 
     public private(set) var port: UInt16? {
@@ -41,13 +35,11 @@ public final class StreamProxy: @unchecked Sendable {
     public init(
         cache: StreamCache,
         credentials: CredentialStore,
-        session: URLSession = .shared,
-        offlineRoot: URL? = nil
+        session: URLSession = .shared
     ) {
         self.cache = cache
         self.credentials = credentials
         self.session = session
-        self.offlineRoot = offlineRoot
     }
 
     public func start() async {
@@ -61,16 +53,8 @@ public final class StreamProxy: @unchecked Sendable {
             return
         }
         let server = HTTPServer(address: address)
-        await server.appendRoute(HTTPRoute("GET /\(secret)/hls/:id/:v/*")) { [weak self] request in
-            await self?.traced("hls", request) { await self?.handleHLS(request) }
-                ?? HTTPResponse(statusCode: .notFound)
-        }
         await server.appendRoute(HTTPRoute("GET /\(secret)/mp4/:id/:v")) { [weak self] request in
             await self?.traced("mp4", request) { await self?.handleMP4(request) }
-                ?? HTTPResponse(statusCode: .notFound)
-        }
-        await server.appendRoute(HTTPRoute("GET /\(secret)/offline/:id/:v/*")) { [weak self] request in
-            await self?.traced("offline", request) { await self?.handleOffline(request) }
                 ?? HTTPResponse(statusCode: .notFound)
         }
         // Untraced: `ensureRunning` hits this before every play, and those
@@ -178,21 +162,13 @@ public final class StreamProxy: @unchecked Sendable {
 
     // MARK: - Public URL builders
 
-    public func hlsURL(videoId: Int, versionId: Int?) -> URL? {
-        localURL(kind: "hls", videoId: videoId, versionId: versionId, suffix: "/master.m3u8")
-    }
-
     public func mp4URL(videoId: Int, versionId: Int?) -> URL? {
         localURL(kind: "mp4", videoId: videoId, versionId: versionId, suffix: "")
     }
 
-    public func offlineHLSURL(videoId: Int, versionId: Int?) -> URL? {
-        localURL(kind: "offline", videoId: videoId, versionId: versionId, suffix: "/master.m3u8")
-    }
-
     private func localURL(kind: String, videoId: Int, versionId: Int?, suffix: String) -> URL? {
         guard let port else {
-            // Every proxied URL — including the disk-only `offline` route — dies
+            // Every proxied URL dies
             // with the proxy. This is the moment a downloaded video loses its
             // local path, so it must not be silent.
             DevLog.event(.proxy, "proxied URL unavailable — proxy not listening", [
@@ -211,34 +187,6 @@ public final class StreamProxy: @unchecked Sendable {
     private struct RouteParams {
         let videoId: Int
         let versionId: Int?
-        let asset: String
-    }
-
-    private struct PlaylistScope: Hashable {
-        let videoId: Int
-        let versionId: Int?
-    }
-
-    private func params(of request: HTTPRequest) -> RouteParams? {
-        guard let idText = request.routeParameters["id"],
-              let videoId = Int(idText),
-              let vText = request.routeParameters["v"],
-              let version = Int(vText)
-        else {
-            return nil
-        }
-        let marker = "/\(idText)/\(vText)/"
-        let asset: String
-        if let range = request.path.range(of: marker) {
-            asset = String(request.path[range.upperBound...]).removingPercentEncoding ?? ""
-        } else {
-            asset = ""
-        }
-        return RouteParams(
-            videoId: videoId,
-            versionId: version == 0 ? nil : version,
-            asset: asset
-        )
     }
 
     private func mp4Params(of request: HTTPRequest) -> RouteParams? {
@@ -251,8 +199,7 @@ public final class StreamProxy: @unchecked Sendable {
         }
         return RouteParams(
             videoId: videoId,
-            versionId: version == 0 ? nil : version,
-            asset: ""
+            versionId: version == 0 ? nil : version
         )
     }
 
@@ -283,286 +230,9 @@ public final class StreamProxy: @unchecked Sendable {
         return request
     }
 
-    private func contentType(for asset: String) -> String {
-        switch (asset as NSString).pathExtension.lowercased() {
-        case "m3u8": "application/vnd.apple.mpegurl"
-        case "vtt": "text/vtt"
-        case "m4s": "video/iso.segment"
-        case "mp4": "video/mp4"
-        default: "application/octet-stream"
-        }
-    }
-
     private func isSuccessful(_ response: URLResponse) -> Bool {
         guard let response = response as? HTTPURLResponse else { return false }
         return (200..<300).contains(response.statusCode)
-    }
-
-    // MARK: - HLS
-
-    private func handleHLS(_ request: HTTPRequest) async -> HTTPResponse {
-        guard let params = params(of: request),
-              !params.asset.isEmpty,
-              !params.asset.hasPrefix("/"),
-              !params.asset.contains("..")
-        else {
-            return HTTPResponse(statusCode: .notFound)
-        }
-        let headers: HTTPHeaders = [.contentType: contentType(for: params.asset)]
-        if params.asset.hasSuffix(".m3u8") {
-            return await servePlaylist(params, headers: headers)
-        }
-        return await serveHLSAsset(params, headers: headers)
-    }
-
-    private func servePlaylist(
-        _ params: RouteParams,
-        headers: HTTPHeaders
-    ) async -> HTTPResponse {
-        let scope = PlaylistScope(
-            videoId: params.videoId,
-            versionId: params.versionId
-        )
-        guard let url = upstreamURL(
-            path: "videos/\(params.videoId)/hls/\(params.asset)",
-            versionId: params.versionId
-        ) else {
-            return HTTPResponse(statusCode: .badGateway)
-        }
-
-        do {
-            let (data, response) = try await session.data(for: upstreamRequest(url: url))
-            guard isSuccessful(response) else {
-                throw APIError.badStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
-            }
-            var pending: [String: Data] = [:]
-            let hash: String?
-            if params.asset == "video.m3u8" {
-                let packageHash = SegmentCache.packageHash(forPlaylist: data)
-                pending = lock.withLock {
-                    currentHash[scope] = packageHash
-                    return pendingPlaylists.removeValue(forKey: scope) ?? [:]
-                }
-                await cache.segments.dropOtherPackages(
-                    videoId: params.videoId,
-                    versionId: params.versionId,
-                    keeping: packageHash
-                )
-                hash = packageHash
-            } else {
-                hash = lock.withLock {
-                    if let hash = currentHash[scope] {
-                        return hash
-                    }
-                    pendingPlaylists[scope, default: [:]][params.asset] = data
-                    return nil
-                }
-            }
-            if let hash {
-                for (asset, pendingData) in pending {
-                    await storePlaylist(
-                        videoId: params.videoId,
-                        versionId: params.versionId,
-                        hash: hash,
-                        asset: asset,
-                        data: pendingData
-                    )
-                }
-                await storePlaylist(
-                    videoId: params.videoId,
-                    versionId: params.versionId,
-                    hash: hash,
-                    asset: params.asset,
-                    data: data
-                )
-            }
-            return HTTPResponse(statusCode: .ok, headers: headers, body: data)
-        } catch {
-            if let hash = lock.withLock({ currentHash[scope] }),
-                let cached = await cache.segments.cachedData(
-                    videoId: params.videoId,
-                    versionId: params.versionId,
-                    hash: hash,
-                    asset: params.asset
-                ) {
-                cache.touchAndEnforce(
-                    entryDir: cache.segments.videoDir(videoId: params.videoId)
-                )
-                DevLog.event(.proxy, "playlist upstream failed, served from cache", [
-                    "video_id": "\(params.videoId)", "asset": params.asset,
-                    "err": "\(error)",
-                ])
-                return HTTPResponse(statusCode: .ok, headers: headers, body: cached)
-            }
-            DevLog.event(.proxy, "playlist unavailable -> 502", [
-                "video_id": "\(params.videoId)", "asset": params.asset,
-                "err": "\(error)",
-            ])
-            return HTTPResponse(statusCode: .badGateway)
-        }
-    }
-
-    private func storePlaylist(
-        videoId: Int,
-        versionId: Int?,
-        hash: String,
-        asset: String,
-        data: Data
-    ) async {
-        await storeHLSAssetWithRecovery(
-            videoId: videoId,
-            versionId: versionId,
-            hash: hash,
-            asset: asset,
-            data: data
-        )
-    }
-
-    private func storeHLSAssetWithRecovery(
-        videoId: Int,
-        versionId: Int?,
-        hash: String,
-        asset: String,
-        data: Data
-    ) async {
-        let entry = cache.segments.videoDir(videoId: videoId)
-        do {
-            try await cache.segments.store(
-                videoId: videoId,
-                versionId: versionId,
-                hash: hash,
-                asset: asset,
-                data: data
-            )
-            cache.touchAndEnforce(entryDir: entry)
-        } catch {
-            // Storage failed mid-playback and we are about to evict to make
-            // room. Eviction during playback is a leading suspect for the
-            // intermittent failures, so both the entry and the retry outcome go
-            // in the log.
-            DevLog.event(.cache, "HLS store failed, evicting and retrying", [
-                "video_id": "\(videoId)", "asset": asset, "err": "\(error)",
-            ])
-            await cache.evictForStorageFailure(failedEntry: entry)
-            do {
-                try await cache.segments.store(
-                    videoId: videoId,
-                    versionId: versionId,
-                    hash: hash,
-                    asset: asset,
-                    data: data
-                )
-                cache.touchAndEnforce(entryDir: entry)
-            } catch {
-                // Playback remains pass-through after one bounded retry.
-                DevLog.event(.cache, "HLS store retry failed, staying pass-through", [
-                    "video_id": "\(videoId)", "asset": asset, "err": "\(error)",
-                ])
-            }
-        }
-    }
-
-    private func serveHLSAsset(
-        _ params: RouteParams,
-        headers: HTTPHeaders
-    ) async -> HTTPResponse {
-        let scope = PlaylistScope(
-            videoId: params.videoId,
-            versionId: params.versionId
-        )
-        var hash = lock.withLock { currentHash[scope] }
-        if hash == nil {
-            _ = await servePlaylist(
-                RouteParams(
-                    videoId: params.videoId,
-                    versionId: params.versionId,
-                    asset: "video.m3u8"
-                ),
-                headers: [:]
-            )
-            hash = lock.withLock { currentHash[scope] }
-        }
-        guard let hash else {
-            return HTTPResponse(statusCode: .badGateway)
-        }
-
-        if let cached = await cache.segments.cachedData(
-            videoId: params.videoId,
-            versionId: params.versionId,
-            hash: hash,
-            asset: params.asset
-        ) {
-            cache.touchAndEnforce(entryDir: cache.segments.videoDir(videoId: params.videoId))
-            DevLog.event(.proxy, "HLS asset cache hit", [
-                "video_id": "\(params.videoId)", "asset": params.asset,
-                "bytes": "\(cached.count)",
-            ])
-            return HTTPResponse(statusCode: .ok, headers: headers, body: cached)
-        }
-
-        if let staged = stagedHLSAsset(params, hash: hash) {
-            DevLog.event(.proxy, "HLS asset served from download staging", [
-                "video_id": "\(params.videoId)", "asset": params.asset,
-                "bytes": "\(staged.count)",
-            ])
-            return HTTPResponse(statusCode: .ok, headers: headers, body: staged)
-        }
-
-        guard let url = upstreamURL(
-            path: "videos/\(params.videoId)/hls/\(params.asset)",
-            versionId: params.versionId
-        ) else {
-            return HTTPResponse(statusCode: .badGateway)
-        }
-        do {
-            let request = upstreamRequest(url: url)
-            let data = try await singleFlight.run(key: url.absoluteString) { [session] in
-                let (data, response) = try await session.data(for: request)
-                guard let response = response as? HTTPURLResponse,
-                      (200..<300).contains(response.statusCode)
-                else {
-                    throw APIError.badStatus(
-                        (response as? HTTPURLResponse)?.statusCode ?? 0
-                    )
-                }
-                return data
-            }
-            await storeHLSAssetWithRecovery(
-                videoId: params.videoId,
-                versionId: params.versionId,
-                hash: hash,
-                asset: params.asset,
-                data: data
-            )
-            return HTTPResponse(statusCode: .ok, headers: headers, body: data)
-        } catch {
-            DevLog.event(.proxy, "HLS asset fetch failed -> 502", [
-                "video_id": "\(params.videoId)", "asset": params.asset,
-                "err": "\(error)",
-            ])
-            return HTTPResponse(statusCode: .badGateway)
-        }
-    }
-
-    /// A segment an in-flight `downloadHLS` has already written, so playing a
-    /// video mid-download doesn't fetch again what is on disk. Served only when
-    /// the staged `video.m3u8` is the package playback is on: segments from two
-    /// packagings of the same video don't splice. Any miss — no download, a
-    /// segment not written yet, the folder promoted or deleted under us — is
-    /// nil, and the caller fetches upstream as before.
-    private func stagedHLSAsset(_ params: RouteParams, hash: String) -> Data? {
-        guard let offlineRoot else { return nil }
-        let staging = CacheManager.hlsStagingDir(
-            videosRoot: offlineRoot,
-            videoId: params.videoId,
-            versionId: params.versionId
-        )
-        guard let playlist = try? Data(
-                contentsOf: staging.appendingPathComponent("video.m3u8")
-              ),
-              SegmentCache.packageHash(forPlaylist: playlist) == hash
-        else { return nil }
-        return try? Data(contentsOf: staging.appendingPathComponent(params.asset))
     }
 
     // MARK: - MP4
@@ -920,30 +590,6 @@ public final class StreamProxy: @unchecked Sendable {
         )
     }
 
-    // MARK: - Offline
-
-    private func handleOffline(_ request: HTTPRequest) async -> HTTPResponse {
-        guard let params = params(of: request),
-              !params.asset.isEmpty,
-              let offlineRoot,
-              !params.asset.contains(".."),
-              !params.asset.hasPrefix("/")
-        else {
-            return HTTPResponse(statusCode: .notFound)
-        }
-        let suffix = params.versionId.map { "_v\($0)" } ?? ""
-        let file = offlineRoot
-            .appendingPathComponent("hls-\(params.videoId)\(suffix)", isDirectory: true)
-            .appendingPathComponent(params.asset)
-        guard let data = try? Data(contentsOf: file) else {
-            return HTTPResponse(statusCode: .notFound)
-        }
-        return HTTPResponse(
-            statusCode: .ok,
-            headers: [.contentType: contentType(for: params.asset)],
-            body: data
-        )
-    }
 }
 
 /// Deduplicates concurrent identical upstream fetches.
