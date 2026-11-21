@@ -212,7 +212,7 @@ def _normalize_media_for_ios_sync(
         "-dn",
         *_video_codec_args(video_stream),
         *_audio_codec_args(audio_stream),
-        # `artist` is the tag QuickTime, Finder's Get Info and Plex all read,
+        # `artist` is the tag QuickTime and Finder's Get Info read,
         # so the channel is visible in the file itself and not only in our DB.
         *(["-metadata", f"artist={channel}"] if channel else []),
         # mp4 has no atom meaning "where this came from", and `comment` is the
@@ -516,7 +516,7 @@ def _unique_group_name(slug: str, label: str) -> tuple[str, str]:
     for attempt in range(1, PLAYLIST_NAME_MAX_ATTEMPTS + 1):
         name = slug if attempt == 1 else f"{slug}-{attempt}"
         candidate_label = label if attempt == 1 else f"{label} ({attempt})"
-        if name not in db.PLEX_KINDS and db.get_group_by_name(name) is None:
+        if db.get_group_by_name(name) is None:
             return name, candidate_label
     raise RuntimeError(f"Could not find a free group name for {slug!r}")
 

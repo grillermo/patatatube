@@ -183,7 +183,7 @@ map for the intermittent-playback investigation:
    title (`%(channel,uploader|)s`), `download_video` stores it in
    `videos.channel`, and it rides in the `normalize` job's payload so the
    ffmpeg step can write it into the mp4 as `-metadata artist=` — the tag
-   QuickTime, Finder and Plex read. Only that process may spawn ffmpeg, so the
+   QuickTime and Finder read. Only that process may spawn ffmpeg, so the
    payload is the only way the tag can be written. The clients filter on the
    **column** (`serialize_video` exposes `channel`, the iOS search box matches
    it, `VideoRow` shows it under the title) — nothing reads the container tag.
@@ -237,21 +237,21 @@ map for the intermittent-playback investigation:
 ### ffmpeg runs in exactly one process
 
 `converter.py` is the only process that spawns ffmpeg. Web workers never do —
-`/api/videos/{id}/prepare`, a cold `master.m3u8`, and upload normalization all
+a cold `master.m3u8`, an SD rendition, and upload normalization all
 call `db.enqueue_job` and return immediately. The runner claims jobs
 `FFMPEG_JOB_LIMIT` at a time (default 2, env-overridable) from the `jobs` table,
-ordered by `priority` then `id`; `priority=100` is the iOS Download-all path and
-queues behind interactive taps at `priority=0`.
+ordered by `priority` then `id`; `priority=100` is the HLS package a finished
+download queues for itself, and it waits behind interactive taps at `priority=0`.
 
 `./serve` runs it in its own tmux pane under `until ... do sleep 1; done`,
 which respawns it on a crash; a clean exit (SIGTERM) only comes from `./serve`
 replacing the pane. Queue depth is visible in
 `log/backend.log`:
 
-    [job] +1 kind=convert id=812 priority=100 queued=225
-    [job] -1 kind=convert id=812 status=done secs=412
+    [job] +1 kind=hls id=812 priority=0 queued=12
+    [job] -1 kind=hls id=812 status=done secs=41
 
-`ffmpeg_progress.run_ffmpeg` is the only place `convert` and `hls` jobs spawn
+`ffmpeg_progress.run_ffmpeg` is the only place `hls` jobs spawn
 ffmpeg (the `normalize` job still shells out via `downloader.py`, and the
 preview endpoints grab frames directly in the web worker).
 It appends `-progress pipe:1 -nostats` when given a duration and a callback,
@@ -259,8 +259,8 @@ and writes a 0..1 fraction to `jobs.progress` (throttled to ≥1% or ≥2s). std
 gets its own pipe drained on a thread — merging it into stdout would corrupt the
 progress stream, and not draining it deadlocks a verbose failure.
 
-`GET /api/jobs` exposes running jobs plus the next 20 queued (`convert` and
-`hls` only; `normalize` is excluded) with a `queued_total`. The iOS `JobsStore`
+`GET /api/jobs` exposes running jobs plus the next 20 queued (`hls`
+only; `normalize` is excluded) with a `queued_total`. The iOS `JobsStore`
 polls it every 2s while any view is subscribed, and both the download button's
 determinate ring and the Downloads view's "Converting" section read from it.
 
@@ -271,7 +271,7 @@ This exists because 226 concurrent BackgroundTask conversions took the machine
 down on 2026-07-31; see `docs/superpowers/specs/2026-07-31-ffmpeg-job-queue-design.md`.
 
 **Dev caveat:** `--reload` restarts uvicorn but not the converter. Editing
-`converter.py` or `library.py` needs a full `./serve` restart.
+`converter.py` needs a full `./serve` restart.
 
 ### `/sd` — the iPad 1 player
 
@@ -293,7 +293,7 @@ Spec: `docs/superpowers/specs/2026-09-18-sd-page-design.md`.
 
 ### Send to Yoto
 
-The iOS video menu's "Send to Yoto de Elisa" (not on TV/Movies) calls
+The iOS video menu's "Send to Yoto de Elisa" calls
 `POST /api/videos/{id}/yoto`, which POSTs `{path, title}` to
 `YOSUBEE_LOCAL_URL`, yosubee (`~/c/yosubee`) on this same machine, with
 `X-Local-Token: YOSUBEE_LOCAL_TOKEN`. Only the **path** crosses: yosubee
@@ -307,7 +307,7 @@ Unset URL -> 503.
 ### Layering — the SSR page and the JSON API share logic, don't duplicate it
 
 - `db.py` — the only SQLite layer. Single `videos` table. `init_db()` is an **idempotent migration runner**: it does `CREATE TABLE IF NOT EXISTS`, then additive `ALTER TABLE` guards for each newer column, then backfills (`_backfill_positions`, `_backfill_youtube_preview_urls`) and cleanup. Schema changes go here as new idempotent guards, not a migrations framework.
-- `services.py` — mutation logic (`set_group`, `choose_version`, `classify_download`) called by **both** the HTML form endpoints and the JSON API endpoints in `main.py`. Put shared write logic here.
+- `services.py` — mutation logic (`set_group`, `classify_download`) called by **both** the HTML form endpoints and the JSON API endpoints in `main.py`. Put shared write logic here.
 - `views/serializers.py` — `serialize_video` is the canonical video-to-dict presenter for the JSON API. Keep the API shape here.
 - `views/render.py` + `views/templates/*.html` — the server-rendered HTML page.
 
@@ -322,7 +322,7 @@ fixes it. With no startup image at all, iOS composes the splash itself from the
 manifest's `background_color` (`#111111`) and 512px icon, correctly at every
 size and orientation. Don't reintroduce the per-device list.
 
-The `groups` table is the source of truth for video groups. `db.PLEX_KINDS` covers the separate Plex axis. The iOS Videos tab renders `GET /api/groups` and no longer hardcodes anything, so there is no list to keep in sync.
+The `groups` table is the source of truth for video groups. The iOS app's root renders `GET /api/groups` and no longer hardcodes anything, so there is no list to keep in sync.
 
 Adding a group is `POST /api/groups`. Deleting one is `DELETE /api/groups/{id}` (the card's `⋯` menu → Delete group): its videos are **moved into the inbox**, never deleted, and if `/sd` was playing it, `sd_state` falls back to no group. The inbox itself can't be deleted (409), and with no inbox at all every delete is refused, since there'd be nowhere to put the videos.
 
@@ -336,8 +336,7 @@ can *set* it, through the `⋯` menu's "Display titles" toggle, which PATCHes
 `display_titles` **alone** — `APIClient.updateGroup` always sends `emoji`, so
 reusing it here would clear the group's cover. `VideoGroup` decodes the field
 with `decodeIfPresent ?? false` because `GroupStore`'s UserDefaults mirror holds
-blobs written before it existed. A Plex kind is not a group, so TV/Movies never
-overlay titles and never show the toggle.
+blobs written before it existed.
 
 **Group cards show a new-video badge, and it is derived from a play counter.**
 `videos.play_count` (idempotent `ALTER TABLE` guard, nullable) counts every
@@ -365,7 +364,7 @@ to the new group. The wire name is still `unread_count` (and
 `VideoGroup.unreadCount`), frozen from when this was a boolean `unread` column,
 which the migration folds in: `unread = 1` becomes 0 plays, any other finished
 video becomes 1, anything unfinished stays NULL, and the old column is dropped.
-That is what left every counter at zero on rollout. Plex rows have no badge.
+That is what left every counter at zero on rollout.
 
 ### Auth
 
@@ -408,12 +407,12 @@ logged in.
   belonged to another server (`APIError.serverChanged`) every time the route
   flipped. Streams already in flight (AVPlayer, downloads) are not migrated
   when the route changes; the next request picks up the new base.
-- **Navigation is a `TabView` over `MediaTab` (videos/tv/movies).** `RootTabView`
-  builds one `VideoGridView` per tab, each with its own `NavigationStack`;
-  `VideoStore.feed` is the single source of what's loaded, and tab selection
-  calls `switchFeed`. `Feed` distinguishes all videos, a group ID, and a Plex
-  kind for both API queries and persisted per-feed state. The Videos tab's root
-  is `GroupsView`, which renders the server-owned group list. Its `GroupStore`
+- **Navigation is one stack.** `RootTabView` renders a single `VideoGridView`
+  with its own `NavigationStack` and the audio mini player docked under it;
+  there is no tab bar (the TV and Movies tabs were removed with Plex on
+  2026-11-20). `VideoStore.feed` is the single source of what's loaded. `Feed`
+  is all videos or a group ID, for both API queries and persisted per-feed
+  state. The root is `GroupsView`, which renders the server-owned group list. Its `GroupStore`
   is the single UserDefaults mirror of that list, covering both groups and
   their emoji so the offline-first screen renders before any fetch. Tapping a
   card pushes `Route.group(id:)`, and the `path` change selects that group feed,
@@ -421,14 +420,9 @@ logged in.
 - **Download-all is bounded on the client too.** `withBoundedTaskGroup`
   (PatataTubeKit) runs at most `CacheManager.maxConcurrentDownloads` operations
   at once. This is not the same bound as `DownloadConcurrencyGate`, which covers
-  only the transfer: `download` calls `ensureReady` -> `POST /prepare` and then
-  polls every 2s *before* acquiring the gate. One task per video is what sent
-  226 concurrent prepare calls at the server on 2026-07-31. New bulk actions go
-  through the bounded window, not a bare `withTaskGroup`. The grid's own
-  Download-all passes `bulk: true` (server priority=100), but the per-show
-  Download-all in `EpisodesView` shares its `onDownload` closure with
-  individual per-episode taps and deliberately does not, so it enqueues at
-  interactive (non-bulk) priority.
+  only the transfer. One task per video is what sent 226 concurrent calls at
+  the server on 2026-07-31. New bulk actions go through the bounded window, not
+  a bare `withTaskGroup`.
 - **The group-detail list plays audio, not video.** In a pushed group
   (`currentGroupID != nil`) at list size (`GridDisplayMode.list`), tapping a row
   starts `AppModel.audio` (`AudioQueuePlayer`) instead of presenting
@@ -534,8 +528,8 @@ logged in.
   pause/background/dismiss/advance via `PlaybackPositionReporter`, mirroring
   each write into `UserDefaults` (`ResumePositionStore`) so offline playback
   still resumes and failed writes flush later. The Resume/Play-from-start
-  alert only appears past 60s (`ResumeDecision`), and only for Plex items
-  (`plex_kind` non-null) or videos whose **group** has `groups.remember_position`
+  alert only appears past 60s (`ResumeDecision`), and only for videos whose
+  **group** has `groups.remember_position`
   on — a per-group switch in the group's `⋯` menu, PATCHed alone like
   `display_titles`, and read through `GroupStore.remembersPosition`. It used to
   be a per-video toggle (`videos.remember_position`); the migration turned on
@@ -583,29 +577,15 @@ the `itms-services://` link and exits 1.5 s later so iOS can replace the bundle.
 
 Full setup and troubleshooting: `ios/install.md`.
 
-### Plex library (library rows)
+### Posters and subtitles
 
-- `plex.py` fetches metadata from the local Plex server (`PLEX_URL`/`PLEX_TOKEN`); its JSON contains raw control characters, so it parses with `json.loads(text, strict=False)`.
-- `library.py` owns scanning (`scan_library`) and on-demand ffmpeg conversion (`convert_library_video`): passthrough / remux / transcode per the iPad codec policy (`plan_conversion`), converted file written as a sibling `{name}.mp4`.
-- Library rows live in the same `videos` table with `source='library'`, statuses `unconverted → converting → done`; failures set `error_msg` and revert to `unconverted` (never row-delete). Deletes tombstone via `deleted_at` and never touch `source_path`.
-- Stream endpoint is token-gated (Bearer or `?token=`); library previews proxy Plex thumbs at `/videos/{id}/preview` with a disk cache in `data/previews/`. The same endpoint serves **download** rows that have no external thumbnail (Twitter, file uploads — only YouTube fills `preview_url`) by grabbing a frame `PREVIEW_FRAME_OFFSET` seconds into the mp4; frame 0 is black in most clips, which is what left those rows posterless.
-- Conversions keep every audio track matching `LIBRARY_AUDIO_LANGS` (default `eng,spa`; first track as fallback). Per-version `audio_langs`/`converted_langs` are JSON columns filled at scan/convert time; the per-movie choice lives in `videos.audio_lang` (`POST /api/videos/{id}/audio`), and the HLS package carries only the chosen language (invalidated via `hls.invalidate` on change).
+- `GET /videos/{id}/preview` serves posters for **download** rows that have no external thumbnail (Twitter, file uploads — only YouTube fills `preview_url`) by grabbing a frame `PREVIEW_FRAME_OFFSET` seconds into the mp4, cached in `data/previews/` as `dl<id>.*.jpg`; frame 0 is black in most clips, which is what left those rows posterless.
 - Subtitles come from two places, and `subtitles.discover_subtitles` merges both: **sidecar files** next to the media, and **text tracks embedded in the container** (SRT/ASS/mov_text — bitmap PGS/VobSub/DVD tracks are rejected, they would need OCR). A sidecar outranks an embedded track of the same language. Embedded discovery only happens when the caller passes an ffprobe dict; `subtitles.py` never shells out to ffprobe itself, so `discover_subtitles(path)` alone stays a pure filesystem walk.
-- **Exactly one track ships per language** (`_one_per_language`), preferring the plain variant over SDH and Forced, and never dropping a language whose only track is one of those. This is not cosmetic: selection is language-keyed the whole way through (`videos.subtitle_lang`, `POST /api/videos/{id}/subtitle`, the picker's `.tag`), and AVKit's in-player list groups HLS renditions by `LANGUAGE` regardless of `NAME`. Ship several renditions per language and the app's own picker (one row per track) and the player's (one row per language) show different lists. Per-track selection would mean changing that key end-to-end, not just the playlist.
+- **Exactly one track ships per language** (`_one_per_language`), preferring the plain variant over SDH and Forced, and never dropping a language whose only track is one of those. This is not cosmetic: AVKit's in-player list groups HLS renditions by `LANGUAGE` regardless of `NAME`. Ship several renditions per language and the app's own picker (one row per track) and the player's (one row per language) show different lists. Per-track selection would mean changing that key end-to-end, not just the playlist.
 - **Hidden files are never subtitles** (`_list_files`). macOS leaves a binary AppleDouble `._X` twin beside every `X` on a non-HFS volume, and a release folder full of them doubled every track — worse, `._English.eng.srt` sorts first, so the junk twin won the `en` key and shipped as the `DEFAULT=YES` rendition with an AppleDouble blob inside a `.vtt`.
 - **Filename tokens are NFC-folded before any table lookup** (`_fold`). macOS returns decomposed filenames, so `Français.fre.srt` arrives as `Franc\u0327ais...`; unfolded, the language word misses `_NAME_CODES`, gets mistaken for a descriptor ("French (Français)" instead of "French"), and stops counting as the plain variant.
-- `video_versions.subtitle_langs` is a JSON column filled only at scan time by `library._probe_missing_track_langs`, which fills `audio_langs` from the same single ffprobe pass — there is no per-request probe. **Deploying subtitle changes onto an existing library needs one `POST /api/library/scan`** before pre-existing rows report any `subtitle_tracks`; until then the picker silently shows none. The per-movie choice lives in `videos.subtitle_lang` (`POST /api/videos/{id}/subtitle`), which never re-converts since every discovered language is already packaged into the HLS multivariant playlist at conversion time.
-- **A packaged playlist is not invalidated by anything else, so the re-probe does it.** After writing `subtitle_langs`, `library._invalidate_stale_hls` compares the computed languages against `hls.packaged_subtitle_languages(video_id)` (parsed out of the on-disk `master.m3u8`) and calls `hls.invalidate` on a mismatch; `None` means nothing is packaged, which is not a mismatch. Without this a package built before its tracks were known serves that empty rendition set forever — the app's picker reads the fresh DB, the player reads the stale playlist, and the two disagree permanently. `hls` imports `library`, so the import is function-local.
-- **HLS packaging searches the original file for subtitles, not the file it streams.** A converted library row streams our own sibling mp4, and `library.convert_library_video` passes `-sn`, so that mp4 has no subtitle streams at all. `router` sends the version's `source_path` as the job payload's `subtitle_source_path`, and `hls.build_hls_package` searches it instead (costing one extra ffprobe when the two differ). Package from the converted file alone and every embedded track disappears exactly at the point it would have shipped.
 
-### Library rows are never moved by PatataTube
-
-- There is no way to hand a download to Plex: the old "Move to Plex" promote
-  feature (`promote.py`, `POST /api/videos/{id}/promote`) was removed on
-  2026-10-30. **Library** rows only enter through `scan_library`; their
-  `plex_kind` comes from the Plex section they live in (`plex.py`), and is
-  refreshed by the next scan.
-- `/upload/file` takes a `group_id`; it never accepts `tv`/`movies`.
+Movies and TV are not PatataTube's job: they play on the Apple TV through Infuse over SMB from `/Volumes/Media/media`. The Plex-backed library feature was removed on 2026-11-20 (`docs/superpowers/plans/2026-11-20-remove-plex-movies-tv.md`).
 
 ## Conventions
 

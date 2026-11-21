@@ -1,5 +1,4 @@
 import asyncio
-import json
 import math
 import os
 import re
@@ -21,8 +20,6 @@ from pydantic import BaseModel, FiniteFloat, field_validator
 import db
 import devlog
 import hls
-import library
-import plex
 import sd
 import services
 import yosubee
@@ -39,9 +36,9 @@ from views.render import _display_name, build_login_page, build_sd_page, build_v
 router = APIRouter()
 
 PREVIEWS_DIR = Path("data/previews")
-# Longest-edge cap for cached Plex posters. Plex serves full-resolution thumbs
-# (often 1000s of px), which bloated the iPad's memory when decoded across a
-# whole grid (Sentry PATATATUBE-6 OOM). 1200px stays crisp on iPad mini 6 (@2x)
+# Longest-edge cap for posters grabbed out of a download's mp4. Full-resolution
+# frames bloated the iPad's memory when decoded across a whole grid (Sentry
+# PATATATUBE-6 OOM). 1200px stays crisp on iPad mini 6 (@2x)
 # and iPhone 16e (@3x) for both grid and detail views. The suffix versions the
 # cache so previously-cached full-size files regenerate at the new size.
 PREVIEW_MAX_EDGE = 1200
@@ -171,18 +168,6 @@ class SetGroupRequest(BaseModel):
     group_id: int
 
 
-class VersionRequest(BaseModel):
-    version_id: int
-
-
-class AudioRequest(BaseModel):
-    lang: str
-
-
-class SubtitleRequest(BaseModel):
-    lang: str | None = None
-
-
 class PositionRequest(BaseModel):
     secs: FiniteFloat
 
@@ -211,13 +196,6 @@ class GroupUpdateRequest(BaseModel):
     display_titles: bool | None = None
     remember_position: bool | None = None
     description: str | None = None
-
-
-class PrepareRequest(BaseModel):
-    audio_lang: str | None = None
-    # "bulk" is the iOS Download-all path. Anything else, including omitted,
-    # is interactive and jumps ahead of a bulk drain.
-    priority: str | None = None
 
 
 def _print_bad_request_details(request: Request, body: UploadRequest):
@@ -553,27 +531,6 @@ async def _iter_file_range(
         print(f"video {completion_title} uploaded", flush=True)
 
 
-def _resize_jpeg(content: bytes, max_edge: int) -> bytes:
-    """Downscale JPEG bytes so the longest edge is <= max_edge (aspect preserved,
-    never upscaled) via ffmpeg. Returns the original bytes untouched if ffmpeg is
-    missing or fails — a slightly-too-large poster beats a broken one."""
-    cmd = [
-        FFMPEG_BIN, "-loglevel", "error", "-i", "pipe:0",
-        "-vf", (
-            f"scale='min({max_edge},iw)':'min({max_edge},ih)':"
-            "force_original_aspect_ratio=decrease"
-        ),
-        "-q:v", "3", "-f", "mjpeg", "pipe:1",
-    ]
-    try:
-        proc = subprocess.run(cmd, input=content, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except OSError:
-        return content
-    if proc.returncode != 0 or not proc.stdout:
-        return content
-    return proc.stdout
-
-
 def _grab_frame(path: Path, offset: float, max_edge: int) -> bytes:
     """One JPEG frame from `path`, taken `offset` seconds in and downscaled.
 
@@ -600,12 +557,6 @@ def _grab_frame(path: Path, offset: float, max_edge: int) -> bytes:
         return proc.stdout if proc.returncode == 0 else b""
 
     return run(offset) or run(0)
-
-
-def _build_preview(rating_key: str, max_edge: int) -> bytes:
-    """Fetch the Plex thumb and downscale it. Runs in a worker thread."""
-    content = plex.fetch_thumb(rating_key)
-    return _resize_jpeg(content, max_edge)
 
 
 async def _download_preview(video: dict) -> Response:
@@ -635,50 +586,12 @@ async def _download_preview(video: dict) -> Response:
 
 
 @router.get("/videos/{video_id}/preview")
-async def video_preview(video_id: int, request: Request, kind: str = "item"):
+async def video_preview(video_id: int, request: Request):
     _check_token_or_query(request)
     video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
+    if not video:
         raise HTTPException(status_code=404, detail="No preview")
-    if video.get("source") != "library":
-        return await _download_preview(video)
-    if kind == "show":
-        rating_key = video.get("show_rating_key")
-        version = video.get("show_preview_version")
-    else:
-        rating_key = video.get("plex_rating_key")
-        version = video.get("preview_version")
-    if not rating_key:
-        raise HTTPException(status_code=404, detail="No preview")
-
-    # Cache filename carries the resize size + the Plex thumb version, so a poster
-    # changed on Plex (new version) misses the cache and regenerates, while an
-    # unchanged one is a pure local disk read.
-    stem = f"{rating_key}_{version}" if version else str(rating_key)
-    cache_file = PREVIEWS_DIR / f"{stem}.{PREVIEW_CACHE_SUFFIX}.jpg"
-    if not cache_file.exists():
-        try:
-            content = await asyncio.to_thread(
-                _build_preview, rating_key, PREVIEW_MAX_EDGE
-            )
-        except plex.PlexError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
-        # Atomic write so a concurrent reader never sees a half-written file.
-        tmp = cache_file.with_suffix(".jpg.tmp")
-        tmp.write_bytes(content)
-        tmp.replace(cache_file)
-        # Drop superseded versions (and the pre-resize full-size file) for this key.
-        for stale in PREVIEWS_DIR.glob(f"{rating_key}_*.{PREVIEW_CACHE_SUFFIX}.jpg"):
-            if stale != cache_file:
-                stale.unlink(missing_ok=True)
-        (PREVIEWS_DIR / f"{rating_key}.jpg").unlink(missing_ok=True)
-
-    return Response(
-        content=cache_file.read_bytes(),
-        media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
+    return await _download_preview(video)
 
 
 def _file_response(
@@ -734,27 +647,13 @@ def _file_response(
 async def stream_video(video_id: int, request: Request):
     _check_token_or_query(request)
     video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
+    if not video:
         raise HTTPException(status_code=404, detail="Video not found or not ready")
 
-    if video.get("source") == "library":
-        requested_version = request.query_params.get("version_id")
-        try:
-            version_id = int(requested_version) if requested_version else None
-        except ValueError:
-            raise HTTPException(status_code=404, detail="Version not found")
-        version = db.get_video_version(video_id, version_id)
-        if not version:
-            raise HTTPException(status_code=404, detail="Version not found")
-        if version["status"] != "done":
-            raise HTTPException(status_code=409, detail="Video not prepared yet")
-        file_path = Path(version["converted_path"] or version["source_path"])
-        mime = _guess_mime(file_path.name)
-    else:
-        if video["status"] != "done" or not video["filename"]:
-            raise HTTPException(status_code=404, detail="Video not found or not ready")
-        file_path = VIDEOS_DIR / video["filename"]
-        mime = _guess_mime(video["filename"])
+    if video["status"] != "done" or not video["filename"]:
+        raise HTTPException(status_code=404, detail="Video not found or not ready")
+    file_path = VIDEOS_DIR / video["filename"]
+    mime = _guess_mime(video["filename"])
 
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Video file missing")
@@ -768,7 +667,7 @@ async def stream_sd_video(video_id: int, request: Request):
     this is the fallback (and the only path when Caddy has no sd.mp4 rule)."""
     _check_token_or_query(request)
     video = db.get_video(video_id)
-    if not video or video.get("source") == "library" or not video.get("sd_ready"):
+    if not video or not video.get("sd_ready"):
         raise HTTPException(status_code=404, detail="SD rendition not ready")
     file_path = VIDEOS_DIR / sd.sd_filename(video_id)
     if not file_path.exists():
@@ -779,44 +678,11 @@ async def stream_sd_video(video_id: int, request: Request):
 def _resolve_hls_source(video: dict, request: Request) -> Path:
     """Resolve the on-disk source for HLS exactly as /videos/{id}/stream does.
 
-    Raises 409 when the resolved source is not ready (there is no 'completed'
-    status: download rows gate on video status 'done', library rows on the
-    chosen version's status 'done').
+    Raises 409 when the video is not ready (status other than 'done').
     """
-    if video.get("source") == "library":
-        requested_version = request.query_params.get("version_id")
-        try:
-            version_id = int(requested_version) if requested_version else None
-        except ValueError:
-            raise HTTPException(status_code=404, detail="Version not found")
-        version = db.get_video_version(video["id"], version_id)
-        if not version:
-            raise HTTPException(status_code=404, detail="Version not found")
-        if version["status"] != "done":
-            raise HTTPException(status_code=409, detail="Video not prepared yet")
-        return Path(version["converted_path"] or version["source_path"])
-
     if video["status"] != "done" or not video["filename"]:
         raise HTTPException(status_code=409, detail="Video not ready")
     return VIDEOS_DIR / video["filename"]
-
-
-def _resolve_subtitle_source(video: dict, request: Request) -> Path | None:
-    """The file to search for subtitles, when it differs from what we stream.
-
-    A library row streams its converted mp4, which carries no subtitle streams
-    (`-sn` at conversion). Its original still does, so packaging searches that.
-    Download rows stream the only file they have, so there is nothing to name.
-    """
-    if video.get("source") != "library":
-        return None
-    requested_version = request.query_params.get("version_id")
-    try:
-        version_id = int(requested_version) if requested_version else None
-    except ValueError:
-        return None
-    version = db.get_video_version(video["id"], version_id)
-    return Path(version["source_path"]) if version else None
 
 
 @router.get("/videos/{video_id}/hls/{asset_path:path}")
@@ -825,7 +691,7 @@ async def hls_asset(
 ):
     _check_token_or_query(request)
     video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
+    if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
     source = _resolve_hls_source(video, request)
@@ -846,10 +712,7 @@ async def hls_asset(
     if asset_path == "master.m3u8":
         if video.get("hls_status") != "converting":
             db.set_hls_status(video_id, "converting")
-        subtitle_source = _resolve_subtitle_source(video, request)
         payload = {"source_path": str(source)}
-        if subtitle_source is not None and subtitle_source != source:
-            payload["subtitle_source_path"] = str(subtitle_source)
         db.enqueue_job(
             "hls", video_id, priority=db.PRIORITY_INTERACTIVE, payload=payload,
         )
@@ -963,15 +826,6 @@ async def set_video_group_endpoint(
     return RedirectResponse(url=redirect_url, status_code=303)
 
 
-@router.post("/videos/{video_id}/version")
-async def choose_video_version_endpoint(
-    video_id: int, version_id: int = Form(...), group_id: int | None = Form(default=None)
-):
-    services.choose_version(video_id, version_id)
-    redirect_url = f"/?group_id={group_id}" if group_id else "/"
-    return RedirectResponse(url=redirect_url, status_code=303)
-
-
 def serialize_group(group: dict) -> dict:
     return {
         "id": group["id"],
@@ -1006,8 +860,6 @@ async def api_create_group(body: GroupCreateRequest, request: Request):
     label = body.label.strip()
     if not name or not label:
         raise HTTPException(status_code=400, detail="Name and label are required")
-    if name in db.PLEX_KINDS:
-        raise HTTPException(status_code=400, detail="tv and movies are Plex kinds, not groups")
     emoji = _validated_emoji(body.emoji)
     try:
         group = db.create_group(name, label, emoji)
@@ -1085,11 +937,8 @@ def _validated_emoji(raw: str | None) -> str | None:
 
 
 @router.get("/api/videos")
-async def api_videos(group_id: int | None = None, plex_kind: str | None = None):
-    if plex_kind is not None and plex_kind not in db.PLEX_KINDS:
-        return []
-    videos = db.get_all_videos(group_id=group_id, plex_kind=plex_kind)
-    return [serialize_video(v) for v in videos]
+async def api_videos(group_id: int | None = None):
+    return [serialize_video(v) for v in db.get_all_videos(group_id=group_id)]
 
 
 @router.post("/api/videos/{video_id}/group")
@@ -1097,87 +946,6 @@ async def api_set_video_group(video_id: int, body: SetGroupRequest, request: Req
     _check_token(request)
     if not await asyncio.to_thread(services.set_group, video_id, body.group_id):
         raise HTTPException(status_code=400, detail="No such group")
-    return {"ok": True}
-
-
-@router.post("/api/videos/{video_id}/version")
-async def api_choose_video_version(video_id: int, body: VersionRequest, request: Request):
-    _check_token(request)
-    ok = services.choose_version(video_id, body.version_id)
-    return {"ok": ok}
-
-
-@router.post("/api/videos/{video_id}/audio")
-async def api_choose_audio(video_id: int, body: AudioRequest, request: Request):
-    _check_token(request)
-    video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Video not found")
-    if video.get("source") != "library":
-        raise HTTPException(status_code=400, detail="Only library videos have audio tracks")
-    version = db.get_video_version(video_id)
-    if not version:
-        raise HTTPException(status_code=404, detail="Version not found")
-
-    try:
-        source_langs = {track["lang"] for track in json.loads(version.get("audio_langs") or "[]")}
-    except (TypeError, ValueError):
-        source_langs = set()
-    if body.lang not in library.allowed_audio_langs() or body.lang not in source_langs:
-        raise HTTPException(status_code=400, detail="Language not available")
-
-    db.set_audio_lang(video_id, body.lang)
-    hls.invalidate(video_id)
-
-    converted = None
-    if version.get("converted_langs"):
-        try:
-            converted = json.loads(version["converted_langs"])
-        except (TypeError, ValueError):
-            converted = None
-    if version["status"] == "done" and (converted is None or body.lang not in converted):
-        db.set_library_state(video_id, "converting", version_id=version["id"])
-        db.enqueue_job(
-            "convert", video_id, version_id=version["id"],
-            priority=db.PRIORITY_INTERACTIVE,
-        )
-    return {"ok": True}
-
-
-@router.post("/api/videos/{video_id}/subtitle")
-async def api_choose_subtitle(video_id: int, body: SubtitleRequest, request: Request):
-    """Persist a subtitle preference. Unlike audio, this never re-converts —
-    every discovered language is already packaged into the HLS multivariant
-    playlist at conversion time (see hls.py), so there is nothing to invalidate.
-
-    `video_versions.subtitle_langs` (read below to build `available`) is filled
-    only by `library._probe_missing_subtitle_langs`, which runs at scan time —
-    there is no per-request probe anymore. Existing rows stay NULL (no tracks
-    offered) until the next `POST /api/library/scan`, so a fresh deploy of this
-    feature needs one manual scan for pre-existing library videos to surface
-    subtitle tracks.
-    """
-    _check_token(request)
-    video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Video not found")
-    if video.get("source") != "library":
-        raise HTTPException(status_code=400, detail="Only library videos have subtitles")
-
-    if body.lang:
-        version = db.get_video_version(video_id)
-        if not version:
-            raise HTTPException(status_code=404, detail="Version not found")
-        try:
-            available = {
-                track["language"] for track in json.loads(version.get("subtitle_langs") or "[]")
-            }
-        except (TypeError, ValueError):
-            available = set()
-        if body.lang not in available:
-            raise HTTPException(status_code=400, detail="Language not available")
-
-    db.set_subtitle_lang(video_id, body.lang)
     return {"ok": True}
 
 
@@ -1191,7 +959,7 @@ async def api_save_position(video_id: int, body: PositionRequest, request: Reque
     """
     _check_token(request)
     video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
+    if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     db.set_resume_secs(video_id, body.secs)
     return Response(status_code=204)
@@ -1207,7 +975,7 @@ async def api_mark_played(video_id: int, request: Request):
     """
     _check_token(request)
     video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
+    if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     return {"changed": db.record_play(video_id)}
 
@@ -1218,16 +986,13 @@ async def api_send_to_yoto(video_id: int, request: Request):
 
     Fire and forget: yosubee only enqueues (convert, upload, wait for an icon
     pick in its own UI), so a 202 here means "accepted", not "on the card".
-    Plex rows are refused because the menu never offers them for TV/Movies.
     """
     _check_token(request)
     if not yosubee.configured():
         raise HTTPException(status_code=503, detail="Yoto not configured")
     video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
+    if not video:
         raise HTTPException(status_code=404, detail="Video not found")
-    if video.get("source") == "library" or video.get("plex_kind"):
-        raise HTTPException(status_code=409, detail="Library videos can't be sent to Yoto")
     if video.get("status") != "done" or not video.get("filename"):
         raise HTTPException(status_code=409, detail="Video isn't downloaded yet")
     path = (VIDEOS_DIR / video["filename"]).resolve()
@@ -1245,20 +1010,12 @@ async def api_delete_video(video_id: int, request: Request):
     _check_token(request)
     video = db.get_video(video_id)
     if video:
-        if video.get("source") == "library":
-            for version in video.get("versions", []):
-                if version.get("converted_path"):
-                    Path(version["converted_path"]).unlink(missing_ok=True)
-            if video.get("converted_path"):
-                Path(video["converted_path"]).unlink(missing_ok=True)
-            db.tombstone_video(video_id)
-        else:
-            if video.get("filename"):
-                (VIDEOS_DIR / video["filename"]).unlink(missing_ok=True)
-            (VIDEOS_DIR / sd.sd_filename(video_id)).unlink(missing_ok=True)
-            # The generated poster is derived from that mp4 — drop it too.
-            (PREVIEWS_DIR / f"dl{video_id}.{PREVIEW_CACHE_SUFFIX}.jpg").unlink(missing_ok=True)
-            db.delete_video(video_id)
+        if video.get("filename"):
+            (VIDEOS_DIR / video["filename"]).unlink(missing_ok=True)
+        (VIDEOS_DIR / sd.sd_filename(video_id)).unlink(missing_ok=True)
+        # The generated poster is derived from that mp4 — drop it too.
+        (PREVIEWS_DIR / f"dl{video_id}.{PREVIEW_CACHE_SUFFIX}.jpg").unlink(missing_ok=True)
+        db.delete_video(video_id)
     return {"ok": True}
 
 
@@ -1274,17 +1031,6 @@ async def api_backfill_channels(request: Request, background_tasks: BackgroundTa
     _check_token(request)
     background_tasks.add_task(backfill_channels)
     return {"status": "queued"}
-
-
-@router.post("/api/library/scan")
-async def api_library_scan(request: Request):
-    _check_token(request)
-    if not os.getenv("PLEX_TOKEN"):
-        raise HTTPException(status_code=503, detail="Plex not configured (set PLEX_TOKEN)")
-    try:
-        return await asyncio.to_thread(library.scan_library)
-    except plex.PlexError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 class DevLogBatch(BaseModel):
@@ -1320,90 +1066,9 @@ async def api_devlog(request: Request, batch: DevLogBatch):
 async def api_video(video_id: int, request: Request):
     _check_token(request)
     video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
+    if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     return serialize_video(video)
-
-
-@router.post("/api/videos/{video_id}/prepare")
-async def api_prepare_video(
-    video_id: int,
-    request: Request,
-    body: PrepareRequest | None = None,
-):
-    _check_token(request)
-    video = db.get_video(video_id)
-    if not video or video.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Video not found")
-    if video.get("source") != "library":
-        raise HTTPException(status_code=400, detail="Only library videos need preparing")
-
-    version = db.get_video_version(video_id)
-    if not version:
-        raise HTTPException(status_code=404, detail="Version not found")
-    # The legacy no-body API remains a cheap readiness check. A requested
-    # language below deliberately probes a completed row to verify that its
-    # conversion includes that track (and upgrades old one-track outputs).
-    if version["status"] == "done" and not (body and body.audio_lang):
-        return {"status": "done"}
-
-    source = Path(version["source_path"])
-    if not source.exists():
-        db.set_library_state(video_id, "unconverted", error_msg=f"source file missing: {source}", version_id=version["id"])
-        raise HTTPException(status_code=404, detail="Source file missing")
-
-    if version["status"] == "converting":
-        return JSONResponse({"status": "converting"}, status_code=202)
-
-    try:
-        probe = await asyncio.to_thread(library.probe_source, source)
-        plan = library.plan_conversion(probe)
-    except Exception as exc:  # ffprobe failure
-        db.set_library_state(video_id, "unconverted", error_msg=str(exc), version_id=version["id"])
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    selected_lang = body.audio_lang.lower() if body and body.audio_lang else None
-    if selected_lang:
-        source_langs = {track["lang"] for track in library.audio_track_list(probe)}
-        if selected_lang not in library.allowed_audio_langs():
-            raise HTTPException(status_code=400, detail="Audio language is not allowed")
-        if selected_lang not in source_langs:
-            raise HTTPException(status_code=400, detail="Audio language is not in this source")
-        if video.get("audio_lang") != selected_lang:
-            db.set_audio_lang(video_id, selected_lang)
-            hls.invalidate(video_id)
-
-    if plan.passthrough:
-        db.set_library_state(
-            video_id, "done",
-            converted_langs=json.dumps([track["lang"] for track in library.audio_track_list(probe)]),
-            version_id=version["id"],
-        )
-        return {"status": "done"}
-
-    if version["status"] == "done":
-        try:
-            converted_langs = set(json.loads(version.get("converted_langs") or "null") or [])
-        except (TypeError, ValueError):
-            converted_langs = set()
-        if set(plan.audio_langs).issubset(converted_langs):
-            return {"status": "done"}
-
-    # Write "converting" now, before the first await, so a second concurrent
-    # request for this same video reads "converting" on its own db.get_video
-    # call above and takes the no-op 202 early-return instead of racing
-    # through to a second probe + queued job. (Not airtight
-    # against two requests reading the old status in the exact same instant
-    # before either writes, but this closes the practical window between
-    # overlapping requests a few milliseconds apart.)
-    db.set_library_state(video_id, "converting", version_id=version["id"])
-
-    # converter.py is the only process that spawns ffmpeg. Enqueueing an
-    # already-pending job is a no-op, which is why the comment above about
-    # racing concurrent requests no longer needs to be airtight.
-    priority = db.PRIORITY_BULK if body and body.priority == "bulk" else db.PRIORITY_INTERACTIVE
-    db.enqueue_job("convert", video_id, version_id=version["id"], priority=priority)
-    return JSONResponse({"status": "converting"}, status_code=202)
 
 
 # The next 20 queued jobs is plenty for a UI list; the bulk Download-all path
@@ -1469,7 +1134,6 @@ async def logout():
 async def videos_page(
     request: Request,
     group_id: int | None = None,
-    plex_kind: str | None = None,
 ):
     if not _cookie_token_valid(request):
         target = request.url.path
@@ -1481,10 +1145,8 @@ async def videos_page(
         if safe_params:
             target += "?" + urlencode(safe_params, doseq=True)
         return RedirectResponse(url=f"/login?next={quote(target, safe='')}", status_code=303)
-    if plex_kind is not None and plex_kind not in db.PLEX_KINDS:
-        plex_kind = None
-    videos = db.get_all_videos(group_id=group_id, plex_kind=plex_kind)
-    return build_videos_page(videos, db.list_groups(), group_id, plex_kind)
+    videos = db.get_all_videos(group_id=group_id)
+    return build_videos_page(videos, db.list_groups(), group_id)
 
 
 @router.get("/sd", response_class=HTMLResponse)

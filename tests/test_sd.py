@@ -12,14 +12,11 @@ def tmp_db(monkeypatch, tmp_path):
     yield db
 
 
-def _done_video(db, group_id, *, sd_ready=False, source=None):
+def _done_video(db, group_id, *, sd_ready=False):
     vid = db.add_video(f"https://twitter.com/x/status/{id(object())}", group_id=group_id)
     db.update_video(vid, "done", filename=f"{vid}.mp4")
     if sd_ready:
         db.set_sd_ready(vid, True)
-    if source:
-        with db._conn() as conn:
-            conn.execute("UPDATE videos SET source = ? WHERE id = ?", (source, vid))
     return vid
 
 
@@ -56,7 +53,6 @@ def test_candidates_and_pending_split_on_sd_ready(tmp_db):
     ready = _done_video(tmp_db, gid, sd_ready=True)
     pending = _done_video(tmp_db, gid)
     _done_video(tmp_db, other, sd_ready=True)                  # other group
-    _done_video(tmp_db, gid, sd_ready=True, source="library")  # library row
     queued = tmp_db.add_video("https://twitter.com/x/status/9", group_id=gid)  # not done
 
     assert tmp_db.sd_candidate_ids(gid) == [ready]

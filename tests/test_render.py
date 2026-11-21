@@ -1,7 +1,3 @@
-# views.render -> serializers -> library -> downloader -> services -> hls ->
-# library is a cycle that only resolves when `main` loads first, as it does in
-# the app. Imported alone, this file fails collection.
-import main  # noqa: F401
 from views.render import build_videos_page
 
 
@@ -28,7 +24,7 @@ def _video(**kw):
 
 
 def test_renders_done_card():
-    html = build_videos_page([_video()], GROUPS, 1, None)
+    html = build_videos_page([_video()], GROUPS, 1)
 
     assert 'class="card"' in html
     assert "/videos/1/stream" in html
@@ -41,7 +37,7 @@ def test_status_variants():
         _video(id=3, status="queued"),
     ]
 
-    html = build_videos_page(videos, GROUPS, 1, None)
+    html = build_videos_page(videos, GROUPS, 1)
 
     assert "Error: boom" in html
     assert "Video is queued" in html
@@ -52,27 +48,26 @@ def test_named_title_used_for_youtube():
         [_video(platform="youtube", title="My Clip")],
         GROUPS,
         1,
-        None,
     )
 
     assert "My Clip" in html
 
 
 def test_empty_state():
-    html = build_videos_page([], GROUPS, None, None)
+    html = build_videos_page([], GROUPS, None)
 
     assert "No videos yet." in html
 
 
 def test_no_delimiter_leaks():
-    html = build_videos_page([_video()], GROUPS, 1, None)
+    html = build_videos_page([_video()], GROUPS, 1)
 
     assert "{{" not in html
     assert "{%" not in html
 
 
 def test_dialog_and_assets_present():
-    html = build_videos_page([], GROUPS, None, None)
+    html = build_videos_page([], GROUPS, None)
 
     assert 'id="upload-dialog"' in html
     assert "/assets/app/videos.css" in html
@@ -81,59 +76,40 @@ def test_dialog_and_assets_present():
 
 
 def test_page_renders_group_labels_not_names():
-    html = build_videos_page([_video()], GROUPS, 1, None)
+    html = build_videos_page([_video()], GROUPS, 1)
 
     assert "Children" in html
     assert "?group_id=1" in html
 
 
 def test_page_marks_the_current_group_active():
-    html = build_videos_page([_video()], GROUPS, 2, None)
+    html = build_videos_page([_video()], GROUPS, 2)
 
     assert '<option value="/?group_id=2" selected>' in html
 
 
 def test_group_dropdown_shows_unplayed_counts():
     groups = [dict(GROUPS[0], unread_count=3), dict(GROUPS[1], unread_count=0)]
-    html = build_videos_page([], groups, 1, None)
+    html = build_videos_page([], groups, 1)
 
     assert "Children (3)</option>" in html
     assert "Adults</option>" in html
 
 
 def test_group_dropdown_has_a_placeholder_off_a_group():
-    html = build_videos_page([], GROUPS, None, "tv")
+    html = build_videos_page([], GROUPS, None)
 
     assert '<option value="" selected disabled>Groups</option>' in html
 
 
-def test_page_offers_plex_links():
-    html = build_videos_page([], GROUPS, None, None)
-
-    assert "?plex_kind=tv" in html
-    assert "?plex_kind=movies" in html
-
-
-def test_plex_feed_does_not_redirect_to_preferred_group():
-    html = build_videos_page([], GROUPS, None, "tv")
-
-    assert "window.location.replace" not in html
-
-
 def test_card_menu_posts_to_the_group_endpoint():
-    html = build_videos_page([_video()], GROUPS, 1, None)
+    html = build_videos_page([_video()], GROUPS, 1)
 
     assert "/group" in html
 
 
-def test_plex_card_does_not_offer_group_actions():
-    html = build_videos_page([_video(group_id=None, plex_kind="tv")], GROUPS, None, "tv")
-
-    assert "/group" not in html
-
-
 def test_title_overlay_is_absent_when_the_group_has_it_off():
-    html = build_videos_page([_video(platform="youtube", title="My Clip")], GROUPS, 1, None)
+    html = build_videos_page([_video(platform="youtube", title="My Clip")], GROUPS, 1)
 
     assert "title-overlay" not in html
 
@@ -142,21 +118,10 @@ def test_title_overlay_renders_for_a_group_with_display_titles_on():
     groups = [dict(GROUPS[0], display_titles=1), GROUPS[1]]
 
     html = build_videos_page(
-        [_video(platform="youtube", title="My Clip")], groups, 1, None
+        [_video(platform="youtube", title="My Clip")], groups, 1
     )
 
     assert '<div class="title-overlay">My Clip</div>' in html
-
-
-def test_title_overlay_is_absent_on_a_plex_feed():
-    """Plex kinds are not groups, so no group's setting applies to them."""
-    groups = [dict(GROUPS[0], display_titles=1), GROUPS[1]]
-
-    html = build_videos_page(
-        [_video(group_id=None, plex_kind="tv", title="Some Show")], groups, None, "tv"
-    )
-
-    assert "title-overlay" not in html
 
 
 def test_app_asset_route_serves_css_and_js(tmp_path, monkeypatch):
@@ -187,14 +152,14 @@ def test_app_asset_route_serves_css_and_js(tmp_path, monkeypatch):
 
 
 def test_done_card_offers_a_replay_forever_toggle():
-    html = build_videos_page([_video()], GROUPS, 1, None)
+    html = build_videos_page([_video()], GROUPS, 1)
 
     assert 'class="loop-btn" data-video-id="1"' in html
     assert 'aria-label="Replay forever"' in html
 
 
 def test_unfinished_card_has_no_replay_forever_toggle():
-    html = build_videos_page([_video(status="queued")], GROUPS, 1, None)
+    html = build_videos_page([_video(status="queued")], GROUPS, 1)
 
     assert "loop-btn" not in html
 
@@ -203,7 +168,7 @@ def test_app_assets_are_cache_busted_by_mtime():
     """Assets ship with max-age=3600, so an edit needs a changing URL."""
     import re as _re
 
-    html = build_videos_page([], GROUPS, None, None)
+    html = build_videos_page([], GROUPS, None)
 
     for asset in ("videos.css", "videos.js"):
         match = _re.search(rf"/assets/app/{asset}\?v=(\d+)", html)
@@ -253,25 +218,30 @@ def test_login_page_never_contains_the_token():
 
 
 def test_media_urls_carry_no_token_query():
-    html = build_videos_page([_video()], GROUPS, 1, None)
+    html = build_videos_page([_video()], GROUPS, 1)
 
     assert "/videos/1/stream" in html
     assert "?token=" not in html
 
 
 def test_the_page_still_exposes_the_token_to_its_own_js():
-    html = build_videos_page([_video()], GROUPS, 1, None)
+    html = build_videos_page([_video()], GROUPS, 1)
 
     assert "window.UPLOAD_TOKEN" in html
 
 
 def test_local_previews_carry_no_token_query():
     html = build_videos_page(
-        [_video(source="library", plex_kind="movies", group_id=None, preview_url="/videos/1/preview")],
+        [_video(group_id=None, preview_url="/videos/1/preview")],
         GROUPS,
         None,
-        "movies",
     )
 
     assert "?token=" not in html
     assert "&token=" not in html
+
+
+def test_videos_page_has_no_plex_nav():
+    html = build_videos_page([], [{"id": 1, "label": "Inbox", "emoji": None, "unread_count": 0}], None)
+    assert "plex_kind" not in html
+    assert ">TV<" not in html and ">Movies<" not in html

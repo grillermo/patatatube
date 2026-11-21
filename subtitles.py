@@ -1,6 +1,6 @@
 """Subtitle discovery and WebVTT normalization.
 
-Subtitles reach a library row two ways: as sidecar files next to the media, or
+Subtitles reach a video two ways: as sidecar files next to the media, or
 as tracks embedded in the container itself. Both are discovered here.
 
 Only text subtitle formats are supported: SRT, WebVTT, text ``.sub``
@@ -14,7 +14,7 @@ never shells out to ffprobe itself, so ``discover_subtitles`` without a
 ``probe`` stays a pure filesystem walk. Extraction to WebVTT does shell out to
 ffmpeg, at package time only.
 
-Sidecars only exist for library rows (real filesystem media). Real scene
+Sidecars are rare for downloads, which land alone in videos/. Real scene
 releases scatter subtitles several ways, all handled here:
 
 * Same-directory siblings: ``Movie.2025.1080p...srt`` next to the video, or
@@ -261,7 +261,7 @@ def _subtitle_files(video_dir: Path, video_stem: str):
 def discover_embedded_subtitles(video_path, probe: dict) -> list[SubtitleTrack]:
     """Return the text subtitle streams inside ``video_path`` per ``probe``.
 
-    ``probe`` is an ffprobe ``-show_streams`` dict (see ``library.probe_source``).
+    ``probe`` is an ffprobe ``-show_streams`` dict (see ``media_probe.probe_source``).
     Bitmap codecs are skipped. A stream's ``title`` tag is folded into the
     display name so several tracks of one language stay distinguishable
     ("English (SDH)" vs "English (Full)"), matching how sidecar variants read.

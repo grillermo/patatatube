@@ -174,15 +174,10 @@ def test_update_group_returns_none_for_an_unknown_id(fresh_db):
     assert fresh_db.update_group(9999, label="x") is None
 
 
-def test_plex_kinds_are_not_groups(fresh_db):
-    assert fresh_db.PLEX_KINDS == ("tv", "movies")
-    assert not {g["name"] for g in fresh_db.list_groups()} & set(fresh_db.PLEX_KINDS)
-
-
 def test_video_columns_exist(fresh_db):
     with fresh_db._conn() as conn:
         columns = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
-    assert {"group_id", "plex_kind"} <= columns
+    assert "group_id" in columns
 
 
 def test_set_video_group_and_filtered_read(fresh_db):
@@ -204,35 +199,6 @@ def test_set_video_group_to_none_unsorts_it(fresh_db):
     fresh_db.set_video_group(vid, None)
     assert fresh_db.get_video(vid)["group_id"] is None
     assert fresh_db.get_all_videos(group_id=kids) == []
-
-
-def test_plex_kind_filter_is_separate_from_groups(fresh_db):
-    kids = fresh_db.get_group_by_name("children")["id"]
-    show = fresh_db.add_video("https://example.com/s", platform="upload")
-    kid = fresh_db.add_video("https://example.com/k", platform="upload")
-    fresh_db.set_video_plex_kind(show, "tv")
-    fresh_db.set_video_group(kid, kids)
-
-    assert [v["id"] for v in fresh_db.get_all_videos(plex_kind="tv")] == [show]
-    assert [v["id"] for v in fresh_db.get_all_videos(group_id=kids)] == [kid]
-
-
-def test_video_group_and_plex_kind_writes_are_mutually_exclusive(fresh_db):
-    kids = fresh_db.get_group_by_name("children")["id"]
-    vid = fresh_db.add_video("https://example.com/exclusive", platform="upload")
-
-    fresh_db.set_video_plex_kind(vid, "tv")
-    fresh_db.set_video_group(vid, kids)
-    assert (fresh_db.get_video(vid)["group_id"], fresh_db.get_video(vid)["plex_kind"]) == (
-        kids,
-        None,
-    )
-
-    fresh_db.set_video_plex_kind(vid, "movies")
-    assert (fresh_db.get_video(vid)["group_id"], fresh_db.get_video(vid)["plex_kind"]) == (
-        None,
-        "movies",
-    )
 
 
 @pytest.fixture
@@ -361,19 +327,11 @@ def test_migration_backfills_group_id_from_classification(legacy_db):
     assert rows["u2"]["group_id"] == groups["asmr"]
 
 
-def test_migration_backfills_plex_kind_and_leaves_group_null(legacy_db):
-    legacy_db.init_db()
-    rows = _by_url(legacy_db)
-    assert (rows["u3"]["plex_kind"], rows["u3"]["group_id"]) == ("tv", None)
-    assert (rows["u4"]["plex_kind"], rows["u4"]["group_id"]) == ("movies", None)
-
-
 def test_migration_leaves_unmatched_and_null_rows_unsorted(legacy_db):
     legacy_db.init_db()
     rows = _by_url(legacy_db)
     for url in ("u5", "u6"):
         assert rows[url]["group_id"] is None
-        assert rows[url]["plex_kind"] is None
 
 
 def test_migration_folds_group_covers_into_groups(legacy_db):

@@ -68,7 +68,7 @@ def _source_duration(path: Path) -> float | None:
 def build_sd(video_id: int, on_progress=None) -> None:
     """Converter handler body. Raises on failure; sd_ready then stays 0."""
     video = db.get_video(video_id)
-    if not video or video.get("source") == "library" or video.get("status") != "done":
+    if not video or video.get("status") != "done":
         raise ValueError(f"video {video_id} is not a finished download")
     if not video.get("filename"):
         raise ValueError(f"video {video_id} has no file")
@@ -157,7 +157,6 @@ def enqueue_if_selected(video_id: int) -> bool:
             not video
             or group_id is None
             or video.get("group_id") != group_id
-            or video.get("source") == "library"
         ):
             return False
         db.enqueue_job("sd", video_id, priority=SD_PRIORITY)

@@ -226,7 +226,7 @@
               // Merge server metadata without clobbering local sync/chunk fields.
               var next = row || {id: v.id, syncState: 'missing'};
               next.title = v.title; next.group_id = v.group_id;
-              next.plex_kind = v.plex_kind; next.status = v.status;
+              next.status = v.status;
               return window.PtIDB.put('videos', next);
             });
           });
