@@ -187,6 +187,45 @@ final class AppModel: ObservableObject {
         idle.markEngaged()
     }
 
+    private static let legacyHLSPendingKey = "legacyHLSRedownloads"
+    private var legacyHLSMigrationRunning = false
+
+    /// 2.8 -> 2.9: offline HLS packages and paused HLS downloads are gone;
+    /// download those videos again as mp4. Runs on every activation until the
+    /// pending list is empty. A video the server no longer has (404) leaves
+    /// the list rather than being retried forever; a pause or cancellation
+    /// keeps it for the next activation.
+    func migrateLegacyHLSDownloads() {
+        let defaults = UserDefaults.standard
+        var pending = Set(defaults.array(forKey: Self.legacyHLSPendingKey) as? [Int] ?? [])
+        pending.formUnion(cache.removeLegacyHLSPackages())
+        defaults.set(pending.sorted(), forKey: Self.legacyHLSPendingKey)
+        guard !pending.isEmpty, !legacyHLSMigrationRunning,
+              let base = credentials.baseURL else { return }
+        legacyHLSMigrationRunning = true
+        let token = credentials.token
+        let streams = downloadStreamCount
+        let cache = self.cache
+        Task { @MainActor in
+            await withBoundedTaskGroup(limit: cache.maxConcurrentDownloads, over: pending.sorted()) { id in
+                let url = base.appendingPathComponent("videos/\(id)/stream")
+                do {
+                    try await cache.download(id: id, from: url, bearerToken: token, streamCount: streams)
+                } catch is CancellationError {
+                    return
+                } catch is DownloadPausedError {
+                    return
+                } catch {
+                    DevLog.error(error, "legacy HLS re-download failed", ["video_id": "\(id)"])
+                }
+                var left = Set(UserDefaults.standard.array(forKey: Self.legacyHLSPendingKey) as? [Int] ?? [])
+                left.remove(id)
+                UserDefaults.standard.set(left.sorted(), forKey: Self.legacyHLSPendingKey)
+            }
+            self.legacyHLSMigrationRunning = false
+        }
+    }
+
     /// Called whenever the scene becomes active. After more than an hour away
     /// (and nothing playing), the previous session is over: nothing keeps
     /// playing, no player stays full screen, and positions that aren't

@@ -111,9 +111,6 @@ private extension View {
 struct VideoGridView: View {
     init(groups: GroupStore, api: APIClient) {
         _groups = ObservedObject(wrappedValue: groups)
-        // Same APIClient the store uses -- reached via the caller (model.api)
-        // since model itself isn't available until after init.
-        _jobsStore = State(initialValue: JobsStore(api: api))
     }
 
     @EnvironmentObject var model: AppModel
@@ -138,7 +135,6 @@ struct VideoGridView: View {
     /// Set when a tap on a remembering group's video has a resume point worth
     /// asking about; the alert below turns it into either a seek or a fresh start.
     @State private var pendingResume: PendingResume?
-    @State private var jobsStore: JobsStore
     @State private var downloadingAll = false
     @State private var pendingDownloadAll: DownloadAllRequest?
     @State private var errorBannerOffset: CGFloat = 0
@@ -344,12 +340,6 @@ struct VideoGridView: View {
         } message: { request in
             Text("You stopped at \(ResumeDecision.timestamp(request.secs)).")
         }
-        .environment(jobsStore)
-        // Task.never() (ConcurrencyExtras) isn't linkable from this target --
-        // it isn't a direct dependency here, only transitively via test-only
-        // packages -- so subscribe/unsubscribe follow view appearance instead.
-        .onAppear { jobsStore.subscribe() }
-        .onDisappear { jobsStore.unsubscribe() }
     }
 
     private var tabRoot: some View {

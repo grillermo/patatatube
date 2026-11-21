@@ -110,6 +110,7 @@ struct PatataTubeApp: App {
                         // path monitor doesn't report what it missed.
                         if let picker = model.serverPicker { Task { await picker.probe() } }
                         model.cache.resumeInterrupted(bearerToken: model.credentials.token)
+                        model.migrateLegacyHLSDownloads()
                         // iOS reclaims the loopback listener while the app is
                         // suspended, and a proxy that came back dead takes every
                         // cached video's playback URL with it.

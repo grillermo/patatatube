@@ -15,7 +15,6 @@ struct DownloadsView: View {
     // Optional lifecycle seam for hosted inspection of SwiftUI-resolved environment values.
     var didAppear: ((Self) -> Void)? = nil
     @EnvironmentObject var model: AppModel
-    @Environment(JobsStore.self) private var jobsStore: JobsStore?
     @State private var meter = DownloadSpeedMeter()
     // Deliberately not driven from inside the TimelineView body below:
     // mutating @State during body evaluation is a render-phase write.
@@ -29,22 +28,7 @@ struct DownloadsView: View {
             let completed = recent().compactMap { completion in
                 video(completion.videoID, completion.versionID).map { (completion, $0) }
             }
-            let snapshot = jobsStore?.snapshot ?? .empty
-            let converting = snapshot.running + snapshot.queued
             List {
-                if !converting.isEmpty {
-                    Section("Converting") {
-                        ForEach(converting) { job in
-                            convertingRow(job)
-                        }
-                        // The server sends at most 20 queued rows; the rest is a count.
-                        if snapshot.queuedTotal > snapshot.queued.count {
-                            Text("+\(snapshot.queuedTotal - snapshot.queued.count) more")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
                 if !activeItems.isEmpty {
                     Section {
                         ForEach(activeItems) { item in
@@ -87,7 +71,6 @@ struct DownloadsView: View {
             }
         }
         .onAppear {
-            jobsStore?.subscribe()
             // Confirms the real counter is wired here and not the `{ 0 }`
             // default this view falls back to for tests and previews.
             DevLog.event(.download, "downloads view appeared", [
@@ -96,7 +79,6 @@ struct DownloadsView: View {
             ])
             didAppear?(self)
         }
-        .onDisappear { jobsStore?.unsubscribe() }
     }
 
     private func activeRow(_ item: DownloadActivity) -> some View {
@@ -134,27 +116,6 @@ struct DownloadsView: View {
         // Not `.combine`: combining children collapses the menu's own
         // accessibility element, and the menu has to stay separately tappable.
         .accessibilityElement(children: .contain)
-    }
-
-    private func convertingRow(_ job: ConversionJob) -> some View {
-        let rowVideo = video(job.videoID, job.versionID)
-        return HStack {
-            thumbnail(rowVideo)
-            Text(rowVideo?.title ?? job.title ?? "Video \(job.videoID)")
-            Spacer()
-            if let progress = job.progress, progress > 0 {
-                Text("\(Int(progress * 100))%")
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                ProgressView(value: min(max(progress, 0), 1))
-                    .progressViewStyle(.circular)
-                    .frame(width: 22, height: 22)
-            } else {
-                ProgressView().frame(width: 22, height: 22)
-            }
-        }
-        .accessibilityElement(children: .combine)
     }
 
     /// Small poster to the left of the title. Thumb-sized decode (the grid's
