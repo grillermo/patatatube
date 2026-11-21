@@ -382,7 +382,7 @@ logged in.
 ### iOS
 
 - `ios/PatataTubeKit/` — a local SwiftPM package holding all logic (`APIClient`, `CacheManager`, `VideoStore`, `Video`, `CredentialStore`). This is the testable core; build/isolate bugs here with `swift build`.
-- `ios/PatataTube/` — the SwiftUI app shell (`Sources/*.swift`), an XcodeGen target. `Video` decodes the server's snake_case JSON; `CacheManager` downloads MP4s for offline playback; `VideoStore` does optimistic group/upload against `APIClient`.
+- `ios/PatataTube/` — the SwiftUI app shell (`Sources/*.swift`), an XcodeGen target. `Video` decodes the server's snake_case JSON; `CacheManager` downloads MP4s into the shared `MediaStore` for offline playback; `VideoStore` does optimistic group/upload against `APIClient`.
 - **The app talks to the LAN server when it can, the remote URL otherwise.**
   `AppModel.credentials` is a `RoutedCredentialStore` (PatataTubeKit,
   `ServerRoute.swift`) wrapping the Keychain store: its `baseURL` returns the
@@ -488,23 +488,31 @@ logged in.
   full-screen player when `PlaybackSource.airPlayRouteActive`. It is the MP4 `stream` URL, the only source there is. A route change mid-video swaps the item in place
   (`VideoPlayerView.switchSourceForAirPlay`). Every other item stays on the
   device and mirroring shows it; the audio queue never uses `airplay_mp4`.
-- **Downloads can be paused, and a pause outlives the process.** Each row in
-  the Downloads view carries a three-dot menu holding Cancel plus Pause (or
-  Resume). `CacheManager.pause` is deliberately not `cancel`: cancel wipes
-  resume state so a re-tap starts clean, pause preserves it. The segmented path
-  (parallel ranged mp4 transfers) stops transferring but keeps its partial part files and manifest
-  intact, the durable state for byte-by-byte continuation; on resume, segments
-  re-request only the remaining bytes via `Range` + `If-Range` computed from the
-  part file's size on disk. The plain `URLSession` path is unchanged: still
-  cancels tasks `byProducingResumeData`, still writes `{key}.resume` files, and
-  still resumes via `session.downloadTask(withResumeData:)` — Apple's resume-data
-  mechanism. Entries live in `paused-downloads.json` (`PausedDownloadStore`) in
-  the cache root, and `resumeInterrupted()` skips their keys, which is the only
-  thing stopping the next foreground from silently un-pausing them. A paused
-  download **keeps its concurrency permit**: `download`'s `defer` hands ownership
-  to the paused-permit table instead of releasing, and every stored entry
-  re-reserves one at launch, so pausing everything means nothing downloads until
-  the user acts.
+- **Playback and downloads share one per-video store.** `MediaStore`
+  (PatataTubeKit) keeps one entry per cache key under
+  `Documents/videos/.store/<key>/`: a sparse `data.bin` plus `entry.json`
+  (ETag, size, committed ranges, pin/paused, last access), and in memory the
+  **claims** — ranges a fetcher is downloading right now. Claims never
+  overlap, so a byte is fetched once even while a video is watched and
+  downloaded at the same time. `StreamProxy` answers AVPlayer's **full**
+  requested range as one streamed 206 — never a capped window: 2.8 answered
+  with 8 MB windows, and AVPlayer failed every longer file. It serves
+  committed bytes from disk, waits for a fetcher at most 4 MB behind the
+  playhead, or starts its own playback fetcher, which parks 32 MB ahead of
+  what was sent (its claim is then *idle*, and a download may take over the
+  rest). A download pins the entry and keeps `streamCount` fetchers on the
+  holes (`DownloadJobRunner`); **pause** cancels them and keeps the committed
+  ranges and the gate permit, **resume** refills the holes, **cancel** unpins
+  and deletes once no player response still reads the entry. Whatever closes
+  the last hole — a download or watching — renames `data.bin` to
+  `videos/<id>.mp4`, so a video watched to the end *is* a download. Unpinned
+  partial entries are LRU-evicted under 50 GB; pinned ones and finished mp4s
+  never. `CacheManager` keeps only the synchronous UI mirror and sends store
+  writes through one serial queue (`settleStoreWork()` waits for it). First
+  launch of 2.9 deletes `Caches/stream`, segmented part files and `.resume`
+  files, and turns 2.8 paused downloads into paused entries that restart
+  from zero once (`LegacyCacheMigration`). Design:
+  `docs/superpowers/specs/2026-11-21-streaming-mp4-proxy-design.md`.
 - **2.9.0 removed HLS.** `PlaybackSource` has four branches: `local_mp4`,
   `airplay_mp4`, `proxy_mp4` and `direct_mp4`. On activation
   `AppModel.migrateLegacyHLSDownloads` deletes 2.8's offline HLS packages
