@@ -19,6 +19,10 @@ final class ChunkedRangeProtocol: URLProtocol {
         /// Called with the bytes delivered so far. Returning false cuts the
         /// response short with `failureError`.
         let afterChunk: (Int) -> Bool
+        /// False (default): the loop runs synchronously inside `startLoading`.
+        /// True: it runs on a global queue, so `stopLoading` is delivered
+        /// while the transfer is still going.
+        var asyncDelivery: Bool = false
     }
 
     private static let lock = NSLock()
@@ -77,14 +81,18 @@ final class ChunkedRangeProtocol: URLProtocol {
         cancelLock.withLock { isCancelled = true }
     }
 
-    /// Delivers synchronously, on the thread CFNetwork calls this on.
+    /// Default (`Plan.asyncDelivery == false`): delivers synchronously, on the
+    /// thread CFNetwork calls this on. `URLProtocolClient` callbacks are only
+    /// honoured from the client thread, so those `didLoad` calls sit
+    /// unprocessed until `startLoading` returns, and `stopLoading` cannot run
+    /// mid-transfer. The stall is bounded by the test, and every blocking stub
+    /// in this target releases its semaphore on the way out.
     ///
-    /// Tempting to hand the loop to a private queue so it stops occupying a
-    /// pooled loader thread — but `URLProtocolClient` callbacks are only
-    /// honoured from the client thread, so an async loop's `didLoad` calls sit
-    /// unprocessed until that thread frees up. That made things strictly
-    /// worse. The stall this stub allows is bounded by the test, and every
-    /// blocking stub in this target now releases its semaphore on the way out.
+    /// With `asyncDelivery`, the headers go out here and the body loop runs on
+    /// a global queue, so the client thread is free: bytes reach the delegate
+    /// as they are sent and `stopLoading` (a cancel) is seen between chunks.
+    /// Needed to test cancellation; it also changes timing for others, so it
+    /// is opt-in.
     override func startLoading() {
         guard let path = request.url?.path,
               let plan = Self.lock.withLock({ Self.plans[path] })
@@ -116,7 +124,11 @@ final class ChunkedRangeProtocol: URLProtocol {
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
 
-        DispatchQueue.global().async { [self] in deliver(body: body, header: header, path: path, plan: plan) }
+        if plan.asyncDelivery {
+            DispatchQueue.global().async { [self] in deliver(body: body, header: header, path: path, plan: plan) }
+        } else {
+            deliver(body: body, header: header, path: path, plan: plan)
+        }
     }
 
     private func deliver(body: Data, header: String, path: String, plan: Plan) {

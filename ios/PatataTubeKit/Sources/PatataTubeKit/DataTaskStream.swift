@@ -6,6 +6,13 @@ import Foundation
 /// suspended, and it resumes once the reader drains below `lowWater`, so a
 /// parked playback fetcher stops pulling from the network instead of filling
 /// memory. Uses a per-task delegate, so it works on any session.
+///
+/// Ownership: `task.delegate = stream` and `stream.task = task` form a retain
+/// cycle until the task completes. Every caller MUST call `cancel()` on every
+/// exit path, including an early `break` or a throw out of `for try await`,
+/// or a suspended or unfinished task keeps the stream alive.
+///
+/// `nextChunk()` supports a single concurrent reader.
 final class DataTaskStream: NSObject, URLSessionDataDelegate, AsyncSequence, @unchecked Sendable {
     typealias Element = Data
 
@@ -75,6 +82,8 @@ final class DataTaskStream: NSObject, URLSessionDataDelegate, AsyncSequence, @un
             continuation?.resume(returning: http)
         } else {
             continuation?.resume(throwing: URLError(.badServerResponse))
+            completionHandler(.cancel)
+            return
         }
         completionHandler(.allow)
     }
@@ -104,7 +113,9 @@ final class DataTaskStream: NSObject, URLSessionDataDelegate, AsyncSequence, @un
             }
             return (responseContinuation, dataWaiter)
         }
-        continuation?.resume(throwing: error ?? URLError(.badServerResponse))
+        // A cancel before the headers arrived is ours: report it as such.
+        let wasCancelled = lock.withLock { isCancelled }
+        continuation?.resume(throwing: wasCancelled ? CancellationError() : (error ?? URLError(.badServerResponse)))
         waiter?.resume()
     }
 

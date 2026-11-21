@@ -48,7 +48,8 @@ struct DataTaskStreamTests {
         ChunkedRangeProtocol.stub(path: path, plan: .init(
             fullBody: sampleBody(100_000), etag: "\"c\"", chunkSize: 1000,
             failureError: URLError(.networkConnectionLost),
-            afterChunk: { _ in Thread.sleep(forTimeInterval: 0.005); return true }
+            afterChunk: { _ in Thread.sleep(forTimeInterval: 0.005); return true },
+            asyncDelivery: true
         ))
         defer { ChunkedRangeProtocol.reset(path: path) }
         let (_, stream) = try await DataTaskStream.start(request(path, range: "bytes=0-99999"), session: session)
