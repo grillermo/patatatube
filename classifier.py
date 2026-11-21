@@ -89,8 +89,8 @@ async def _post(provider: Provider, payload: dict) -> dict:
     # _scproxy.get_proxies() -> SystemConfiguration -> a synchronous XPC round
     # trip to cfprefsd. On the child side of gunicorn's fork that Mach port is
     # invalid, so the call hangs ~30s and then segfaults the whole worker --
-    # taking the download's BackgroundTask (classification, the play counter,
-    # the HLS job) with it.
+    # taking the download's BackgroundTask (classification, the play counter)
+    # with it.
     async with httpx.AsyncClient(timeout=TIMEOUT_SECS, trust_env=False) as client:
         resp = await client.post(
             provider.url,

@@ -22,11 +22,6 @@ def downloader_env(monkeypatch, tmp_path):
     except ImportError:
         # library might fail to import due to circular dependency, that's OK
         pass
-    try:
-        import hls  # noqa: F401
-    except ImportError:
-        # hls might fail, that's OK
-        pass
     import downloader
 
     importlib.reload(db)
@@ -1138,10 +1133,10 @@ async def test_download_youtube_passes_the_id_to_normalization(
 
 
 @pytest.mark.asyncio
-async def test_download_youtube_enqueues_hls_packaging(
+async def test_download_youtube_queues_no_packaging_job(
     monkeypatch, downloader_env, tmp_path
 ):
-    db, downloader, videos_dir = downloader_env
+    db, downloader, _videos_dir = downloader_env
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"youtube-bytes")
 
@@ -1161,11 +1156,8 @@ async def test_download_youtube_enqueues_hls_packaging(
     )
     await downloader.download_video(video_id)
 
-    job = db.claim_job()
-    assert job["kind"] == "hls"
-    assert job["video_id"] == video_id
-    assert job["priority"] == db.PRIORITY_BULK
-    assert job["payload"]["source_path"] == str(videos_dir / f"{video_id}.mp4")
+    assert db.get_video(video_id)["status"] == "done"
+    assert db.claim_job() is None
 
 
 @pytest.mark.asyncio
@@ -1294,13 +1286,6 @@ def classify_env(monkeypatch, downloader_env, tmp_path):
     return db, downloader, add, calls
 
 
-def _hls_payload(db, video_id):
-    while (job := db.claim_job()) is not None and job["kind"] != "hls":
-        pass
-    assert job is not None and job["video_id"] == video_id
-    return job["payload"] or {}
-
-
 @pytest.mark.asyncio
 async def test_download_classifies_an_inbox_video_when_asked(classify_env):
     db, downloader, add, calls = classify_env
@@ -1315,7 +1300,7 @@ async def test_download_classifies_an_inbox_video_when_asked(classify_env):
     assert db.unplayed_count(asmr_id) == 1
     assert db.unplayed_count(inbox_id) == 0
     # Nothing is left for converter.py to do about it.
-    assert "classify" not in _hls_payload(db, video_id)
+    assert db.claim_job() is None
 
 
 @pytest.mark.asyncio
