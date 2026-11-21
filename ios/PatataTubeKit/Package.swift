@@ -39,6 +39,7 @@ let package = Package(
         .testTarget(
             name: "PatataTubeKitTests",
             dependencies: ["PatataTubeKit"],
+            resources: [.copy("Fixtures")],
             swiftSettings: [.define("DEVLOG", .when(configuration: .debug))]
         ),
     ]
