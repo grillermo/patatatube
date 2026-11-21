@@ -2,7 +2,7 @@
 created: 2026-11-21T07:08:46Z
 branch: remove-plex
 trigger: manual
-restored: false
+restored: true
 topic: remove-plex-movies-tv
 ---
 
