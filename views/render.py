@@ -14,7 +14,7 @@ def _preview_src(video: dict) -> str | None:
 
 
 def _display_name(video: dict) -> str:
-    has_named_title = video.get("platform") in ("youtube", "upload") or video.get("source") == "library"
+    has_named_title = video.get("platform") in ("youtube", "upload")
     if has_named_title and video.get("title"):
         return video["title"]
 
@@ -57,14 +57,12 @@ def build_videos_page(
     videos: list[dict],
     groups: list[dict],
     current_group_id: int | None,
-    current_plex_kind: str | None,
 ) -> str:
     template = _env.get_template("videos_page.html")
     return template.render(
         videos=videos,
         groups=groups,
         current_group_id=current_group_id,
-        current_plex_kind=current_plex_kind,
         upload_token=os.getenv("UPLOAD_TOKEN", ""),
         css_version=_asset_version("videos.css"),
         js_version=_asset_version("videos.js"),

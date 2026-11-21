@@ -4,7 +4,7 @@ from pathlib import Path
 
 import hls
 import pytest
-import library
+import media_probe
 from subtitles import SubtitleTrack
 
 
@@ -131,7 +131,7 @@ def test_subtitle_media_playlist_is_vod(tmp_path):
 
 
 def test_build_command_maps_selected_audio(tmp_path):
-    plan = library.ConversionPlan(
+    plan = media_probe.ConversionPlan(
         passthrough=False,
         video_args=["-c:v", "copy", "-tag:v", "avc1"],
         audio_args=["-c:a:0", "copy"],
@@ -143,7 +143,7 @@ def test_build_command_maps_selected_audio(tmp_path):
 
 
 def test_build_command_no_audio(tmp_path):
-    plan = library.ConversionPlan(
+    plan = media_probe.ConversionPlan(
         passthrough=False,
         video_args=["-c:v", "copy"],
         audio_args=["-an"],
@@ -152,28 +152,6 @@ def test_build_command_no_audio(tmp_path):
     )
     cmd = hls.build_ffmpeg_command(Path("in.mp4"), tmp_path, plan)
     assert "0:a:0?" not in cmd and cmd.count("-map") == 1
-
-
-def test_build_package_selects_audio_lang(tmp_path):
-    probe = {
-        "streams": [
-            {"codec_type": "video", "codec_name": "h264", "width": 1920},
-            {"codec_type": "audio", "codec_name": "eac3", "tags": {"language": "cat"}},
-            {"codec_type": "audio", "codec_name": "eac3", "tags": {"language": "spa"}},
-        ],
-        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2", "duration": "10"},
-    }
-    commands = []
-    hls.build_hls_package(
-        1,
-        tmp_path / "in.mp4",
-        output_root=tmp_path / "out",
-        probe=probe,
-        subtitles=[],
-        run_ffmpeg=_capture(commands),
-        audio_lang="spa",
-    )
-    assert "0:a:1" in commands[0]
 
 
 def test_build_hls_package_passes_duration_and_progress(tmp_path):
@@ -234,84 +212,6 @@ def test_prepare_failure_resets_status_without_raising_by_default(fresh_db, monk
     hls.prepare(video_id, "/tmp/movie.mp4")
 
     assert db.get_video(video_id)["hls_status"] == "none"
-
-
-def test_subtitles_read_from_original_when_streaming_a_converted_file(tmp_path):
-    """The streamed mp4 is our own conversion, which carries no subtitles.
-
-    library.convert_library_video passes -sn, so the converted sibling has no
-    subtitle streams at all. Packaging must search the original source for
-    them or an mkv's embedded tracks vanish at exactly the point they would
-    have shipped.
-    """
-    original = tmp_path / "movie.mkv"
-    original.write_bytes(b"x")
-    converted = tmp_path / "movie.mp4"
-    converted.write_bytes(b"x")
-
-    original_probe = {
-        "format": {"duration": "12.0"},
-        "streams": [
-            {"index": 0, "codec_type": "video", "codec_name": "hevc"},
-            {"index": 2, "codec_type": "subtitle", "codec_name": "subrip",
-             "tags": {"language": "eng"}},
-        ],
-    }
-
-    extracted = []
-
-    def fake_probe_source(path):
-        assert Path(path) == original
-        return original_probe
-
-    def fake_convert(track, output_path, fps=None):
-        extracted.append((Path(track.source_path), track.stream_index))
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_path).write_text("WEBVTT\n", encoding="utf-8")
-        return Path(output_path)
-
-    original_probe_source = hls.probe_source
-    original_convert = hls.convert_to_webvtt
-    hls.probe_source = fake_probe_source
-    hls.convert_to_webvtt = fake_convert
-    try:
-        pkg = hls.build_hls_package(
-            11, converted, tmp_path / "hls",
-            probe=COMPAT_PROBE,           # the converted file: no subtitle streams
-            subtitle_source=original,
-            run_ffmpeg=_capture([]),
-        )
-    finally:
-        hls.probe_source = original_probe_source
-        hls.convert_to_webvtt = original_convert
-
-    assert extracted == [(original, 2)]
-    assert [t.language for t in pkg.tracks] == ["en"]
-    assert 'LANGUAGE="en"' in pkg.master_path.read_text(encoding="utf-8")
-
-
-def test_packaging_survives_an_unprobeable_subtitle_source(tmp_path):
-    """A missing original costs subtitles, never the whole package."""
-    converted = tmp_path / "movie.mp4"
-    converted.write_bytes(b"x")
-
-    def boom(path):
-        raise RuntimeError("ffprobe failed")
-
-    original_probe_source = hls.probe_source
-    hls.probe_source = boom
-    try:
-        pkg = hls.build_hls_package(
-            12, converted, tmp_path / "hls",
-            probe=COMPAT_PROBE,
-            subtitle_source=tmp_path / "gone.mkv",
-            run_ffmpeg=_capture([]),
-        )
-    finally:
-        hls.probe_source = original_probe_source
-
-    assert pkg.tracks == []
-    assert pkg.master_path.exists()
 
 
 def test_packaged_subtitle_languages_reads_the_master(tmp_path):

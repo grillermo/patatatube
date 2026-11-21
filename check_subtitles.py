@@ -27,7 +27,7 @@ from pathlib import Path
 
 import db
 import hls
-from library import probe_source
+from media_probe import probe_source
 from paths import VIDEOS_DIR
 from subtitles import UnsupportedSubtitleError, convert_to_webvtt, discover_subtitles
 
@@ -100,29 +100,17 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
 
 
-def _stream_source(video: dict, version: dict | None) -> Path:
+def _stream_source(video: dict) -> Path:
     """The file the player actually streams — same rule as router._resolve_hls_source."""
-    if video.get("source") == "library":
-        if not version:
-            sys.exit("video has no version row")
-        return Path(version["converted_path"] or version["source_path"])
     if not video.get("filename"):
         sys.exit("download row has no file yet")
     return VIDEOS_DIR / video["filename"]
-
-
-def _subtitle_source(video: dict, version: dict | None) -> Path | None:
-    """Where subtitles live, which for a library row is the original, not the mp4."""
-    if video.get("source") == "library" and version:
-        return Path(version["source_path"])
-    return None
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("video_id", type=int)
     parser.add_argument("--lang", action="append", help="only these languages (repeatable); default all")
-    parser.add_argument("--version-id", type=int, default=None)
     parser.add_argument("--at", help="prefer a cue near this time (SS or MM:SS or HH:MM:SS)")
     parser.add_argument("--out-dir", default="log/subtitle-checks")
     parser.add_argument("--no-discover", action="store_true",
@@ -130,32 +118,24 @@ def main() -> int:
     args = parser.parse_args()
 
     video = db.get_video(args.video_id)
-    if not video or video.get("deleted_at"):
+    if not video:
         return print(f"video {args.video_id} not found") or 1
-    version = db.get_video_version(args.video_id, args.version_id) if video.get("source") == "library" else None
 
-    source = _stream_source(video, version)
-    sub_source = _subtitle_source(video, version)
+    source = _stream_source(video)
     at = _seconds(args.at) if args.at else None
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"video {video['id']}: {video.get('title')}")
     print(f"  streams   : {source}{'' if source.exists() else '   [MISSING]'}")
-    if sub_source and sub_source != source:
-        print(f"  subs from : {sub_source}{'' if sub_source.exists() else '   [MISSING]'}")
-    print(f"  chosen    : subtitle_lang={video.get('subtitle_lang')!r}")
-    if version:
-        print(f"  db says   : subtitle_langs={version.get('subtitle_langs')}")
     packaged = hls.packaged_subtitle_languages(args.video_id)
     print(f"  packaged  : {'nothing packaged' if packaged is None else sorted(packaged) or 'none'}")
 
-    # Discovery is what fills the DB at scan time; showing it next to the
-    # packaged set is how a stale package (built before the tracks were known)
-    # becomes visible.
+    # Showing discovery next to the packaged set is how a stale package
+    # (built before the tracks were known) becomes visible.
     tracks = []
     if not args.no_discover:
-        search = sub_source or source
+        search = source
         try:
             tracks = discover_subtitles(search, probe_source(search))
         except Exception as exc:  # noqa: BLE001 - discovery failing is a result, not a crash

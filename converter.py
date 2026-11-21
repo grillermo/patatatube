@@ -21,7 +21,6 @@ load_dotenv()
 import app_logging  # noqa: E402
 import db  # noqa: E402
 import hls  # noqa: E402
-import library  # noqa: E402
 import sd  # noqa: E402
 from paths import ensure_media_root  # noqa: E402
 
@@ -37,27 +36,17 @@ def _positive_int_env(name: str, default: int) -> int:
 FFMPEG_JOB_LIMIT = _positive_int_env("FFMPEG_JOB_LIMIT", 2)
 
 
-def _handle_convert(job: dict, on_progress) -> None:
-    version_id = job.get("version_id") or 0
-    if version_id <= 0:
-        raise ValueError("convert job requires a positive version_id")
-    library.convert_library_video(
-        job["video_id"], version_id, raise_errors=True, on_progress=on_progress
-    )
-
-
 def _handle_hls(job: dict, on_progress) -> None:
     payload = job.get("payload") or {}
     hls.prepare(
         job["video_id"], payload["source_path"],
-        subtitle_source=payload.get("subtitle_source_path"),
         raise_errors=True, on_progress=on_progress,
     )
 
 
 def _handle_normalize(job: dict, on_progress) -> dict:
     # Imported lazily: downloader pulls in pybalt, which the other kinds do not
-    # need, and a normalize job is rare compared to convert.
+    # need, and a normalize job is rare compared to hls.
     from downloader import _normalize_media_for_ios_sync
 
     payload = job.get("payload") or {}
@@ -74,7 +63,6 @@ def _handle_sd(job: dict, on_progress) -> None:
 
 
 JOB_HANDLERS = {
-    "convert": _handle_convert,
     "hls": _handle_hls,
     "normalize": _handle_normalize,
     "sd": _handle_sd,
@@ -114,13 +102,7 @@ def cleanup_orphan(job: dict) -> None:
     failure here must not stop the runner from draining the queue.
     """
     try:
-        if job["kind"] == "convert":
-            temp = library.temp_target_for(
-                job["video_id"], version_id=job.get("version_id") or 0
-            )
-            if temp is not None:
-                Path(temp).unlink(missing_ok=True)
-        elif job["kind"] == "hls":
+        if job["kind"] == "hls":
             hls.invalidate(job["video_id"])
         elif job["kind"] == "sd":
             sd.part_path(job["video_id"]).unlink(missing_ok=True)
@@ -140,20 +122,13 @@ def worker_loop(stop: threading.Event, poll_interval: float = 1.0) -> None:
 
 
 def recover_orphans() -> None:
-    """Requeue crashed work, clean partials, and finalize exhausted versions."""
+    """Requeue crashed work and clean partials."""
     orphans = db.reset_orphan_jobs()
     for orphan in orphans:
         print(f"[job] requeued orphan kind={orphan['kind']} id={orphan['video_id']}", flush=True)
         cleanup_orphan(orphan)
 
     swept = db.sweep_exhausted_jobs()
-    db.recover_exhausted_convert_versions()
-
-    # After the requeue above, anything still 'converting' with no pending job
-    # is debris from a crash between /prepare's status write and its enqueue.
-    stranded = db.recover_jobless_converting_versions()
-    if stranded:
-        print(f"[job] freed {stranded} version(s) stuck converting with no job", flush=True)
 
     if swept:
         print(f"[job] failed {swept} job(s) past {db.MAX_JOB_ATTEMPTS} attempts", flush=True)

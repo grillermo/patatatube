@@ -5,7 +5,6 @@ import logging
 
 import classifier
 import db
-import hls
 import sd
 
 logger = logging.getLogger(__name__)
@@ -17,7 +16,7 @@ def set_group(video_id: int, group_id: int) -> bool:
     This is a pure column write.
     """
     video = db.get_video(video_id)
-    if db.get_group(group_id) is None or not video or video.get("plex_kind") is not None:
+    if db.get_group(group_id) is None or not video:
         return False
     db.set_video_group(video_id, group_id)
     # Moving a video into the currently-selected /sd group is one of the
@@ -25,13 +24,6 @@ def set_group(video_id: int, group_id: int) -> bool:
     # gets one until someone reselects the group or reruns the backfill.
     sd.enqueue_if_selected(video_id)
     return True
-
-
-def choose_version(video_id: int, version_id: int) -> bool:
-    chosen = db.set_chosen_version(video_id, version_id)
-    if chosen:
-        hls.invalidate(video_id)
-    return chosen
 
 
 def classify_download(

@@ -40,15 +40,14 @@
   var group_id=params.get('group_id');
   if(group_id){
     document.cookie='preferred_group_id='+encodeURIComponent(group_id)+';path=/;max-age=31536000;SameSite=Lax';
-  }{% if not current_plex_kind %}else{
+  }else{
     var m=document.cookie.match(/(?:^|;\s*)preferred_group_id=([^;]+)/);
     if(m){window.location.replace('/?group_id='+m[1]);}
-  }{% endif %}
+  }
 })();
 </script>
 <h2 style="text-align:center;margin-bottom:12px;font-size:1.1em;max-width:900px;margin-left:auto;margin-right:auto">Patata Videos</h2>
-{{ m.nav(groups, current_group_id, current_plex_kind) }}
-{# "Display titles" is a per-group setting, so a Plex feed never has one. #}
+{{ m.nav(groups, current_group_id) }}
 {% set current_group = (groups | selectattr("id", "equalto", current_group_id) | list | first) if current_group_id else None -%}
 {% set show_titles = current_group and current_group.get("display_titles") -%}
 <div class="grid">

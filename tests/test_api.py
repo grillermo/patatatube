@@ -280,29 +280,6 @@ def test_upload_reuses_completed_youtube_video(client, monkeypatch):
     assert queued == []
 
 
-def test_upload_reused_legacy_plex_youtube_video_returns_conflict(client, monkeypatch):
-    queued = []
-    monkeypatch.setattr("router.download_video", lambda *a, **kw: queued.append((a, kw)))
-
-    import db
-
-    existing_id = db.add_video(
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-        platform="youtube",
-        source_key="dQw4w9WgXcQ",
-    )
-    db.update_video(existing_id, status="done", filename="existing.mp4")
-    db.set_video_plex_kind(existing_id, "movies")
-
-    resp = client.post(
-        "/upload",
-        json={"url": "https://youtu.be/dQw4w9WgXcQ"},
-        headers={"Authorization": "Bearer test-secret"},
-    )
-
-    assert resp.status_code == 409
-    assert queued == []
-
 def test_stream_not_found(client):
     resp = client.get("/videos/999/stream", headers=AUTH)
     assert resp.status_code == 404
@@ -692,20 +669,6 @@ def test_videos_page_shows_youtube_title(client):
     assert "Saved YouTube Title" in resp.text
 
 
-def test_videos_page_shows_library_title_not_filesystem_path(client, tmp_path):
-    import db
-
-    vid_id, src = make_library_row(tmp_path)
-    db.set_library_state(vid_id, "done", converted_path=str(tmp_path / "ep.mp4"))
-    resp = client.get("/videos")
-    assert resp.status_code == 200
-    # LIB_ITEM_API's title is "System" — must appear as the rendered card
-    # title, not merely as a substring of unrelated page chrome (e.g. the
-    # CSS "-apple-system" font stack, which also contains "System").
-    assert '<div class="name-overlay">System</div>' in resp.text
-    assert str(src) not in resp.text
-
-
 def test_videos_page_shows_youtube_video_directly(client):
     import db
 
@@ -877,12 +840,9 @@ def test_create_group_appends_it(client, auth_headers):
     assert [g["name"] for g in client.get("/api/groups").json()["groups"]][-1] == "cooking"
 
 
-def test_create_group_rejects_a_duplicate_or_plex_name(client, auth_headers):
+def test_create_group_rejects_a_duplicate_or_blank_name(client, auth_headers):
     assert client.post(
         "/api/groups", json={"name": "asmr", "label": "x"}, headers=auth_headers
-    ).status_code == 400
-    assert client.post(
-        "/api/groups", json={"name": "tv", "label": "x"}, headers=auth_headers
     ).status_code == 400
     assert client.post(
         "/api/groups", json={"name": "  ", "label": "x"}, headers=auth_headers
@@ -1133,14 +1093,6 @@ def _library_row_that_passes_through(tmp_path, monkeypatch):
     return _queued_library_row(tmp_path)
 
 
-def _ready_library_row(tmp_path):
-    import db
-
-    vid = _queued_library_row(tmp_path)
-    db.set_library_state(vid, "done")
-    return vid
-
-
 def _seed_multi_audio_movie(tmp_path, converted_langs='["eng", "spa"]', status="done"):
     import db
 
@@ -1163,69 +1115,6 @@ def _seed_multi_audio_movie(tmp_path, converted_langs='["eng", "spa"]', status="
     return vid, version["id"]
 
 
-def test_choose_audio_requires_token(client, tmp_path):
-    vid, _ = _seed_multi_audio_movie(tmp_path)
-
-    resp = client.post(f"/api/videos/{vid}/audio", json={"lang": "spa"})
-
-    assert resp.status_code in (401, 403)
-
-
-def test_choose_audio_sets_lang(client, tmp_path):
-    import db
-
-    vid, _ = _seed_multi_audio_movie(tmp_path)
-    resp = client.post(f"/api/videos/{vid}/audio", json={"lang": "spa"}, headers=AUTH)
-
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
-    assert db.get_video(vid)["audio_lang"] == "spa"
-    assert db.get_video(vid)["status"] == "done"
-
-
-def test_choose_audio_rejects_unknown_lang(client, tmp_path):
-    vid, _ = _seed_multi_audio_movie(tmp_path)
-
-    assert client.post(
-        f"/api/videos/{vid}/audio", json={"lang": "jpn"}, headers=AUTH
-    ).status_code == 400
-    assert client.post(
-        f"/api/videos/{vid}/audio", json={"lang": "cat"}, headers=AUTH
-    ).status_code == 400
-
-
-def test_choose_audio_triggers_reconvert_when_missing(client, tmp_path, monkeypatch):
-    import db
-    import library
-
-    vid, version_id = _seed_multi_audio_movie(tmp_path, converted_langs='["cat"]')
-    spawned = []
-    monkeypatch.setattr(library, "convert_library_video", spawned.append)
-
-    resp = client.post(f"/api/videos/{vid}/audio", json={"lang": "spa"}, headers=AUTH)
-
-    assert resp.status_code == 200
-    assert db.get_video(vid)["status"] == "converting"
-    assert spawned == []
-    job = db.claim_job()
-    assert job["kind"] == "convert"
-    assert job["video_id"] == vid
-    assert job["version_id"] == version_id
-
-
-def test_choose_audio_legacy_null_converted_langs_reconverts(client, tmp_path, monkeypatch):
-    import db
-    import library
-
-    vid, _ = _seed_multi_audio_movie(tmp_path, converted_langs=None)
-    monkeypatch.setattr(library, "convert_library_video", lambda video_id: None)
-
-    client.post(f"/api/videos/{vid}/audio", json={"lang": "spa"}, headers=AUTH)
-
-    assert db.get_video(vid)["status"] == "converting"
-    assert db.queued_job_count() == 1
-
-
 def _seed_subtitle_movie(tmp_path, subtitle_langs=None):
     import db
 
@@ -1245,121 +1134,6 @@ def _seed_subtitle_movie(tmp_path, subtitle_langs=None):
     db.set_version_subtitle_langs(version["id"], json.dumps(subtitle_langs))
     db.set_library_state(vid, "done", converted_path=str(tmp_path / "m.mp4"), version_id=version["id"])
     return vid, version["id"]
-
-
-def test_choose_subtitle_requires_token(client, tmp_path):
-    vid, _ = _seed_subtitle_movie(tmp_path)
-
-    resp = client.post(f"/api/videos/{vid}/subtitle", json={"lang": "es"})
-
-    assert resp.status_code in (401, 403)
-
-
-def test_choose_subtitle_sets_lang(client, tmp_path):
-    import db
-
-    vid, _ = _seed_subtitle_movie(tmp_path)
-    resp = client.post(f"/api/videos/{vid}/subtitle", json={"lang": "es"}, headers=AUTH)
-
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
-    assert db.get_video(vid)["subtitle_lang"] == "es"
-
-
-def test_choose_subtitle_off_is_valid(client, tmp_path):
-    import db
-
-    vid, _ = _seed_subtitle_movie(tmp_path)
-    resp = client.post(f"/api/videos/{vid}/subtitle", json={"lang": ""}, headers=AUTH)
-
-    assert resp.status_code == 200
-    assert db.get_video(vid)["subtitle_lang"] == ""
-
-
-def test_choose_subtitle_rejects_unknown_lang(client, tmp_path):
-    vid, _ = _seed_subtitle_movie(tmp_path)
-
-    resp = client.post(f"/api/videos/{vid}/subtitle", json={"lang": "jp"}, headers=AUTH)
-
-    assert resp.status_code == 400
-
-
-def test_choose_subtitle_does_not_invalidate_hls(client, tmp_path, monkeypatch):
-    import hls
-
-    vid, _ = _seed_subtitle_movie(tmp_path)
-    calls = []
-    monkeypatch.setattr(hls, "invalidate", lambda video_id: calls.append(video_id))
-
-    resp = client.post(f"/api/videos/{vid}/subtitle", json={"lang": "es"}, headers=AUTH)
-
-    assert resp.status_code == 200
-    assert calls == []
-
-
-def test_get_video_exposes_subtitle_tracks_from_scan_cache(client, tmp_path):
-    vid, _ = _seed_subtitle_movie(tmp_path)
-
-    resp = client.get(f"/api/videos/{vid}", headers=AUTH)
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["subtitle_tracks"] == [
-        {"language": "en", "name": "English", "default": True, "forced": False},
-        {"language": "es", "name": "Spanish", "default": False, "forced": False},
-    ]
-
-
-def test_scan_requires_token(client):
-    assert client.post("/api/library/scan").status_code == 401
-
-
-def test_scan_without_plex_token_is_503(client, monkeypatch):
-    monkeypatch.delenv("PLEX_TOKEN", raising=False)
-    resp = client.post("/api/library/scan", headers=AUTH)
-    assert resp.status_code == 503
-
-
-def test_scan_success(client, monkeypatch, tmp_path):
-    monkeypatch.setenv("PLEX_TOKEN", "plex-token")
-    src = tmp_path / "a.mkv"
-    src.write_bytes(b"x")
-    import plex
-    monkeypatch.setattr(plex, "fetch_library_items", lambda: [
-        {**LIB_ITEM_API, "source_path": str(src)},
-    ])
-    resp = client.post("/api/library/scan", headers=AUTH)
-    assert resp.status_code == 200
-    assert resp.json() == {"added": 1, "updated": 0, "skipped": 0, "removed": 0}
-
-    videos = client.get("/api/videos").json()
-    lib = [v for v in videos if v["source"] == "library"]
-    assert len(lib) == 1 and lib[0]["status"] == "unconverted"
-
-
-def test_scan_plex_down_is_502(client, monkeypatch):
-    monkeypatch.setenv("PLEX_TOKEN", "plex-token")
-    import plex
-    def boom():
-        raise plex.PlexError("connection refused")
-    monkeypatch.setattr(plex, "fetch_library_items", boom)
-    resp = client.post("/api/library/scan", headers=AUTH)
-    assert resp.status_code == 502
-
-
-def test_delete_library_video_tombstones(client, tmp_path):
-    import db
-    vid, src = make_library_row(tmp_path)
-    converted = tmp_path / "ep.mp4"
-    converted.write_bytes(b"converted")
-    db.set_library_state(vid, "done", converted_path=str(converted))
-
-    resp = client.post(f"/api/video/{vid}/delete", headers=AUTH)
-    assert resp.status_code == 200
-    assert src.exists()                     # original never touched
-    assert not converted.exists()           # our copy removed
-    assert db.get_video(vid)["deleted_at"] is not None
-    assert vid not in [v["id"] for v in client.get("/api/videos").json()]
 
 
 def test_get_single_video(client, tmp_path):
@@ -1396,320 +1170,6 @@ def make_versioned_movie(tmp_path):
         }
     )
     return vid, src_1080, src_4k
-
-
-def test_api_video_serializes_versions(client, tmp_path):
-    import db
-
-    vid, _, _ = make_versioned_movie(tmp_path)
-    versions = db.get_video_versions(vid)
-    assert db.set_chosen_version(vid, versions[1]["id"]) is True
-
-    resp = client.get(f"/api/videos/{vid}", headers=AUTH)
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["chosen_version_id"] == versions[1]["id"]
-    assert data["audio_lang"] is None
-    assert data["versions"] == [
-        {
-            "id": versions[0]["id"], "label": "1080p", "status": "unconverted",
-            "is_chosen": False, "audio_tracks": [],
-        },
-        {
-            "id": versions[1]["id"], "label": "4K", "status": "unconverted",
-            "is_chosen": True, "audio_tracks": [],
-        },
-    ]
-
-
-def test_choose_version_endpoint_updates_selection(client, tmp_path):
-    import db
-
-    vid, _, _ = make_versioned_movie(tmp_path)
-    versions = db.get_video_versions(vid)
-
-    resp = client.post(
-        f"/api/videos/{vid}/version",
-        json={"version_id": versions[1]["id"]},
-        headers=AUTH,
-    )
-
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
-    assert db.get_video(vid)["chosen_version_id"] == versions[1]["id"]
-
-
-def test_stream_library_supports_version_override(client, tmp_path):
-    import db
-
-    vid, _, src_4k = make_versioned_movie(tmp_path)
-    versions = db.get_video_versions(vid)
-    db.set_library_state(vid, "done", version_id=versions[1]["id"])
-
-    resp = client.get(
-        f"/videos/{vid}/stream?version_id={versions[1]['id']}",
-        headers=AUTH,
-    )
-
-    assert resp.status_code == 200
-    assert resp.content == src_4k.read_bytes()
-
-
-def test_prepare_passthrough_returns_done(client, tmp_path, monkeypatch):
-    import library
-    vid, _ = make_library_row(tmp_path, name="ep.mp4")
-    monkeypatch.setattr(library, "probe_source", lambda p: {
-        "streams": [
-            {"codec_type": "video", "codec_name": "h264", "width": 1920,
-             "codec_tag_string": "avc1"},
-            {"codec_type": "audio", "codec_name": "aac", "channels": 2},
-        ],
-        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
-    })
-    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "done"}
-    import db
-    assert db.get_video(vid)["status"] == "done"
-
-
-def test_prepare_queues_conversion(client, tmp_path, monkeypatch):
-    import library
-    vid, _ = make_library_row(tmp_path)
-    monkeypatch.setattr(library, "probe_source", lambda p: {
-        "streams": [{"codec_type": "video", "codec_name": "hevc", "width": 1920,
-                     "codec_tag_string": "[0][0][0][0]"}],
-        "format": {"format_name": "matroska,webm"},
-    })
-    converted = []
-    monkeypatch.setattr("router.library.convert_library_video",
-                        lambda video_id: converted.append(video_id))
-    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
-    assert resp.status_code == 202
-    assert resp.json() == {"status": "converting"}
-    import db
-    assert converted == []
-    assert db.queued_job_count() == 1
-    assert db.get_video(vid)["status"] == "converting"
-
-
-def test_prepare_enqueues_instead_of_spawning(client, tmp_path, monkeypatch):
-    import db
-    import library
-
-    spawned = []
-    monkeypatch.setattr(library, "convert_library_video", lambda vid: spawned.append(vid))
-    video_id = _library_row_needing_conversion(tmp_path, monkeypatch)
-
-    response = client.post(
-        f"/api/videos/{video_id}/prepare", headers=AUTH, json={}
-    )
-
-    assert response.status_code == 202
-    assert response.json()["status"] == "converting"
-    assert spawned == []
-    assert db.queued_job_count() == 1
-
-
-def test_prepare_passthrough_creates_no_job(client, tmp_path, monkeypatch):
-    import db
-
-    video_id = _library_row_that_passes_through(tmp_path, monkeypatch)
-
-    response = client.post(f"/api/videos/{video_id}/prepare", headers=AUTH, json={})
-
-    assert response.json()["status"] == "done"
-    assert db.queued_job_count() == 0
-
-
-def test_bulk_prepare_is_queued_behind_interactive(client, tmp_path, monkeypatch):
-    import db
-
-    bulk_id = _library_row_needing_conversion(tmp_path, monkeypatch)
-    interactive_id = _library_row_needing_conversion(tmp_path, monkeypatch)
-
-    client.post(
-        f"/api/videos/{bulk_id}/prepare", headers=AUTH, json={"priority": "bulk"}
-    )
-    client.post(f"/api/videos/{interactive_id}/prepare", headers=AUTH, json={})
-
-    assert db.claim_job()["video_id"] == interactive_id
-    assert db.claim_job()["video_id"] == bulk_id
-
-
-def test_prepare_storm_spawns_no_ffmpeg(client, tmp_path, monkeypatch):
-    """The incident, as a test: many prepares, zero ffmpeg from the web process."""
-    import db
-    import library
-
-    spawned = []
-    monkeypatch.setattr(library, "convert_library_video", lambda vid: spawned.append(vid))
-    video_ids = [
-        _library_row_needing_conversion(tmp_path, monkeypatch) for _ in range(25)
-    ]
-
-    for video_id in video_ids:
-        client.post(
-            f"/api/videos/{video_id}/prepare", headers=AUTH, json={"priority": "bulk"}
-        )
-
-    assert spawned == []
-    assert db.queued_job_count() == 25
-
-
-def test_repeated_prepare_for_one_video_queues_one_job(client, tmp_path, monkeypatch):
-    import db
-
-    video_id = _library_row_needing_conversion(tmp_path, monkeypatch)
-
-    client.post(f"/api/videos/{video_id}/prepare", headers=AUTH, json={})
-    client.post(f"/api/videos/{video_id}/prepare", headers=AUTH, json={})
-
-    assert db.queued_job_count() == 1
-
-
-def test_prepare_while_converting_is_noop_202(client, tmp_path, monkeypatch):
-    import db
-    vid, _ = make_library_row(tmp_path)
-    db.set_library_state(vid, "converting")
-    called = []
-    monkeypatch.setattr("router.library.convert_library_video", lambda v: called.append(v))
-    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
-    assert resp.status_code == 202 and called == []
-
-
-def test_prepare_download_row_is_400(client, monkeypatch):
-    import db
-    monkeypatch.setattr("router.download_video", lambda *a, **kw: None)
-    up = client.post("/upload", json={"url": "https://twitter.com/x/status/9"}, headers=AUTH)
-    resp = client.post(f"/api/videos/{up.json()['id']}/prepare", headers=AUTH)
-    assert resp.status_code == 400
-
-
-def test_prepare_selects_allowlisted_source_audio_and_invalidates_hls(client, tmp_path, monkeypatch):
-    import db
-    import library
-
-    vid, _ = make_library_row(tmp_path)
-    version = db.get_video_versions(vid)[0]
-    db.set_library_state(
-        vid, "done", converted_path=str(tmp_path / "ep.mp4"),
-        converted_langs='["eng", "spa"]', version_id=version["id"],
-    )
-    monkeypatch.setattr(library, "probe_source", lambda p: {
-        "streams": [
-            {"codec_type": "video", "codec_name": "h264", "width": 1920,
-             "codec_tag_string": "avc1"},
-            {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "eng"}},
-            {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "spa"}},
-        ],
-        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
-    })
-    invalidated = []
-    monkeypatch.setattr("router.hls.invalidate", invalidated.append)
-
-    resp = client.post(f"/api/videos/{vid}/prepare", json={"audio_lang": "spa"}, headers=AUTH)
-
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "done"}
-    assert db.get_video(vid)["audio_lang"] == "spa"
-    assert invalidated == [vid]
-
-
-def test_prepare_rejects_audio_outside_allowlist_or_source(client, tmp_path, monkeypatch):
-    import library
-
-    vid, _ = make_library_row(tmp_path)
-    monkeypatch.setattr(library, "probe_source", lambda p: {
-        "streams": [
-            {"codec_type": "video", "codec_name": "h264", "width": 1920,
-             "codec_tag_string": "avc1"},
-            {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "eng"}},
-        ],
-        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
-    })
-
-    assert client.post(
-        f"/api/videos/{vid}/prepare", json={"audio_lang": "jpn"}, headers=AUTH
-    ).status_code == 400
-    assert client.post(
-        f"/api/videos/{vid}/prepare", json={"audio_lang": "spa"}, headers=AUTH
-    ).status_code == 400
-
-
-def test_prepare_reconverts_legacy_or_missing_selected_audio(client, tmp_path, monkeypatch):
-    import db
-    import library
-
-    vid, _ = make_library_row(tmp_path)
-    version = db.get_video_versions(vid)[0]
-    db.set_library_state(vid, "done", converted_path=str(tmp_path / "ep.mp4"), version_id=version["id"])
-    monkeypatch.setattr(library, "probe_source", lambda p: {
-        "streams": [
-            {"codec_type": "video", "codec_name": "hevc", "width": 1920,
-             "codec_tag_string": "[0][0][0][0]"},
-            {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "eng"}},
-            {"codec_type": "audio", "codec_name": "aac", "tags": {"language": "spa"}},
-        ],
-        "format": {"format_name": "matroska,webm"},
-    })
-    converted, invalidated = [], []
-    monkeypatch.setattr("router.library.convert_library_video", converted.append)
-    monkeypatch.setattr("router.hls.invalidate", invalidated.append)
-
-    resp = client.post(f"/api/videos/{vid}/prepare", json={"audio_lang": "spa"}, headers=AUTH)
-
-    assert resp.status_code == 202
-    assert converted == []
-    job = db.claim_job()
-    assert job["kind"] == "convert"
-    assert job["video_id"] == vid
-    assert invalidated == [vid]
-    assert db.get_video(vid)["audio_lang"] == "spa"
-
-
-def test_prepare_while_done_is_noop_200(client, tmp_path, monkeypatch):
-    import db
-    vid, _ = make_library_row(tmp_path)
-    db.set_library_state(vid, "done")
-    called = []
-    monkeypatch.setattr("router.library.convert_library_video", lambda v: called.append(v))
-    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "done"}
-    assert called == []
-
-
-def test_prepare_missing_source_is_404(client, tmp_path):
-    import db
-    vid, src = make_library_row(tmp_path)
-    src.unlink()
-    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
-    assert resp.status_code == 404
-    assert "missing" in db.get_video(vid)["error_msg"]
-
-
-def test_prepare_probe_failure_is_500(client, tmp_path, monkeypatch):
-    import db
-    import library
-    vid, _ = make_library_row(tmp_path)
-
-    def boom(p):
-        raise RuntimeError("ffprobe exploded")
-
-    monkeypatch.setattr(library, "probe_source", boom)
-    resp = client.post(f"/api/videos/{vid}/prepare", headers=AUTH)
-    assert resp.status_code == 500
-    assert "ffprobe exploded" in db.get_video(vid)["error_msg"]
-
-
-def test_get_single_video_tombstoned_is_404(client, tmp_path):
-    import db
-    vid, _ = make_library_row(tmp_path)
-    db.tombstone_video(vid)
-    resp = client.get(f"/api/videos/{vid}", headers=AUTH)
-    assert resp.status_code == 404
 
 
 def make_done_download_video(tmp_path):
@@ -1758,31 +1218,6 @@ def test_stream_tombstoned_library_row_is_404(client, tmp_path):
     assert resp.status_code == 404
 
 
-def test_stream_library_serves_converted_copy(client, tmp_path):
-    import db
-    vid, src = make_library_row(tmp_path)
-    converted = tmp_path / "ep.mp4"
-    converted.write_bytes(b"converted-bytes")
-    db.set_library_state(vid, "done", converted_path=str(converted))
-    resp = client.get(f"/videos/{vid}/stream", headers=AUTH)
-    assert resp.status_code == 200
-    assert resp.content == b"converted-bytes"
-
-
-def test_stream_library_passthrough_serves_original(client, tmp_path):
-    import db
-    vid, src = make_library_row(tmp_path, name="ep.mp4")
-    db.set_library_state(vid, "done")  # passthrough: no converted_path
-    resp = client.get(f"/videos/{vid}/stream", headers=AUTH)
-    assert resp.status_code == 200
-    assert resp.content == b"fake"
-
-
-def test_stream_unprepared_library_is_409(client, tmp_path):
-    vid, _ = make_library_row(tmp_path)
-    assert client.get(f"/videos/{vid}/stream", headers=AUTH).status_code == 409
-
-
 def test_ssr_page_appends_stream_token(client, tmp_path):
     vid, f = make_done_download_video(tmp_path)
     try:
@@ -1791,76 +1226,6 @@ def test_ssr_page_appends_stream_token(client, tmp_path):
         assert "?token=" not in html
     finally:
         f.unlink(missing_ok=True)
-
-
-def test_preview_proxies_and_caches(client, tmp_path, monkeypatch):
-    import plex
-    vid, _ = make_library_row(tmp_path)
-    calls = []
-
-    def fake_thumb(rating_key):
-        calls.append(rating_key)
-        return b"jpegbytes"
-
-    monkeypatch.setattr(plex, "fetch_thumb", fake_thumb)
-    monkeypatch.setattr("router.PREVIEWS_DIR", tmp_path / "previews")
-
-    # Clear the cookie to test that access without auth is rejected
-    del client.cookies["upload_token"]
-    assert client.get(f"/videos/{vid}/preview").status_code == 401
-    # Re-set the cookie for the authenticated requests
-    client.cookies.set("upload_token", "test-secret")
-
-    resp = client.get(f"/videos/{vid}/preview", headers=AUTH)
-    assert resp.status_code == 200
-    assert resp.content == b"jpegbytes"
-    assert resp.headers["content-type"] == "image/jpeg"
-    assert calls == ["1264"]
-
-    resp = client.get(f"/videos/{vid}/preview", headers=AUTH)  # served from disk cache
-    assert resp.status_code == 200 and calls == ["1264"]
-
-    resp = client.get(f"/videos/{vid}/preview?kind=show", headers=AUTH)
-    assert resp.status_code == 200 and calls == ["1264", "1262"]
-
-
-def test_preview_resizes_and_keys_cache_on_plex_version(client, tmp_path, monkeypatch):
-    import db, plex, router
-    src = tmp_path / "ep.mkv"
-    src.write_bytes(b"fake")
-    vid, _ = db.upsert_library_video({
-        **LIB_ITEM_API, "source_path": str(src), "preview_version": "v1",
-    })
-    previews = tmp_path / "previews"
-    monkeypatch.setattr("router.PREVIEWS_DIR", previews)
-    monkeypatch.setattr(plex, "fetch_thumb", lambda rating_key: b"RAWTHUMB")
-    resize_calls = []
-
-    def fake_resize(content, max_edge):
-        resize_calls.append((content, max_edge))
-        return b"SMALL"
-
-    monkeypatch.setattr(router, "_resize_jpeg", fake_resize)
-
-    # The serializer publishes the version in the URL, so the client requests it.
-    resp = client.get(f"/videos/{vid}/preview?v=v1", headers=AUTH)
-    assert resp.status_code == 200
-    assert resp.content == b"SMALL"                       # served the resized bytes
-    assert resize_calls == [(b"RAWTHUMB", router.PREVIEW_MAX_EDGE)]
-    # Cache filename carries the Plex thumb version.
-    v1_file = previews / f"1264_v1.{router.PREVIEW_CACHE_SUFFIX}.jpg"
-    assert v1_file.exists()
-
-    # Same version → pure disk read, no refetch/resize.
-    client.get(f"/videos/{vid}/preview?v=v1", headers=AUTH)
-    assert len(resize_calls) == 1
-
-    # Plex changes the art → new version → regenerate, and the stale file is purged.
-    db.upsert_library_video({**LIB_ITEM_API, "source_path": str(src), "preview_version": "v2"})
-    resp = client.get(f"/videos/{vid}/preview?v=v2", headers=AUTH)
-    assert resp.status_code == 200 and len(resize_calls) == 2
-    assert (previews / f"1264_v2.{router.PREVIEW_CACHE_SUFFIX}.jpg").exists()
-    assert not v1_file.exists()
 
 
 def test_preview_404_for_download_rows(client, monkeypatch):
@@ -1928,7 +1293,8 @@ def test_cold_master_playlist_enqueues_an_hls_job(client, tmp_path, monkeypatch)
 
     packaged = []
     monkeypatch.setattr(hls, "prepare", lambda vid, src: packaged.append(vid))
-    video_id = _ready_library_row(tmp_path)
+    monkeypatch.setattr(hls, "HLS_DIR", tmp_path / "hls")
+    video_id, _ = _seed_done_download()
 
     response = client.get(f"/videos/{video_id}/hls/master.m3u8", headers=AUTH)
 
@@ -2525,16 +1891,6 @@ def test_send_to_yoto_409_while_downloading(client, auth_headers, yoto_sent):
     assert yoto_sent == []
 
 
-def test_send_to_yoto_409_for_library_rows(client, auth_headers, yoto_sent, tmp_path):
-    import db
-
-    vid = _done_video(tmp_path)
-    with db._conn() as conn:
-        conn.execute("UPDATE videos SET source = 'library', plex_kind = 'movie' WHERE id = ?", (vid,))
-    assert client.post(f"/api/videos/{vid}/yoto", headers=auth_headers).status_code == 409
-    assert yoto_sent == []
-
-
 def test_send_to_yoto_409_when_file_missing(client, auth_headers, yoto_sent, tmp_path):
     vid = _done_video(tmp_path)
     (tmp_path / f"{vid}.mp4").unlink()
@@ -2552,3 +1908,22 @@ def test_send_to_yoto_502_when_yosubee_fails(client, auth_headers, yoto_sent, tm
     resp = client.post(f"/api/videos/{vid}/yoto", headers=auth_headers)
     assert resp.status_code == 502
     assert "No card named English" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("method,path", [
+    ("post", "/api/library/scan"),
+    ("post", "/api/videos/1/version"),
+    ("post", "/api/videos/1/audio"),
+    ("post", "/api/videos/1/subtitle"),
+    ("post", "/api/videos/1/prepare"),
+    ("post", "/videos/1/version"),
+])
+def test_library_endpoints_are_gone(client, auth_headers, method, path):
+    response = getattr(client, method)(path, headers=auth_headers, json={})
+    assert response.status_code in (404, 405)
+
+
+def test_group_named_tv_is_allowed_now(client, auth_headers):
+    response = client.post("/api/groups", headers=auth_headers,
+                           json={"name": "tv", "label": "TV"})
+    assert response.status_code == 201

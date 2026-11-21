@@ -18,7 +18,7 @@ from pathlib import Path
 
 import db
 import ffmpeg_progress
-from media_probe import audio_track_list, plan_conversion, probe_source, select_audio_indices
+from media_probe import plan_conversion, probe_source, select_audio_indices
 from paths import HLS_DIR
 from subtitles import (
     SubtitleTrack,
@@ -214,26 +214,6 @@ def _master_playlist(probe: dict, tracks: list[SubtitleTrack], keys: list[str]) 
     return "\n".join(lines) + "\n"
 
 
-def _discover_for_package(source: Path, probe: dict, subtitle_source) -> list[SubtitleTrack]:
-    """Find the subtitle tracks to package alongside ``source``.
-
-    ``source`` is what gets segmented, and for a library row that is usually
-    our own converted mp4 — which has no subtitle streams at all, because
-    `library.convert_library_video` passes ``-sn``. So when the caller names a
-    separate ``subtitle_source`` (the original file), that is what gets
-    searched, both for sidecars and for embedded tracks. Its probe costs an
-    extra ffprobe; a failure there costs subtitles, never the package.
-    """
-    subtitle_source = Path(subtitle_source) if subtitle_source else source
-    if subtitle_source == source:
-        return discover_subtitles(source, probe)
-    try:
-        return discover_subtitles(subtitle_source, probe_source(subtitle_source))
-    except Exception:  # noqa: BLE001 - an unreadable original must not fail packaging
-        traceback.print_exc()
-        return []
-
-
 def build_hls_package(
     video_id: int,
     source_path,
@@ -241,9 +221,7 @@ def build_hls_package(
     *,
     probe: dict | None = None,
     subtitles: list[SubtitleTrack] | None = None,
-    subtitle_source=None,
     run_ffmpeg=ffmpeg_progress.run_ffmpeg,
-    audio_lang: str | None = None,
     on_progress=None,
 ) -> HlsPackage:
     """Probe, segment, normalize subtitles, and write the multivariant playlist."""
@@ -252,13 +230,7 @@ def build_hls_package(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     probe = probe if probe is not None else probe_source(source)
-    tracks = audio_track_list(probe)
-    audio_indices: list[int] | None = None
-    if audio_lang:
-        match = next((index for index, track in enumerate(tracks) if track["lang"] == audio_lang), None)
-        audio_indices = [match] if match is not None else None
-    if audio_indices is None:
-        audio_indices = select_audio_indices(probe, [])
+    audio_indices = select_audio_indices(probe, [])
     plan = plan_conversion(probe, audio_indices=audio_indices)
     run_ffmpeg(
         build_ffmpeg_command(source, out_dir, plan),
@@ -268,7 +240,7 @@ def build_hls_package(
 
     discovered = (
         subtitles if subtitles is not None
-        else _discover_for_package(source, probe, subtitle_source)
+        else discover_subtitles(source, probe)
     )
     duration = _duration(probe)
     fps = _frame_rate(probe) or 24.0
@@ -315,23 +287,19 @@ def prepare(
     video_id: int,
     source_path,
     *,
-    subtitle_source=None,
     raise_errors: bool = False,
     on_progress=None,
 ) -> None:
     """Background task: build the HLS package and record readiness in the DB.
 
     Runs synchronously (FastAPI runs sync background tasks on a thread). On
-    failure the status reverts to 'none' so a later request retries, mirroring
-    the library-convert path which never leaves a row wedged in 'converting'.
+    failure the status reverts to 'none' so a later request retries, so a row
+    is never left wedged in 'converting'.
     Converter workers opt into re-raising after the reset so the job can also
     be marked failed.
     """
     try:
-        video = db.get_video(video_id)
-        audio_lang = video.get("audio_lang") if video else None
-        build_hls_package(video_id, source_path, audio_lang=audio_lang,
-                          subtitle_source=subtitle_source, on_progress=on_progress)
+        build_hls_package(video_id, source_path, on_progress=on_progress)
         db.set_hls_status(video_id, "done")
     except Exception:  # noqa: BLE001 - persist state before optional re-raise
         traceback.print_exc()

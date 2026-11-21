@@ -1,81 +1,19 @@
 """Canonical video presenter shared by the SSR page and the JSON API."""
 
-import json
-
-from library import allowed_audio_langs
-
-
-def _audio_tracks(version: dict) -> list[dict]:
-    """Return selectable source tracks and whether each is in the conversion."""
-    try:
-        source_tracks = json.loads(version.get("audio_langs") or "[]")
-    except (TypeError, ValueError):
-        return []
-    converted = None
-    if version.get("converted_langs"):
-        try:
-            converted = json.loads(version["converted_langs"])
-        except (TypeError, ValueError):
-            converted = None
-    allowed = allowed_audio_langs()
-    first_lang = source_tracks[0]["lang"] if source_tracks else None
-    tracks, seen = [], set()
-    for track in source_tracks:
-        lang = track.get("lang")
-        if lang not in allowed or lang in seen:
-            continue
-        seen.add(lang)
-        available = lang in converted if converted is not None else lang == first_lang
-        tracks.append({"lang": lang, "title": track.get("title") or "", "available": available})
-    return tracks
-
-
-def _subtitle_tracks(version: dict) -> list[dict]:
-    """Parse the scan-time-cached subtitle track list for one version.
-
-    A listed track isn't guaranteed to be in the packaged HLS playlist: a
-    track that fails `convert_to_webvtt` at `hls.build_hls_package` time (a
-    malformed sidecar, an embedded stream ffmpeg will not remux) is silently
-    dropped from `master.m3u8` but stays in this scan-time cache, so a picker
-    entry can be a no-op.
-    """
-    try:
-        return json.loads(version.get("subtitle_langs") or "[]")
-    except (TypeError, ValueError):
-        return []
-
 
 def _hls_ready(video: dict) -> bool:
-    """Whether an HLS package can be served for this row.
-
-    Download rows are ready once status is 'done'; library rows once a version
-    has converted. Pure check — never touches the filesystem, because this runs
-    once per row in the list endpoint.
-    """
-    if (video.get("source") or "download") == "library":
-        versions = video.get("versions") or []
-        return any(v.get("status") == "done" for v in versions) or bool(video.get("converted_path"))
+    """Whether an HLS package can be served for this row. Pure check — never
+    touches the filesystem, because this runs once per row in the list endpoint."""
     return video.get("status") == "done"
 
 
 def preview_url_for(video: dict) -> str | None:
     """Where to fetch this row's poster/thumbnail image from.
 
-    Library rows proxy Plex thumbs through our own endpoint; download rows
-    (YouTube) carry an external thumbnail URL straight in the column. Twitter
-    and file-upload rows have no external thumbnail at all — for those the same
-    endpoint grabs a frame out of the downloaded mp4, which beats the black
-    poster the clients showed when this was None.
+    YouTube rows carry an external thumbnail URL straight in the column.
+    Twitter and file-upload rows have none, so the preview endpoint grabs a
+    frame out of the downloaded mp4.
     """
-    if (video.get("source") or "download") == "library":
-        url = f"/videos/{video['id']}/preview"
-        # Embed the Plex thumb version so the URL changes whenever the poster
-        # changes on Plex. Every cache layer keyed on the URL — the server-side
-        # Redis GET cache, the client's Cache-Control, the iOS in-memory image
-        # cache (keyed by path) — then busts automatically; an unchanged poster
-        # keeps a stable URL and stays cached.
-        version = video.get("preview_version")
-        return f"{url}?v={version}" if version else url
     external = video.get("preview_url")
     if external:
         return external
@@ -85,7 +23,6 @@ def preview_url_for(video: dict) -> str | None:
 
 
 def serialize_video(video: dict) -> dict:
-    source = video.get("source") or "download"
     data = {
         "id": video["id"],
         "url": video["url"],
@@ -97,67 +34,19 @@ def serialize_video(video: dict) -> dict:
         "channel": video.get("channel"),
         "preview_url": preview_url_for(video),
         "group_id": video.get("group_id"),
-        "plex_kind": video.get("plex_kind"),
         "position": video.get("position"),
         "resume_secs": video.get("resume_secs") or 0,
         "status": video["status"],
         # Announced and never played -- the same rule the group badge counts
         # (db._UNPLAYED_WHERE), so the dots in a group add up to its badge.
-        "unwatched": video.get("play_count") == 0
-        and video["status"] == "done"
-        and video.get("plex_kind") is None,
+        "unwatched": video.get("play_count") == 0 and video["status"] == "done",
         "error_msg": video.get("error_msg"),
         "stream_path": f"/videos/{video['id']}/stream",
-        "source": source,
-        "show_title": video.get("show_title"),
-        "season": video.get("season"),
-        "episode": video.get("episode"),
-        "summary": video.get("summary"),
-        "show_preview_url": None,
-        "subtitle_tracks": [],
     }
     if _hls_ready(video):
         data["hls_path"] = f"/videos/{video['id']}/hls/master.m3u8"
-    if video.get("versions") is not None:
-        data["chosen_version_id"] = video.get("chosen_version_id")
-        data["audio_lang"] = video.get("audio_lang")
-        data["subtitle_lang"] = video.get("subtitle_lang")
-        versions = video.get("versions") or []
-        chosen = next((v for v in versions if v.get("is_chosen")), None) or (
-            versions[0] if versions else None
-        )
-        if chosen:
-            data["subtitle_tracks"] = _subtitle_tracks(chosen)
-        data["versions"] = [
-            {
-                "id": version["id"],
-                "label": version.get("label"),
-                "status": version["status"],
-                "is_chosen": bool(version.get("is_chosen")),
-                "audio_tracks": _audio_tracks(version),
-            }
-            for version in versions
-        ]
-    if source == "library":
-        # `url` holds the raw filesystem source_path for library rows (see
-        # db.upsert_library_video) — never expose that to API consumers.
-        # Redact to "" rather than None: the iOS client's Video.url is a
-        # non-optional String, and a null would break JSON decoding of the
-        # whole /api/videos response. Playback/display use stream_path and
-        # title instead, so an empty url is never read for library rows.
-        # Expose only the basename so the client can search by filename
-        # without leaking the server's directory layout.
-        raw_path = video.get("url") or ""
-        data["source_filename"] = raw_path.rsplit("/", 1)[-1] or None
-        data["url"] = ""
-        if video.get("show_rating_key"):
-            show_url = f"/videos/{video['id']}/preview?kind=show"
-            show_version = video.get("show_preview_version")
-            if show_version:
-                show_url += f"&v={show_version}"
-            data["show_preview_url"] = show_url
     if video.get("platform") == "upload":
         # `url` temporarily holds the local upload path until the background
-        # processor moves it into videos/{id}.mp4. Treat it like library paths.
+        # processor moves it into videos/{id}.mp4 — never expose it.
         data["url"] = ""
     return data

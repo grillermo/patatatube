@@ -480,12 +480,6 @@ def test_unique_group_name_suffixes_past_existing_groups(downloader_env):
     )
 
 
-def test_unique_group_name_avoids_plex_kinds(downloader_env):
-    _db, downloader, _videos_dir = downloader_env
-
-    assert downloader._unique_group_name("movies", "Movies") == ("movies-2", "Movies (2)")
-
-
 def _playlist_json():
     return json.dumps(
         {

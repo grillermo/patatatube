@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """The one way PatataTube runs ffmpeg, with optional progress reporting.
 
-Both call sites (library.convert_library_video and hls.build_hls_package) used
-to shell out with subprocess.run and stderr folded into stdout. Progress needs
+Its call site (hls.build_hls_package) used to shell out with subprocess.run and stderr folded into stdout. Progress needs
 stdout to itself (-progress writes there), so stderr moves to its own pipe and
 is drained on a thread -- a full stderr pipe would otherwise deadlock the
 stdout reader on any verbose failure.
