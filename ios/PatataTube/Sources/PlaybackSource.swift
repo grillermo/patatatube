@@ -15,7 +15,7 @@ import PatataTubeKit
 /// candidate would bury the one that actually got played.
 @MainActor
 enum PlaybackSource {
-    /// As `playerItem(for:)`, but reports which of the five source branches was
+    /// As `playerItem(for:)`, but reports which of the four source branches (`local_mp4`, `airplay_mp4`, `proxy_mp4`, `direct_mp4`) was
     /// taken. Playback failures that only happen sometimes are usually a wrong
     /// branch — a `cached` state over a file that is missing or half written,
     /// say — so the branch and the on-disk facts behind it are recorded
@@ -40,10 +40,9 @@ enum PlaybackSource {
                 "local_exists": "\(localExists)",
                 "local_bytes": Self.fileSize(at: local),
                 "status": video.status ?? "-",
-                "has_hls": "\(!(video.hlsPath ?? "").isEmpty)",
                 // Discriminates the two ways a downloaded video ends up streaming.
-                // Proxy down (port nil) kills the offline HLS route as well as the
-                // network ones, because both go through the same URL builder.
+                // Proxy down (port nil) kills the proxied MP4 route, so a non-cached
+                // video falls to `direct_mp4`.
                 "proxy_port": model.streamProxy.port.map(String.init) ?? "nil",
                 // True when *some* version of this video is on disk. `cache` is
                 // keyed by chosenVersionId, so `cache=notCached` together with
@@ -67,35 +66,12 @@ enum PlaybackSource {
            let url = model.airPlayStreamURL(for: video) {
             return chose("airplay_mp4", AVPlayerItem(url: url))
         }
-        if cacheState == .cached {
-            // Else promoted HLS via the proxy.
-            if let offline = model.offlineHLSURL(for: video) {
-                return chose("offline_hls", AVPlayerItem(url: offline))
-            }
-            // Reported cached, yet neither offline source resolved — the cache
-            // and the filesystem disagree. Falls through to streaming below.
-            if log {
-                DevLog.event(.cache, "cached but no local source", [
-                    "video_id": "\(video.id)",
-                    "local": local.path,
-                ])
-            }
-        }
-        if let proxied = model.proxiedHLSURL(for: video) {
-            // Proxied HLS: read-through cache, native subtitle tracks, no headers needed.
-            return chose("proxy_hls", AVPlayerItem(url: proxied))
-        }
-        if let hlsURL = model.hlsURL(for: video) {
-            // Proxy down: direct remote HLS with authed headers (old behavior).
-            return chose("direct_hls", AVPlayerItem(asset: authedAsset(url: hlsURL, model: model)), ["proxy": "down"])
-        }
-        if video.hlsPath == nil || video.hlsPath?.isEmpty == true,
-           let proxied = model.proxiedMP4URL(for: video), model.streamURL(for: video) != nil {
-            // Proxied direct MP4 for rows without an HLS package.
+        if let proxied = model.proxiedMP4URL(for: video), model.streamURL(for: video) != nil {
+            // Proxied MP4: read-through cache, no headers needed.
             return chose("proxy_mp4", AVPlayerItem(url: proxied))
         }
         if let url = model.streamURL(for: video) {
-            // Proxy down: direct MP4 fallback.
+            // Proxy down: direct MP4 with authed headers.
             return chose("direct_mp4", AVPlayerItem(asset: authedAsset(url: url, model: model)), ["proxy": "down"])
         }
         if log {
@@ -106,8 +82,8 @@ enum PlaybackSource {
         return nil
     }
 
-    /// One asset carrying the bearer header, so AVFoundation authenticates the
-    /// HLS playlist, segment, and subtitle sub-requests on the same asset.
+    /// One asset carrying the bearer header, so AVFoundation authenticates every
+    /// range request on the same asset.
     static func authedAsset(url: URL, model: AppModel) -> AVURLAsset {
         var options: [String: Any] = [:]
         if let token = model.credentials.token {

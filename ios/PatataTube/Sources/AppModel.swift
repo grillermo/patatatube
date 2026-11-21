@@ -155,8 +155,7 @@ final class AppModel: ObservableObject {
         self.cache = cache
         self.streamProxy = StreamProxy(
             cache: streamCache,
-            credentials: credentials,
-            offlineRoot: cache.videosRoot
+            credentials: credentials
         )
         self.api = api
         self.resumeStore = resumeStore
@@ -318,9 +317,7 @@ final class AppModel: ObservableObject {
 
     /// `streamURL` with the token in its query, for an AirPlay receiver: the
     /// Apple TV fetches the URL itself, so it can't use the stream proxy
-    /// (loopback) or a bearer header. MP4 rather than HLS because Caddy serves
-    /// the packaged playlists as-is, and their relative segment URIs don't
-    /// carry the token.
+    /// (loopback) or a bearer header.
     func airPlayStreamURL(for video: Video) -> URL? {
         guard !video.streamPath.isEmpty, let token = credentials.token,
               let url = streamURL(for: video),
@@ -329,28 +326,9 @@ final class AppModel: ObservableObject {
         return comps.url
     }
 
-    /// HLS master playlist URL, or nil when the server did not advertise one.
-    func hlsURL(for video: Video) -> URL? {
-        guard let hlsPath = video.hlsPath, !hlsPath.isEmpty else { return nil }
-        return absoluteURL(for: video, path: hlsPath)
-    }
-
-    /// Proxied HLS playback URL; nil when no HLS package or proxy is down.
-    func proxiedHLSURL(for video: Video) -> URL? {
-        guard video.hlsPath?.isEmpty == false else { return nil }
-        return streamProxy.hlsURL(videoId: video.id, versionId: video.chosenVersionId)
-    }
-
     /// Proxied MP4 playback URL; nil when proxy is down.
     func proxiedMP4URL(for video: Video) -> URL? {
         streamProxy.mp4URL(videoId: video.id, versionId: video.chosenVersionId)
-    }
-
-    /// Offline HLS playback URL for a promoted package; nil when absent/proxy down.
-    func offlineHLSURL(for video: Video) -> URL? {
-        guard cache.offlineHLSMasterURL(for: video.id, versionId: video.chosenVersionId) != nil
-        else { return nil }
-        return streamProxy.offlineHLSURL(videoId: video.id, versionId: video.chosenVersionId)
     }
 
     private func absoluteURL(for video: Video, path rawPath: String) -> URL? {

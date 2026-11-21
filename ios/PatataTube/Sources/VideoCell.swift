@@ -186,7 +186,6 @@ struct VideoInfoView: View {
 
                 Section("Playback") {
                     row("Stream path", video.streamPath)
-                    row("HLS path", video.hlsPath)
                     row("Preview URL", video.previewUrl)
                 }
 

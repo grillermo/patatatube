@@ -573,7 +573,6 @@ struct VideoGridView: View {
                         id: activity.videoID,
                         versionId: activity.versionID,
                         remote: parameters.remote,
-                        isHLS: parameters.isHLS,
                         streamCount: parameters.streamCount,
                         preview: parameters.preview
                     )
@@ -833,31 +832,16 @@ struct VideoGridView: View {
             return false
         }
         let preview = resolveImageURL(target.previewUrl)
-        let master = model.hlsURL(for: target)
-        let takesHLS = master != nil && target.hlsPath?.isEmpty == false
-        // The ring reads `cache.state`, so recording it next to the branch is what
-        // ties a frozen percentage to either a live transfer or a stale inFlight
-        // entry left behind by an earlier attempt.
         DevLog.event(.download, "download branch", [
             "video_id": "\(target.id)",
-            "branch": takesHLS ? "hls" : "mp4",
+            "branch": "mp4",
             "status": target.status,
-            "hls_path": target.hlsPath ?? "-",
             "state": DevLog.describe(model.cache.state(for: target.id, versionId: target.chosenVersionId)),
         ])
         do {
-            if let master, takesHLS {
-                try await model.cache.downloadHLS(
-                    id: target.id, versionId: target.chosenVersionId,
-                    masterURL: master,
-                    preview: preview,
-                    bearerToken: model.credentials.token
-                )
-            } else {
-                try await model.cache.download(id: target.id, versionId: target.chosenVersionId, from: url, preview: preview,
-                                               bearerToken: model.credentials.token,
-                                               streamCount: model.downloadStreamCount)
-            }
+            try await model.cache.download(id: target.id, versionId: target.chosenVersionId, from: url, preview: preview,
+                                           bearerToken: model.credentials.token,
+                                           streamCount: model.downloadStreamCount)
             return true
         } catch {
             if isCancellation(error) { return false }
@@ -868,21 +852,16 @@ struct VideoGridView: View {
     }
 
     /// The parameters a paused entry has to remember, resolved from the loaded
-    /// video. Mirrors the branch in `download(_:)` — an HLS row pauses with its
-    /// master playlist URL, everything else with its stream URL.
+    /// video: its stream URL, the stream count and the poster.
     private func pauseParameters(
         for videoID: Int, versionID: Int?
-    ) -> (remote: URL, isHLS: Bool, streamCount: Int,
-          preview: URL?)? {
+    ) -> (remote: URL, streamCount: Int, preview: URL?)? {
         guard let target = Self.downloadVideo(
             id: videoID, versionID: versionID, videos: store.videos
         ) else { return nil }
-        let master = model.hlsURL(for: target)
-        let takesHLS = master != nil && target.hlsPath?.isEmpty == false
-        guard let remote = takesHLS ? master : model.streamURL(for: target) else { return nil }
+        guard let remote = model.streamURL(for: target) else { return nil }
         return (
             remote: remote,
-            isHLS: takesHLS,
             streamCount: model.downloadStreamCount,
             preview: resolveImageURL(target.previewUrl)
         )

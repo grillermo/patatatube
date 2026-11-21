@@ -382,7 +382,7 @@ struct VideoPlayerView: View {
             adopted.pause()
         }
         // Before the URL is built, not after it fails: a dead proxy makes
-        // `offlineHLSURL` hand out an address nothing answers on, and AVPlayer
+        // the proxied mp4 URL an address nothing answers on, and AVPlayer
         // reports that as a 12s buffer followed by -1004.
         await model.streamProxy.ensureRunning()
         guard Self.canContinueSetup(
