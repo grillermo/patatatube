@@ -243,8 +243,7 @@ public actor MediaStore {
     /// identity-less one, or resets one that holds a different identity.
     @discardableResult
     func open(key: String, identity: MediaIdentity) throws -> Int {
-        if entries[key] == nil,
-           FileManager.default.fileExists(atPath: finishedURL(key: key).path) {
+        if entries[key] == nil, finishedFileMatches(key: key, identity: identity) {
             // Finished while nobody held an entry: answer for the mp4.
             var committed = ByteRangeSet()
             committed.insert(DownloadByteRange(start: 0, end: identity.totalByteCount - 1))
@@ -268,8 +267,33 @@ public actor MediaStore {
         } else if entry.manifest.identity != identity, !entry.promoted {
             try reset(key, entry, to: identity)
         }
+        try completePromotionIfNeeded(key, entry)
         entry.verified = true
         return entry.generation
+    }
+
+    /// True when a finished mp4 exists for `key` and has the identity's size.
+    /// One of another size is stale: it is deleted, so the store never
+    /// advertises bytes that are not there.
+    private func finishedFileMatches(key: String, identity: MediaIdentity) -> Bool {
+        let url = finishedURL(key: key)
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? nil
+        if size == identity.totalByteCount { return true }
+        DevLog.event(.cache, "finished mp4 size mismatch, removed", [
+            "key": key, "size": size.map { "\($0)" } ?? "-", "expected": "\(identity.totalByteCount)",
+        ])
+        try? FileManager.default.removeItem(at: url)
+        return false
+    }
+
+    /// A promotion that failed leaves a complete manifest with the file still
+    /// in `data.bin`. Any later open or claim tries the rename again.
+    private func completePromotionIfNeeded(_ key: String, _ entry: Entry) throws {
+        guard !entry.promoted, entry.manifest.isComplete else { return }
+        entry.claims.removeAll()
+        defer { bump(key) }
+        try promote(key, entry)
     }
 
     private func create(key: String, identity: MediaIdentity?) throws -> Entry {
@@ -332,6 +356,10 @@ public actor MediaStore {
     ) -> ClaimResult {
         guard let entry = entry(key) else { return .noEntry }
         if entry.promoted { return .alreadyCommitted }
+        if entry.manifest.isComplete {
+            try? completePromotionIfNeeded(key, entry)
+            return .alreadyCommitted
+        }
         guard let total = entry.manifest.identity?.totalByteCount,
               start >= 0, start < total, end >= start
         else { return .noEntry }
@@ -431,24 +459,27 @@ public actor MediaStore {
         if entry.promoted { return .finished }
         guard entry.generation == generation else { return .stale }
         guard var claim = entry.claims[id] else { return .finished }
-        guard lastByte >= claim.cursor, lastByte <= claim.end else {
+        guard lastByte >= claim.cursor else {
             throw MediaStoreError.commitOutsideClaim
         }
+        // Another claimer may have shortened this claim mid-read; the bytes
+        // past its end now belong to that claimer.
+        let lastByte = min(lastByte, claim.end)
         let range = DownloadByteRange(start: claim.cursor, end: lastByte)
         entry.manifest.committed.insert(range)
         entry.dirtyBytes += range.length
         entry.manifest.lastAccess = now()
         claim.cursor = lastByte + 1
+        // Whatever happens below, the state changed: waiters must wake.
+        defer { bump(key) }
         if entry.manifest.isComplete {
             entry.claims.removeAll()
             try promote(key, entry)
-            bump(key)
             return .promoted
         }
         let done = claim.cursor > claim.end
         entry.claims[id] = done ? nil : claim
         try flushIfDue(key, entry)
-        bump(key)
         return done ? .finished : .continueThrough(claim.end)
     }
 
@@ -506,7 +537,7 @@ public actor MediaStore {
             try FileManager.default.moveItem(at: source, to: destination)
         } catch {
             DevLog.event(.cache, "store promotion failed", ["key": key, "err": "\(error)"])
-            throw MediaStoreError.storageFull
+            throw MediaStoreError.promotionFailed
         }
         try? FileManager.default.removeItem(at: entryDir(key: key))
         entry.promoted = true

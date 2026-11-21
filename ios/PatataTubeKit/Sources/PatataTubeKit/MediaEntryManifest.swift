@@ -67,4 +67,7 @@ enum MediaStoreError: Error, Equatable {
     case storageFull
     /// A fetcher tried to commit bytes outside its claim. A programming error.
     case commitOutsideClaim
+    /// Every byte arrived but renaming `data.bin` to the mp4 failed. The entry
+    /// stays complete; the next open or claim retries the rename.
+    case promotionFailed
 }

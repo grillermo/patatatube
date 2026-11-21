@@ -97,6 +97,7 @@ struct MediaStoreTests {
         let generation = try await store.open(key: "1", identity: identity)
         let seen = await store.version(key: "1")
         let woke = Task { await store.waitForChange(key: "1", after: seen); return true }
+        try await Task.sleep(for: .milliseconds(20))
         try await put(store, key: "1", DownloadByteRange(start: 0, end: 9), generation: generation, from: body)
         #expect(await woke.value)
     }
@@ -118,8 +119,10 @@ struct MediaStoreTests {
             key: "1", from: 0, through: 99, owner: .download, waitWithin: 0
         ) else { Issue.record("refused"); return }
         #expect(try await store.commit(key: "1", claim: claim.id, generation: generation + 1, through: 9) == .stale)
+        #expect(try await store.commit(key: "1", claim: claim.id, generation: generation, through: 9)
+                == .continueThrough(99))
         await #expect(throws: MediaStoreError.commitOutsideClaim) {
-            _ = try await store.commit(key: "1", claim: claim.id, generation: generation, through: 100)
+            _ = try await store.commit(key: "1", claim: claim.id, generation: generation, through: 5)
         }
     }
 
@@ -170,5 +173,60 @@ struct MediaStoreTests {
         _ = try await store.open(key: "1", identity: MediaIdentity(etag: "\"e\"", totalByteCount: 23))
         let claims = await store.claimForDownload(key: "1", slots: 4, minPiece: 1)
         #expect(claims.map { "\($0.cursor)-\($0.end)" }.sorted() == ["0-4", "11-16", "17-22", "5-10"])
+    }
+
+    @Test func aCommitPastAShortenedClaimIsClamped() async throws {
+        let (store, _) = makeStore()
+        let generation = try await store.open(key: "1", identity: identity)
+        guard case .granted(let first) = await store.claim(
+            key: "1", from: 0, through: 999, owner: .download, waitWithin: 0
+        ) else { Issue.record("refused"); return }
+        _ = await store.claim(key: "1", from: 500, through: 999, owner: .playback, waitWithin: 0)
+        let handle = try FileHandle(forWritingTo: store.dataURL(key: "1"))
+        try handle.write(contentsOf: body.subdata(in: 0..<800))
+        try handle.close()
+        #expect(try await store.commit(key: "1", claim: first.id, generation: generation, through: 799) == .finished)
+        #expect(await store.available(key: "1", from: 0)?.bytes == 500)
+        // The claim is gone now; a late commit is just finished.
+        #expect(try await store.commit(key: "1", claim: first.id, generation: generation, through: 799) == .finished)
+    }
+
+    @Test func aFailedPromotionWakesWaitersAndIsRetried() async throws {
+        let (store, root) = makeStore()
+        let generation = try await store.open(key: "1", identity: identity)
+        guard case .granted(let claim) = await store.claim(
+            key: "1", from: 0, through: 999, owner: .download, waitWithin: 0
+        ) else { Issue.record("refused"); return }
+        let handle = try FileHandle(forWritingTo: store.dataURL(key: "1"))
+        try handle.write(contentsOf: body)
+        try handle.close()
+        let seen = await store.version(key: "1")
+        let woke = Task { await store.waitForChange(key: "1", after: seen); return true }
+        try await Task.sleep(for: .milliseconds(20))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: root.path)
+        await #expect(throws: MediaStoreError.promotionFailed) {
+            _ = try await store.commit(key: "1", claim: claim.id, generation: generation, through: 999)
+        }
+        #expect(await woke.value)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+        _ = try await store.open(key: "1", identity: identity)
+        #expect(try Data(contentsOf: store.finishedURL(key: "1")) == body)
+        #expect(!FileManager.default.fileExists(atPath: store.entryDir(key: "1").path))
+    }
+
+    @Test func aFinishedFileOfTheWrongSizeIsDropped() async throws {
+        let (store, _) = makeStore()
+        try body.prefix(10).write(to: store.finishedURL(key: "1"))
+        _ = try await store.open(key: "1", identity: identity)
+        #expect(!FileManager.default.fileExists(atPath: store.finishedURL(key: "1").path))
+        #expect(await store.available(key: "1", from: 0)?.bytes == 0)
+        #expect(await store.manifest(key: "1")?.identity == identity)
+    }
+
+    @Test func aFinishedFileOfTheRightSizeIsServed() async throws {
+        let (store, _) = makeStore()
+        try body.write(to: store.finishedURL(key: "1"))
+        _ = try await store.open(key: "1", identity: identity)
+        #expect(await store.available(key: "1", from: 0)?.bytes == 1000)
     }
 }
