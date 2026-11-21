@@ -13,30 +13,14 @@ def tmp_db(monkeypatch, tmp_path):
     yield db
 
 
-def test_convert_job_success_marks_job_done(tmp_db, monkeypatch):
-    import converter
-
-    called = []
-    monkeypatch.setitem(
-        converter.JOB_HANDLERS, "convert",
-        lambda job, on_progress: called.append(job["video_id"]),
-    )
-    tmp_db.enqueue_job("convert", video_id=42)
-
-    converter.run_job(tmp_db.claim_job())
-
-    assert called == [42]
-    assert tmp_db.get_job(1)["status"] == "done"
-
-
 def test_handler_raising_marks_job_failed_with_the_message(tmp_db, monkeypatch):
     import converter
 
     def boom(job, on_progress):
         raise RuntimeError("ffmpeg exploded")
 
-    monkeypatch.setitem(converter.JOB_HANDLERS, "convert", boom)
-    tmp_db.enqueue_job("convert", video_id=42)
+    monkeypatch.setitem(converter.JOB_HANDLERS, "hls", boom)
+    tmp_db.enqueue_job("hls", video_id=42)
 
     converter.run_job(tmp_db.claim_job())
 
@@ -121,7 +105,7 @@ def test_handler_result_is_stored_on_the_job(tmp_db, monkeypatch):
 def test_unknown_kind_fails_the_job_instead_of_crashing_the_runner(tmp_db):
     import converter
 
-    tmp_db.enqueue_job("convert", video_id=1)
+    tmp_db.enqueue_job("hls", video_id=1)
     job = tmp_db.claim_job()
     job["kind"] = "bogus"
 
@@ -133,9 +117,9 @@ def test_unknown_kind_fails_the_job_instead_of_crashing_the_runner(tmp_db):
 def test_worker_loop_drains_the_queue_then_idles(tmp_db, monkeypatch):
     import converter
 
-    monkeypatch.setitem(converter.JOB_HANDLERS, "convert", lambda job, on_progress: None)
+    monkeypatch.setitem(converter.JOB_HANDLERS, "hls", lambda job, on_progress: None)
     for video_id in range(1, 4):
-        tmp_db.enqueue_job("convert", video_id=video_id)
+        tmp_db.enqueue_job("hls", video_id=video_id)
 
     stop = threading.Event()
     thread = threading.Thread(
@@ -171,9 +155,9 @@ def test_cap_holds_under_a_burst(tmp_db, monkeypatch):
         with guard:
             concurrent -= 1
 
-    monkeypatch.setitem(converter.JOB_HANDLERS, "convert", handler)
+    monkeypatch.setitem(converter.JOB_HANDLERS, "hls", handler)
     for video_id in range(1, 21):
-        tmp_db.enqueue_job("convert", video_id=video_id)
+        tmp_db.enqueue_job("hls", video_id=video_id)
 
     stop = threading.Event()
     threads = [
@@ -205,80 +189,6 @@ def test_cleanup_orphan_invalidates_partial_hls_output(tmp_db, monkeypatch):
     converter.cleanup_orphan({"kind": "hls", "video_id": 42, "payload": None})
 
     assert invalidated == [42]
-
-
-def test_convert_job_without_version_id_does_not_touch_chosen_version(
-    tmp_db, tmp_path
-):
-    import converter
-
-    source = tmp_path / "movie.mkv"
-    video_id, _ = tmp_db.upsert_library_video({
-        "source_path": str(source),
-        "title": "Movie",
-        "plex_kind": "movies",
-        "summary": None,
-        "plex_rating_key": "1",
-    })
-    version = tmp_db.get_video_versions(video_id)[0]
-    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
-    tmp_db.enqueue_job("convert", video_id=video_id)
-
-    converter.run_job(tmp_db.claim_job())
-
-    assert tmp_db.get_job(1)["status"] == "failed"
-    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
-
-
-def test_recover_orphans_keeps_a_requeued_orphan_job_converting(tmp_db, tmp_path):
-    """A crashed *running* job is requeued, so its version is live work, not debris."""
-    import converter
-
-    video_id, _ = tmp_db.upsert_library_video({
-        "source_path": str(tmp_path / "movie.mkv"),
-        "title": "Movie",
-        "plex_kind": "movies",
-        "summary": None,
-        "plex_rating_key": "1",
-    })
-    version = tmp_db.get_video_versions(video_id)[0]
-    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
-    job_id = tmp_db.enqueue_job("convert", video_id=video_id, version_id=version["id"])
-    tmp_db.claim_job()
-
-    converter.recover_orphans()
-
-    assert tmp_db.get_job(job_id)["status"] == "queued"
-    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
-
-
-def test_legacy_exhausted_job_does_not_override_newer_explicit_version_work(
-    tmp_db, monkeypatch, tmp_path
-):
-    import converter
-
-    source = tmp_path / "movie.mkv"
-    video_id, _ = tmp_db.upsert_library_video({
-        "source_path": str(source),
-        "title": "Movie",
-        "plex_kind": "movies",
-        "summary": None,
-        "plex_rating_key": "1",
-    })
-    version = tmp_db.get_video_versions(video_id)[0]
-    monkeypatch.setattr(tmp_db, "MAX_JOB_ATTEMPTS", 1)
-    old_id = tmp_db.enqueue_job("convert", video_id=video_id)
-    tmp_db.claim_job()
-    tmp_db.requeue_job(old_id)
-    tmp_db.sweep_exhausted_jobs()
-    tmp_db.set_library_state(video_id, "converting", version_id=version["id"])
-
-    newer_id = tmp_db.enqueue_job("convert", video_id=video_id, version_id=version["id"])
-
-    converter.recover_orphans()
-
-    assert tmp_db.get_job(newer_id)["status"] == "queued"
-    assert tmp_db.get_video_version(video_id, version["id"])["status"] == "converting"
 
 
 def test_normalize_handler_forwards_the_channel_tag(tmp_db, monkeypatch):

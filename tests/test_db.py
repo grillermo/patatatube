@@ -102,38 +102,6 @@ def test_conn_closes_on_exit(tmp_db):
         conn.execute("SELECT 1")
 
 
-def test_get_all_videos_batches_version_queries(fresh_db, monkeypatch):
-    import db
-    for key, prefix in (("42", "/m/a"), ("43", "/m/b")):
-        db.upsert_library_video(
-            {
-                **_versioned_movie_item(key),
-                "source_path": f"{prefix}-1080.mkv",
-                "versions": [
-                    {"source_path": f"{prefix}-1080.mkv", "label": "1080p"},
-                    {"source_path": f"{prefix}-4k.mkv", "label": "4K"},
-                ],
-            }
-        )
-
-    original_conn = db._conn
-    opened = 0
-
-    def counting_conn():
-        nonlocal opened
-        opened += 1
-        return original_conn()
-
-    monkeypatch.setattr(db, "_conn", counting_conn)
-    videos = db.get_all_videos(plex_kind="movies")
-
-    # Two library rows, each with two versions. The whole listing must use a
-    # single connection — no per-row version fetch (the N+1 that leaked FDs).
-    assert opened == 1
-    for video in videos:
-        assert len(video["versions"]) == 2
-
-
 def test_video_metadata_fields_and_source_lookup(tmp_db):
     vid_id = tmp_db.add_video(
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -175,438 +143,6 @@ def test_init_db_backfills_youtube_preview_urls(tmp_db):
     assert video["preview_url"] == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
 
 
-LIB_ITEM = {
-    "source_path": "/Volumes/Media/media/tv/The.Bear.S01/The.Bear.S01E01.mkv",
-    "title": "System",
-    "plex_kind": "tv",
-    "show_title": "The Bear",
-    "season": 1,
-    "episode": 1,
-    "summary": "Carmy retrains the crew.",
-    "plex_rating_key": "1264",
-    "show_rating_key": "1262",
-}
-
-
-def test_plex_kinds_are_fixed():
-    import db
-    assert db.PLEX_KINDS == ("tv", "movies")
-
-
-def test_upsert_library_video_creates_row(fresh_db):
-    import db
-    vid, status = db.upsert_library_video(LIB_ITEM)
-    assert status == "created"
-    row = db.get_video(vid)
-    assert row["source"] == "library"
-    assert row["status"] == "unconverted"
-    assert row["source_path"] == LIB_ITEM["source_path"]
-    assert row["show_title"] == "The Bear"
-    assert row["season"] == 1 and row["episode"] == 1
-    assert row["plex_kind"] == "tv"
-    assert row["deleted_at"] is None
-
-
-def test_upsert_library_video_updates_existing(fresh_db):
-    import db
-    vid, _ = db.upsert_library_video(LIB_ITEM)
-    vid2, status = db.upsert_library_video({**LIB_ITEM, "title": "System (renamed)"})
-    assert vid2 == vid and status == "updated"
-    assert db.get_video(vid)["title"] == "System (renamed)"
-
-
-def test_upsert_library_video_clears_a_stale_group(fresh_db):
-    import db
-
-    vid, _ = db.upsert_library_video(LIB_ITEM)
-    group_id = db.get_group_by_name("children")["id"]
-    db.set_video_group(vid, group_id)
-
-    db.upsert_library_video(LIB_ITEM)
-
-    row = db.get_video(vid)
-    assert row["group_id"] is None
-    assert row["plex_kind"] == "tv"
-
-
-def test_upsert_same_path_new_rating_key_updates_not_collides(fresh_db):
-    # Plex changed the ratingKey on rescan (or two items share a file). The
-    # rating-key lookup misses, but source_path is globally UNIQUE, so a naive
-    # INSERT hits "UNIQUE constraint failed: videos.source_path". Must UPDATE.
-    import db
-    vid, _ = db.upsert_library_video(LIB_ITEM)
-    vid2, status = db.upsert_library_video({**LIB_ITEM, "plex_rating_key": "9999"})
-    assert vid2 == vid and status == "updated"
-
-
-def test_upsert_tombstoned_same_path_new_rating_key(fresh_db):
-    # A tombstoned row still owns source_path; a rescan with a different rating
-    # key must not INSERT-collide on it.
-    import db
-    vid, _ = db.upsert_library_video(LIB_ITEM)
-    db.tombstone_video(vid)
-    vid2, status = db.upsert_library_video({**LIB_ITEM, "plex_rating_key": "9999"})
-    assert vid2 == vid and status == "tombstoned"
-
-
-def test_upsert_skips_tombstoned(fresh_db):
-    import db
-    vid, _ = db.upsert_library_video(LIB_ITEM)
-    db.tombstone_video(vid)
-    vid2, status = db.upsert_library_video(LIB_ITEM)
-    assert vid2 == vid and status == "tombstoned"
-    assert db.get_video(vid)["deleted_at"] is not None
-
-
-def test_get_all_videos_excludes_tombstoned(fresh_db):
-    import db
-    vid, _ = db.upsert_library_video(LIB_ITEM)
-    assert any(v["id"] == vid for v in db.get_all_videos())
-    db.tombstone_video(vid)
-    assert not any(v["id"] == vid for v in db.get_all_videos())
-
-
-def test_set_library_state_and_converted_paths(fresh_db):
-    import db
-    vid, _ = db.upsert_library_video(LIB_ITEM)
-    db.set_library_state(vid, "converting")
-    assert db.get_video(vid)["status"] == "converting"
-    db.set_library_state(vid, "done", converted_path="/tmp/x.mp4")
-    row = db.get_video(vid)
-    assert row["status"] == "done" and row["converted_path"] == "/tmp/x.mp4"
-    assert db.get_converted_paths() == {"/tmp/x.mp4"}
-    db.set_library_state(vid, "unconverted", error_msg="boom")
-    row = db.get_video(vid)
-    assert row["status"] == "unconverted" and row["error_msg"] == "boom"
-
-
-def test_upsert_library_video_uses_added_at_for_position(fresh_db):
-    import db
-    item = {**LIB_ITEM, "added_at": 1_700_000_000}
-    vid, _ = db.upsert_library_video(item)
-    row = db.get_video(vid)
-    assert row["position"] == 1_700_000_000
-    assert row["created_at"].startswith("2023-11-14")
-
-
-def test_library_videos_sorted_newest_added_first(fresh_db):
-    import db
-    older, _ = db.upsert_library_video(
-        {**LIB_ITEM, "source_path": "/m/old.mkv", "plex_rating_key": "old", "added_at": 1_600_000_000})
-    newer, _ = db.upsert_library_video(
-        {**LIB_ITEM, "source_path": "/m/new.mkv", "plex_rating_key": "new", "added_at": 1_700_000_000})
-    ordered = [v["id"] for v in db.get_all_videos()]
-    assert ordered.index(newer) < ordered.index(older)
-
-
-def test_backfill_library_added_at_rewrites_legacy_rows(fresh_db, tmp_path):
-    import db
-    f = tmp_path / "clip.mkv"
-    f.write_bytes(b"x")
-    import os
-    os.utime(f, (1_650_000_000, 1_650_000_000))
-    # Legacy row: created via scan order (no added_at) -> small position.
-    vid, _ = db.upsert_library_video({**LIB_ITEM, "source_path": str(f)})
-    assert db.get_video(vid)["position"] < db._ADDED_AT_POSITION_FLOOR
-    with db._conn() as conn:
-        assert db._backfill_library_added_at(conn) == 1
-    assert db.get_video(vid)["position"] == 1_650_000_000
-    # Idempotent: unix-scale positions are left untouched on a second pass.
-    with db._conn() as conn:
-        assert db._backfill_library_added_at(conn) == 0
-
-
-def _versioned_movie_item(rating_key="42", versions=None):
-    return {
-        "source_path": "/m/1080.mkv",
-        "title": "Akira",
-        "plex_kind": "movies",
-        "show_title": None,
-        "season": None,
-        "episode": None,
-        "summary": "Neo-Tokyo.",
-        "plex_rating_key": rating_key,
-        "show_rating_key": None,
-        "versions": versions
-        or [
-            {"source_path": "/m/1080.mkv", "label": "1080p"},
-            {"source_path": "/m/4k.mkv", "label": "4K"},
-        ],
-    }
-
-
-def test_video_versions_table_and_chosen_column_exist(fresh_db):
-    import db
-
-    with db._conn() as conn:
-        video_columns = {row["name"] for row in conn.execute("PRAGMA table_info(videos)")}
-        version_columns = {row["name"] for row in conn.execute("PRAGMA table_info(video_versions)")}
-
-    assert "chosen_version_id" in video_columns
-    assert {
-        "id",
-        "video_id",
-        "source_path",
-        "label",
-        "status",
-        "converted_path",
-        "error_msg",
-        "position",
-    } <= version_columns
-
-
-def test_backfill_creates_one_version_per_library_row(fresh_db):
-    import db
-
-    with db._conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO videos (
-                url, title, status, plex_kind, source, source_path,
-                converted_path, plex_rating_key, created_at, position
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "/m/a.mkv",
-                "A",
-                "done",
-                "movies",
-                "library",
-                "/m/a.mkv",
-                "/m/a.mp4",
-                "42",
-                "2026-01-01T00:00:00+00:00",
-                1,
-            ),
-        )
-
-    db.init_db()
-    video = db.get_all_videos(plex_kind="movies")[0]
-    versions = db.get_video_versions(video["id"])
-
-    assert video["chosen_version_id"] == versions[0]["id"]
-    assert versions[0]["source_path"] == "/m/a.mkv"
-    assert versions[0]["converted_path"] == "/m/a.mp4"
-    assert versions[0]["status"] == "done"
-
-
-def test_version_helpers_update_chosen_version_and_paths(fresh_db):
-    import db
-
-    video_id, status = db.upsert_library_video(_versioned_movie_item())
-    assert status == "created"
-    versions = db.get_video_versions(video_id)
-    assert [v["label"] for v in versions] == ["1080p", "4K"]
-    assert versions[0]["is_chosen"] is True
-    assert versions[1]["is_chosen"] is False
-
-    assert db.set_chosen_version(video_id, versions[1]["id"]) is True
-    assert db.set_chosen_version(video_id, 9999) is False
-    chosen = db.get_video(video_id)
-    assert chosen["chosen_version_id"] == versions[1]["id"]
-    assert chosen["source_path"] == "/m/4k.mkv"
-
-    db.set_library_state(video_id, "done", converted_path="/m/4k.mp4")
-    refreshed = db.get_video_versions(video_id)
-    converted = next(v for v in refreshed if v["label"] == "4K")
-    assert converted["converted_path"] == "/m/4k.mp4"
-    assert db.get_converted_paths() == {"/m/4k.mp4"}
-
-
-def test_changing_version_clears_audio_lang_missing_from_new_version(fresh_db):
-    import db
-
-    video_id, _ = db.upsert_library_video(_versioned_movie_item())
-    versions = db.get_video_versions(video_id)
-    db.set_version_audio_langs(versions[0]["id"], '[{"lang": "eng", "title": ""}]')
-    db.set_version_audio_langs(versions[1]["id"], '[{"lang": "spa", "title": ""}]')
-    db.set_audio_lang(video_id, "eng")
-
-    assert db.set_chosen_version(video_id, versions[1]["id"])
-    assert db.get_video(video_id)["audio_lang"] is None
-
-
-def test_changing_version_clears_subtitle_lang_missing_from_new_version(fresh_db):
-    import db
-
-    video_id, _ = db.upsert_library_video(_versioned_movie_item())
-    versions = db.get_video_versions(video_id)
-    db.set_version_subtitle_langs(versions[0]["id"], '[{"language": "eng", "name": "English"}]')
-    db.set_version_subtitle_langs(versions[1]["id"], '[{"language": "spa", "name": "Spanish"}]')
-    db.set_subtitle_lang(video_id, "eng")
-
-    assert db.set_chosen_version(video_id, versions[1]["id"])
-    assert db.get_video(video_id)["subtitle_lang"] is None
-
-
-def test_upsert_library_video_syncs_versions_by_rating_key(fresh_db):
-    import db
-
-    video_id, status = db.upsert_library_video(_versioned_movie_item())
-    assert status == "created"
-    versions = db.get_video_versions(video_id)
-    assert db.set_chosen_version(video_id, versions[1]["id"]) is True
-
-    video_id2, status2 = db.upsert_library_video(
-        _versioned_movie_item(
-            versions=[
-                {"source_path": "/m/1080.mkv", "label": "1080p"},
-                {"source_path": "/m/4k.mkv", "label": "4K Remux"},
-            ]
-        )
-    )
-
-    assert video_id2 == video_id
-    assert status2 == "updated"
-    refreshed = db.get_video_versions(video_id)
-    assert [v["label"] for v in refreshed] == ["1080p", "4K Remux"]
-    assert next(v for v in refreshed if v["source_path"] == "/m/4k.mkv")["is_chosen"] is True
-
-
-def _lib_item(tmp_path, name="m.mkv", key="k1"):
-    src = tmp_path / name
-    src.write_bytes(b"x")
-    return {
-        "source_path": str(src),
-        "title": "M",
-        "plex_kind": "movies",
-        "show_title": None,
-        "season": None,
-        "episode": None,
-        "summary": None,
-        "plex_rating_key": key,
-        "show_rating_key": None,
-    }
-
-
-def test_audio_lang_roundtrip(fresh_db, tmp_path):
-    import db
-
-    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
-    assert db.get_video(vid)["audio_lang"] is None
-    db.set_audio_lang(vid, "spa")
-    assert db.get_video(vid)["audio_lang"] == "spa"
-
-
-def test_version_audio_langs_roundtrip(fresh_db, tmp_path):
-    import db
-
-    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
-    version = db.get_video_versions(vid)[0]
-    assert version["audio_langs"] is None
-    db.set_version_audio_langs(version["id"], '[{"lang": "eng", "title": ""}]')
-    version = db.get_video_versions(vid)[0]
-    assert version["audio_langs"] == '[{"lang": "eng", "title": ""}]'
-
-
-def test_set_library_state_stores_converted_langs(fresh_db, tmp_path):
-    import db
-
-    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
-    version = db.get_video_versions(vid)[0]
-    db.set_library_state(
-        vid,
-        "done",
-        converted_path="/tmp/out.mp4",
-        converted_langs='["eng", "spa"]',
-        version_id=version["id"],
-    )
-    version = db.get_video_versions(vid)[0]
-    assert version["converted_langs"] == '["eng", "spa"]'
-
-
-def test_set_library_state_error_clears_converted_langs(fresh_db, tmp_path):
-    import db
-
-    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
-    version = db.get_video_versions(vid)[0]
-    db.set_library_state(
-        vid,
-        "done",
-        converted_path="/tmp/out.mp4",
-        converted_langs='["eng"]',
-        version_id=version["id"],
-    )
-    db.set_library_state(vid, "unconverted", error_msg="boom", version_id=version["id"])
-    version = db.get_video_versions(vid)[0]
-    assert version["converted_langs"] is None
-
-
-def test_subtitle_lang_roundtrip(fresh_db, tmp_path):
-    import db
-
-    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
-    assert db.get_video(vid)["subtitle_lang"] is None
-    db.set_subtitle_lang(vid, "es")
-    assert db.get_video(vid)["subtitle_lang"] == "es"
-    db.set_subtitle_lang(vid, "")
-    assert db.get_video(vid)["subtitle_lang"] == ""
-
-
-def test_version_subtitle_langs_roundtrip(fresh_db, tmp_path):
-    import db
-
-    vid, _ = db.upsert_library_video(_lib_item(tmp_path))
-    version = db.get_video_versions(vid)[0]
-    assert version["subtitle_langs"] is None
-    db.set_version_subtitle_langs(
-        version["id"],
-        '[{"language": "en", "name": "English", "default": true, "forced": false}]',
-    )
-    version = db.get_video_versions(vid)[0]
-    assert version["subtitle_langs"] == (
-        '[{"language": "en", "name": "English", "default": true, "forced": false}]'
-    )
-
-
-# --- one-shot subtitle re-probe backfill ------------------------------------
-
-
-def _versions_row(db, video_id):
-    return db.get_video_versions(video_id)[0]
-
-
-def test_subtitle_reprobe_backfill_clears_cached_langs_once(fresh_db, tmp_path):
-    """Cached subtitle_langs predate embedded-track discovery, so clear them.
-
-    Every value written before embedded discovery existed was sidecar-only.
-    Setting them NULL makes the next library scan re-probe. It must run
-    exactly once: repeating it on every startup would drop a good scan result
-    on each restart.
-    """
-    import db
-    import os
-    import sqlite3
-
-    def _set_user_version(value):
-        conn = sqlite3.connect(os.getenv("DB_PATH"))
-        try:
-            conn.execute(f"PRAGMA user_version = {value}")
-        finally:
-            conn.close()
-
-    db.upsert_library_video({
-        "source_path": str(tmp_path / "a.mkv"), "title": "a", "plex_kind": "movies",
-        "show_title": None, "season": None, "episode": None, "summary": None,
-        "plex_rating_key": "rk-a", "show_rating_key": None,
-    })
-    movie = db.get_all_videos(plex_kind="movies")[0]
-    version = _versions_row(db, movie["id"])
-    db.set_version_subtitle_langs(version["id"], "[]")
-
-    # Rewind to a DB that predates the backfill (fresh_db already stamped it).
-    _set_user_version(0)
-    db.init_db()  # the backfill runs here
-    assert _versions_row(db, movie["id"])["subtitle_langs"] is None
-
-    # A later scan result must survive every subsequent startup.
-    db.set_version_subtitle_langs(version["id"], '[{"language": "en"}]')
-    db.init_db()
-    db.init_db()
-    assert _versions_row(db, movie["id"])["subtitle_langs"] == '[{"language": "en"}]'
-
-
 def test_subtitle_reprobe_backfill_stamps_schema_version(fresh_db):
     import db
     import sqlite3
@@ -618,32 +154,83 @@ def test_subtitle_reprobe_backfill_stamps_schema_version(fresh_db):
         conn.close()
 
 
-@pytest.mark.parametrize("stamped", [1, 2])
-def test_subtitle_reprobe_backfill_reruns_for_an_older_stamp(fresh_db, tmp_path, stamped):
-    """A DB stamped at an earlier version still needs the later clear.
+LIBRARY_COLUMNS = {
+    "source", "source_path", "converted_path", "show_title", "season", "episode",
+    "summary", "plex_rating_key", "show_rating_key", "deleted_at", "chosen_version_id",
+    "audio_lang", "subtitle_lang", "preview_version", "show_preview_version", "plex_kind",
+}
 
-    v1 shipped embedded-track discovery; v2 dropped AppleDouble duplicates;
-    v3 re-clears rows a still-running older server refilled after v2. Each
-    leaves cached lists the next version considers wrong.
-    """
-    import db
-    import os
+
+def _legacy_db(path):
+    """A database as the pre-removal code left it: one download, one library row."""
     import sqlite3
 
-    db.upsert_library_video({
-        "source_path": str(tmp_path / "a.mkv"), "title": "a", "plex_kind": "movies",
-        "show_title": None, "season": None, "episode": None, "summary": None,
-        "plex_rating_key": "rk-a", "show_rating_key": None,
-    })
-    movie = db.get_all_videos(plex_kind="movies")[0]
-    version = db.get_video_versions(movie["id"])[0]
-    db.set_version_subtitle_langs(version["id"], '[{"language": "en"}]')
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, platform TEXT,
+            source_key TEXT, title TEXT, filename TEXT, status TEXT NOT NULL DEFAULT 'queued',
+            error_msg TEXT, created_at TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'download',
+            source_path TEXT, converted_path TEXT, plex_kind TEXT, deleted_at TEXT,
+            plex_rating_key TEXT, resume_secs REAL NOT NULL DEFAULT 0
+        );
+        CREATE UNIQUE INDEX idx_videos_source_path ON videos(source_path);
+        CREATE TABLE video_versions (id INTEGER PRIMARY KEY, video_id INTEGER NOT NULL,
+            source_path TEXT NOT NULL);
+        CREATE TABLE jobs (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, video_id INTEGER NOT NULL,
+            version_id INTEGER NOT NULL DEFAULT 0, payload TEXT, result TEXT,
+            priority INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'queued',
+            attempts INTEGER NOT NULL DEFAULT 0, error_msg TEXT, created_at TEXT NOT NULL,
+            started_at TEXT, finished_at TEXT);
+        INSERT INTO videos (id, url, status, created_at, resume_secs)
+            VALUES (1, 'https://youtu.be/x', 'done', '2026-01-01', 42);
+        INSERT INTO videos (id, url, status, created_at, source, source_path, plex_kind)
+            VALUES (2, '/Volumes/Media/media/movies/a.mkv', 'done', '2026-01-01',
+                    'library', '/Volumes/Media/media/movies/a.mkv', 'movies');
+        INSERT INTO video_versions (video_id, source_path) VALUES (2, '/Volumes/Media/media/movies/a.mkv');
+        INSERT INTO jobs (kind, video_id, created_at) VALUES ('convert', 2, '2026-01-01');
+        INSERT INTO jobs (kind, video_id, created_at) VALUES ('hls', 1, '2026-01-01');
+        """
+    )
+    conn.commit()
+    conn.close()
 
-    conn = sqlite3.connect(os.getenv("DB_PATH"))
-    try:
-        conn.execute(f"PRAGMA user_version = {stamped}")
-    finally:
-        conn.close()
+
+def test_init_db_purges_the_library(tmp_path, monkeypatch):
+    import sqlite3
+
+    import db
+
+    path = tmp_path / "legacy.sqlite"
+    _legacy_db(path)
+    monkeypatch.setenv("DB_PATH", str(path))
 
     db.init_db()
-    assert db.get_video_versions(movie["id"])[0]["subtitle_langs"] is None
+    db.init_db()  # idempotent
+
+    conn = sqlite3.connect(path)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(videos)")}
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    rows = conn.execute("SELECT id, resume_secs FROM videos").fetchall()
+    jobs = conn.execute("SELECT kind, video_id FROM jobs").fetchall()
+    conn.close()
+
+    assert columns.isdisjoint(LIBRARY_COLUMNS)
+    assert "video_versions" not in tables
+    assert rows == [(1, 42)]
+    assert jobs == [("hls", 1)]
+
+
+def test_fresh_db_never_creates_library_columns(tmp_path, monkeypatch):
+    import sqlite3
+
+    import db
+
+    path = tmp_path / "fresh.sqlite"
+    monkeypatch.setenv("DB_PATH", str(path))
+    db.init_db()
+    conn = sqlite3.connect(path)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(videos)")}
+    conn.close()
+    assert columns.isdisjoint(LIBRARY_COLUMNS)

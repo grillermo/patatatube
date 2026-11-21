@@ -36,9 +36,9 @@ from views.render import _display_name, build_login_page, build_sd_page, build_v
 router = APIRouter()
 
 PREVIEWS_DIR = Path("data/previews")
-# Longest-edge cap for cached Plex posters. Plex serves full-resolution thumbs
-# (often 1000s of px), which bloated the iPad's memory when decoded across a
-# whole grid (Sentry PATATATUBE-6 OOM). 1200px stays crisp on iPad mini 6 (@2x)
+# Longest-edge cap for posters grabbed out of a download's mp4. Full-resolution
+# frames bloated the iPad's memory when decoded across a whole grid (Sentry
+# PATATATUBE-6 OOM). 1200px stays crisp on iPad mini 6 (@2x)
 # and iPhone 16e (@3x) for both grid and detail views. The suffix versions the
 # cache so previously-cached full-size files regenerate at the new size.
 PREVIEW_MAX_EDGE = 1200

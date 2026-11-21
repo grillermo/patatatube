@@ -1,7 +1,5 @@
 # tests/test_api.py
 import importlib
-import itertools
-import json
 from pathlib import Path
 
 import pytest
@@ -1031,145 +1029,17 @@ def test_api_delete_removes_row_and_file(client):
 
 AUTH = {"Authorization": "Bearer test-secret"}
 
-LIB_ITEM_API = {
-    "source_path": None,  # filled per-test with tmp file
-    "title": "System", "plex_kind": "tv", "show_title": "The Bear",
-    "season": 1, "episode": 1, "summary": "Carmy.",
-    "plex_rating_key": "1264", "show_rating_key": "1262",
-}
 
 
-def make_library_row(tmp_path, name="ep.mkv"):
-    import db
-    src = tmp_path / name
-    src.write_bytes(b"fake")
-    vid, _ = db.upsert_library_video({**LIB_ITEM_API, "source_path": str(src)})
-    return vid, src
-
-
-_queued_library_ids = itertools.count()
-
-
-def _queued_library_row(tmp_path):
-    import db
-
-    item_id = next(_queued_library_ids)
-    src = tmp_path / f"queued-{item_id}.mkv"
-    src.write_bytes(b"fake")
-    vid, _ = db.upsert_library_video({
-        **LIB_ITEM_API,
-        "source_path": str(src),
-        "plex_rating_key": f"queued-{item_id}",
-    })
-    return vid
-
-
-def _library_row_needing_conversion(tmp_path, monkeypatch):
-    import library
-
-    monkeypatch.setattr(library, "probe_source", lambda p: {
-        "streams": [{
-            "codec_type": "video", "codec_name": "hevc", "width": 1920,
-            "codec_tag_string": "[0][0][0][0]",
-        }],
-        "format": {"format_name": "matroska,webm"},
-    })
-    return _queued_library_row(tmp_path)
-
-
-def _library_row_that_passes_through(tmp_path, monkeypatch):
-    import library
-
-    monkeypatch.setattr(library, "probe_source", lambda p: {
-        "streams": [
-            {
-                "codec_type": "video", "codec_name": "h264", "width": 1920,
-                "codec_tag_string": "avc1",
-            },
-            {"codec_type": "audio", "codec_name": "aac", "channels": 2},
-        ],
-        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
-    })
-    return _queued_library_row(tmp_path)
-
-
-def _seed_multi_audio_movie(tmp_path, converted_langs='["eng", "spa"]', status="done"):
-    import db
-
-    src = tmp_path / "m.mkv"
-    src.write_bytes(b"x")
-    vid, _ = db.upsert_library_video({
-        "source_path": str(src), "title": "M", "plex_kind": "movies",
-        "show_title": None, "season": None, "episode": None, "summary": None,
-        "plex_rating_key": "m1", "show_rating_key": None,
-    })
-    version = db.get_video_versions(vid)[0]
-    db.set_version_audio_langs(version["id"], json.dumps([
-        {"lang": "cat", "title": ""}, {"lang": "eng", "title": ""},
-        {"lang": "spa", "title": ""},
-    ]))
-    db.set_library_state(
-        vid, status, converted_path=str(tmp_path / "m.mp4"),
-        converted_langs=converted_langs, version_id=version["id"],
-    )
-    return vid, version["id"]
-
-
-def _seed_subtitle_movie(tmp_path, subtitle_langs=None):
-    import db
-
-    src = tmp_path / "m.mkv"
-    src.write_bytes(b"x")
-    vid, _ = db.upsert_library_video({
-        "source_path": str(src), "title": "M", "plex_kind": "movies",
-        "show_title": None, "season": None, "episode": None, "summary": None,
-        "plex_rating_key": "sm1", "show_rating_key": None,
-    })
-    version = db.get_video_versions(vid)[0]
-    if subtitle_langs is None:
-        subtitle_langs = [
-            {"language": "en", "name": "English", "default": True, "forced": False},
-            {"language": "es", "name": "Spanish", "default": False, "forced": False},
-        ]
-    db.set_version_subtitle_langs(version["id"], json.dumps(subtitle_langs))
-    db.set_library_state(vid, "done", converted_path=str(tmp_path / "m.mp4"), version_id=version["id"])
-    return vid, version["id"]
 
 
 def test_get_single_video(client, tmp_path):
-    vid, _ = make_library_row(tmp_path)
+    vid, _ = _seed_done_download()
     assert client.get(f"/api/videos/{vid}").status_code == 401
     resp = client.get(f"/api/videos/{vid}", headers=AUTH)
     assert resp.status_code == 200
     assert resp.json()["id"] == vid
     assert client.get("/api/videos/99999", headers=AUTH).status_code == 404
-
-
-def make_versioned_movie(tmp_path):
-    import db
-
-    src_1080 = tmp_path / "movie.1080p.mkv"
-    src_4k = tmp_path / "movie.4k.mkv"
-    src_1080.write_bytes(b"1080-bytes")
-    src_4k.write_bytes(b"4k-bytes")
-    vid, _ = db.upsert_library_video(
-        {
-            **LIB_ITEM_API,
-            "source_path": str(src_1080),
-            "title": "Movie",
-            "plex_kind": "movies",
-            "show_title": None,
-            "season": None,
-            "episode": None,
-            "plex_rating_key": "4242",
-            "show_rating_key": None,
-            "versions": [
-                {"source_path": str(src_1080), "label": "1080p"},
-                {"source_path": str(src_4k), "label": "4K"},
-            ],
-        }
-    )
-    return vid, src_1080, src_4k
 
 
 def make_done_download_video(tmp_path):
@@ -1205,17 +1075,6 @@ def test_stream_rejects_wrong_bearer_token(client, tmp_path):
         assert resp.status_code == 401
     finally:
         f.unlink(missing_ok=True)
-
-
-def test_stream_tombstoned_library_row_is_404(client, tmp_path):
-    import db
-    vid, src = make_library_row(tmp_path)
-    converted = tmp_path / "ep.mp4"
-    converted.write_bytes(b"converted-bytes")
-    db.set_library_state(vid, "done", converted_path=str(converted))
-    db.tombstone_video(vid)
-    resp = client.get(f"/videos/{vid}/stream", headers=AUTH)
-    assert resp.status_code == 404
 
 
 def test_ssr_page_appends_stream_token(client, tmp_path):
@@ -1505,15 +1364,15 @@ def test_jobs_requires_a_token(client):
 
 def test_jobs_returns_running_and_queued(client, auth_headers):
     import db
-    running_id = db.enqueue_job("convert", video_id=1, version_id=1)
+    running_id = db.enqueue_job("hls", video_id=1, version_id=1)
     db.claim_job()
     db.set_job_progress(running_id, 0.6)
-    db.enqueue_job("convert", video_id=2, version_id=2)
+    db.enqueue_job("hls", video_id=2, version_id=2)
 
     body = client.get("/api/jobs", headers=auth_headers).json()
     assert [job["id"] for job in body["running"]] == [running_id]
     assert body["running"][0]["progress"] == 0.6
-    assert body["running"][0]["kind"] == "convert"
+    assert body["running"][0]["kind"] == "hls"
     assert [job["video_id"] for job in body["queued"]] == [2]
     assert body["queued"][0]["progress"] is None
     assert body["queued_total"] == 1
@@ -1522,7 +1381,7 @@ def test_jobs_returns_running_and_queued(client, auth_headers):
 def test_jobs_caps_the_queued_list_at_twenty(client, auth_headers):
     import db
     for video_id in range(1, 26):
-        db.enqueue_job("convert", video_id=video_id, version_id=video_id)
+        db.enqueue_job("hls", video_id=video_id, version_id=video_id)
     body = client.get("/api/jobs", headers=auth_headers).json()
     assert len(body["queued"]) == 20
     assert body["queued_total"] == 25

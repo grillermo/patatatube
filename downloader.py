@@ -212,7 +212,7 @@ def _normalize_media_for_ios_sync(
         "-dn",
         *_video_codec_args(video_stream),
         *_audio_codec_args(audio_stream),
-        # `artist` is the tag QuickTime, Finder's Get Info and Plex all read,
+        # `artist` is the tag QuickTime and Finder's Get Info read,
         # so the channel is visible in the file itself and not only in our DB.
         *(["-metadata", f"artist={channel}"] if channel else []),
         # mp4 has no atom meaning "where this came from", and `comment` is the
