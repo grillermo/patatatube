@@ -1,5 +1,5 @@
-import Foundation
 import CryptoKit
+import Foundation
 
 public enum CacheState: Equatable, Sendable {
     case notCached
@@ -7,233 +7,75 @@ public enum CacheState: Equatable, Sendable {
     case cached
 }
 
-/// Why a pause teardown wait ended without the teardown having finished.
-/// Exists so the timeout reaches `DevLog.error` as a typed error.
-enum CacheManagerPauseError: Error, Equatable {
-    case teardownTimedOut(key: String)
-}
-
-/// Internal rather than private so the sink-replacement and start-decision
-/// seams below can be unit-tested.
-struct SegmentTaskContext {
-    let attemptID: UUID
-    let cacheKey: String
-    let segmentIndex: Int
-    /// Bytes already on disk in this segment's part file when the task started.
-    /// The request's `Range` begins there, and the sink appends behind it.
-    let durablePrefixByteCount: Int64
-}
-
-private final class FreshProbeAttempt: @unchecked Sendable {
-    let id = UUID()
-    let cacheKey: String
-    var task: URLSessionDataTask?
-    var continuation: CheckedContinuation<DownloadProbe, Error>?
-
-    init(cacheKey: String) {
-        self.cacheKey = cacheKey
-    }
-}
-
-protocol CacheManagerCancellationFencing: Sendable {
-    func beginCancellation(cacheKey: String)
-    func endCancellation(cacheKey: String)
-    func isCancellationRequested(cacheKey: String) -> Bool
-    func performMutation(
-        cacheKey: String,
-        _ mutation: () throws -> Void
-    ) throws
-    func performTerminalClaim(
-        cacheKey: String,
-        _ claim: () -> Bool
-    ) -> Bool
-}
-
-final class CacheManagerCancellationFence:
-    CacheManagerCancellationFencing,
-    @unchecked Sendable
-{
-    private let condition = NSCondition()
-    private var cancellationRequestCounts: [String: Int] = [:]
-    private var mutationKeys: Set<String> = []
-
-    func beginCancellation(cacheKey: String) {
-        condition.lock()
-        cancellationRequestCounts[cacheKey, default: 0] += 1
-        while mutationKeys.contains(cacheKey) {
-            condition.wait()
-        }
-        condition.unlock()
+/// Offline videos: downloads and their pause/resume/cancel, deletion, and the
+/// state the UI shows for each video.
+///
+/// Since 2.9 a download is a **pinned entry** in the `MediaStore` that the
+/// stream proxy also reads and writes. `DownloadJobRunner` fills its holes,
+/// and whatever closes the last one (a download or watching) renames it to
+/// `localURL`. This class keeps only what the UI must read synchronously —
+/// running jobs, a mirror of pinned entries, progress — under `lock`, and
+/// sends every store write through one serial queue so they land in call
+/// order: a cancel followed at once by a new download can never reach the
+/// store reversed.
+public final class CacheManager: @unchecked Sendable {
+    private enum StopReason {
+        case paused
+        case cancelled
     }
 
-    func endCancellation(cacheKey: String) {
-        condition.withLock {
-            let remaining = (cancellationRequestCounts[cacheKey] ?? 1) - 1
-            cancellationRequestCounts[cacheKey] = remaining > 0 ? remaining : nil
+    /// One running download. `stopReason` and `task` are touched only under
+    /// `CacheManager.lock`.
+    private final class RunningJob: @unchecked Sendable {
+        let params: DownloadJobParameters
+        var stopReason: StopReason?
+        var task: Task<Void, Error>?
+
+        init(params: DownloadJobParameters) {
+            self.params = params
         }
     }
 
-    func isCancellationRequested(cacheKey: String) -> Bool {
-        condition.withLock {
-            (cancellationRequestCounts[cacheKey] ?? 0) > 0
-        }
+    /// The UI's synchronous view of a pinned store entry.
+    private struct PinnedRecord {
+        var params: DownloadJobParameters
+        var paused: Bool
+        var progress: Double
+        var transferredByteCount: Int64
+        var totalByteCount: Int64?
     }
 
-    func performMutation(
-        cacheKey: String,
-        _ mutation: () throws -> Void
-    ) throws {
-        condition.lock()
-        guard (cancellationRequestCounts[cacheKey] ?? 0) == 0 else {
-            condition.unlock()
-            throw CancellationError()
-        }
-        mutationKeys.insert(cacheKey)
-        condition.unlock()
-
-        let result = Result { try mutation() }
-
-        condition.lock()
-        mutationKeys.remove(cacheKey)
-        let cancelled = (cancellationRequestCounts[cacheKey] ?? 0) > 0
-        condition.broadcast()
-        condition.unlock()
-
-        if cancelled {
-            throw CancellationError()
-        }
-        try result.get()
-    }
-
-    func performTerminalClaim(
-        cacheKey: String,
-        _ claim: () -> Bool
-    ) -> Bool {
-        condition.lock()
-        defer { condition.unlock() }
-        guard (cancellationRequestCounts[cacheKey] ?? 0) == 0 else {
-            return false
-        }
-        return claim()
-    }
-}
-
-private final class SegmentedAttempt: @unchecked Sendable {
-    // A single segment may hit a transient transport error several times on a
-    // long transfer; retry it in place this many times before failing the whole
-    // attempt, so one flaky connection can't discard the other segments' work.
-    static let maxSegmentRetries = 3
-
-    let id = UUID()
-    let cacheKey: String
-    let bearerToken: String?
-    var manifest: SegmentedDownloadManifest
-    var continuation: CheckedContinuation<URL, Error>?
-    var taskIDs: Set<Int> = []
-    var activeByteCounts: [Int: Int64] = [:]
-    var completedResults: [Int: Result<URL, Error>] = [:]
-    var segmentRetryCounts: [Int: Int] = [:]
-    var terminalError: Error?
-    var preservingResumeData = false
-    /// Segment tasks whose teardown still owes durable state before the
-    /// attempt may reach its terminal claim. Data tasks make their bytes
-    /// durable synchronously in `finalizeSegmentSink`, so nothing populates
-    /// this today; the guards that read it are kept because they are the
-    /// heavily-reviewed ordering contract between pause teardown and the
-    /// terminal claim, and any future async teardown belongs here.
-    var resumeDataPendingTaskIDs: Set<Int> = []
-    var explicitlyCancelled = false
-    var terminalClaimed = false
-
-    init(
-        cacheKey: String,
-        bearerToken: String?,
-        manifest: SegmentedDownloadManifest,
-        continuation: CheckedContinuation<URL, Error>?
-    ) {
-        self.cacheKey = cacheKey
-        self.bearerToken = bearerToken
-        self.manifest = manifest
-        self.continuation = continuation
-    }
-}
-
-public final class CacheManager:
-    NSObject,
-    URLSessionDownloadDelegate,
-    URLSessionDataDelegate,
-    @unchecked Sendable
-{
     private let root: URL
-    private let segmentedStore: SegmentedDownloadStore
-    let streamCache: (any StreamCacheSeeding)?
-    private var session: URLSession!
+    private let store: MediaStore
+    private let session: URLSession
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
+    private let credentials: CredentialStore?
+    private let tuning: DownloadTuning
     private let lock = NSLock()
-    private let cancellationFence: any CacheManagerCancellationFencing
     let concurrencyGate: any DownloadConcurrencyGating
     private var inFlight = InFlightActivities()
     private var completionHistory: DownloadCompletionHistoryStore
-    private var pausedStore: PausedDownloadStore
-    /// In-memory mirror of `pausedStore`'s keys, read under `lock` on the hot
-    /// paths (`releasePermit`, `resumeInterrupted`) so they never touch the
-    /// filesystem.
+    private var jobs: [String: RunningJob] = [:]
+    private var pinned: [String: PinnedRecord] = [:]
+    /// Keys whose `download` is waiting at the gate, so `resumeInterrupted`
+    /// on a quick background/foreground does not queue them twice.
+    private var queuedKeys: Set<String> = []
+    private var storeChain: Task<Void, Never>?
+    /// Paused keys. A paused download keeps its gate permit (as in 2.8).
     private var pausedKeys: Set<String> = []
     /// Paused keys currently holding a gate permit.
     private var pausedPermitKeys: Set<String> = []
-    /// Keys a pause claimed the permit *ownership* of, independently of
-    /// whether the old transfer has handed it over yet. Survives the moment
-    /// `resume` clears `pausedKeys`, so a slow unwind's `releasePermit` still
-    /// hands the permit to the resumed transfer rather than to the gate.
-    /// Cleared by `releasePausedPermit` — i.e. when the resumed (or cancelled)
-    /// transfer is finally done with it.
+    /// Keys a pause claimed permit ownership of; survives the moment `resume`
+    /// clears `pausedKeys`, so a slow unwind's `releasePermit` hands the
+    /// permit to the resumed transfer rather than to the gate.
     private var permitOwnerKeys: Set<String> = []
-    /// Keys whose pause teardown is still writing resume data. `pause` returns
-    /// as soon as cancellation has been *requested*; the URLSession callbacks
-    /// that persist the partial state land later, and a resume that starts
-    /// before they do would race the manifest/resume file it needs.
-    /// Internal (not private) so tests can put a key into teardown.
-    var pauseTeardownKeys: Set<String> = []
-    /// Keys whose teardown wait hit `pauseTeardownTimeout`. The previous
-    /// transfer's sinks may still be open on the part files, so the resumed
-    /// transfer must not continue from them — see `segmentStartPrefix`.
-    /// Consumed once, by the transfer that follows the timed-out wait.
-    private var pauseTeardownTimeoutKeys: Set<String> = []
-    /// How long `resume` waits for a pause teardown before proceeding anyway.
-    /// A bound, not a deadline: it must never be possible for a lost callback
-    /// to make Resume permanently dead. A `var` only so tests need not wait
-    /// five real seconds.
-    var pauseTeardownTimeout: Duration = .seconds(5)
-    /// Launch-time reservations still waiting on the gate. Completing means the
-    /// permit was granted (or the key stopped being paused, in which case the
-    /// task released it again).
+    /// Launch-time permit reservations for entries paused in a past process.
     private var pausedReservations: [String: Task<Void, Never>] = [:]
-    private var continuations: [Int: CheckedContinuation<URL, Error>] = [:]
-    private var idByTask: [Int: String] = [:]
-    private var tasksByKey: [String: URLSessionDownloadTask] = [:]
-    private var completedResults: [Int: Result<URL, Error>] = [:]
-    private var segmentedAttempts: [String: SegmentedAttempt] = [:]
-    private var probeAttempts: [String: FreshProbeAttempt] = [:]
-    private var segmentContextByTask: [Int: SegmentTaskContext] = [:]
-    private var tasksByIdentifier: [Int: URLSessionTask] = [:]
-    /// The open part-file writer for each in-flight segment data task. Created
-    /// when its response headers validate, closed in `didCompleteWithError`.
-    /// Internal (not private) so `takeExistingSegmentSink` can be tested.
-    var segmentSinks: [Int: SegmentByteSink] = [:]
-    /// Last time (and byte count) each sink's progress was written back into
-    /// the manifest, so durability bookkeeping is throttled rather than run on
-    /// every delivered chunk.
-    private var segmentSinkFlushes: [Int: (at: Date, byteCount: Int64)] = [:]
-    /// Rewrite the manifest at most this often, or after this many new bytes —
-    /// whichever comes first. A crash then loses a bounded amount of progress
-    /// without the delegate queue hammering the disk.
-    private static let segmentManifestFlushInterval: TimeInterval = 2
-    private static let segmentManifestFlushByteCount: Int64 = 1_048_576
 
-    /// Default session config for app use. `waitsForConnectivity` lets a retry
-    /// started during an outage park inside URLSession instead of failing
-    /// instantly, so a retry doesn't spin while offline.
+    /// Session config for downloads. `waitsForConnectivity` parks a retry
+    /// during an outage instead of failing at once. (Playback uses
+    /// `StreamProxy.defaultSession`, which never waits.)
     public static func defaultConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.default
         configuration.waitsForConnectivity = true
@@ -243,14 +85,18 @@ public final class CacheManager:
     public convenience init(
         root: URL? = nil,
         configuration: URLSessionConfiguration = CacheManager.defaultConfiguration(),
-        streamCache: StreamCache? = nil
+        credentials: CredentialStore? = nil
     ) {
         self.init(
             root: root,
             configuration: configuration,
             fileManager: .default,
-            cancellationFence: CacheManagerCancellationFence(),
-            streamCache: streamCache
+            credentials: credentials,
+            // Only the real app root owns the real 2.8 stream cache.
+            legacyStreamRoot: root == nil
+                ? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("stream", isDirectory: true)
+                : nil
         )
     }
 
@@ -259,73 +105,76 @@ public final class CacheManager:
         configuration: URLSessionConfiguration,
         fileManager: FileManager,
         now: @escaping @Sendable () -> Date = Date.init,
-        cancellationFence: any CacheManagerCancellationFencing =
-            CacheManagerCancellationFence(),
-        concurrencyGate: any DownloadConcurrencyGating =
-            DownloadConcurrencyGate(limit: 3),
-        streamCache: (any StreamCacheSeeding)? = nil
+        concurrencyGate: any DownloadConcurrencyGating = DownloadConcurrencyGate(limit: 3),
+        credentials: CredentialStore? = nil,
+        legacyStreamRoot: URL? = nil,
+        storeTuning: MediaStore.Tuning = MediaStore.Tuning(),
+        budgetBytes: Int64 = MediaStore.defaultBudgetBytes,
+        fetchTuning: DownloadTuning = DownloadTuning()
     ) {
-        self.fileManager = fileManager
-        self.now = now
-        self.cancellationFence = cancellationFence
-        self.concurrencyGate = concurrencyGate
-        self.streamCache = streamCache
-        self.root = root ?? fileManager
+        let resolvedRoot = root ?? fileManager
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("videos")
-        self.completionHistory = DownloadCompletionHistoryStore(
-            root: self.root,
-            fileManager: fileManager
-        )
-        self.segmentedStore = SegmentedDownloadStore(
-            root: self.root,
-            fileManager: fileManager
-        )
-        self.pausedStore = PausedDownloadStore(root: self.root, fileManager: fileManager)
-        super.init()
-        self.pausedKeys = Set(self.pausedStore.entries.map(\.id))
-        for key in self.pausedKeys {
-            reservePermit(for: key)
-        }
-        self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-        try? fileManager.createDirectory(at: self.root, withIntermediateDirectories: true)
-        // Visible in the Files app (Documents), but keep it out of iCloud/device
-        // backups - these MP4s are re-downloadable, not user data.
+        try? fileManager.createDirectory(at: resolvedRoot, withIntermediateDirectories: true)
+        // Visible in the Files app (Documents), but out of iCloud/device
+        // backups — these MP4s are re-downloadable, not user data.
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        var dir = self.root
-        try? dir.setResourceValues(values)
+        var directory = resolvedRoot
+        try? directory.setResourceValues(values)
+        LegacyCacheMigration.run(videosRoot: resolvedRoot, legacyStreamRoot: legacyStreamRoot, now: now())
+
+        self.root = resolvedRoot
+        self.fileManager = fileManager
+        self.now = now
+        self.concurrencyGate = concurrencyGate
+        self.credentials = credentials
+        self.tuning = fetchTuning
+        self.store = MediaStore(videosRoot: resolvedRoot, budgetBytes: budgetBytes, tuning: storeTuning, now: now)
+        self.session = URLSession(configuration: configuration)
+        self.completionHistory = DownloadCompletionHistoryStore(root: resolvedRoot, fileManager: fileManager)
+
+        for manifest in MediaStore.loadManifests(storeRoot: MediaStore.storeRoot(videosRoot: resolvedRoot)) {
+            guard let pin = manifest.pin else { continue }
+            pinned[manifest.key] = PinnedRecord(
+                params: pin.job,
+                paused: pin.paused,
+                progress: manifest.progress,
+                transferredByteCount: manifest.committed.totalBytes,
+                totalByteCount: manifest.identity?.totalByteCount
+            )
+            if pin.paused { pausedKeys.insert(manifest.key) }
+        }
+        for key in pausedKeys { reservePermit(for: key) }
     }
+
+    /// The store `StreamProxy` reads and writes — the same one downloads fill.
+    public var mediaStore: MediaStore { store }
 
     /// Sets the global cap on how many videos download at once.
     public func setMaxConcurrentDownloads(_ n: Int) {
         concurrencyGate.setLimit(n)
     }
 
-    /// Current global simultaneous-download cap.
     public var maxConcurrentDownloads: Int {
         concurrencyGate.currentLimit
     }
 
-    /// Directory holding the cached videos. Exposed so callers can ask how much
-    /// room is left on the volume that downloads actually land on.
+    /// Directory holding the cached videos, for free-space checks.
     public var cacheRootURL: URL { root }
 
     public func localURL(for id: Int, versionId: Int? = nil) -> URL {
-        root.appendingPathComponent(filename(videoId: id, versionId: versionId))
+        root.appendingPathComponent(MediaKey.finishedFilename(cacheKey(videoId: id, versionId: versionId)))
     }
 
-    /// Root permanent video store, suitable for StreamProxy's offline root.
     public var videosRoot: URL { root }
 
     var urlSession: URLSession { session }
 
+    // MARK: - Previews and posters (unchanged from 2.8)
+
     /// Local file URL of a cached preview image, or nil if none is cached.
-    ///
-    /// Version-aware: the filename embeds a hash of the preview URL, so a poster
-    /// served from a new URL gets a new hash → this returns nil → the caller
-    /// refetches the current poster. Passing
-    /// `path: nil` falls back to a plain id match (no URL to key on).
+    /// Version-aware: the filename embeds a hash of the preview URL.
     public func cachedPreviewURL(for id: Int, path: String?) -> URL? {
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         let prefix = path.map { "\(id).preview.\(posterHash($0))." } ?? "\(id).preview."
@@ -333,8 +182,6 @@ public final class CacheManager:
         return root.appendingPathComponent(name)
     }
 
-    /// Writes preview bytes for a video. Best-effort: failures leave the preview uncached.
-    /// Any prior poster version for this video is dropped so only the current one remains.
     public func storePreview(_ data: Data, for id: Int, path: String) {
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         let prefix = "\(id).preview."
@@ -345,8 +192,6 @@ public final class CacheManager:
         try? data.write(to: destination)
     }
 
-    /// Local file URL of a cached show poster, or nil if none is cached.
-    /// Keyed by the raw showPreviewUrl string so store and lookup always agree.
     public func cachedShowPosterURL(for key: String) -> URL? {
         let prefix = "poster.\(posterHash(key))."
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
@@ -354,7 +199,6 @@ public final class CacheManager:
         return root.appendingPathComponent(name)
     }
 
-    /// Writes poster bytes for a show. Best-effort: failures leave the poster uncached.
     public func storeShowPoster(_ data: Data, for key: String) {
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         let destination = root.appendingPathComponent("poster.\(posterHash(key)).\(safeExt(from: key))")
@@ -362,93 +206,61 @@ public final class CacheManager:
         try? data.write(to: destination)
     }
 
+    // MARK: - State
+
+    /// `.cached` once the finished mp4 exists, however it got there.
+    /// `.downloading` for a running or paused download. A partly watched
+    /// video, or a pinned download whose last attempt failed, is
+    /// `.notCached`: the download button shows, and tapping it continues
+    /// from the committed bytes.
     public func state(for id: Int, versionId: Int? = nil) -> CacheState {
         let key = cacheKey(videoId: id, versionId: versionId)
         if fileManager.fileExists(atPath: localURL(for: id, versionId: versionId).path) { return .cached }
         return lock.withLock {
-            if let activity = inFlight[key]?.activity {
-                return .downloading(activity.progress)
-            }
-            if let entry = pausedStore.entry(key) {
-                return .downloading(entry.progress)
-            }
+            if jobs[key] != nil { return .downloading(inFlight[key]?.activity.progress ?? 0) }
+            if let record = pinned[key], record.paused { return .downloading(record.progress) }
             return .notCached
         }
     }
 
-    /// Live transfers plus paused entries, sorted by key. A paused entry whose
-    /// file has since landed is stale (a pause that raced a completion) — drop
-    /// it here, the same staleness check `recentDownloads()` applies.
-    ///
-    /// This runs at UI-refresh cadence, so the filesystem probes happen on a
-    /// snapshot taken under `lock` and released again — never with the lock
-    /// held. Dropping a stale entry also **releases its permit**: the pause
-    /// that raced a completion is exactly the case where the finishing
-    /// download handed its permit to the paused table, and forgetting it here
-    /// costs a gate slot for the rest of the process.
+    /// Live transfers plus paused downloads, sorted by key. A paused entry
+    /// whose file has landed anyway (a pause that raced a completion) is
+    /// dropped here, and its permit returned.
     public func activeDownloads() -> [DownloadActivity] {
-        let (live, entries) = lock.withLock {
-            (inFlight.values.map(\.activity), pausedStore.entries)
+        let (live, paused) = lock.withLock {
+            (inFlight.values.map(\.activity), pinned.filter { $0.value.paused && jobs[$0.key] == nil })
         }
         let liveKeys = Set(live.map(\.id))
         var stale: [String] = []
-        var paused: [DownloadActivity] = []
-        for entry in entries where !liveKeys.contains(entry.id) {
-            // A finished mp4 means the pause raced a completion.
-            let landed = fileManager.fileExists(
-                atPath: localURL(for: entry.videoID, versionId: entry.versionID).path
-            )
-            if landed {
-                stale.append(entry.id)
+        var rows: [DownloadActivity] = []
+        for (key, record) in paused where !liveKeys.contains(key) {
+            let id = MediaKey.videoId(of: key)
+            let version = MediaKey.versionId(of: key)
+            if fileManager.fileExists(atPath: localURL(for: id, versionId: version).path) {
+                stale.append(key)
                 continue
             }
-            paused.append(DownloadActivity(
-                videoID: entry.videoID,
-                versionID: entry.versionID,
-                progress: entry.progress,
-                transferredByteCount: entry.transferredByteCount,
-                totalByteCount: entry.totalByteCount,
+            rows.append(DownloadActivity(
+                videoID: id,
+                versionID: version,
+                progress: record.progress,
+                transferredByteCount: record.transferredByteCount,
+                totalByteCount: record.totalByteCount,
                 isPaused: true
             ))
         }
-        if !stale.isEmpty {
-            lock.withLock {
-                for key in stale {
-                    pausedStore.remove(key)
-                    pausedKeys.remove(key)
-                }
-            }
-            // Outside the lock: `releasePausedPermit` takes it itself.
-            stale.forEach { releasePausedPermit(for: $0) }
-        }
-        return (live + paused).sorted { $0.id < $1.id }
+        stale.forEach(forgetPin)
+        return (live + rows).sorted { $0.id < $1.id }
     }
 
-    /// Total bytes this process has downloaded since launch, across every
-    /// transfer, finished or not. Monotonic by construction — feed it to
-    /// `DownloadSpeedMeter`, not the sum of `activeDownloads()`.
+    /// Total bytes committed by downloads since launch. Monotonic by
+    /// construction; feed it to `DownloadSpeedMeter`.
     public func downloadedByteCount() -> Int64 {
         lock.withLock {
-            // Read at the meter's 0.25s cadence only while the Downloads view
-            // is on screen, so logging every read is affordable and gives the
-            // counter's whole timeline against the write tallies that fed it.
-            DevLog.event(.download, "byte counter read", {
-                var meta = inFlight.counterMeta
-                meta["seg_progress_calls"] = "\(segmentProgressCallCount)"
-                meta["plain_progress_calls"] = "\(plainProgressCallCount)"
-                return meta
-            }())
+            DevLog.event(.download, "byte counter read", inFlight.counterMeta)
             return inFlight.cumulativeByteCount
         }
     }
-
-    /// Progress-callback tallies, per download path. A flat cumulative counter
-    /// means either nothing is calling these (the transfer isn't going through
-    /// `CacheManager` at all) or they call but their writes count nothing —
-    /// two very different bugs, distinguished by comparing these against
-    /// `InFlightActivities.updateWriteCount`.
-    private var segmentProgressCallCount = 0
-    private var plainProgressCallCount = 0
 
     public func recentDownloads() -> [DownloadCompletion] {
         lock.withLock {
@@ -461,6 +273,8 @@ public final class CacheManager:
         }
     }
 
+    // MARK: - Downloading
+
     public func download(id: Int, versionId: Int? = nil, from remote: URL, preview: URL? = nil,
                          showPosterKey: String? = nil, showPoster: URL? = nil,
                          bearerToken: String? = nil, streamCount: Int = 1) async throws {
@@ -471,331 +285,136 @@ public final class CacheManager:
             "state": DevLog.describe(state(for: id, versionId: versionId)),
         ])
         let key = cacheKey(videoId: id, versionId: versionId)
+        let params = DownloadJobParameters(
+            remoteURL: remote,
+            streamCount: min(max(streamCount, 1), 4),
+            previewURL: preview,
+            showPosterKey: showPosterKey,
+            showPosterURL: showPoster
+        )
+        lock.withLock { _ = queuedKeys.insert(key) }
         await concurrencyGate.acquire()
+        lock.withLock { _ = queuedKeys.remove(key) }
         DevLog.event(.download, "download passed gate", ["video_id": "\(id)"])
         defer {
             DevLog.event(.download, "download releasing gate", ["video_id": "\(id)"])
             releasePermit(for: key)
         }
-        try await performDownload(
-            id: id, versionId: versionId, from: remote, preview: preview,
-            showPosterKey: showPosterKey, showPoster: showPoster,
-            bearerToken: bearerToken, streamCount: streamCount
-        )
+        try await performDownload(key: key, params: params, bearerToken: bearerToken)
     }
 
-    /// The transfer itself, with no gate interaction. `download` wraps it in an
-    /// acquire/release; `resume` calls it directly because the permit for a
-    /// paused entry is already held.
-    private func performDownload(
-        id: Int, versionId: Int?, from remote: URL, preview: URL?,
-        showPosterKey: String?, showPoster: URL?,
-        bearerToken: String?, streamCount: Int
-    ) async throws {
-        _ = try await downloadVideo(
-            id: id,
-            versionId: versionId,
-            from: remote,
-            bearerToken: bearerToken,
-            streamCount: min(max(streamCount, 1), 4)
-        )
+    /// The transfer, with no gate interaction: `download` wraps it in an
+    /// acquire/release; `resume` reuses the permit the paused entry holds.
+    private func performDownload(key: String, params: DownloadJobParameters, bearerToken: String?) async throws {
+        let id = MediaKey.videoId(of: key)
+        if !fileManager.fileExists(atPath: store.finishedURL(key: key).path) {
+            try await runJob(key: key, params: params, bearerToken: bearerToken)
+        }
         // Best-effort: a missing preview must not fail the cached video.
-        if let preview { try? await cachePreview(id: id, from: preview, bearerToken: bearerToken) }
-        // Show poster is shared across episodes: fetch once, skip when cached.
-        if let showPosterKey, let showPoster, cachedShowPosterURL(for: showPosterKey) == nil {
-            try? await cacheShowPoster(key: showPosterKey, from: showPoster, bearerToken: bearerToken)
+        if let preview = params.previewURL {
+            try? await cachePreview(id: id, from: preview, bearerToken: bearerToken)
+        }
+        if let posterKey = params.showPosterKey, let poster = params.showPosterURL,
+           cachedShowPosterURL(for: posterKey) == nil {
+            try? await cacheShowPoster(key: posterKey, from: poster, bearerToken: bearerToken)
         }
     }
 
-    /// Restarts a paused download. The permit it has been holding is reused, so
-    /// this never queues behind other pending downloads. Nothing calls this
-    /// automatically — only the Resume menu item does.
-    public func resume(id: Int, versionId: Int? = nil, bearerToken: String? = nil) async throws {
-        let key = cacheKey(videoId: id, versionId: versionId)
-        guard lock.withLock({ pausedStore.contains(key) }) else { return }
-        // Can block indefinitely when more entries were paused than the gate
-        // allows, so nothing may be claimed before it returns.
-        await awaitPermit(for: key)
-        // Claim the entry: whoever removes it from `pausedStore` owns the
-        // resume. A second Resume tap during the await above finds it gone and
-        // no-ops, so one key never gets two concurrent transfers.
-        guard let entry = lock.withLock({ () -> PausedDownload? in
-            guard let entry = pausedStore.entry(key) else { return nil }
-            pausedStore.remove(key)
-            return entry
-        }) else { return }
-        // `pause` only *requests* cancellation — the resume-data and manifest
-        // writes land in later URLSession callbacks. Starting a new transfer
-        // before they finish would read state the old teardown is still
-        // rewriting, so wait it out first. `pausedKeys` stays set for the
-        // duration, which keeps every registration path closed for this key
-        // until the disk state has settled.
-        await awaitPauseTeardown(for: key)
-        lock.withLock { _ = pausedKeys.remove(key) }
-        DevLog.event(.download, "resume", [
-            "video_id": "\(id)",
-            "version_id": versionId.map(String.init) ?? "-",
-            "progress": String(format: "%.3f", entry.progress),
-        ])
-        defer {
-            // The permit was reserved for the paused entry; hand it back now
-            // that the transfer has ended, however it ended.
-            releasePausedPermit(for: key)
-            // A segmented transfer that never reached `startIncompleteSegments`
-            // leaves it set; it must not outlive this resume.
-            _ = consumePauseTeardownTimeout(for: key)
-        }
-        try await performDownload(
-            id: id, versionId: versionId, from: entry.remoteURL,
-            preview: entry.previewURL,
-            showPosterKey: entry.showPosterKey, showPoster: entry.showPosterURL,
-            bearerToken: bearerToken, streamCount: entry.streamCount
+    /// Starts the job for `key`, or joins the one already running.
+    private func runJob(key: String, params: DownloadJobParameters, bearerToken: String?) async throws {
+        let runner = DownloadJobRunner(
+            store: store,
+            key: key,
+            streamCount: params.streamCount,
+            session: session,
+            upstream: UpstreamRequests(url: params.remoteURL, credentials: credentials, fallbackToken: bearerToken),
+            tuning: tuning,
+            onProgress: { [weak self] manifest in self?.recordProgress(key: key, manifest: manifest) }
         )
-    }
-
-    /// Restarts downloads interrupted by app suspension. Call when the app
-    /// returns to the foreground (and on launch): a suspended `.default` session
-    /// cancels its tasks and the OS hands back resume data, which we persisted
-    /// as `{key}.resume`. This picks those files up and continues from the last
-    /// byte. Fire-and-forget — no caller awaits the result; the delegate methods
-    /// move the finished file into place. Returns the video ids it resumed.
-    @discardableResult
-    public func resumeInterrupted(bearerToken: String? = nil) -> [Int] {
-        var resumed: [Int] = []
-        var resumedIDs: Set<Int> = []
-
-        func recordResumedID(_ id: Int) {
-            if resumedIDs.insert(id).inserted {
-                resumed.append(id)
-            }
-        }
-
-        let manifests = lock.withLock {
-            segmentedStore.manifests()
-        }
-        for manifest in manifests {
-            let key = manifest.cacheKey
-            let destination = localURL(
-                for: manifest.videoId,
-                versionId: manifest.versionId
+        let (job, task, created) = lock.withLock { () -> (RunningJob, Task<Void, Error>, Bool) in
+            if let existing = jobs[key], let task = existing.task { return (existing, task, false) }
+            let job = RunningJob(params: params)
+            jobs[key] = job
+            let previous = pinned[key]
+            pinned[key] = PinnedRecord(
+                params: params,
+                paused: false,
+                progress: previous?.progress ?? 0,
+                transferredByteCount: previous?.transferredByteCount ?? 0,
+                totalByteCount: previous?.totalByteCount
             )
-            if fileManager.fileExists(atPath: destination.path) {
-                segmentedStore.remove(cacheKey: key)
-                continue
-            }
-            let attempt = SegmentedAttempt(
-                cacheKey: key,
-                bearerToken: bearerToken,
-                manifest: manifest,
-                continuation: nil
+            inFlight[key] = DownloadActivityAccumulator(
+                videoID: MediaKey.videoId(of: key),
+                versionID: MediaKey.versionId(of: key),
+                totalByteCount: previous?.totalByteCount
             )
-            let registered = lock.withLock {
-                guard segmentedAttempts[key] == nil,
-                      tasksByKey[key] == nil,
-                      probeAttempts[key] == nil,
-                      inFlight[key] == nil,
-                      !pausedKeys.contains(key)
-                else { return false }
-                segmentedAttempts[key] = attempt
-                inFlight[key] = activityAccumulator(
-                    manifest: manifest,
-                    activeByteCounts: [:]
-                )
-                return true
+            let pinWritten = enqueueStoreWorkLocked { await $0.setPin(key: key, pin: PinState(job: params, paused: false)) }
+            let task = Task {
+                await pinWritten.value
+                try await runner.run()
             }
-            guard registered else { continue }
-            startIncompleteSegments(attempt: attempt, bearerToken: bearerToken)
-            recordResumedID(manifest.videoId)
+            job.task = task
+            return (job, task, true)
         }
+        do {
+            try await task.value
+            if created { finishJob(key: key, job: job, error: nil) }
+        } catch {
+            if created { finishJob(key: key, job: job, error: error) }
+            let reason = lock.withLock { job.stopReason }
+            switch reason {
+            case .paused: throw DownloadPausedError()
+            case .cancelled: throw CancellationError()
+            case nil: throw error
+            }
+        }
+    }
 
-        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
-        let keys = contents
-            .filter { $0.hasSuffix(".resume") }
-            .map { String($0.dropLast(".resume".count)) }
-        for key in keys {
-            let id = videoId(from: key)
-            let vid = versionId(from: key)
-            // Finished while we were away — drop the stale resume file.
-            if fileManager.fileExists(atPath: localURL(for: id, versionId: vid).path) {
-                try? fileManager.removeItem(at: resumeURL(for: key))
-                continue
-            }
-            // A live task already owns this key (e.g. the user re-tapped download).
-        if lock.withLock({
-            tasksByKey[key] != nil
-                || segmentedAttempts[key] != nil
-                || probeAttempts[key] != nil
-                || inFlight[key] != nil
-                || pausedKeys.contains(key)
-        }) {
-                continue
-            }
-            guard let data = try? Data(contentsOf: resumeURL(for: key)), !data.isEmpty else { continue }
-            let task = session.downloadTask(withResumeData: data)
-            let registered = lock.withLock {
-                guard tasksByKey[key] == nil,
-                      segmentedAttempts[key] == nil,
-                      probeAttempts[key] == nil,
-                      inFlight[key] == nil,
-                      !pausedKeys.contains(key)
-                else { return false }
-                inFlight[key] = DownloadActivityAccumulator(
-                    videoID: id,
-                    versionID: vid,
-                    totalByteCount: nil
-                )
-                idByTask[task.taskIdentifier] = key
-                tasksByKey[key] = task
-                return true
-            }
-            guard registered else { continue }
-            task.resume()
-            recordResumedID(id)
+    private func recordProgress(key: String, manifest: MediaEntryManifest) {
+        lock.withLock {
+            guard jobs[key] != nil else { return }
+            inFlight[key]?.record(
+                transferredByteCount: manifest.committed.totalBytes,
+                progress: manifest.progress,
+                totalByteCount: manifest.identity?.totalByteCount
+            )
+            pinned[key]?.progress = manifest.progress
+            pinned[key]?.transferredByteCount = manifest.committed.totalBytes
+            pinned[key]?.totalByteCount = manifest.identity?.totalByteCount
         }
-        // This path never touches `concurrencyGate` — unlike `download(id:…)`.
-        // It also re-runs on every foreground, not once per launch. If this
-        // count is large, every one of those transfers started at once, which is
-        // what the backend's stream-slot gauge should be compared against.
-        DevLog.event(.download, "resumeInterrupted (ungated by concurrencyGate)", [
-            "resumed": "\(resumed.count)",
-            "ids": resumed.prefix(20).map(String.init).joined(separator: ","),
-            "free_bytes": DevLog.freeDiskBytes(),
+    }
+
+    /// Only the job's creator finishes it, and only while it is still the
+    /// current job: a pause or cancel already moved the table on.
+    private func finishJob(key: String, job: RunningJob, error: Error?) {
+        let unpin: Bool = lock.withLock {
+            guard jobs[key] === job else { return false }
+            jobs[key] = nil
+            inFlight[key] = nil
+            guard let error else {
+                pinned[key] = nil
+                completionHistory.record(DownloadCompletion(
+                    videoID: MediaKey.videoId(of: key),
+                    versionID: MediaKey.versionId(of: key),
+                    completedAt: now()
+                ))
+                return false // promotion already removed the entry
+            }
+            if case .badStatus(let status)? = error as? APIError, (400..<500).contains(status) {
+                pinned[key] = nil
+                return true // the server will not have it on a retry either
+            }
+            return false // stays pinned with its bytes; the next tap or resumeInterrupted continues
+        }
+        if unpin { enqueueStoreWork { await $0.discard(key: key) } }
+        DevLog.event(.download, error == nil ? "download finished" : "download failed", [
+            "key": key, "err": error.map { "\($0)" } ?? "-",
         ])
-        return resumed
     }
 
-    /// Returns a finished download's permit — unless the key was paused, in
-    /// which case ownership transfers to the paused-permit table and the slot
-    /// stays occupied. Called from `download`'s `defer` instead of a bare
-    /// `concurrencyGate.release()`.
-    func releasePermit(for key: String) {
-        let handedOver = lock.withLock { () -> Bool in
-            // `permitOwnerKeys` rather than `pausedKeys` alone: a Resume that
-            // landed while this transfer was still unwinding has already
-            // cleared `pausedKeys`, and it is that resumed transfer the permit
-            // now belongs to.
-            guard pausedKeys.contains(key) || permitOwnerKeys.contains(key),
-                  !pausedPermitKeys.contains(key)
-            else { return false }
-            pausedPermitKeys.insert(key)
-            return true
-        }
-        DevLog.event(.download, handedOver ? "permit held for pause" : "permit released", [
-            "key": key,
-        ])
-        if !handedOver { concurrencyGate.release() }
-    }
-
-    /// Re-acquires a permit for an entry that was paused in a previous process.
-    /// Queues through the gate like any other acquirer; if the entry stops being
-    /// paused before the permit is granted, it is handed straight back.
-    private func reservePermit(for key: String) {
-        let task = Task.detached { [weak self] in
-            guard let self else { return }
-            await self.concurrencyGate.acquire()
-            let stillPaused = self.lock.withLock { () -> Bool in
-                guard self.pausedKeys.contains(key) else { return false }
-                self.pausedPermitKeys.insert(key)
-                return true
-            }
-            if !stillPaused { self.concurrencyGate.release() }
-        }
-        lock.withLock { pausedReservations[key] = task }
-    }
-
-    /// Waits until this paused key's permit has actually been granted. A no-op
-    /// when the permit was handed over from a live download (no reservation).
-    func awaitPermit(for key: String) async {
-        guard let task = lock.withLock({ pausedReservations[key] }) else { return }
-        await task.value
-    }
-
-    /// True while the previous transfer for `key` is still unwinding: the
-    /// segmented attempt has not reached its terminal claim, the plain task's
-    /// resume-data callback has not fired, the plain task is still registered,
-    /// or the plain task is still registered.
-    ///
-    /// The permit half of the same race is handled by `permitOwnerKeys`
-    /// instead of by waiting — see `releasePermit`.
-    private func pauseTeardownInProgressLocked(_ key: String) -> Bool {
-        pauseTeardownKeys.contains(key)
-            || segmentedAttempts[key] != nil
-            || tasksByKey[key] != nil
-    }
-
-    /// Waits for a pause teardown of `key` to finish before a new transfer for
-    /// the same key starts. Bounded by `pauseTeardownTimeout` so a callback
-    /// URLSession never delivers can't wedge Resume forever.
-    /// A timeout is not benign: the old transfer's `SegmentByteSink`s can still
-    /// be open on the part files, with their own file offsets. Anything that
-    /// starts after one must therefore refuse to continue from those bytes, so
-    /// the key is recorded for `consumePauseTeardownTimeout` and reported at
-    /// error severity rather than as a routine event.
-    func awaitPauseTeardown(for key: String) async {
-        guard lock.withLock({ pauseTeardownInProgressLocked(key) }) else { return }
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: pauseTeardownTimeout)
-        while lock.withLock({ pauseTeardownInProgressLocked(key) }) {
-            guard clock.now < deadline else {
-                lock.withLock { _ = pauseTeardownTimeoutKeys.insert(key) }
-                DevLog.error(
-                    CacheManagerPauseError.teardownTimedOut(key: key),
-                    "pause teardown wait timed out; segments restart from 0",
-                    ["key": key]
-                )
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-    }
-
-    /// Whether the transfer about to start for `key` follows a timed-out pause
-    /// teardown. One-shot: the flag is cleared as it is read, so only the very
-    /// next transfer pays for it.
-    func consumePauseTeardownTimeout(for key: String) -> Bool {
-        lock.withLock { pauseTeardownTimeoutKeys.remove(key) != nil }
-    }
-
-    /// Where a segment's next request starts.
-    ///
-    /// Normally the part file on disk is the durable record, so its size is the
-    /// continuation point. A part at exactly the segment length on a segment
-    /// still marked incomplete is untrustworthy (no bytes left to request, and
-    /// the completion bookkeeping never ran), and after a timed-out pause
-    /// teardown *nothing* on disk is trustworthy: another sink may still be
-    /// draining queued writes into that part file with its own offset. Both
-    /// cases restart the segment from byte 0 — re-downloading is cheap next to
-    /// silently interleaved bytes that no checksum downstream would catch.
-    static func segmentStartPrefix(
-        partByteCount: Int64?,
-        segmentLength: Int64,
-        teardownTimedOut: Bool
-    ) -> Int64 {
-        guard !teardownTimedOut,
-              let partByteCount,
-              partByteCount > 0,
-              partByteCount < segmentLength
-        else { return 0 }
-        return partByteCount
-    }
-
-    /// Hands a paused entry's permit back to the gate. Safe to call for a key
-    /// that never held one.
-    func releasePausedPermit(for key: String) {
-        let held = lock.withLock { () -> Bool in
-            permitOwnerKeys.remove(key)
-            return pausedPermitKeys.remove(key) != nil
-        }
-        lock.withLock { pausedReservations[key] = nil }
-        if held { concurrencyGate.release() }
-    }
-
-    /// Suspends a download, keeping every byte already on disk **and** its gate
-    /// permit. Deliberately not `cancel(id:)`: that path exists to wipe resume
-    /// state so a re-tap starts clean, which is the opposite of a pause.
-    ///
-    /// The download parameters are taken as arguments and stored, because a
-    /// resume may happen in a later process.
+    /// Suspends a download, keeping its committed bytes **and** its gate
+    /// permit. The parameters are stored because a resume may come in a
+    /// later process.
     public func pause(
         id: Int,
         versionId: Int? = nil,
@@ -806,198 +425,140 @@ public final class CacheManager:
         showPoster: URL? = nil
     ) {
         let key = cacheKey(videoId: id, versionId: versionId)
-        let snapshot = lock.withLock { () -> DownloadActivity? in
+        let outcome = lock.withLock { () -> (task: Task<Void, Error>?, progress: Double)? in
             guard !pausedKeys.contains(key) else { return nil }
-            let activity = inFlight[key]?.activity
-            pausedKeys.insert(key)
-            permitOwnerKeys.insert(key)
-            pausedStore.insert(PausedDownload(
-                videoID: id,
-                versionID: versionId,
+            let job = jobs[key]
+            let params = job?.params ?? pinned[key]?.params ?? DownloadJobParameters(
                 remoteURL: remote,
-                streamCount: streamCount,
+                streamCount: min(max(streamCount, 1), 4),
                 previewURL: preview,
                 showPosterKey: showPosterKey,
-                showPosterURL: showPoster,
-                progress: activity?.progress ?? 0,
-                transferredByteCount: activity?.transferredByteCount ?? 0,
-                totalByteCount: activity?.totalByteCount
-            ))
+                showPosterURL: showPoster
+            )
+            let activity = inFlight[key]?.activity
+            let previous = pinned[key]
+            let record = PinnedRecord(
+                params: params,
+                paused: true,
+                progress: activity?.progress ?? previous?.progress ?? 0,
+                transferredByteCount: activity?.transferredByteCount ?? previous?.transferredByteCount ?? 0,
+                totalByteCount: activity?.totalByteCount ?? previous?.totalByteCount
+            )
+            pinned[key] = record
+            pausedKeys.insert(key)
+            permitOwnerKeys.insert(key)
+            job?.stopReason = .paused
+            jobs[key] = nil
             inFlight[key] = nil
-            return activity
+            _ = enqueueStoreWorkLocked { await $0.setPin(key: key, pin: PinState(job: params, paused: true)) }
+            return (job?.task, record.progress)
         }
+        guard let outcome else { return }
         DevLog.event(.download, "pause", [
             "video_id": "\(id)",
             "version_id": versionId.map(String.init) ?? "-",
-            "progress": snapshot.map { String(format: "%.3f", $0.progress) } ?? "-",
+            "progress": String(format: "%.3f", outcome.progress),
         ])
-        // Order matters: the probe is the earliest stage, and tearing it down
-        // first means a probe that lands mid-pause can only turn into a
-        // segmented attempt that `pauseSegmented` still sees. `pausedKeys` was
-        // inserted above, and every registration path checks it, so nothing new
-        // can be registered for this key from here on either way.
-        pauseProbe(key: key)
-        pauseSegmented(key: key)
-        pausePlain(key: key)
+        outcome.task?.cancel()
     }
 
-    /// A pause during the probe stage: `downloadVideo` registers `inFlight`
-    /// (so the row, and its Pause button, already exist) before the probe
-    /// response arrives. Without this the probe would return, register the real
-    /// transfer, and run to completion while the store said "paused" — the row
-    /// un-pausing itself. Mirrors `cancel(id:)`'s probe teardown.
-    private func pauseProbe(key: String) {
-        let claim: (
-            task: URLSessionDataTask?,
-            continuation: CheckedContinuation<DownloadProbe, Error>?
-        )? = lock.withLock {
-            guard let probe = probeAttempts.removeValue(forKey: key) else {
-                return nil
-            }
-            let task = probe.task
-            let continuation = probe.continuation
-            probe.task = nil
-            probe.continuation = nil
-            return (task, continuation)
-        }
-        guard let claim else { return }
-        claim.task?.cancel()
-        claim.continuation?.resume(throwing: DownloadPausedError())
-    }
-
-    /// Cancels the segment tasks outright. Nothing has to be extracted from
-    /// URLSession any more: every byte is already in the segment's part file,
-    /// and each task's own completion callback closes its sink and writes the
-    /// byte count into the manifest on the way out.
-    ///
-    /// `preservingResumeData` stays set for exactly one remaining reason — it
-    /// makes `finishFailedSegmentedAttemptIfReady` write the manifest back and
-    /// skip `segmentedStore.remove`, so the parts survive for
-    /// `startIncompleteSegments` to continue from.
-    private func pauseSegmented(key: String) {
-        guard let attempt = lock.withLock({ segmentedAttempts[key] }) else { return }
-        let tasks: [URLSessionTask] = lock.withLock {
-            guard let current = segmentedAttempts[key],
-                  current.id == attempt.id,
-                  !current.terminalClaimed
-            else { return [] }
-            current.preservingResumeData = true
-            if current.terminalError == nil {
-                current.terminalError = DownloadPausedError()
-            }
-            return current.taskIDs.compactMap { taskID in
-                guard let task = tasksByIdentifier[taskID],
-                      let context = segmentContextByTask[taskID],
-                      context.attemptID == current.id
-                else { return nil }
-                return task
-            }
-        }
-        tasks.forEach { $0.cancel() }
-        finishFailedSegmentedAttemptIfReady(attempt)
-    }
-
-    /// The plain path (a download already running off a `{key}.resume` file):
-    /// cancel producing fresh resume data and write it back over that file.
-    private func pausePlain(key: String) {
-        guard let task = lock.withLock({ () -> URLSessionDownloadTask? in
-            guard let task = tasksByKey[key] else { return nil }
-            // Marks the teardown as in progress *before* requesting the cancel,
-            // so a Resume arriving in the same instant waits for the resume
-            // data to hit disk instead of racing the write.
-            pauseTeardownKeys.insert(key)
-            return task
-        }) else { return }
-        task.cancel(byProducingResumeData: { [weak self] data in
-            guard let self else { return }
-            defer {
-                self.lock.withLock { _ = self.pauseTeardownKeys.remove(key) }
-            }
-            DevLog.event(.download, "pause resume data", [
-                "key": key,
-                "path": "plain",
-                "bytes": "\(data?.count ?? -1)",
-            ])
-            guard let data, !data.isEmpty else { return }
-            try? self.fileManager.createDirectory(
-                at: self.root, withIntermediateDirectories: true
-            )
-            try? data.write(to: self.resumeURL(for: key), options: .atomic)
-        })
-    }
-
-    /// Cancels an in-flight download for this id/version. The awaiting
-    /// `download` call throws; `state(for:)` returns to `.notCached`.
-    /// Explicit cancel restarts from scratch - it does not persist resume data.
-    public func cancel(id: Int, versionId: Int? = nil) {
+    /// Restarts a paused download on the permit it has been holding. Only
+    /// the Resume menu item calls this.
+    public func resume(id: Int, versionId: Int? = nil, bearerToken: String? = nil) async throws {
         let key = cacheKey(videoId: id, versionId: versionId)
-        // A cancellation racing a video that is currently playing is a textbook
-        // intermittent failure, so every cancel is recorded with the state it
-        // interrupted.
+        guard lock.withLock({ pinned[key]?.paused == true }) else { return }
+        // Can block while more entries are paused than the gate allows, so
+        // nothing is claimed before it returns.
+        await awaitPermit(for: key)
+        guard let params = lock.withLock({ () -> DownloadJobParameters? in
+            guard let record = pinned[key], record.paused else { return nil }
+            pinned[key]?.paused = false
+            pausedKeys.remove(key)
+            return record.params
+        }) else { return }
+        DevLog.event(.download, "resume", [
+            "video_id": "\(id)", "version_id": versionId.map(String.init) ?? "-",
+        ])
+        defer { releasePausedPermit(for: key) }
+        try await performDownload(key: key, params: params, bearerToken: bearerToken)
+    }
+
+    /// Restarts pinned, unpaused downloads that are not running: those the
+    /// app was suspended or killed during, and those whose last attempt
+    /// failed. Each goes through the gate like any download. Call on launch
+    /// and on every activation. Returns the video ids restarted.
+    @discardableResult
+    public func resumeInterrupted(bearerToken: String? = nil) -> [Int] {
+        let pending = lock.withLock {
+            pinned.filter { !$0.value.paused && jobs[$0.key] == nil && !queuedKeys.contains($0.key) }
+        }
+        for (key, record) in pending {
+            let params = record.params
+            Task { [weak self] in
+                try? await self?.download(
+                    id: MediaKey.videoId(of: key),
+                    versionId: MediaKey.versionId(of: key),
+                    from: params.remoteURL,
+                    preview: params.previewURL,
+                    showPosterKey: params.showPosterKey,
+                    showPoster: params.showPosterURL,
+                    bearerToken: bearerToken,
+                    streamCount: params.streamCount
+                )
+            }
+        }
+        let ids = Array(Set(pending.keys.map(MediaKey.videoId(of:)))).sorted()
+        DevLog.event(.download, "resumeInterrupted", [
+            "resumed": "\(ids.count)",
+            "ids": ids.prefix(20).map(String.init).joined(separator: ","),
+            "free_bytes": DevLog.freeDiskBytes(),
+        ])
+        return ids
+    }
+
+    // MARK: - Cancel and delete
+
+    /// Stops a download and unpins it. Its bytes go once no player response
+    /// reads them. The awaiting `download` throws `CancellationError`.
+    public func cancel(id: Int, versionId: Int? = nil) {
         DevLog.event(.cache, "cancel", [
             "video_id": "\(id)",
             "version_id": versionId.map(String.init) ?? "-",
             "state": DevLog.describe(state(for: id, versionId: versionId)),
         ])
-        let wasPaused = lock.withLock { () -> Bool in
-            guard pausedKeys.contains(key) else { return false }
-            pausedStore.remove(key)
-            pausedKeys.remove(key)
-            return true
-        }
-        if wasPaused {
-            releasePausedPermit(for: key)
-            segmentedStore.remove(cacheKey: key)
-            try? fileManager.removeItem(at: resumeURL(for: key))
-        }
-        cancellationFence.beginCancellation(cacheKey: key)
-        defer {
-            cancellationFence.endCancellation(cacheKey: key)
-        }
-        let (probeTask, probeContinuation, segmentedAttempt) = lock.withLock {
-            let probe = probeAttempts.removeValue(forKey: key)
-            if probe != nil, segmentedAttempts[key] == nil {
-                inFlight[key] = nil
-            }
-            let task = probe?.task
-            let continuation = probe?.continuation
-            probe?.task = nil
-            probe?.continuation = nil
-            return (task, continuation, segmentedAttempts[key])
-        }
-        probeTask?.cancel()
-        probeContinuation?.resume(throwing: CancellationError())
-        if let attempt = segmentedAttempt {
-            let claim = lock.withLock { () -> (
-                continuation: CheckedContinuation<URL, Error>?,
-                tasks: [URLSessionTask],
-                error: Error?
-            )? in
-                attempt.explicitlyCancelled = true
-                return claimSegmentedAttemptLocked(
-                    attempt,
-                    error: CancellationError()
-                )
-            }
-            if let claim {
-                segmentedStore.remove(cacheKey: key)
-                completeSegmentedClaim(
-                    attempt,
-                    continuation: claim.continuation,
-                    result: .failure(CancellationError())
-                )
-                claim.tasks.forEach { $0.cancel() }
-            }
-        }
-        lock.withLock({ tasksByKey[key] })?.cancel()
+        discardDownload(key: cacheKey(videoId: id, versionId: versionId))
     }
 
-    /// Deletes a cached MP4. Used when the server re-converts a file with a
-    /// different audio track set, making the cached copy stale.
+    private func discardDownload(key: String) {
+        let (task, wasPaused) = lock.withLock { () -> (Task<Void, Error>?, Bool) in
+            let wasPaused = pausedKeys.remove(key) != nil
+            let job = jobs.removeValue(forKey: key)
+            job?.stopReason = .cancelled
+            inFlight[key] = nil
+            pinned[key] = nil
+            _ = enqueueStoreWorkLocked { await $0.discard(key: key) }
+            return (job?.task, wasPaused)
+        }
+        if wasPaused { releasePausedPermit(for: key) }
+        task?.cancel()
+    }
+
+    /// Drops a pin whose file landed anyway: the mirror, the permit, the flag.
+    private func forgetPin(_ key: String) {
+        lock.withLock {
+            pinned[key] = nil
+            _ = pausedKeys.remove(key)
+        }
+        releasePausedPermit(for: key)
+        enqueueStoreWork { await $0.setPin(key: key, pin: nil) }
+    }
+
+    /// Deletes a downloaded video (and any store entry for it).
     public func removeCached(id: Int, versionId: Int? = nil) {
         DevLog.event(.cache, "removeCached", [
             "video_id": "\(id)", "version_id": versionId.map(String.init) ?? "-",
         ])
+        discardDownload(key: cacheKey(videoId: id, versionId: versionId))
         try? fileManager.removeItem(at: localURL(for: id, versionId: versionId))
     }
 
@@ -1006,28 +567,21 @@ public final class CacheManager:
         !cachedVideoFilenames(id: id).isEmpty
     }
 
-    /// Deletes every cached MP4 and resume file for this video.
-    /// Preview images and show posters are kept — small, still useful offline.
+    /// Deletes every cached MP4 and store entry for this video. Previews and
+    /// posters are kept — small, still useful offline.
     public func removeAllCached(id: Int) {
         DevLog.event(.cache, "removeAllCached", ["video_id": "\(id)"])
-        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
-        let resumes = contents.filter {
-            $0 == "\(id).resume" || ($0.hasPrefix("\(id):") && $0.hasSuffix(".resume"))
-        }
-        for name in cachedVideoFilenames(id: id) + resumes {
+        let keys = lock.withLock { Set(jobs.keys).union(pinned.keys).filter { MediaKey.videoId(of: $0) == id } }
+        keys.forEach(discardDownload)
+        for name in cachedVideoFilenames(id: id) {
             try? fileManager.removeItem(at: root.appendingPathComponent(name))
         }
-        for manifest in segmentedStore.manifests() where manifest.videoId == id {
-            segmentedStore.remove(cacheKey: manifest.cacheKey)
-        }
+        enqueueStoreWork { await $0.discardAll(videoId: id) }
     }
 
     /// One-time cleanup of the HLS era (<= 2.8): deletes every offline HLS
-    /// package (`hls-<id>` / `hls-<id>_v<v>`) and the `.hls-tmp` staging dir,
-    /// and returns the ids to download again as mp4 — those packages plus the
-    /// paused HLS downloads `PausedDownloadStore` dropped at load. Ids whose
-    /// mp4 is already on disk are left out. Idempotent: a second call finds
-    /// nothing and returns `[]`.
+    /// package and the `.hls-tmp` staging dir, and returns the ids to
+    /// download again as mp4. Idempotent.
     public func removeLegacyHLSPackages() -> [Int] {
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         var ids = Set(PausedDownloadStore.droppedHLSVideoIDs(root: root))
@@ -1038,7 +592,7 @@ public final class CacheManager:
         }
         let staging = root.appendingPathComponent(".hls-tmp", isDirectory: true)
         if let staged = try? fileManager.contentsOfDirectory(atPath: staging.path) {
-            for key in staged { ids.insert(videoId(from: key)) }
+            for key in staged { ids.insert(MediaKey.videoId(of: key)) }
         }
         try? fileManager.removeItem(at: staging)
         PausedDownloadStore.clearDroppedHLS(root: root)
@@ -1051,39 +605,20 @@ public final class CacheManager:
         return pending
     }
 
-    /// Clears every downloaded video: cancels in-flight downloads, removes all
-    /// MP4s (and any 2.8-era `hls-*` folders) + resume files + manifests + completion history. Preview
-    /// images and show posters are kept (see `clearAllCovers()`).
+    /// Cancels every download and deletes every MP4, store entry and the
+    /// completion history. Previews and posters stay (see `clearAllCovers`).
     public func clearAllVideos() {
-        DevLog.event(.cache, "clearAllVideos", [
-            "active_downloads": "\(activeDownloads().count)",
-        ])
-        for activity in activeDownloads() {
-            cancel(id: activity.videoID, versionId: activity.versionID)
-        }
+        let keys = lock.withLock { Set(jobs.keys).union(pinned.keys) }
+        DevLog.event(.cache, "clearAllVideos", ["downloads": "\(keys.count)"])
+        keys.forEach(discardDownload)
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
-        for name in contents where
-            name.hasSuffix(".mp4")
-                || name.hasSuffix(".resume")
-                || name.hasPrefix("hls-")
-        {
+        for name in contents where name.hasSuffix(".mp4") || name.hasPrefix("hls-") {
             try? fileManager.removeItem(at: root.appendingPathComponent(name))
         }
-        for manifest in segmentedStore.manifests() {
-            segmentedStore.remove(cacheKey: manifest.cacheKey)
-        }
-        let strandedPermits = lock.withLock { () -> [String] in
-            let keys = Array(pausedKeys)
-            pausedStore.removeAll()
-            pausedKeys.removeAll()
-            return keys
-        }
-        strandedPermits.forEach { releasePausedPermit(for: $0) }
+        enqueueStoreWork { await $0.discardAll() }
         lock.withLock { completionHistory.clear() }
     }
 
-    /// Clears every cached preview image and show poster. Videos, resume data,
-    /// manifests, and history are kept (see `clearAllVideos()`).
     public func clearAllCovers() {
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
         for name in contents where name.contains(".preview.") || name.hasPrefix("poster.") {
@@ -1098,1487 +633,85 @@ public final class CacheManager:
         }
     }
 
-    public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                           didWriteData bytesWritten: Int64,
-                           totalBytesWritten: Int64,
-                           totalBytesExpectedToWrite: Int64) {
-        // Segments no longer run on download tasks, so this only ever fires for
-        // the plain/legacy resume-data path.
-        guard let key = lock.withLock({ idByTask[downloadTask.taskIdentifier] }) else { return }
-        let progress: Double
-        if totalBytesExpectedToWrite > 0 {
-            progress = min(max(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite), 0), 1)
-        } else {
-            progress = 0
-        }
-        lock.withLock {
-            plainProgressCallCount += 1
-            guard tasksByKey[key]?.taskIdentifier == downloadTask.taskIdentifier else { return }
-            inFlight[key]?.record(
-                transferredByteCount: totalBytesWritten,
-                progress: progress,
-                totalByteCount: totalBytesExpectedToWrite > 0
-                    ? totalBytesExpectedToWrite
-                    : nil
-            )
-        }
+    // MARK: - Store work queue
+
+    @discardableResult
+    private func enqueueStoreWork(_ work: @escaping @Sendable (MediaStore) async -> Void) -> Task<Void, Never> {
+        lock.withLock { enqueueStoreWorkLocked(work) }
     }
 
-    public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                           didFinishDownloadingTo location: URL) {
-        let taskIdentifier = downloadTask.taskIdentifier
-        guard let key = lock.withLock({ idByTask[taskIdentifier] }) else { return }
-
-        let result: Result<URL, Error>
-        if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            result = .failure(APIError.badStatus(http.statusCode))
-        } else {
-            do {
-                try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-                let destination = localURL(for: videoId(from: key), versionId: versionId(from: key))
-                try? fileManager.removeItem(at: destination)
-                try fileManager.moveItem(at: location, to: destination)
-                try? fileManager.removeItem(at: resumeURL(for: key))
-                result = .success(destination)
-            } catch {
-                result = .failure(error)
-            }
+    /// Store writes run one at a time in call order. Caller holds `lock`.
+    private func enqueueStoreWorkLocked(_ work: @escaping @Sendable (MediaStore) async -> Void) -> Task<Void, Never> {
+        let previous = storeChain
+        let store = self.store
+        let task = Task {
+            await previous?.value
+            await work(store)
         }
-
-        lock.withLock { completedResults[taskIdentifier] = result }
+        storeChain = task
+        return task
     }
 
-    public func urlSession(_ session: URLSession, task: URLSessionTask,
-                           didCompleteWithError error: Error?) {
-        let taskIdentifier = task.taskIdentifier
-        if let context = lock.withLock({ segmentContextByTask[taskIdentifier] }) {
-            // Close and account for the part file *before* the state machine
-            // reads the segment's result: the bytes on disk are the outcome.
-            finalizeSegmentSink(
-                context: context,
-                taskIdentifier: taskIdentifier,
-                error: error
-            )
-            completeSegmentTask(
-                context: context,
-                taskIdentifier: taskIdentifier,
-                error: error
-            )
-            return
-        }
-        guard let key = lock.withLock({ idByTask[taskIdentifier] }) else { return }
-
-        if let error {
-            persistResumeData(from: error, for: key)
-            finish(key: key, taskIdentifier: taskIdentifier, result: .failure(error))
-            return
-        }
-
-        let result = lock.withLock {
-            completedResults[taskIdentifier] ?? .failure(URLError(.unknown))
-        }
-        finish(key: key, taskIdentifier: taskIdentifier, result: result)
+    /// Waits for every store write queued so far.
+    public func settleStoreWork() async {
+        let last = lock.withLock { storeChain }
+        await last?.value
     }
 
-    // MARK: - Segment data-task transport
-    //
-    // Segments stream through data tasks appending straight to their part
-    // file, rather than download tasks handing back a finished temp file. The
-    // part file is the durable state, which is what makes a pause resumable:
-    // URLSession refuses to produce resume data for a deliberate cancel, so
-    // anything living only in its private temp file is gone.
+    // MARK: - Gate permits for paused downloads (unchanged from 2.8)
 
-    public func urlSession(
-        _ session: URLSession,
-        dataTask: URLSessionDataTask,
-        didReceive response: URLResponse,
-        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
-    ) {
-        guard let context = lock.withLock({
-            segmentContextByTask[dataTask.taskIdentifier]
-        }) else {
-            completionHandler(.allow)
-            return
-        }
-        let opened = openSegmentSink(
-            context: context,
-            taskIdentifier: dataTask.taskIdentifier,
-            response: response
-        )
-        completionHandler(opened ? .allow : .cancel)
-    }
-
-    public func urlSession(
-        _ session: URLSession,
-        dataTask: URLSessionDataTask,
-        didReceive data: Data
-    ) {
-        let taskIdentifier = dataTask.taskIdentifier
-        guard let context = lock.withLock({
-            segmentContextByTask[taskIdentifier]
-        }) else { return }
-
-        // The write happens outside the lock. Delegate callbacks for this
-        // session are serialized (nil `delegateQueue`), so the sink has exactly
-        // one writer, and this app has already shipped one main-thread hang
-        // from file I/O on a shared path — see `VideoStore.swift`'s history.
-        guard let sink = lock.withLock({ () -> SegmentByteSink? in
-            guard let attempt = segmentedAttempts[context.cacheKey],
-                  attempt.id == context.attemptID,
-                  !attempt.terminalClaimed
-            else { return nil }
-            return segmentSinks[taskIdentifier]
-        }) else { return }
-
-        var failure: Error?
-        do {
-            try sink.append(data)
-        } catch {
-            failure = error
-        }
-
-        var manifestToFlush: SegmentedDownloadManifest?
-        lock.withLock {
-            segmentProgressCallCount += 1
-            guard failure == nil,
-                  let attempt = segmentedAttempts[context.cacheKey],
-                  attempt.id == context.attemptID,
-                  !attempt.terminalClaimed
-            else { return }
-            // `activeByteCounts` holds the segment's absolute byte count, which
-            // is what `progress` and `updatePersistedByteCountLocked` compare
-            // against `persistedByteCount`.
-            attempt.activeByteCounts[context.segmentIndex] = sink.byteCount
-            inFlight[context.cacheKey]?.record(
-                transferredByteCount: transferredByteCount(
-                    manifest: attempt.manifest,
-                    activeByteCounts: attempt.activeByteCounts
-                ),
-                progress: SegmentedDownloadStore.progress(
-                    manifest: attempt.manifest,
-                    activeByteCounts: attempt.activeByteCounts
-                )
-            )
-            let last = segmentSinkFlushes[taskIdentifier]
-            let elapsed = now().timeIntervalSince(last?.at ?? .distantPast)
-            let grown = sink.byteCount - (last?.byteCount ?? 0)
-            guard elapsed >= Self.segmentManifestFlushInterval
-                    || grown >= Self.segmentManifestFlushByteCount
-            else { return }
-            let length = attempt.manifest.segments[context.segmentIndex].range.length
-            attempt.manifest.segments[context.segmentIndex].persistedByteCount =
-                min(length, sink.byteCount)
-            segmentSinkFlushes[taskIdentifier] = (now(), sink.byteCount)
-            manifestToFlush = attempt.manifest
-        }
-
-        if let failure {
-            DevLog.error(failure, "segment part write failed", [
-                "key": context.cacheKey,
-                "segment": "\(context.segmentIndex)",
-            ])
-            lock.withLock {
-                guard let attempt = segmentedAttempts[context.cacheKey],
-                      attempt.id == context.attemptID
-                else { return }
-                attempt.completedResults[context.segmentIndex] = .failure(failure)
-            }
-            dataTask.cancel()
-            return
-        }
-        if let manifestToFlush {
-            // Snapshotted under the lock, written outside it. That ordering is
-            // only safe because delegate callbacks are serialized — the session
-            // is built with `delegateQueue: nil`, which gives one serial queue
-            // for the whole session, so two flushes cannot race and land out of
-            // order. Giving the session a concurrent delegate queue would break
-            // this and the write would have to move back under the lock.
-            try? cancellationFence.performMutation(cacheKey: context.cacheKey) {
-                try segmentedStore.write(manifestToFlush)
-            }
-        }
-    }
-
-    /// Unregisters any sink already open for `taskIdentifier`, resets the
-    /// segment's in-flight byte accounting back to the prefix the next sink
-    /// will start from, and hands the old sink back so the **caller closes it
-    /// outside the lock** — closing drains up to
-    /// `SegmentByteSink.maxPendingByteCount` of queued writes, which is I/O and
-    /// must never run under the lock that serializes every download.
-    ///
-    /// Must be called with `lock` held.
-    private func takeExistingSegmentSinkLocked(
-        context: SegmentTaskContext,
-        taskIdentifier: Int
-    ) -> SegmentByteSink? {
-        guard let stale = segmentSinks.removeValue(forKey: taskIdentifier)
-        else { return nil }
-        segmentSinkFlushes[taskIdentifier] = nil
-        // The stale sink's bytes are about to be truncated away (or the
-        // segment re-fetched); leaving its count in `activeByteCounts` would
-        // report progress no part file holds.
-        if let attempt = segmentedAttempts[context.cacheKey],
-           attempt.id == context.attemptID {
-            attempt.activeByteCounts[context.segmentIndex] =
-                context.durablePrefixByteCount > 0
-                    ? context.durablePrefixByteCount
-                    : nil
-        }
-        return stale
-    }
-
-    /// Locking wrapper around `takeExistingSegmentSinkLocked`. The returned
-    /// sink is still open; the caller owns closing it.
-    func takeExistingSegmentSink(
-        context: SegmentTaskContext,
-        taskIdentifier: Int
-    ) -> SegmentByteSink? {
-        lock.withLock {
-            takeExistingSegmentSinkLocked(
-                context: context,
-                taskIdentifier: taskIdentifier
-            )
-        }
-    }
-
-    /// Validates a segment's response headers and opens its part-file sink.
-    /// Returns false (with the failure recorded on the attempt) when the
-    /// response is not the 206 continuation we asked for, so the caller
-    /// cancels the task and the existing per-segment failure path takes over.
-    ///
-    /// Three phases on purpose: snapshot under the lock, then validate and
-    /// touch the filesystem *outside* it, then register under it again. The
-    /// lock serializes every download in the app, so opening a file handle
-    /// while holding it makes one slow volume everyone's problem.
-    private func openSegmentSink(
-        context: SegmentTaskContext,
-        taskIdentifier: Int,
-        response: URLResponse
-    ) -> Bool {
-        // URLSession can deliver `didReceive response:` more than once for a
-        // single data task — an authentication challenge retry, a redirect
-        // chain, or an `.allow` following a 401. Whatever the first response
-        // opened has to be torn down *before* a second sink truncates the same
-        // part file, or that sink's queued writes land past the truncation
-        // point and silently corrupt it.
-        let (manifest, stale) = lock.withLock {
-            () -> (SegmentedDownloadManifest?, SegmentByteSink?) in
-            let stale = takeExistingSegmentSinkLocked(
-                context: context,
-                taskIdentifier: taskIdentifier
-            )
-            guard let attempt = segmentedAttempts[context.cacheKey],
-                  attempt.id == context.attemptID,
-                  !attempt.terminalClaimed
-            else { return (nil, stale) }
-            return (attempt.manifest, stale)
-        }
-        if let stale {
-            // `close()` drains the queued writes, so it is I/O and stays off
-            // the lock — and it must complete before the new sink truncates.
-            stale.close()
-            DevLog.event(.download, "stale segment sink closed", [
-                "key": context.cacheKey,
-                "segment": "\(context.segmentIndex)",
-                "task": "\(taskIdentifier)",
-            ])
-        }
-        guard let manifest else { return false }
-
-        let record = manifest.segments[context.segmentIndex]
-        let requested = DownloadByteRange(
-            start: record.range.start + context.durablePrefixByteCount,
-            end: record.range.end
-        )
-        let opened: Result<SegmentByteSink, Error> = Result {
-            guard let http = response as? HTTPURLResponse else {
-                throw SegmentedDownloadError.invalidSegmentResponse(
-                    index: context.segmentIndex
-                )
-            }
-            // `fileSize` is the body we are about to receive; the real
-            // part-file length check happens once the task completes.
-            try SegmentedDownloadStore.validateSegment(
-                http,
-                planned: DownloadSegmentRecord(
-                    index: record.index,
-                    range: requested,
-                    isComplete: false,
-                    persistedByteCount: 0
-                ),
-                etag: manifest.etag,
-                totalByteCount: manifest.totalByteCount,
-                fileSize: requested.length,
-                resumed: false
-            )
-            let part = segmentedStore.partURL(
-                cacheKey: context.cacheKey,
-                index: context.segmentIndex
-            )
-            try fileManager.createDirectory(
-                at: part.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            return try SegmentByteSink(
-                partURL: part,
-                expectedOffset: context.durablePrefixByteCount,
-                fileManager: fileManager
-            )
-        }
-
-        switch opened {
-        case .success(let sink):
-            let (registered, raced) = lock.withLock {
-                () -> (Bool, SegmentByteSink?) in
-                // The attempt can have been claimed while the file was being
-                // opened; re-check rather than registering into a dead attempt.
-                guard let attempt = segmentedAttempts[context.cacheKey],
-                      attempt.id == context.attemptID,
-                      !attempt.terminalClaimed
-                else { return (false, nil) }
-                // Never blind-assign: an entry here means a sink this call did
-                // not account for is still open on the same part file.
-                let raced = segmentSinks.updateValue(sink, forKey: taskIdentifier)
-                segmentSinkFlushes[taskIdentifier] = (now(), sink.byteCount)
-                attempt.activeByteCounts[context.segmentIndex] = sink.byteCount
-                return (true, raced)
-            }
-            raced?.close()
-            guard registered else {
-                sink.close()
-                return false
-            }
-            DevLog.event(.download, "segment sink opened", [
-                "key": context.cacheKey,
-                "segment": "\(context.segmentIndex)",
-                "offset": "\(context.durablePrefixByteCount)",
-                "range": requested.headerValue,
-            ])
-            return true
-        case .failure(let error):
-            lock.withLock {
-                guard let attempt = segmentedAttempts[context.cacheKey],
-                      attempt.id == context.attemptID
-                else { return }
-                attempt.completedResults[context.segmentIndex] = .failure(error)
-            }
-            return false
-        }
-    }
-
-    /// Closes a segment's sink and turns the bytes on disk into the segment's
-    /// result. Runs before `completeSegmentTask`, which consumes that result.
-    private func finalizeSegmentSink(
-        context: SegmentTaskContext,
-        taskIdentifier: Int,
-        error: Error?
-    ) {
-        let sink = lock.withLock { () -> SegmentByteSink? in
-            segmentSinkFlushes[taskIdentifier] = nil
-            return segmentSinks.removeValue(forKey: taskIdentifier)
-        }
-        // No sink means the task died before its headers validated; nothing was
-        // written, so there is nothing to account for.
-        guard let sink else { return }
-        // Drains the sink's queued writes; every byte counted below is on disk
-        // by the time this returns.
-        sink.close()
-        // A write that failed asynchronously may never have been reported to an
-        // `append`. The part file is short by however much it lost, so the
-        // segment has to fail rather than be trusted.
-        let writeFailure = sink.failure
-        lock.withLock {
-            guard let attempt = segmentedAttempts[context.cacheKey],
-                  attempt.id == context.attemptID,
-                  !attempt.terminalClaimed
-            else { return }
-            let record = attempt.manifest.segments[context.segmentIndex]
-            if let writeFailure {
-                // Re-derive from disk: whatever landed before the failure is
-                // still a valid prefix to resume from.
-                let part = segmentedStore.partURL(
-                    cacheKey: context.cacheKey,
-                    index: context.segmentIndex
-                )
-                let actual = ((try? fileManager.attributesOfItem(
-                    atPath: part.path
-                )[.size]) as? NSNumber)?.int64Value ?? 0
-                attempt.manifest.segments[context.segmentIndex].persistedByteCount =
-                    min(record.range.length, max(0, actual))
-                attempt.activeByteCounts[context.segmentIndex] = actual
-                if attempt.completedResults[context.segmentIndex] == nil {
-                    attempt.completedResults[context.segmentIndex] = .failure(writeFailure)
-                }
-                DevLog.error(writeFailure, "segment sink closed after write failure", [
-                    "key": context.cacheKey,
-                    "segment": "\(context.segmentIndex)",
-                    "on_disk": "\(actual)",
-                ])
-                return
-            }
-            // Whatever happened, the bytes are on disk — record them so a pause
-            // or a transport failure resumes from here instead of from zero.
-            attempt.manifest.segments[context.segmentIndex].persistedByteCount =
-                min(record.range.length, max(record.persistedByteCount, sink.byteCount))
-            attempt.activeByteCounts[context.segmentIndex] = sink.byteCount
-            DevLog.event(.download, "segment sink closed", [
-                "key": context.cacheKey,
-                "segment": "\(context.segmentIndex)",
-                "bytes": "\(sink.byteCount)",
-                "expected": "\(record.range.length)",
-                "err": error.map { "\($0)" } ?? "-",
-            ])
-            guard error == nil,
-                  attempt.completedResults[context.segmentIndex] == nil
-            else { return }
-            if sink.byteCount == record.range.length {
-                attempt.completedResults[context.segmentIndex] = .success(
-                    segmentedStore.partURL(
-                        cacheKey: context.cacheKey,
-                        index: context.segmentIndex
-                    )
-                )
-            } else {
-                attempt.completedResults[context.segmentIndex] = .failure(
-                    SegmentedDownloadError.lengthMismatch(
-                        expected: record.range.length,
-                        actual: sink.byteCount
-                    )
-                )
-            }
-        }
-    }
-
-    private func downloadVideo(
-        id: Int,
-        versionId: Int?,
-        from remote: URL,
-        bearerToken: String?,
-        streamCount: Int
-    ) async throws -> URL {
-        let key = cacheKey(videoId: id, versionId: versionId)
-        if let data = try? Data(contentsOf: resumeURL(for: key)), !data.isEmpty {
-            return try await downloadLegacy(key: key, resumeData: data)
-        }
-        let manifestURL = segmentedStore.manifestURL(cacheKey: key)
-        if fileManager.fileExists(atPath: manifestURL.path) {
-            let manifest: SegmentedDownloadManifest
-            do {
-                manifest = try segmentedStore.load(cacheKey: key)
-            } catch {
-                segmentedStore.remove(cacheKey: key)
-                lock.withLock { inFlight[key] = nil }
-                throw error
-            }
-            return try await startSegmentedAttempt(
-                manifest: manifest,
-                bearerToken: bearerToken
-            )
-        }
-
-        let probeAttempt = FreshProbeAttempt(cacheKey: key)
-        let canProbe = lock.withLock {
-            guard segmentedAttempts[key] == nil,
-                  probeAttempts[key] == nil,
-                  inFlight[key] == nil,
-                  !pausedKeys.contains(key)
+    /// Returns a finished download's permit — unless the key was paused, in
+    /// which case ownership moves to the paused-permit table and the slot
+    /// stays occupied.
+    func releasePermit(for key: String) {
+        let handedOver = lock.withLock { () -> Bool in
+            guard pausedKeys.contains(key) || permitOwnerKeys.contains(key),
+                  !pausedPermitKeys.contains(key)
             else { return false }
-            probeAttempts[key] = probeAttempt
-            inFlight[key] = DownloadActivityAccumulator(
-                videoID: id,
-                versionID: versionId,
-                totalByteCount: nil
-            )
+            pausedPermitKeys.insert(key)
             return true
         }
-        guard canProbe else { throw CancellationError() }
-
-        do {
-            let probe = try await probe(
-                remote: remote,
-                bearerToken: bearerToken,
-                attempt: probeAttempt
-            )
-            var manifest = try SegmentedDownloadManifest.make(
-                videoId: id,
-                versionId: versionId,
-                remoteURL: remote,
-                requestedStreamCount: streamCount,
-                totalByteCount: probe.totalByteCount,
-                etag: probe.etag
-            )
-            var seededStore: SegmentedDownloadStore?
-            if let streamCache {
-                let stagingRoot = fileManager.temporaryDirectory
-                    .appendingPathComponent(
-                        "patatatube-seed-\(UUID().uuidString)",
-                        isDirectory: true
-                    )
-                let stagingStore = SegmentedDownloadStore(
-                    root: stagingRoot,
-                    fileManager: fileManager
-                )
-                let seeded = await streamCache.seedSegments(
-                    manifest: manifest,
-                    into: stagingStore
-                )
-                if seeded == manifest {
-                    try? fileManager.removeItem(at: stagingRoot)
-                } else {
-                    manifest = seeded
-                    seededStore = stagingStore
-                }
-            }
-            return try await startSegmentedAttempt(
-                manifest: manifest,
-                bearerToken: bearerToken,
-                probeAttempt: probeAttempt,
-                seededStore: seededStore
-            )
-        } catch {
-            lock.withLock {
-                guard probeAttempts[key]?.id == probeAttempt.id else { return }
-                probeAttempts[key] = nil
-                inFlight[key] = nil
-            }
-            throw error
-        }
+        DevLog.event(.download, handedOver ? "permit held for pause" : "permit released", ["key": key])
+        if !handedOver { concurrencyGate.release() }
     }
 
-    private func probe(
-        remote: URL,
-        bearerToken: String?,
-        attempt: FreshProbeAttempt
-    ) async throws -> DownloadProbe {
-        var request = URLRequest(url: remote)
-        request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
-        if let bearerToken {
-            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
-        }
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                let task = session.dataTask(with: request) {
-                    [weak self, weak attempt] data, response, error in
-                        guard let self, let attempt else { return }
-                        let result: Result<DownloadProbe, Error>
-                        do {
-                            if let error {
-                                throw error
-                            }
-                            guard let http = response as? HTTPURLResponse else {
-                                throw SegmentedDownloadError.invalidProbe
-                            }
-                            if (400..<600).contains(http.statusCode) {
-                                throw APIError.badStatus(http.statusCode)
-                            }
-                            result = .success(try SegmentedDownloadStore.validateProbe(
-                                http,
-                                bodyCount: data?.count ?? 0
-                            ))
-                        } catch {
-                            result = .failure(error)
-                        }
-                        self.completeProbe(attempt, result: result)
-                }
-                let shouldResume = lock.withLock {
-                    guard probeAttempts[attempt.cacheKey]?.id == attempt.id else {
-                        return false
-                    }
-                    attempt.task = task
-                    attempt.continuation = continuation
-                    return true
-                }
-                guard shouldResume else {
-                    task.cancel()
-                    continuation.resume(throwing: CancellationError())
-                    return
-                }
-                task.resume()
-            }
-        } onCancel: { [weak self, weak attempt] in
-            guard let self, let attempt else { return }
-            self.cancelProbeAttempt(attempt)
-        }
-    }
-
-    private func cancelProbeAttempt(_ attempt: FreshProbeAttempt) {
-        let claim: (
-            task: URLSessionDataTask?,
-            continuation: CheckedContinuation<DownloadProbe, Error>?
-        ) = lock.withLock {
-            guard probeAttempts[attempt.cacheKey]?.id == attempt.id else {
-                return (nil, nil)
-            }
-            probeAttempts[attempt.cacheKey] = nil
-            inFlight[attempt.cacheKey] = nil
-            let task = attempt.task
-            let continuation = attempt.continuation
-            attempt.task = nil
-            attempt.continuation = nil
-            return (task, continuation)
-        }
-        claim.task?.cancel()
-        claim.continuation?.resume(throwing: CancellationError())
-    }
-
-    private func completeProbe(
-        _ attempt: FreshProbeAttempt,
-        result: Result<DownloadProbe, Error>
-    ) {
-        let continuation: CheckedContinuation<DownloadProbe, Error>? = lock.withLock {
-            guard probeAttempts[attempt.cacheKey]?.id == attempt.id else {
-                return nil
-            }
-            attempt.task = nil
-            let continuation = attempt.continuation
-            attempt.continuation = nil
-            return continuation
-        }
-        switch result {
-        case .success(let probe):
-            continuation?.resume(returning: probe)
-        case .failure(let error):
-            continuation?.resume(throwing: error)
-        }
-    }
-
-    private func startSegmentedAttempt(
-        manifest: SegmentedDownloadManifest,
-        bearerToken: String?
-    ) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            let attempt = SegmentedAttempt(
-                cacheKey: manifest.cacheKey,
-                bearerToken: bearerToken,
-                manifest: manifest,
-                continuation: continuation
-            )
-            let registered = lock.withLock {
-                guard segmentedAttempts[manifest.cacheKey] == nil,
-                      probeAttempts[manifest.cacheKey] == nil,
-                      inFlight[manifest.cacheKey] == nil,
-                      !pausedKeys.contains(manifest.cacheKey)
-                else { return false }
-                segmentedAttempts[manifest.cacheKey] = attempt
-                inFlight[manifest.cacheKey] = activityAccumulator(
-                    manifest: manifest,
-                    activeByteCounts: [:]
-                )
+    /// Re-acquires a permit for an entry paused in a previous process.
+    private func reservePermit(for key: String) {
+        let task = Task.detached { [weak self] in
+            guard let self else { return }
+            await self.concurrencyGate.acquire()
+            let stillPaused = self.lock.withLock { () -> Bool in
+                guard self.pausedKeys.contains(key) else { return false }
+                self.pausedPermitKeys.insert(key)
                 return true
             }
-            guard registered else {
-                continuation.resume(throwing: CancellationError())
-                return
-            }
-            startIncompleteSegments(attempt: attempt, bearerToken: bearerToken)
+            if !stillPaused { self.concurrencyGate.release() }
         }
+        lock.withLock { pausedReservations[key] = task }
     }
 
-    private func startSegmentedAttempt(
-        manifest: SegmentedDownloadManifest,
-        bearerToken: String?,
-        probeAttempt: FreshProbeAttempt,
-        seededStore: SegmentedDownloadStore?
-    ) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            let attempt = SegmentedAttempt(
-                cacheKey: manifest.cacheKey,
-                bearerToken: bearerToken,
-                manifest: manifest,
-                continuation: continuation
-            )
-            let registration = lock.withLock { () -> Result<Void, Error> in
-                guard probeAttempts[manifest.cacheKey]?.id == probeAttempt.id,
-                      segmentedAttempts[manifest.cacheKey] == nil,
-                      !pausedKeys.contains(manifest.cacheKey)
-                else { return .failure(CancellationError()) }
-                do {
-                    try cancellationFence.performMutation(
-                        cacheKey: manifest.cacheKey
-                    ) {
-                        if let seededStore {
-                            try publishSeededParts(
-                                manifest: manifest,
-                                from: seededStore
-                            )
-                        }
-                        try segmentedStore.write(manifest)
-                    }
-                } catch {
-                    segmentedStore.remove(cacheKey: manifest.cacheKey)
-                    probeAttempts[manifest.cacheKey] = nil
-                    inFlight[manifest.cacheKey] = nil
-                    return .failure(error)
-                }
-                probeAttempts[manifest.cacheKey] = nil
-                segmentedAttempts[manifest.cacheKey] = attempt
-                inFlight[manifest.cacheKey] = activityAccumulator(
-                    manifest: manifest,
-                    activeByteCounts: [:]
-                )
-                return .success(())
-            }
-            if let seededStore {
-                try? fileManager.removeItem(at: seededStore.root)
-            }
-            guard case .success = registration else {
-                if case .failure(let error) = registration {
-                    continuation.resume(throwing: error)
-                }
-                return
-            }
-            startIncompleteSegments(attempt: attempt, bearerToken: bearerToken)
-        }
+    func awaitPermit(for key: String) async {
+        guard let task = lock.withLock({ pausedReservations[key] }) else { return }
+        await task.value
     }
 
-    private func publishSeededParts(
-        manifest: SegmentedDownloadManifest,
-        from seededStore: SegmentedDownloadStore
-    ) throws {
-        for segment in manifest.segments where segment.persistedByteCount > 0 {
-            let source = seededStore.partURL(
-                cacheKey: manifest.cacheKey,
-                index: segment.index
-            )
-            let sourceSize = ((try fileManager.attributesOfItem(
-                atPath: source.path
-            )[.size]) as? NSNumber)?.int64Value ?? -1
-            guard sourceSize == segment.persistedByteCount else {
-                throw SegmentedDownloadError.lengthMismatch(
-                    expected: segment.persistedByteCount,
-                    actual: sourceSize
-                )
-            }
-            let destination = segmentedStore.partURL(
-                cacheKey: manifest.cacheKey,
-                index: segment.index
-            )
-            try fileManager.createDirectory(
-                at: destination.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try? fileManager.removeItem(at: destination)
-            try fileManager.moveItem(at: source, to: destination)
+    func releasePausedPermit(for key: String) {
+        let held = lock.withLock { () -> Bool in
+            permitOwnerKeys.remove(key)
+            return pausedPermitKeys.remove(key) != nil
         }
+        lock.withLock { pausedReservations[key] = nil }
+        if held { concurrencyGate.release() }
     }
 
-    private func startIncompleteSegments(
-        attempt: SegmentedAttempt,
-        bearerToken: String?
-    ) {
-        let incompleteSegments = attempt.manifest.segments.filter {
-            !$0.isComplete
-        }
-        guard !incompleteSegments.isEmpty else {
-            finishCompletedSegmentedAttemptIfReady(attempt)
-            return
-        }
-
-        // The part file — not URLSession's resume blob — is the durable record
-        // of a segment's progress, so its size on disk decides where the next
-        // request starts. A part at exactly the segment length on a segment
-        // still marked incomplete is treated as untrustworthy and re-fetched:
-        // there would be no bytes left to request, and the completion
-        // bookkeeping never ran for it.
-        // A pause teardown that timed out may have left the previous transfer's
-        // sinks open on these very part files, so every segment restarts clean.
-        let teardownTimedOut = consumePauseTeardownTimeout(for: attempt.cacheKey)
-        let starts = incompleteSegments.map { segment in
-            let part = segmentedStore.partURL(
-                cacheKey: attempt.cacheKey,
-                index: segment.index
-            )
-            let partSize = ((try? fileManager.attributesOfItem(
-                atPath: part.path
-            )[.size]) as? NSNumber)?.int64Value
-            let durablePrefixByteCount = Self.segmentStartPrefix(
-                partByteCount: partSize,
-                segmentLength: segment.range.length,
-                teardownTimedOut: teardownTimedOut
-            )
-            DevLog.event(.download, "segment start decision", [
-                "key": attempt.cacheKey,
-                "segment": "\(segment.index)",
-                "part_bytes": partSize.map(String.init) ?? "-",
-                "persisted": "\(segment.persistedByteCount)",
-                "durable_prefix": "\(durablePrefixByteCount)",
-                "teardown_timed_out": "\(teardownTimedOut)",
-            ])
-            return (
-                segment: segment,
-                durablePrefixByteCount: durablePrefixByteCount
-            )
-        }
-        // The manifest must agree with the disk before anything else reads it:
-        // `progress`, `transferredByteCount` and the resume decision all key
-        // off `persistedByteCount`.
-        let prefixesByIndex = Dictionary(
-            uniqueKeysWithValues: starts.map {
-                ($0.segment.index, $0.durablePrefixByteCount)
-            }
-        )
-        let resetManifest: SegmentedDownloadManifest? = lock.withLock { () -> SegmentedDownloadManifest? in
-            guard let current = segmentedAttempts[attempt.cacheKey],
-                  current.id == attempt.id
-            else { return nil }
-            var didReset = false
-            for (index, prefix) in prefixesByIndex
-            where current.manifest.segments[index].persistedByteCount != prefix {
-                current.manifest.segments[index].persistedByteCount = prefix
-                current.activeByteCounts[index] = prefix > 0 ? prefix : nil
-                didReset = true
-            }
-            guard didReset else { return nil }
-            inFlight[attempt.cacheKey] = activityAccumulator(
-                manifest: current.manifest,
-                activeByteCounts: current.activeByteCounts
-            )
-            return current.manifest
-        }
-        if let resetManifest {
-            do {
-                try cancellationFence.performMutation(cacheKey: attempt.cacheKey) {
-                    try segmentedStore.write(resetManifest)
-                }
-            } catch {
-                let ownsFailure = lock.withLock {
-                    guard let current = segmentedAttempts[attempt.cacheKey],
-                          current.id == attempt.id,
-                          !current.terminalClaimed
-                    else { return false }
-                    current.terminalError = error
-                    current.preservingResumeData = false
-                    return true
-                }
-                if ownsFailure {
-                    finishFailedSegmentedAttemptIfReady(attempt)
-                }
-                return
-            }
-        }
-
-        var tasksToStart: [URLSessionDataTask] = []
-        for start in starts {
-            let segment = start.segment
-            var request = URLRequest(url: attempt.manifest.remoteURL)
-            let requestRange = DownloadByteRange(
-                start: segment.range.start + start.durablePrefixByteCount,
-                end: segment.range.end
-            )
-            request.setValue(
-                requestRange.headerValue,
-                forHTTPHeaderField: "Range"
-            )
-            request.setValue(attempt.manifest.etag, forHTTPHeaderField: "If-Range")
-            if let bearerToken {
-                request.setValue(
-                    "Bearer \(bearerToken)",
-                    forHTTPHeaderField: "Authorization"
-                )
-            }
-            let task = session.dataTask(with: request)
-            let context = SegmentTaskContext(
-                attemptID: attempt.id,
-                cacheKey: attempt.cacheKey,
-                segmentIndex: segment.index,
-                durablePrefixByteCount: start.durablePrefixByteCount
-            )
-            let shouldResume = lock.withLock {
-                guard let current = segmentedAttempts[attempt.cacheKey],
-                      current.id == attempt.id
-                else { return false }
-                attempt.taskIDs.insert(task.taskIdentifier)
-                segmentContextByTask[task.taskIdentifier] = context
-                tasksByIdentifier[task.taskIdentifier] = task
-                return true
-            }
-            guard shouldResume else {
-                task.cancel()
-                tasksToStart.forEach { $0.cancel() }
-                return
-            }
-            tasksToStart.append(task)
-        }
-        tasksToStart.forEach { $0.resume() }
-    }
-
-    /// Re-requests the remainder of a single segment's byte range after a
-    /// transient transport failure, leaving the attempt's other segment tasks
-    /// untouched.
-    ///
-    /// It continues from the part file rather than restarting at zero. Under
-    /// the old download-task transport a blip threw away nothing durable —
-    /// there was nothing durable to throw away — but the part file is real, and
-    /// discarding 90% of a segment because one connection dropped is exactly
-    /// the failure this task set out to remove.
-    private func relaunchSegment(attempt: SegmentedAttempt, segmentIndex: Int) {
-        let segment = attempt.manifest.segments[segmentIndex]
-        let part = segmentedStore.partURL(
-            cacheKey: attempt.cacheKey,
-            index: segmentIndex
-        )
-        let partSize = ((try? fileManager.attributesOfItem(
-            atPath: part.path
-        )[.size]) as? NSNumber)?.int64Value
-        // No teardown flag here: `startIncompleteSegments` already consumed it
-        // for this transfer, and by now its sinks are this attempt's own.
-        let durablePrefixByteCount = Self.segmentStartPrefix(
-            partByteCount: partSize,
-            segmentLength: segment.range.length,
-            teardownTimedOut: false
-        )
-        let requestRange = DownloadByteRange(
-            start: segment.range.start + durablePrefixByteCount,
-            end: segment.range.end
-        )
-        var request = URLRequest(url: attempt.manifest.remoteURL)
-        request.setValue(requestRange.headerValue, forHTTPHeaderField: "Range")
-        request.setValue(attempt.manifest.etag, forHTTPHeaderField: "If-Range")
-        if let bearerToken = attempt.bearerToken {
-            request.setValue(
-                "Bearer \(bearerToken)",
-                forHTTPHeaderField: "Authorization"
-            )
-        }
-        DevLog.event(.download, "segment relaunch decision", [
-            "key": attempt.cacheKey,
-            "segment": "\(segmentIndex)",
-            "part_bytes": partSize.map(String.init) ?? "-",
-            "durable_prefix": "\(durablePrefixByteCount)",
-        ])
-        let task = session.dataTask(with: request)
-        let context = SegmentTaskContext(
-            attemptID: attempt.id,
-            cacheKey: attempt.cacheKey,
-            segmentIndex: segmentIndex,
-            durablePrefixByteCount: durablePrefixByteCount
-        )
-        let shouldResume = lock.withLock {
-            guard let current = segmentedAttempts[attempt.cacheKey],
-                  current.id == attempt.id,
-                  !current.terminalClaimed
-            else { return false }
-            // The retry branch zeroed this segment's progress before calling
-            // in; restore whatever the part file still holds.
-            current.manifest.segments[segmentIndex].persistedByteCount =
-                durablePrefixByteCount
-            current.activeByteCounts[segmentIndex] =
-                durablePrefixByteCount > 0 ? durablePrefixByteCount : nil
-            attempt.taskIDs.insert(task.taskIdentifier)
-            segmentContextByTask[task.taskIdentifier] = context
-            tasksByIdentifier[task.taskIdentifier] = task
-            return true
-        }
-        if shouldResume {
-            task.resume()
-        } else {
-            task.cancel()
-        }
-    }
-
-    private func downloadLegacy(key: String, resumeData: Data) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            let task = session.downloadTask(withResumeData: resumeData)
-            let registered = lock.withLock {
-                guard inFlight[key] == nil,
-                      !pausedKeys.contains(key)
-                else { return false }
-                inFlight[key] = DownloadActivityAccumulator(
-                    videoID: videoId(from: key),
-                    versionID: versionId(from: key),
-                    totalByteCount: nil
-                )
-                continuations[task.taskIdentifier] = continuation
-                idByTask[task.taskIdentifier] = key
-                tasksByKey[key] = task
-                return true
-            }
-            guard registered else {
-                continuation.resume(throwing: CancellationError())
-                return
-            }
-            task.resume()
-        }
-    }
-
-    private func activityAccumulator(
-        manifest: SegmentedDownloadManifest,
-        activeByteCounts: [Int: Int64]
-    ) -> DownloadActivityAccumulator {
-        let progress = SegmentedDownloadStore.progress(
-            manifest: manifest,
-            activeByteCounts: activeByteCounts
-        )
-        var accumulator = DownloadActivityAccumulator(
-            videoID: manifest.videoId,
-            versionID: manifest.versionId,
-            totalByteCount: manifest.totalByteCount
-        )
-        accumulator.record(
-            transferredByteCount: transferredByteCount(
-                manifest: manifest,
-                activeByteCounts: activeByteCounts
-            ),
-            progress: progress
-        )
-        return accumulator
-    }
-
-    /// Mirrors `SegmentedDownloadStore.progress`'s numerator exactly.
-    /// `activeByteCounts` holds each segment's *absolute* byte count now that
-    /// the sink owns the part file, so this takes the larger of the live and
-    /// persisted counts rather than adding them — adding would double-count
-    /// every byte the throttled manifest flush has already recorded.
-    private func transferredByteCount(
-        manifest: SegmentedDownloadManifest,
-        activeByteCounts: [Int: Int64]
-    ) -> Int64 {
-        manifest.segments.reduce(Int64(0)) { total, segment in
-            let active = activeByteCounts[segment.index] ?? 0
-            let bytes = segment.isComplete
-                ? segment.range.length
-                : min(segment.range.length, max(segment.persistedByteCount, active))
-            return total + bytes
-        }
-    }
-
-    private func completeSegmentTask(
-        context: SegmentTaskContext,
-        taskIdentifier: Int,
-        error: Error?
-    ) {
-        var owningAttempt: SegmentedAttempt?
-        var completionError = error
-        var unsafeCompletionError: Error?
-        var segmentToRetry: Int?
-        var tasksToCancel: [URLSessionTask] = []
-
-        lock.withLock {
-            tasksByIdentifier[taskIdentifier] = nil
-            segmentContextByTask[taskIdentifier] = nil
-
-            guard let attempt = segmentedAttempts[context.cacheKey],
-                  attempt.id == context.attemptID,
-                  !attempt.terminalClaimed
-            else { return }
-            owningAttempt = attempt
-            attempt.taskIDs.remove(taskIdentifier)
-
-            if cancellationFence.isCancellationRequested(cacheKey: context.cacheKey) {
-                completionError = CancellationError()
-            }
-            let recordedResult = attempt.completedResults.removeValue(
-                forKey: context.segmentIndex
-            )
-            if case .failure(let segmentError)? = recordedResult {
-                completionError = segmentError
-                unsafeCompletionError = segmentError
-            }
-            if completionError == nil {
-                switch recordedResult ?? .failure(URLError(.unknown)) {
-                case .success:
-                    attempt.manifest.segments[context.segmentIndex].isComplete = true
-                    attempt.manifest.segments[context.segmentIndex].persistedByteCount =
-                        attempt.manifest.segments[context.segmentIndex].range.length
-                    attempt.activeByteCounts[context.segmentIndex] = nil
-                    inFlight[context.cacheKey]?.record(
-                        transferredByteCount: transferredByteCount(
-                            manifest: attempt.manifest,
-                            activeByteCounts: attempt.activeByteCounts
-                        ),
-                        progress: SegmentedDownloadStore.progress(
-                            manifest: attempt.manifest,
-                            activeByteCounts: attempt.activeByteCounts
-                        )
-                    )
-                case .failure(let segmentError):
-                    completionError = segmentError
-                    unsafeCompletionError = segmentError
-                }
-            }
-            if completionError == nil {
-                do {
-                    try cancellationFence.performMutation(
-                        cacheKey: context.cacheKey
-                    ) {
-                        try? fileManager.removeItem(at: segmentedStore.resumeURL(
-                            cacheKey: context.cacheKey,
-                            index: context.segmentIndex
-                        ))
-                        try segmentedStore.write(attempt.manifest)
-                    }
-                } catch let persistenceError {
-                    completionError = persistenceError
-                    unsafeCompletionError = persistenceError
-                }
-            }
-            if let completionError {
-                let cancelling = attempt.explicitlyCancelled
-                    || cancellationFence.isCancellationRequested(cacheKey: context.cacheKey)
-                let retriesUsed = attempt.segmentRetryCounts[context.segmentIndex] ?? 0
-                let retryable = unsafeCompletionError == nil
-                    && attempt.terminalError == nil
-                    && !cancelling
-                    && retriesUsed < SegmentedAttempt.maxSegmentRetries
-                    && (error.map {
-                        isResumableTransportError($0, preservingResumeData: false)
-                    } ?? false)
-                if retryable {
-                    // A transient blip on one segment must not discard the whole
-                    // multiplexed download: re-request just this segment's range
-                    // from scratch and leave the sibling tasks running.
-                    attempt.segmentRetryCounts[context.segmentIndex] = retriesUsed + 1
-                    attempt.manifest.segments[context.segmentIndex].isComplete = false
-                    attempt.manifest.segments[context.segmentIndex].persistedByteCount = 0
-                    attempt.activeByteCounts[context.segmentIndex] = nil
-                    inFlight[context.cacheKey]?.record(
-                        transferredByteCount: transferredByteCount(
-                            manifest: attempt.manifest,
-                            activeByteCounts: attempt.activeByteCounts
-                        ),
-                        progress: SegmentedDownloadStore.progress(
-                            manifest: attempt.manifest,
-                            activeByteCounts: attempt.activeByteCounts
-                        )
-                    )
-                    segmentToRetry = context.segmentIndex
-                } else if let unsafeCompletionError {
-                    if attempt.terminalError == nil || attempt.preservingResumeData {
-                        attempt.terminalError = unsafeCompletionError
-                    }
-                    attempt.preservingResumeData = false
-                    tasksToCancel = attempt.taskIDs.compactMap {
-                        tasksByIdentifier[$0]
-                    }
-                } else if attempt.terminalError == nil {
-                    attempt.terminalError = completionError
-                    if let transportError = error,
-                       isResumableTransportError(
-                        transportError,
-                        preservingResumeData: false
-                       ) {
-                        attempt.preservingResumeData = true
-                        updatePersistedByteCountLocked(
-                            attempt: attempt,
-                            segmentIndex: context.segmentIndex
-                        )
-                        // Siblings are cancelled outright. Their part files are
-                        // already durable, and each one's own completion
-                        // callback records its bytes on the way out — which is
-                        // what `cancel(byProducingResumeData:)` used to buy.
-                        tasksToCancel = attempt.taskIDs.compactMap {
-                            tasksByIdentifier[$0]
-                        }
-                    } else {
-                        tasksToCancel = attempt.taskIDs.compactMap {
-                            tasksByIdentifier[$0]
-                        }
-                    }
-                } else if attempt.preservingResumeData,
-                          let transportError = error,
-                          isResumableTransportError(
-                            transportError,
-                            preservingResumeData: true
-                          ) {
-                    updatePersistedByteCountLocked(
-                        attempt: attempt,
-                        segmentIndex: context.segmentIndex
-                    )
-                }
-            }
-        }
-
-        guard let attempt = owningAttempt else { return }
-        if let segmentToRetry {
-            relaunchSegment(attempt: attempt, segmentIndex: segmentToRetry)
-            return
-        }
-        tasksToCancel.forEach { $0.cancel() }
-
-        finishFailedSegmentedAttemptIfReady(attempt)
-        finishCompletedSegmentedAttemptIfReady(attempt)
-    }
-
-    private func finishCompletedSegmentedAttemptIfReady(
-        _ attempt: SegmentedAttempt
-    ) {
-        var claim: (
-            continuation: CheckedContinuation<URL, Error>?,
-            tasks: [URLSessionTask],
-            error: Error?
-        )?
-        _ = cancellationFence.performTerminalClaim(cacheKey: attempt.cacheKey) {
-            lock.withLock {
-                guard let current = segmentedAttempts[attempt.cacheKey],
-                      current.id == attempt.id,
-                      current.terminalError == nil,
-                      current.taskIDs.isEmpty,
-                      current.resumeDataPendingTaskIDs.isEmpty,
-                      current.manifest.segments.allSatisfy(\.isComplete),
-                      let currentClaim = claimSegmentedAttemptLocked(current)
-                else { return false }
-                claim = currentClaim
-                return true
-            }
-        }
-        guard let claim else { return }
-        let destination = localURL(
-            for: attempt.manifest.videoId,
-            versionId: attempt.manifest.versionId
-        )
-        do {
-            try segmentedStore.assemble(
-                manifest: attempt.manifest,
-                destination: destination
-            )
-            completeSegmentedClaim(
-                attempt,
-                continuation: claim.continuation,
-                result: .success(destination)
-            )
-        } catch {
-            segmentedStore.remove(cacheKey: attempt.cacheKey)
-            completeSegmentedClaim(
-                attempt,
-                continuation: claim.continuation,
-                result: .failure(error)
-            )
-        }
-    }
-
-    private func finishFailedSegmentedAttemptIfReady(
-        _ attempt: SegmentedAttempt
-    ) {
-        let ready: (
-            manifest: SegmentedDownloadManifest,
-            preservingResumeData: Bool
-        )? = lock.withLock {
-            guard let current = segmentedAttempts[attempt.cacheKey],
-                  current.id == attempt.id,
-                  !current.terminalClaimed,
-                  current.terminalError != nil,
-                  current.taskIDs.isEmpty,
-                  current.resumeDataPendingTaskIDs.isEmpty
-            else { return nil }
-            return (current.manifest, current.preservingResumeData)
-        }
-        guard var ready else { return }
-
-        if ready.preservingResumeData {
-            do {
-                try cancellationFence.performMutation(
-                    cacheKey: attempt.cacheKey
-                ) {
-                    try segmentedStore.write(ready.manifest)
-                }
-            } catch {
-                lock.withLock {
-                    guard let current = segmentedAttempts[attempt.cacheKey],
-                          current.id == attempt.id
-                    else { return }
-                    current.preservingResumeData = false
-                }
-                ready.preservingResumeData = false
-            }
-        }
-
-        var claim: (
-            continuation: CheckedContinuation<URL, Error>?,
-            tasks: [URLSessionTask],
-            error: Error?
-        )?
-        var preservesScratch = false
-        _ = cancellationFence.performTerminalClaim(cacheKey: attempt.cacheKey) {
-            lock.withLock {
-                guard let current = segmentedAttempts[attempt.cacheKey],
-                      current.id == attempt.id,
-                      current.terminalError != nil,
-                      current.taskIDs.isEmpty,
-                      current.resumeDataPendingTaskIDs.isEmpty,
-                      let currentClaim = claimSegmentedAttemptLocked(current)
-                else { return false }
-                current.activeByteCounts.removeAll()
-                preservesScratch = current.preservingResumeData
-                claim = currentClaim
-                return true
-            }
-        }
-        guard let claim, let terminalError = claim.error else { return }
-        if !preservesScratch {
-            segmentedStore.remove(cacheKey: attempt.cacheKey)
-        }
-        completeSegmentedClaim(
-            attempt,
-            continuation: claim.continuation,
-            result: .failure(terminalError)
-        )
-    }
-
-    private func isResumableTransportError(
-        _ error: Error,
-        preservingResumeData: Bool
-    ) -> Bool {
-        if resumeData(from: error) != nil {
-            return true
-        }
-        if let urlError = error as? URLError {
-            return preservingResumeData || urlError.code != .cancelled
-        }
-        return preservingResumeData && error is CancellationError
-    }
-
-    private func resumeData(from error: Error) -> Data? {
-        let data = (error as NSError)
-            .userInfo[NSURLSessionDownloadTaskResumeData] as? Data
-        return data?.isEmpty == false ? data : nil
-    }
-
-    private func updatePersistedByteCountLocked(
-        attempt: SegmentedAttempt,
-        segmentIndex: Int
-    ) {
-        let active = max(attempt.activeByteCounts[segmentIndex] ?? 0, 0)
-        let segment = attempt.manifest.segments[segmentIndex]
-        attempt.manifest.segments[segmentIndex].persistedByteCount = min(
-            segment.range.length,
-            max(segment.persistedByteCount, active)
-        )
-    }
-
-    private func claimSegmentedAttemptLocked(
-        _ attempt: SegmentedAttempt,
-        error: Error? = nil
-    ) -> (
-        continuation: CheckedContinuation<URL, Error>?,
-        tasks: [URLSessionTask],
-        error: Error?
-    )? {
-        guard let current = segmentedAttempts[attempt.cacheKey],
-              current.id == attempt.id,
-              !current.terminalClaimed
-        else { return nil }
-        current.terminalClaimed = true
-        if current.terminalError == nil {
-            current.terminalError = error
-        }
-        let continuation = current.continuation
-        current.continuation = nil
-        return (
-            continuation,
-            current.taskIDs.compactMap { tasksByIdentifier[$0] },
-            current.terminalError
-        )
-    }
-
-    private func completeSegmentedClaim(
-        _ attempt: SegmentedAttempt,
-        continuation: CheckedContinuation<URL, Error>?,
-        result: Result<URL, Error>
-    ) {
-        lock.withLock {
-            guard let current = segmentedAttempts[attempt.cacheKey],
-                  current.id == attempt.id,
-                  current.terminalClaimed
-            else { return }
-            if case .success = result {
-                completionHistory.record(DownloadCompletion(
-                    videoID: attempt.manifest.videoId,
-                    versionID: attempt.manifest.versionId,
-                    completedAt: now()
-                ))
-            }
-            segmentedAttempts[attempt.cacheKey] = nil
-            inFlight[attempt.cacheKey] = nil
-        }
-        switch result {
-        case .success(let url):
-            DevLog.event(.download, "segmented download finished", [
-                "video_id": "\(attempt.manifest.videoId)",
-                "bytes": "\(attempt.manifest.totalByteCount)",
-                "file": url.lastPathComponent,
-            ])
-            continuation?.resume(returning: url)
-        case .failure(let error):
-            DevLog.event(.download, "segmented download failed", [
-                "video_id": "\(attempt.manifest.videoId)",
-                "cancelled": "\(attempt.explicitlyCancelled)",
-                "err": "\(error)",
-            ])
-            continuation?.resume(throwing: error)
-        }
-    }
-
-    private func finish(key: String, taskIdentifier: Int, result: Result<URL, Error>) {
-        let continuation = lock.withLock {
-            idByTask[taskIdentifier] = nil
-            completedResults[taskIdentifier] = nil
-            if tasksByKey[key]?.taskIdentifier == taskIdentifier {
-                if case .success = result {
-                    completionHistory.record(DownloadCompletion(
-                        videoID: videoId(from: key),
-                        versionID: versionId(from: key),
-                        completedAt: now()
-                    ))
-                }
-                inFlight[key] = nil
-                tasksByKey[key] = nil
-            }
-            return continuations.removeValue(forKey: taskIdentifier)
-        }
-
-        switch result {
-        case .success(let url):
-            DevLog.event(.download, "download finished", [
-                "key": key, "file": url.lastPathComponent,
-            ])
-            continuation?.resume(returning: url)
-        case .failure(let error):
-            DevLog.event(.download, "download failed", [
-                "key": key, "err": "\(error)",
-            ])
-            continuation?.resume(throwing: error)
-        }
-    }
-
-    private func persistResumeData(from error: Error, for key: String) {
-        let userInfo = (error as NSError).userInfo
-        guard let data = userInfo[NSURLSessionDownloadTaskResumeData] as? Data, !data.isEmpty else {
-            return
-        }
-        try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        try? data.write(to: resumeURL(for: key), options: .atomic)
-    }
-
-    private func resumeURL(for key: String) -> URL {
-        root.appendingPathComponent("\(key).resume")
-    }
-
-    private func filename(videoId: Int, versionId: Int?) -> String {
-        if let versionId {
-            return "\(videoId).v\(versionId).mp4"
-        }
-        return "\(videoId).mp4"
-    }
+    // MARK: - Helpers
 
     func cacheKey(videoId: Int, versionId: Int?) -> String {
         Self.cacheKey(videoId: videoId, versionId: versionId)
     }
 
     static func cacheKey(videoId: Int, versionId: Int?) -> String {
-        if let versionId {
-            return "\(videoId):\(versionId)"
-        }
-        return "\(videoId)"
-    }
-
-    private func videoId(from key: String) -> Int {
-        Int(key.split(separator: ":").first ?? "") ?? 0
-    }
-
-    private func versionId(from key: String) -> Int? {
-        let parts = key.split(separator: ":")
-        guard parts.count == 2 else { return nil }
-        return Int(parts[1])
+        MediaKey.key(videoId: videoId, versionId: versionId)
     }
 
     func cachePreview(id: Int, from remote: URL, bearerToken: String? = nil) async throws {

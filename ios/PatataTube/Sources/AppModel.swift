@@ -147,7 +147,7 @@ final class AppModel: ObservableObject {
         let api = APIClient(store: credentials)
         let resumeStore = ResumePositionStore(serverURL: credentials.identityURL)
         let streamCache = StreamCache()
-        let cache = CacheManager(root: cacheRoot, streamCache: streamCache)
+        let cache = CacheManager(root: cacheRoot, credentials: credentials)
         self.credentials = credentials
         let routed = credentials as? RoutedCredentialStore
         self.serverPicker = routed.map(ServerPicker.init(store:))
