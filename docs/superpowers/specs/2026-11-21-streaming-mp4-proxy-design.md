@@ -67,6 +67,8 @@ The remove-HLS branch (`remove-hls`, 2.9.0, not deployed) keeps the same
   2026-11-21.)
 - **Testing and rollout (section 4) approved** as written below. (Owner,
   2026-11-21.)
+- **Spec approved** as a whole; the implementation plan is written in a new
+  session. (Owner, 2026-11-21.)
 
 ## Architecture
 
