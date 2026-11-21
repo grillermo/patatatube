@@ -1,8 +1,8 @@
 """HLS VOD packaging with WebVTT subtitle sidecars.
 
 Segments are fMP4. Video/audio are stream-copied when the source is already
-iPad/HLS-compatible (H.264/AAC per ``library.plan_conversion``); incompatible
-library sources transcode only the offending stream(s). Subtitle sidecars are
+iPad/HLS-compatible (H.264/AAC per ``media_probe.plan_conversion``); incompatible
+sources transcode only the offending stream(s). Subtitle sidecars are
 normalized to WebVTT and exposed as an ``EXT-X-MEDIA:TYPE=SUBTITLES`` group.
 
 All output for a video is constrained under ``HLS_DIR / str(video_id)``.
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import db
 import ffmpeg_progress
-from library import audio_track_list, plan_conversion, probe_source, select_audio_indices
+from media_probe import audio_track_list, plan_conversion, probe_source, select_audio_indices
 from paths import HLS_DIR
 from subtitles import (
     SubtitleTrack,
