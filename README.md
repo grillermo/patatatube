@@ -50,7 +50,7 @@ Most of it was built with Claude.
 ```
  iOS Shortcut ──► FastAPI server (always-on, at home) ──► iPad app (SwiftUI)
    (a URL)          downloads, re-encodes to H.264/AAC,       groups, playback,
-                    streams over HTTP Range / HLS             offline cache
+                    streams over HTTP Range                 offline cache
 ```
 
 - `main.py`, `downloader.py`, `converter.py`: the backend. It downloads with yt-dlp and pybalt, and a single converter process runs every ffmpeg job.

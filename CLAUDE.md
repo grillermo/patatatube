@@ -201,10 +201,10 @@ map for the intermittent-playback investigation:
    group; once `_download_youtube_media` has the metadata, `download_video`
    writes title and channel onto the still-`downloading` row and calls
    `services.classify_download` on a worker thread, which moves the row.
-   Normalize and the HLS job come after. Showing
+   Normalize comes after. Showing
    the video in its group fast is the priority: it used to be filed only once
-   its HLS package existed, so that the move and the badge coincided, and that
-   kept a new video out of its group for the whole conversion. The **badge**
+   the whole conversion had finished, which
+   kept a new video out of its group. The **badge**
    still waits for the file — `_announce_new_video` runs when the row turns
    `done` — so a group can list a video that is not badged or playable yet.
    The move writes `db.set_video_group` directly rather than
@@ -237,32 +237,26 @@ map for the intermittent-playback investigation:
 ### ffmpeg runs in exactly one process
 
 `converter.py` is the only process that spawns ffmpeg. Web workers never do —
-a cold `master.m3u8`, an SD rendition, and upload normalization all
+an SD rendition and upload normalization
 call `db.enqueue_job` and return immediately. The runner claims jobs
 `FFMPEG_JOB_LIMIT` at a time (default 2, env-overridable) from the `jobs` table,
-ordered by `priority` then `id`; `priority=100` is the HLS package a finished
-download queues for itself, and it waits behind interactive taps at `priority=0`.
+ordered by `priority` then `id`; `sd` renditions run at priority 200, behind interactive work.
 
 `./serve` runs it in its own tmux pane under `until ... do sleep 1; done`,
 which respawns it on a crash; a clean exit (SIGTERM) only comes from `./serve`
 replacing the pane. Queue depth is visible in
 `log/backend.log`:
 
-    [job] +1 kind=hls id=812 priority=0 queued=12
-    [job] -1 kind=hls id=812 status=done secs=41
+    [job] +1 kind=sd id=812 priority=200 queued=3
+    [job] -1 kind=sd id=812 status=done secs=41
 
-`ffmpeg_progress.run_ffmpeg` is the only place `hls` jobs spawn
+`ffmpeg_progress.run_ffmpeg` is how `sd` jobs spawn
 ffmpeg (the `normalize` job still shells out via `downloader.py`, and the
 preview endpoints grab frames directly in the web worker).
 It appends `-progress pipe:1 -nostats` when given a duration and a callback,
 and writes a 0..1 fraction to `jobs.progress` (throttled to ≥1% or ≥2s). stderr
 gets its own pipe drained on a thread — merging it into stdout would corrupt the
 progress stream, and not draining it deadlocks a verbose failure.
-
-`GET /api/jobs` exposes running jobs plus the next 20 queued (`hls`
-only; `normalize` is excluded) with a `queued_total`. The iOS `JobsStore`
-polls it every 2s while any view is subscribed, and both the download button's
-determinate ring and the Downloads view's "Converting" section read from it.
 
 Only this process may run ffmpeg — that is the invariant that makes the startup
 orphan reset correct (nothing else can hold a `running` job) and the cap real.
@@ -375,7 +369,7 @@ Write endpoints call `_check_token`: `Authorization: Bearer <UPLOAD_TOKEN>` comp
 holding the raw `UPLOAD_TOKEN`; `GET /` and `/videos` 303 to `/login?next=…`
 without it, and `GET /logout` clears it. `_check_token_or_query` accepts the
 cookie alongside Bearer and `?token=`, so nothing in the rendered HTML carries
-a token in its URL any more — but Caddy serves downloaded MP4s and HLS segments
+a token in its URL any more — but Caddy serves downloaded MP4s
 off disk and runs the same check itself, so `@ptunauth` in
 `~/c/server/Caddyfile` carries the matching `not header Cookie
 *upload_token={env.UPLOAD_TOKEN}*` line. **Changing `UPLOAD_TOKEN` to include
@@ -491,16 +485,14 @@ logged in.
   crossed-out icon. So `PlaybackSource.configureExternalPlayback` allows
   external playback only for a local file or `airplay_mp4`: the server's MP4
   `stream` URL with `?token=` (`AppModel.airPlayStreamURL`), chosen by the
-  full-screen player when `PlaybackSource.airPlayRouteActive`. MP4, not HLS:
-  Caddy serves the packaged playlists as-is and their relative segment URIs
-  don't carry the token. A route change mid-video swaps the item in place
+  full-screen player when `PlaybackSource.airPlayRouteActive`. It is the MP4 `stream` URL, the only source there is. A route change mid-video swaps the item in place
   (`VideoPlayerView.switchSourceForAirPlay`). Every other item stays on the
   device and mirroring shows it; the audio queue never uses `airplay_mp4`.
 - **Downloads can be paused, and a pause outlives the process.** Each row in
   the Downloads view carries a three-dot menu holding Cancel plus Pause (or
   Resume). `CacheManager.pause` is deliberately not `cancel`: cancel wipes
   resume state so a re-tap starts clean, pause preserves it. The segmented path
-  (HLS segments) stops transferring but keeps its partial part files and manifest
+  (parallel ranged mp4 transfers) stops transferring but keeps its partial part files and manifest
   intact, the durable state for byte-by-byte continuation; on resume, segments
   re-request only the remaining bytes via `Range` + `If-Range` computed from the
   part file's size on disk. The plain `URLSession` path is unchanged: still
@@ -512,8 +504,7 @@ logged in.
   download **keeps its concurrency permit**: `download`'s `defer` hands ownership
   to the paused-permit table instead of releasing, and every stored entry
   re-reserves one at launch, so pausing everything means nothing downloads until
-  the user acts. HLS packages have no partial state on disk, so pausing one
-  restarts it from zero on resume.
+  the user acts.
 - **The in-app web bridge has an address bar.** `WebBridgeView` opens on the
   last committed page (`WebHistoryStore.lastURL`, `UserDefaults` key
   `webBridgeHistory`, 200 entries) rather than a hardcoded URL. Typing
@@ -577,13 +568,10 @@ the `itms-services://` link and exits 1.5 s later so iOS can replace the bundle.
 
 Full setup and troubleshooting: `ios/install.md`.
 
-### Posters and subtitles
+### Posters
 
 - `GET /videos/{id}/preview` serves posters for **download** rows that have no external thumbnail (Twitter, file uploads — only YouTube fills `preview_url`) by grabbing a frame `PREVIEW_FRAME_OFFSET` seconds into the mp4, cached in `data/previews/` as `dl<id>.*.jpg`; frame 0 is black in most clips, which is what left those rows posterless.
-- Subtitles come from two places, and `subtitles.discover_subtitles` merges both: **sidecar files** next to the media, and **text tracks embedded in the container** (SRT/ASS/mov_text — bitmap PGS/VobSub/DVD tracks are rejected, they would need OCR). A sidecar outranks an embedded track of the same language. Embedded discovery only happens when the caller passes an ffprobe dict; `subtitles.py` never shells out to ffprobe itself, so `discover_subtitles(path)` alone stays a pure filesystem walk.
-- **Exactly one track ships per language** (`_one_per_language`), preferring the plain variant over SDH and Forced, and never dropping a language whose only track is one of those. This is not cosmetic: AVKit's in-player list groups HLS renditions by `LANGUAGE` regardless of `NAME`. Ship several renditions per language and the app's own picker (one row per track) and the player's (one row per language) show different lists. Per-track selection would mean changing that key end-to-end, not just the playlist.
-- **Hidden files are never subtitles** (`_list_files`). macOS leaves a binary AppleDouble `._X` twin beside every `X` on a non-HFS volume, and a release folder full of them doubled every track — worse, `._English.eng.srt` sorts first, so the junk twin won the `en` key and shipped as the `DEFAULT=YES` rendition with an AppleDouble blob inside a `.vtt`.
-- **Filename tokens are NFC-folded before any table lookup** (`_fold`). macOS returns decomposed filenames, so `Français.fre.srt` arrives as `Franc\u0327ais...`; unfolded, the language word misses `_NAME_CODES`, gets mistaken for a descriptor ("French (Français)" instead of "French"), and stops counting as the plain variant.
+- Downloads carry no subtitles: `_normalize_media_for_ios` drops them (`-sn`). HLS packaging, the only path that ever delivered subtitles, was removed on 2026-11-21 (`docs/superpowers/plans/2026-11-21-remove-hls.md`).
 
 Movies and TV are not PatataTube's job: they play on the Apple TV through Infuse over SMB from `/Volumes/Media/media`. The Plex-backed library feature was removed on 2026-11-20 (`docs/superpowers/plans/2026-11-20-remove-plex-movies-tv.md`).
 
@@ -601,4 +589,4 @@ Movies and TV are not PatataTube's job: they play on the Apple TV through Infuse
 - ffmpeg/ffprobe/yt-dlp binaries and behavior are all env-overridable (`FFMPEG_BIN`, `FFPROBE_BIN`, `YTDLP_BIN`, `YTDLP_BROWSER`, `YTDLP_FORMAT`). Downloader code should keep reading these rather than hardcoding paths.
 - `ALLOWED_HOSTS` env drives `TrustedHostMiddleware`; the default includes the production hosts plus `testserver` (FastAPI TestClient's host).
 - Tests reload `db` then `main` after setting `DB_PATH`/`UPLOAD_TOKEN` env vars (see the `client` fixture in `tests/test_api.py`) — because both modules read env at import time. Follow that pattern for new integration tests.
-- **Storage layout**: `paths.py` holds `VIDEOS_DIR`/`HLS_DIR`, both derived from `MEDIA_ROOT` (env, default `.` — repo-relative). Setting `MEDIA_ROOT` moves downloaded MP4s and HLS packages off the boot disk onto an external volume; `paths.ensure_media_root()` runs at both `main.py` and `converter.py` startup and raises loudly if that volume isn't mounted, rather than silently refilling the boot disk. `data/watch_later.sqlite` and `data/previews/` always stay local.
+- **Storage layout**: `paths.py` holds `VIDEOS_DIR`, derived from `MEDIA_ROOT` (env, default `.` — repo-relative). Setting `MEDIA_ROOT` moves downloaded MP4s off the boot disk onto an external volume; `paths.ensure_media_root()` runs at both `main.py` and `converter.py` startup and raises loudly if that volume isn't mounted, rather than silently refilling the boot disk. `data/watch_later.sqlite` and `data/previews/` always stay local.

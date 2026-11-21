@@ -21,7 +21,7 @@ APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$APP_DIR" || exit 1
 
 SESSION="${SERVE_SESSION:-patatatube-server}"
-# Caddy owns the client-facing :3050 and serves static assets / HLS segments /
+# Caddy owns the client-facing :3050 and serves static assets /
 # downloaded MP4s from disk (see ~/c/server/Caddyfile); the app sits behind it.
 PORT="${PORT:-3051}"
 PYTHON_BIN="${PYTHON_BIN:-python_env/bin/python}"
@@ -85,8 +85,8 @@ run_convert() {
 }
 
 run_web() {
-  # macOS launchd hands processes a 256-fd soft limit. Video streaming, HLS
-  # segment bursts, preview fetches and SQLite each hold fds, so raise the soft
+  # macOS launchd hands processes a 256-fd soft limit. Video streaming,
+  # preview fetches and SQLite each hold fds, so raise the soft
   # limit toward the hard cap. Defense in depth on top of closing connections.
   ulimit -n "${FD_LIMIT:-8192}" 2>/dev/null || true
 
