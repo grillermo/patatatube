@@ -210,53 +210,6 @@ def test_claim_job_resets_progress_to_zero(tmp_db):
     assert claimed["progress"] == 0
 
 
-def test_active_jobs_splits_running_from_queued(tmp_db, monkeypatch):
-    monkeypatch.setattr(tmp_db, "PROGRESS_JOB_KINDS", ("sd",))  # A4 deletes these tests
-    running_id = tmp_db.enqueue_job("sd", video_id=1, version_id=1)
-    tmp_db.claim_job()
-    tmp_db.set_job_progress(running_id, 0.3)
-    tmp_db.enqueue_job("sd", video_id=2, version_id=2)
-
-    snapshot = tmp_db.active_jobs()
-    assert [job["id"] for job in snapshot["running"]] == [running_id]
-    assert snapshot["running"][0]["progress"] == 0.3
-    assert [job["video_id"] for job in snapshot["queued"]] == [2]
-    assert snapshot["queued"][0]["progress"] is None
-    assert snapshot["queued_total"] == 1
-
-
-def test_active_jobs_excludes_normalize(tmp_db):
-    tmp_db.enqueue_job("normalize", video_id=5, version_id=0)
-    snapshot = tmp_db.active_jobs()
-    assert snapshot["queued"] == []
-    assert snapshot["queued_total"] == 0
-
-
-def test_active_jobs_caps_queued_but_counts_all(tmp_db, monkeypatch):
-    monkeypatch.setattr(tmp_db, "PROGRESS_JOB_KINDS", ("sd",))  # A4 deletes these tests
-    for video_id in range(1, 26):
-        tmp_db.enqueue_job("sd", video_id=video_id, version_id=video_id)
-    snapshot = tmp_db.active_jobs(queued_limit=20)
-    assert len(snapshot["queued"]) == 20
-    assert snapshot["queued_total"] == 25
-
-
-def test_active_jobs_orders_queued_by_priority_then_id(tmp_db, monkeypatch):
-    monkeypatch.setattr(tmp_db, "PROGRESS_JOB_KINDS", ("sd",))  # A4 deletes these tests
-    tmp_db.enqueue_job("sd", video_id=1, version_id=1, priority=tmp_db.PRIORITY_BULK)
-    tmp_db.enqueue_job("sd", video_id=2, version_id=2, priority=tmp_db.PRIORITY_INTERACTIVE)
-    snapshot = tmp_db.active_jobs()
-    assert [job["video_id"] for job in snapshot["queued"]] == [2, 1]
-
-
-def test_active_jobs_carries_the_video_title(tmp_db, monkeypatch):
-    monkeypatch.setattr(tmp_db, "PROGRESS_JOB_KINDS", ("sd",))  # A4 deletes these tests
-    video_id = tmp_db.add_video("https://example.com/a", platform="youtube", title="Blade Runner")
-    tmp_db.enqueue_job("sd", video_id=video_id, version_id=1)
-    snapshot = tmp_db.active_jobs()
-    assert snapshot["queued"][0]["title"] == "Blade Runner"
-
-
 def test_hls_is_not_a_job_kind():
     import db
 

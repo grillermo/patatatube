@@ -219,7 +219,7 @@ def test_init_db_purges_the_library(tmp_path, monkeypatch):
     assert columns.isdisjoint(LIBRARY_COLUMNS)
     assert "video_versions" not in tables
     assert rows == [(1, 42)]
-    assert jobs == [("hls", 1)]
+    assert jobs == []
 
 
 def test_fresh_db_never_creates_library_columns(tmp_path, monkeypatch):
@@ -234,3 +234,60 @@ def test_fresh_db_never_creates_library_columns(tmp_path, monkeypatch):
     columns = {r[1] for r in conn.execute("PRAGMA table_info(videos)")}
     conn.close()
     assert columns.isdisjoint(LIBRARY_COLUMNS)
+
+
+def test_init_db_drops_hls(tmp_path, monkeypatch):
+    import sqlite3
+
+    import db
+
+    path = tmp_path / "hls.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, platform TEXT,
+            source_key TEXT, title TEXT, filename TEXT, status TEXT NOT NULL DEFAULT 'queued',
+            error_msg TEXT, created_at TEXT NOT NULL, resume_secs REAL NOT NULL DEFAULT 0,
+            hls_status TEXT NOT NULL DEFAULT 'none'
+        );
+        CREATE TABLE jobs (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, video_id INTEGER NOT NULL,
+            version_id INTEGER NOT NULL DEFAULT 0, payload TEXT, result TEXT,
+            priority INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'queued',
+            attempts INTEGER NOT NULL DEFAULT 0, error_msg TEXT, created_at TEXT NOT NULL,
+            started_at TEXT, finished_at TEXT);
+        INSERT INTO videos (id, url, status, created_at, resume_secs, hls_status)
+            VALUES (1, 'https://youtu.be/x', 'done', '2026-01-01', 42, 'done');
+        INSERT INTO jobs (kind, video_id, created_at) VALUES ('hls', 1, '2026-01-01');
+        INSERT INTO jobs (kind, video_id, created_at) VALUES ('sd', 1, '2026-01-01');
+        """
+    )
+    conn.close()
+    monkeypatch.setenv("DB_PATH", str(path))
+
+    db.init_db()
+    db.init_db()  # idempotent
+
+    conn = sqlite3.connect(path)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(videos)")}
+    jobs = conn.execute("SELECT kind FROM jobs").fetchall()
+    rows = conn.execute("SELECT id, resume_secs FROM videos").fetchall()
+    conn.close()
+
+    assert "hls_status" not in columns
+    assert jobs == [("sd",)]
+    assert rows == [(1, 42)]
+
+
+def test_fresh_db_has_no_hls_status(tmp_path, monkeypatch):
+    import sqlite3
+
+    import db
+
+    path = tmp_path / "fresh-hls.sqlite"
+    monkeypatch.setenv("DB_PATH", str(path))
+    db.init_db()
+    conn = sqlite3.connect(path)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(videos)")}
+    conn.close()
+    assert "hls_status" not in columns

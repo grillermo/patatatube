@@ -127,8 +127,6 @@ def init_db():
             _add_column(conn, "ALTER TABLE videos ADD COLUMN preview_url TEXT")
         if "position" not in columns:
             _add_column(conn, "ALTER TABLE videos ADD COLUMN position INTEGER")
-        if "hls_status" not in columns:
-            _add_column(conn, "ALTER TABLE videos ADD COLUMN hls_status TEXT NOT NULL DEFAULT 'none'")
         # Playback resume point in seconds, written by the iOS player every
         # ~10s and on exit. 0 means "start from the beginning" — reaching the
         # end of a video resets it to 0, so a finished video never prompts.
@@ -144,8 +142,7 @@ def init_db():
             _add_column(conn, "ALTER TABLE videos ADD COLUMN channel TEXT")
         # How many times the video has been played, bumped by every playback
         # start. NULL is a third state and it matters: "not announced yet" --
-        # a download still running, or one whose HLS package is still being
-        # built. A group's badge counts the rows sitting at exactly 0 (announced,
+        # a download still running. A group's badge counts the rows sitting at exactly 0 (announced,
         # never played), derived rather than stored, so it cannot drift, and the
         # count keeps rising long after the badge is gone. Replaces the `unread`
         # boolean this backfills from, whose 1 is this column's 0. Rows that were
@@ -256,6 +253,7 @@ def init_db():
         _seed_sd_state(conn)
         _migrate_classifications_to_groups(conn)
         _purge_library(conn)
+        _drop_hls(conn)
         _backfill_youtube_preview_urls(conn)
         _backfill_positions(conn)
         _delete_error_videos(conn)
@@ -299,6 +297,19 @@ _LIBRARY_COLUMNS = (
     "audio_lang", "subtitle_lang", "preview_version", "show_preview_version",
     "plex_kind", "source",
 )
+
+
+def _drop_hls(conn: sqlite3.Connection) -> None:
+    """Remove HLS packaging's data. Idempotent.
+
+    HLS was removed on 2026-11-21: every package was a `-c copy` of the mp4
+    it came from, so its job kind and its status column go.
+    """
+    conn.execute("DELETE FROM jobs WHERE kind = 'hls'")
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()}
+    if "hls_status" in columns:
+        conn.execute("ALTER TABLE videos DROP COLUMN hls_status")
+    conn.commit()
 
 
 def _purge_library(conn: sqlite3.Connection) -> int:
@@ -732,12 +743,6 @@ def set_video_group(video_id: int, group_id: int | None) -> None:
         conn.execute("UPDATE videos SET group_id = ? WHERE id = ?", (group_id, video_id))
 
 
-def set_hls_status(video_id: int, status: str) -> None:
-    """Track HLS package readiness: 'none' | 'converting' | 'done'."""
-    with _conn() as conn:
-        conn.execute("UPDATE videos SET hls_status = ? WHERE id = ?", (status, video_id))
-
-
 def get_completed_video_by_source(platform: str, source_key: str) -> dict | None:
     with _conn() as conn:
         row = conn.execute(
@@ -914,61 +919,10 @@ def finish_job(
         )
 
 
-# Kinds whose progress the iOS UI shows. 'normalize' is deliberately absent:
-# those rows render as "downloading" in the app, not as a conversion spinner.
-PROGRESS_JOB_KINDS = ("hls",)
-
-
 def set_job_progress(job_id: int, fraction: float) -> None:
     """Record how far along a running job's ffmpeg is (0..1)."""
     with _conn() as conn:
         conn.execute("UPDATE jobs SET progress = ? WHERE id = ?", (fraction, job_id))
-
-
-def active_jobs(queued_limit: int = 20) -> dict:
-    """Running jobs, the next `queued_limit` queued ones, and the queued total.
-
-    The queued slice uses claim_job's ordering, so it is genuinely the next work
-    up. The cap exists because a bulk Download-all leaves 200+ rows queued and
-    this feeds a 2s poll.
-    """
-    placeholders = ",".join("?" for _ in PROGRESS_JOB_KINDS)
-    columns = """
-        job.id, job.kind, job.video_id, job.version_id, job.priority, job.progress,
-        video.title AS title
-    """
-    with _conn() as conn:
-        running = conn.execute(
-            f"""
-            SELECT {columns} FROM jobs AS job
-            LEFT JOIN videos AS video ON video.id = job.video_id
-            WHERE job.status = 'running' AND job.kind IN ({placeholders})
-            ORDER BY job.id
-            """,
-            PROGRESS_JOB_KINDS,
-        ).fetchall()
-        queued = conn.execute(
-            f"""
-            SELECT {columns} FROM jobs AS job
-            LEFT JOIN videos AS video ON video.id = job.video_id
-            WHERE job.status = 'queued' AND job.attempts < ? AND job.kind IN ({placeholders})
-            ORDER BY job.priority, job.id
-            LIMIT ?
-            """,
-            (MAX_JOB_ATTEMPTS, *PROGRESS_JOB_KINDS, queued_limit),
-        ).fetchall()
-        total = conn.execute(
-            f"""
-            SELECT COUNT(*) FROM jobs
-            WHERE status = 'queued' AND attempts < ? AND kind IN ({placeholders})
-            """,
-            (MAX_JOB_ATTEMPTS, *PROGRESS_JOB_KINDS),
-        ).fetchone()[0]
-    return {
-        "running": [dict(row) for row in running],
-        "queued": [dict(row) for row in queued],
-        "queued_total": total,
-    }
 
 
 def requeue_job(job_id: int) -> None:
