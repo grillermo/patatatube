@@ -120,7 +120,6 @@ struct RangeFetcher: Sendable {
 
         var pending = Data()
         for try await chunk in body {
-            print("DBG chunk", chunk.count, offset)
             pending.append(chunk)
             guard pending.count >= commitSize else { continue }
             if let outcome = try await commit(&pending, claim: claim.id, offset: &offset, end: &end, handle: handle) {
