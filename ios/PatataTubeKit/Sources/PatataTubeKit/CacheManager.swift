@@ -1022,6 +1022,35 @@ public final class CacheManager:
         }
     }
 
+    /// One-time cleanup of the HLS era (<= 2.8): deletes every offline HLS
+    /// package (`hls-<id>` / `hls-<id>_v<v>`) and the `.hls-tmp` staging dir,
+    /// and returns the ids to download again as mp4 — those packages plus the
+    /// paused HLS downloads `PausedDownloadStore` dropped at load. Ids whose
+    /// mp4 is already on disk are left out. Idempotent: a second call finds
+    /// nothing and returns `[]`.
+    public func removeLegacyHLSPackages() -> [Int] {
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        var ids = Set(PausedDownloadStore.droppedHLSVideoIDs(root: root))
+        for name in contents where name.hasPrefix("hls-") {
+            let digits = name.dropFirst("hls-".count).prefix { $0.isNumber }
+            if let id = Int(digits) { ids.insert(id) }
+            try? fileManager.removeItem(at: root.appendingPathComponent(name))
+        }
+        let staging = root.appendingPathComponent(".hls-tmp", isDirectory: true)
+        if let staged = try? fileManager.contentsOfDirectory(atPath: staging.path) {
+            for key in staged { ids.insert(videoId(from: key)) }
+        }
+        try? fileManager.removeItem(at: staging)
+        PausedDownloadStore.clearDroppedHLS(root: root)
+        let pending = ids.filter { !hasAnyCached(id: $0) }.sorted()
+        if !pending.isEmpty {
+            DevLog.event(.cache, "legacy HLS removed", [
+                "ids": pending.map(String.init).joined(separator: ","),
+            ])
+        }
+        return pending
+    }
+
     /// Clears every downloaded video: cancels in-flight downloads, removes all
     /// MP4s (and any 2.8-era `hls-*` folders) + resume files + manifests + completion history. Preview
     /// images and show posters are kept (see `clearAllCovers()`).

@@ -86,7 +86,7 @@ struct DownloadActivityAccumulator {
 /// Exists so `CacheManager` gets a **monotonic** total for the speed meter
 /// without touching its ~19 `inFlight[key] = …` sites: `inFlight[key]?.record(…)`
 /// is a get-modify-set through this subscript, so the setter sees every
-/// progress update from the plain, segmented, and external/HLS paths alike.
+/// progress update from the plain and segmented paths alike.
 ///
 /// Removing a key contributes zero, so a finishing or cancelled download can
 /// never make the counter go down.

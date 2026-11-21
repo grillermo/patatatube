@@ -12,7 +12,7 @@ import Foundation
 ///
 /// **The disk write never runs on the caller's thread.** `append` is called
 /// from the URLSession delegate queue, and that queue is shared by the *whole*
-/// session — the plain download path and the HLS fetches deliver their
+/// session — the plain download path and the segment fetches deliver their
 /// callbacks on it too. A synchronous write there would make one slow volume
 /// stall every download in the app. So `append` accounts for the bytes
 /// synchronously (`byteCount` is correct the instant it returns) and hands the
