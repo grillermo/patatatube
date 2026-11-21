@@ -4,7 +4,7 @@ import XCTest
 final class QueueNavigatorTests: XCTestCase {
     private func video(id: Int) -> Video {
         Video(id: id, url: "https://example.com/\(id)", title: "Video \(id)", platform: nil,
-              sourceKey: nil, previewUrl: nil, groupID: 1, plexKind: nil,
+              sourceKey: nil, previewUrl: nil, groupID: 1,
               position: nil, status: "done", errorMsg: nil, streamPath: "/videos/\(id)/stream")
     }
 

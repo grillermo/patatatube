@@ -2,14 +2,14 @@ import Testing
 import Foundation
 @testable import PatataTubeKit
 
-private func makeVideo(id: Int, groupID: Int? = 1, plexKind: PlexKind? = nil,
+private func makeVideo(id: Int, groupID: Int? = 1,
                        status: String = "completed",
                        errorMsg: String? = nil, previewUrl: String? = nil, chosenVersionId: Int? = nil,
-                       versions: [VideoVersion] = [], resumeSecs: Double = 0) -> Video {
+                       resumeSecs: Double = 0) -> Video {
     return Video(id: id, url: "u\(id)", title: "t\(id)", platform: nil, sourceKey: nil,
-          previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: id,
+          previewUrl: previewUrl, groupID: groupID, position: id,
           status: status, errorMsg: errorMsg, streamPath: "/videos/\(id)/stream",
-          chosenVersionId: chosenVersionId, versions: versions, resumeSecs: resumeSecs)
+          chosenVersionId: chosenVersionId, resumeSecs: resumeSecs)
 }
 
 private func makeDefaults() -> UserDefaults {
@@ -44,7 +44,6 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         switch feed {
         case .all: return videosToReturn
         case .group(let id): return videosToReturn.filter { $0.groupID == id }
-        case .plex(let kind): return videosToReturn.filter { $0.plexKind == kind }
         }
     }
     /// Thrown by every mutating endpoint, so one hook covers them all.
@@ -72,47 +71,14 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
         if deleteResult { videosToReturn.removeAll { $0.id == id } }
         return deleteResult
     }
-    var scanResult = ScanResult(added: 0, updated: 0, skipped: 0)
-    var throwOnScan = false
-    private(set) var scanCalls = 0
-    var chooseVersionResult = true
-    private(set) var chosenVersions: [(id: Int, versionId: Int)] = []
-    var chooseAudioResult = true
-    private(set) var chosenAudio: [(id: Int, lang: String)] = []
-    var chooseSubtitleResult = true
-    private(set) var chosenSubtitle: [(id: Int, lang: String?)] = []
-    var prepareResult = "done"
     var videoResults: [Video] = []
     private(set) var videoCalls = 0
     private(set) var savedPositions: [(id: Int, secs: Double)] = []
 
-    var scanError: Error?
-    func scanLibrary() async throws -> ScanResult {
-        scanCalls += 1
-        if let scanError { throw scanError }
-        if throwOnScan { throw APIError.badStatus(500) }
-        return scanResult
-    }
-    func chooseVersion(id: Int, versionId: Int) async throws -> Bool {
-        if let mutationError { throw mutationError }
-        chosenVersions.append((id, versionId))
-        return chooseVersionResult
-    }
-    func chooseAudio(id: Int, lang: String) async throws -> Bool {
-        if let mutationError { throw mutationError }
-        chosenAudio.append((id, lang))
-        return chooseAudioResult
-    }
-    func chooseSubtitle(id: Int, lang: String?) async throws -> Bool {
-        if let mutationError { throw mutationError }
-        chosenSubtitle.append((id, lang))
-        return chooseSubtitleResult
-    }
     func savePosition(id: Int, secs: Double) async throws {
         if let mutationError { throw mutationError }
         savedPositions.append((id, secs))
     }
-    func prepare(id: Int, bulk: Bool) async throws -> String { prepareResult }
     func video(id: Int) async throws -> Video {
         videoCalls += 1
         return videoResults.isEmpty ? makeVideo(id: id) : videoResults[min(videoCalls, videoResults.count) - 1]
@@ -136,8 +102,8 @@ private final class FakeAPI: VideoAPI, @unchecked Sendable {
 @MainActor @Test func switchFeedRequestsTheNewFeed() async {
     let api = FakeAPI()
     let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.switchFeed(to: .plex(.movies))
-    #expect(api.lastFeed == .plex(.movies))
+    await store.switchFeed(to: .group(id: 9))
+    #expect(api.lastFeed == .group(id: 9))
 }
 
 private final class BlockingSaveCache: VideoListCaching, @unchecked Sendable {
@@ -322,7 +288,7 @@ private actor StaleVideoFetch {
 
 @MainActor @Test func successfulPositionSaveWinsOverStaleRowAndOfflineCacheUntilFreshList() async throws {
     let api = FakeAPI()
-    let stale = makeVideo(id: 7, groupID: nil, plexKind: .movies, resumeSecs: 10)
+    let stale = makeVideo(id: 7, groupID: nil, resumeSecs: 10)
     let cache = tempCache()
     cache.save([stale], feed: .all)
     let defaults = try #require(UserDefaults(suiteName: "position-grid-\(UUID().uuidString)"))
@@ -335,7 +301,7 @@ private actor StaleVideoFetch {
     #expect(positions.pending().isEmpty)
     #expect(ResumeDecision.decide(
         resumeSecs: positions.resolved(server: stale.resumeSecs, for: stale.id),
-        plexKind: stale.plexKind
+        remembersPosition: true
     ) == .ask(secs: 120))
 
     api.videosError = URLError(.notConnectedToInternet)
@@ -344,7 +310,7 @@ private actor StaleVideoFetch {
     let cached = try #require(videoStore.videos.first)
     #expect(ResumeDecision.decide(
         resumeSecs: positions.resolved(server: cached.resumeSecs, for: cached.id),
-        plexKind: cached.plexKind
+        remembersPosition: true
     ) == .ask(secs: 120))
 }
 
@@ -383,62 +349,6 @@ private actor StaleVideoFetch {
     let stale = try #require(videoStore.videos.first)
     #expect(positions.pending().isEmpty)
     #expect(positions.resolved(server: stale.resumeSecs, for: stale.id) == 120)
-}
-
-@Test func videoDecodesVersionsAndDefaultsMissingVersions() throws {
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
-
-    let data = Data("""
-    {
-      "id": 7,
-      "url": "",
-      "title": "A",
-      "platform": null,
-      "source_key": null,
-      "preview_url": null,
-      "group_id": null,
-      "plex_kind": "movies",
-      "position": 1,
-      "status": "done",
-      "error_msg": null,
-      "stream_path": "/videos/7/stream",
-      "source": "library",
-      "chosen_version_id": 20,
-      "versions": [
-        {"id": 20, "label": "1080p", "status": "done", "is_chosen": true},
-        {"id": 21, "label": "4K", "status": "unconverted", "is_chosen": false}
-      ]
-    }
-    """.utf8)
-
-    let video = try decoder.decode(Video.self, from: data)
-    #expect(video.chosenVersionId == 20)
-    #expect(video.versions == [
-        VideoVersion(id: 20, label: "1080p", status: "done", isChosen: true),
-        VideoVersion(id: 21, label: "4K", status: "unconverted", isChosen: false),
-    ])
-
-    let legacy = Data("""
-    {
-      "id": 1,
-      "url": "u",
-      "title": null,
-      "platform": null,
-      "source_key": null,
-      "preview_url": null,
-      "group_id": 1,
-      "plex_kind": null,
-      "position": 1,
-      "status": "done",
-      "error_msg": null,
-      "stream_path": "/videos/1/stream",
-      "source": null
-    }
-    """.utf8)
-    let oldVideo = try decoder.decode(Video.self, from: legacy)
-    #expect(oldVideo.chosenVersionId == nil)
-    #expect(oldVideo.versions.isEmpty)
 }
 
 @Test func cacheLocalURLUsesVersionIdWhenPresent() {
@@ -492,19 +402,6 @@ private actor StaleVideoFetch {
     #expect(store.videos[0].groupID == 1)
 }
 
-@MainActor @Test func setGroupIgnoresPlexVideos() async {
-    let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1, groupID: nil, plexKind: .movies)]
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.load()
-
-    await store.setGroup(id: 1, groupID: 2)
-
-    #expect(api.setGroupRequests.isEmpty)
-    #expect(store.videos[0].groupID == nil)
-    #expect(store.videos[0].plexKind == .movies)
-}
-
 @MainActor @Test func setGroupSetsErrorOnThrow() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
     api.throwOnSetGroup = true
@@ -513,37 +410,6 @@ private actor StaleVideoFetch {
     await store.setGroup(id: 1, groupID: 2)
     #expect(store.errorText != nil)
     #expect(store.videos[0].groupID == 1)
-}
-
-@MainActor @Test func groupSettlementPreservesNewerVideoFieldsInUIAndCache() async throws {
-    let versions = [
-        VideoVersion(id: 10, label: "old", status: "done", isChosen: true),
-        VideoVersion(id: 11, label: "new", status: "done", isChosen: false),
-    ]
-    let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1, chosenVersionId: 10, versions: versions)]
-    let gate = GroupMoveGate()
-    api.setGroupHook = { _, groupID in
-        await gate.arrive(groupID)
-        return true
-    }
-    let cache = tempCache()
-    let store = VideoStore(api: api, cache: cache, defaults: makeDefaults())
-    await store.load()
-
-    async let move: Void = store.setGroup(id: 1, groupID: 2)
-    await gate.waitForArrival(2)
-    await store.chooseVersion(id: 1, versionId: 11)
-    let fresh = try #require(store.videos.first)
-    cache.save([fresh.withGroupID(1)], feed: .all)
-
-    await gate.release(2)
-    await move
-
-    #expect(store.videos.first?.groupID == 2)
-    #expect(store.videos.first?.chosenVersionId == 11)
-    #expect(cache.load(feed: .all)?.first?.groupID == 2)
-    #expect(cache.load(feed: .all)?.first?.chosenVersionId == 11)
 }
 
 @MainActor @Test func olderSetGroupFailureDoesNotRevertANewerGroup() async {
@@ -1016,110 +882,6 @@ private actor StaleVideoFetch {
     #expect(cache.cached(feed: .group(id: 1))?.map(\.id) == [1])
 }
 
-@MainActor @Test func chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess() async throws {
-    let versions = [
-        VideoVersion(id: 10, label: "1080p", status: "done", isChosen: true),
-        VideoVersion(id: 11, label: "4K", status: "unconverted", isChosen: false),
-    ]
-    let api = FakeAPI()
-    api.videosToReturn = [
-        makeVideo(id: 1, groupID: nil, plexKind: .movies, chosenVersionId: 10, versions: versions)
-    ]
-    let defaultsSuite = "VideoStoreTests.chooseVersionOptimisticallyUpdatesThenKeepsOnSuccess"
-    let defaults = try #require(UserDefaults(suiteName: defaultsSuite))
-    defaults.removePersistentDomain(forName: defaultsSuite)
-    defer { defaults.removePersistentDomain(forName: defaultsSuite) }
-    let store = VideoStore(api: api, defaults: defaults)
-    await store.load()
-    _ = try #require(store.videos.first)
-
-    await store.chooseVersion(id: 1, versionId: 11)
-
-    #expect(api.chosenVersions.count == 1)
-    let chosenVersion = try #require(api.chosenVersions.first)
-    #expect(chosenVersion.id == 1)
-    #expect(chosenVersion.versionId == 11)
-    #expect(store.videos[0].chosenVersionId == 11)
-    #expect(store.videos[0].status == "unconverted")
-    #expect(store.videos[0].versions.map(\.isChosen) == [false, true])
-}
-
-@MainActor @Test func chooseVersionRevertsOnFailure() async throws {
-    let versions = [
-        VideoVersion(id: 10, label: "1080p", status: "done", isChosen: true),
-        VideoVersion(id: 11, label: "4K", status: "unconverted", isChosen: false),
-    ]
-    let api = FakeAPI()
-    api.videosToReturn = [
-        makeVideo(id: 1, groupID: nil, plexKind: .movies, chosenVersionId: 10, versions: versions)
-    ]
-    api.chooseVersionResult = false
-    let defaultsSuite = "VideoStoreTests.chooseVersionRevertsOnFailure"
-    let defaults = try #require(UserDefaults(suiteName: defaultsSuite))
-    defaults.removePersistentDomain(forName: defaultsSuite)
-    defer { defaults.removePersistentDomain(forName: defaultsSuite) }
-    let store = VideoStore(api: api, defaults: defaults)
-    await store.load()
-    _ = try #require(store.videos.first)
-
-    await store.chooseVersion(id: 1, versionId: 11)
-
-    #expect(store.videos[0].chosenVersionId == 10)
-    #expect(store.videos[0].versions.map(\.isChosen) == [true, false])
-}
-
-@MainActor @Test func chooseAudioOptimisticallyUpdatesThenReloads() async {
-    let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.load()
-
-    await store.chooseAudio(id: 1, lang: "es")
-
-    #expect(api.chosenAudio.map(\.id) == [1])
-    #expect(api.chosenAudio.map(\.lang) == ["es"])
-    #expect(api.loadCount == 2)
-}
-
-@MainActor @Test func chooseAudioRevertsWhenServerReturnsNotOk() async {
-    let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1)]
-    api.chooseAudioResult = false
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.load()
-
-    await store.chooseAudio(id: 1, lang: "es")
-
-    #expect(store.videos[0].audioLang == nil)
-    #expect(api.loadCount == 1)
-}
-
-@MainActor @Test func chooseSubtitleOptimisticallyUpdates() async {
-    let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.load()
-
-    await store.chooseSubtitle(id: 1, lang: "es")
-
-    #expect(api.chosenSubtitle.map(\.id) == [1])
-    #expect(api.chosenSubtitle.map(\.lang) == ["es"])
-    #expect(store.videos[0].subtitleLang == "es")
-    #expect(api.loadCount == 1)
-}
-
-@MainActor @Test func chooseSubtitleRevertsWhenServerReturnsNotOk() async {
-    let api = FakeAPI()
-    api.videosToReturn = [makeVideo(id: 1)]
-    api.chooseSubtitleResult = false
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.load()
-
-    await store.chooseSubtitle(id: 1, lang: "es")
-
-    #expect(store.videos[0].subtitleLang == nil)
-}
-
 private func tempCache() -> VideoListCache {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("vlc-\(UUID().uuidString)")
@@ -1202,24 +964,6 @@ private func tempCache() -> VideoListCache {
     #expect(store.videos.first?.groupID == 1)
 }
 
-@MainActor @Test func chooseVersionIgnoresCancellation() async {
-    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
-    await store.load()
-    api.mutationError = CancellationError()
-    await store.chooseVersion(id: 1, versionId: 7)
-    #expect(store.errorText == nil)
-}
-
-@MainActor @Test func chooseAudioIgnoresCancellation() async {
-    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
-    await store.load()
-    api.mutationError = URLError(.cancelled)
-    await store.chooseAudio(id: 1, lang: "spa")
-    #expect(store.errorText == nil)
-}
-
 @MainActor @Test func deleteIgnoresCancellation() async {
     let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
     let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
@@ -1250,15 +994,6 @@ private func tempCache() -> VideoListCache {
     #expect(store.videos.map(\.id) == [api.uploadId])
 }
 
-@MainActor @Test func refreshLibraryIgnoresScanCancellation() async {
-    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
-    api.scanError = URLError(.cancelled)
-    await store.refreshLibrary()
-    #expect(store.errorText == nil)
-    #expect(store.videos.map(\.id) == [1])   // load() still ran
-}
-
 // SwiftUI cancels a .refreshable action mid-flight; URLSession then throws
 // .cancelled and load() drops the result. refresh() must not inherit that.
 @MainActor @Test func refreshSurvivesCancellationOfTheCallingTask() async {
@@ -1277,26 +1012,14 @@ private func tempCache() -> VideoListCache {
     #expect(store.videos.map(\.id) == [7])
 }
 
-@MainActor @Test func refreshScansOnlyOnAPlexFeed() async {
-    let api = FakeAPI()
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.switchFeed(to: .group(id: 2))
-    await store.refresh()
-    #expect(api.scanCalls == 0)
-
-    await store.switchFeed(to: .plex(.movies))
-    await store.refresh()
-    #expect(api.scanCalls == 1)
-}
-
 @MainActor @Test func markWatchedClearsOnlyThatVideosDot() async {
     let api = FakeAPI()
     api.videosToReturn = [
         Video(id: 1, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
-              groupID: 1, plexKind: nil, position: nil, status: "done", errorMsg: nil,
+              groupID: 1, position: nil, status: "done", errorMsg: nil,
               streamPath: "/s", unwatched: true),
         Video(id: 2, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
-              groupID: 1, plexKind: nil, position: nil, status: "done", errorMsg: nil,
+              groupID: 1, position: nil, status: "done", errorMsg: nil,
               streamPath: "/s", unwatched: true),
     ]
     let store = VideoStore(api: api, defaults: makeDefaults())
@@ -1316,16 +1039,7 @@ private func tempCache() -> VideoListCache {
     #expect(try decoder.decode(Video.self, from: Data(without.utf8)).unwatched == false)
     // The copy helpers must carry the flag, not reset it.
     let video = try decoder.decode(Video.self, from: Data(with.utf8))
-    #expect(video.withChosenVersion(nil).unwatched)
-}
-
-// A genuine scan failure must still surface -- the cancellation guard is
-// narrow, not a blanket silencer.
-@MainActor @Test func refreshLibraryStillReportsRealScanFailure() async {
-    let api = FakeAPI(); api.throwOnScan = true
-    let store = VideoStore(api: api, cache: tempCache(), defaults: makeDefaults())
-    await store.refreshLibrary()
-    #expect(store.errorText?.contains("500") == true)
+    #expect(video.withGroupID(nil).unwatched)
 }
 
 @MainActor @Test func bootLoadShowsCacheThenRefreshes() async {
@@ -1355,96 +1069,6 @@ private func tempCache() -> VideoListCache {
     await store.delete(id: 1)   // delete -> reload
     #expect(api.deletedIds == [1])
     #expect(api.loadCount == 2)
-}
-
-@MainActor @Test func refreshLibraryScansThenReloads() async {
-    let api = FakeAPI()
-    api.scanResult = ScanResult(added: 2, updated: 0, skipped: 1)
-    api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.refreshLibrary()
-    #expect(api.scanCalls == 1)
-    #expect(store.videos.map(\.id) == [1])
-}
-
-@MainActor @Test func refreshLibraryToleratesScanFailureButStillReloads() async {
-    // A scan failure must not prevent the subsequent list reload from running:
-    // the video list still ends up fresh even though the scan call itself errored.
-    let api = FakeAPI()
-    api.throwOnScan = true
-    api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.refreshLibrary()
-    #expect(api.scanCalls == 1)
-    #expect(api.loadCount == 1)
-    #expect(store.videos.map(\.id) == [1])
-}
-
-@MainActor @Test func refreshLibraryPreservesScanErrorWhenLoadSucceeds() async {
-    // scanLibrary() fails, but the subsequent load() fetch succeeds -- the scan
-    // failure message must still surface in errorText rather than being wiped
-    // out by load()'s unconditional `errorText = nil` reset.
-    let api = FakeAPI()
-    api.throwOnScan = true
-    api.videosToReturn = [makeVideo(id: 1)]
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.refreshLibrary()
-    #expect(store.videos.map(\.id) == [1])
-    #expect(store.errorText != nil)
-    #expect(store.errorText?.contains("500") == true)
-}
-
-@MainActor @Test func refreshLibraryLoadErrorTakesPrecedenceOverScanSuccess() async {
-    // scanLibrary() succeeds but the subsequent load() fetch fails -- errorText
-    // should reflect the load failure, not stale state from the (successful) scan.
-    let api = FakeAPI()
-    api.throwOnScan = false
-    api.throwOnVideos = true
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    await store.refreshLibrary()
-    #expect(store.errorText != nil)
-    #expect(store.errorText?.contains("503") == true)
-}
-
-@MainActor @Test func ensureReadyPollsUntilDone() async throws {
-    let api = FakeAPI()
-    api.prepareResult = "converting"
-    api.videoResults = [
-        makeVideo(id: 7, status: "converting"),
-        makeVideo(id: 7, status: "converting"),
-        makeVideo(id: 7, status: "done"),
-    ]
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    let ready = try await store.ensureReady(id: 7, pollIntervalSeconds: 0.01)
-    #expect(ready.status == "done")
-    #expect(api.videoCalls == 3)
-}
-
-@MainActor @Test func ensureReadyShortCircuitsWhenAlreadyDoneAfterPrepare() async throws {
-    let api = FakeAPI()
-    api.prepareResult = "done"
-    api.videoResults = [makeVideo(id: 7, status: "done")]
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    let ready = try await store.ensureReady(id: 7, pollIntervalSeconds: 0.01)
-    #expect(ready.status == "done")
-    #expect(api.videoCalls == 1)
-}
-
-@MainActor @Test func ensureReadyThrowsOnConversionError() async {
-    let api = FakeAPI()
-    api.prepareResult = "converting"
-    api.videoResults = [
-        makeVideo(id: 7, status: "unconverted", errorMsg: "ffmpeg exploded"),
-    ]
-    let store = VideoStore(api: api, defaults: makeDefaults())
-    do {
-        _ = try await store.ensureReady(id: 7, pollIntervalSeconds: 0.01)
-        Issue.record("expected throw")
-    } catch let error as PrepareError {
-        #expect(error == .conversionFailed("ffmpeg exploded"))
-    } catch {
-        Issue.record("wrong error: \(error)")
-    }
 }
 
 @MainActor @Test func clearListCacheEmptiesVideosAndDiskCache() async {

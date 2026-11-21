@@ -17,8 +17,8 @@ private actor StubJobsAPI: JobsAPI {
 }
 
 private func job(id: Int, videoID: Int, progress: Double?) -> ConversionJob {
-    ConversionJob(id: id, videoID: videoID, versionID: nil, kind: "convert",
-                  progress: progress, title: "Video \(videoID)", showTitle: nil)
+    ConversionJob(id: id, videoID: videoID, versionID: nil, kind: "hls",
+                  progress: progress, title: "Video \(videoID)")
 }
 
 @Suite("Jobs store")

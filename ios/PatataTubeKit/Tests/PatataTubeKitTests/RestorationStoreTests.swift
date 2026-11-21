@@ -17,12 +17,11 @@ final class RestorationStoreTests: XCTestCase {
     func testRoundTripsEveryField() {
         let defaults = makeDefaults()
         var state = RestorationState.empty
-        state.feed = .plex(.tv)
-        state.path = [.show(title: "The Bear"), .movie(id: 42), .downloads]
+        state.feed = .group(id: 3)
+        state.path = [.group(id: 3), .downloads]
         state.search = "bear"
         state.scrollAnchors = [
-            RestorationState.gridKey(feed: .plex(.tv)): "show:The Bear",
-            RestorationState.showKey(title: "The Bear"): "12",
+            RestorationState.gridKey(feed: .group(id: 3)): "12",
         ]
         state.player = PlayerState(videoID: 42, versionID: 7, sleepMode: true)
 
@@ -58,32 +57,34 @@ final class RestorationStoreTests: XCTestCase {
     }
 
     func testScreenKeysAreDistinct() {
-        XCTAssertNotEqual(RestorationState.gridKey(feed: .plex(.tv)),
-                          RestorationState.gridKey(feed: .plex(.movies)))
+        XCTAssertNotEqual(RestorationState.gridKey(feed: .group(id: 3)),
+                          RestorationState.gridKey(feed: .group(id: 4)))
         XCTAssertNotEqual(RestorationState.gridKey(feed: .all),
-                          RestorationState.gridKey(feed: .plex(.tv)))
-        XCTAssertNotEqual(RestorationState.showKey(title: "The Bear"),
                           RestorationState.gridKey(feed: .group(id: 4)))
     }
 
-    func testRoundTripsSelectedTab() {
+    func testLegacyShowRouteFallsBackToDefaultState() {
         let defaults = makeDefaults()
-        var state = RestorationState.empty
-        state.tab = .movies
-        state.path = [.group(id: 3)]
-        RestorationStore(defaults: defaults).save(state)
-        XCTAssertEqual(RestorationStore(defaults: defaults).load(), state)
+        // A blob written by a build that still had the TV tab.
+        let legacy = #"{"feed":null,"path":[{"show":{"title":"Bluey"}}],"search":"","scrollAnchors":{},"tab":"tv"}"#
+        defaults.set(Data(legacy.utf8), forKey: RestorationStore.storageKey)
+        XCTAssertEqual(RestorationStore(defaults: defaults).load(), RestorationState.empty)
+    }
+
+    func testLegacyTabKeyIsIgnored() {
+        let defaults = makeDefaults()
+        let legacy = #"{"feed":{"group":{"id":3}},"path":[{"group":{"id":3}}],"search":"","scrollAnchors":{},"tab":"videos"}"#
+        defaults.set(Data(legacy.utf8), forKey: RestorationStore.storageKey)
+        XCTAssertEqual(RestorationStore(defaults: defaults).load().path, [.group(id: 3)])
     }
 
     func testBlobWithoutTabStillDecodes() {
         let defaults = makeDefaults()
-        // A blob written by a build that predates MediaTab: no "tab" key.
         let legacy = """
         {"path":[],"search":"","scrollAnchors":{}}
         """.data(using: .utf8)!
         defaults.set(legacy, forKey: RestorationStore.storageKey)
         let loaded = RestorationStore(defaults: defaults).load()
-        XCTAssertNil(loaded.tab)
         XCTAssertNil(loaded.feed)
     }
 }

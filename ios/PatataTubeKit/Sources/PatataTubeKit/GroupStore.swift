@@ -78,10 +78,8 @@ public final class GroupStore: ObservableObject, @unchecked Sendable {
     public func group(named name: String) -> VideoGroup? { groups.first { $0.name == name } }
 
     /// Whether a video's stored position is offered as a resume point and
-    /// survives an idle reset: always for Plex items, and for a group video
-    /// when its group has "Remember position" on.
+    /// survives an idle reset: when its group has "Remember position" on.
     public func remembersPosition(_ video: Video) -> Bool {
-        if video.plexKind != nil { return true }
         guard let id = video.groupID else { return false }
         return group(id: id)?.rememberPosition ?? false
     }

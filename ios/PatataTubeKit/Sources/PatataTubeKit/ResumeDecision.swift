@@ -2,7 +2,7 @@ import Foundation
 
 /// Whether a play tap should offer "resume" or just start.
 ///
-/// Plex rows and opted-in Videos rows prompt, and only past a floor —
+/// Opted-in groups prompt, and only past a floor —
 /// a 20-second accidental open must not put a modal in front of the next tap.
 /// There is deliberately no upper bound here: reaching the end of a video
 /// resets the stored position to 0 (see `PlaybackPositionReporter`), so a
@@ -13,17 +13,16 @@ public enum ResumeDecision: Equatable, Sendable {
 
     public static let defaultMinimumSecs: Double = 60
 
-    /// A Plex item always prompts. A group video prompts only when the user
-    /// turned "Remember position" on for its group (`GroupStore.remembersPosition`) — position is
-    /// recorded for every video, so the flag is what decides whether that
-    /// recorded position is allowed to interrupt the next tap.
+    /// A video prompts only when the user turned "Remember position" on for its
+    /// group (`GroupStore.remembersPosition`). Position is recorded for every
+    /// video, so the flag is what decides whether that recorded position may
+    /// interrupt the next tap.
     public static func decide(
         resumeSecs: Double,
-        plexKind: PlexKind?,
         remembersPosition: Bool = false,
         minimumSecs: Double = ResumeDecision.defaultMinimumSecs
     ) -> ResumeDecision {
-        guard plexKind != nil || remembersPosition else { return .playFromStart }
+        guard remembersPosition else { return .playFromStart }
         guard resumeSecs >= minimumSecs else { return .playFromStart }
         return .ask(secs: resumeSecs)
     }

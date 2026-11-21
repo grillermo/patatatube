@@ -17,11 +17,10 @@ extension APIClientTests {
             MockURLProtocol.handler = { req in
                 #expect(req.url?.path == "/api/jobs")
                 let body = """
-                {"running":[{"id":41,"kind":"convert","video_id":812,"version_id":3,
-                             "priority":100,"progress":0.47,"title":"Blade Runner",
-                             "show_title":null}],
+                {"running":[{"id":41,"kind":"hls","video_id":812,"version_id":3,
+                             "priority":100,"progress":0.47,"title":"Blade Runner"}],
                  "queued":[{"id":42,"kind":"hls","video_id":813,"version_id":4,
-                            "priority":0,"progress":null,"title":"Dune","show_title":null}],
+                            "priority":0,"progress":null,"title":"Dune"}],
                  "queued_total":203}
                 """.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)

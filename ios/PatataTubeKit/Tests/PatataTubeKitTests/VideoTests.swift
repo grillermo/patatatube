@@ -6,10 +6,10 @@ private let sampleJSON = """
 [
   {"id": 7, "url": "https://youtu.be/abc", "title": "Hi", "platform": "youtube",
    "source_key": "abc12345678", "preview_url": "https://img/abc.jpg",
-   "group_id": 1, "plex_kind": null, "position": 3, "status": "completed",
+   "group_id": 1, "position": 3, "status": "completed",
    "error_msg": null, "stream_path": "/videos/7/stream"},
   {"id": 8, "url": "https://x/y", "title": null, "platform": null,
-   "source_key": null, "preview_url": null, "group_id": 2, "plex_kind": null,
+   "source_key": null, "preview_url": null, "group_id": 2,
    "position": null, "status": "pending", "error_msg": "boom",
    "stream_path": "/videos/8/stream"}
 ]
@@ -30,175 +30,65 @@ private let sampleJSON = """
     #expect(videos[1].errorMsg == "boom")
 }
 
-@Test func decodesGroupIDAndPlexKind() throws {
-    let json = #"{"id":1,"url":"u","status":"done","group_id":3,"plex_kind":null,"subtitle_tracks":[]}"#
+@Test func decodesGroupID() throws {
+    let json = #"{"id":1,"url":"u","status":"done","group_id":3}"#
     let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
     #expect(video.groupID == 3)
-    #expect(video.plexKind == nil)
-    #expect(video.isPlexItem == false)
 }
 
-@Test func decodesAPlexItem() throws {
-    let json = #"{"id":2,"url":"u","status":"done","group_id":null,"plex_kind":"tv","subtitle_tracks":[]}"#
-    let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
-    #expect(video.plexKind == .tv)
-    #expect(video.isPlexItem == true)
-}
 
-@Test func decodesGroupIDAndPlexKindWithSnakeCaseDecoder() throws {
-    let json = #"{"id":2,"url":"u","status":"done","group_id":3,"plex_kind":"tv","subtitle_tracks":[]}"#
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
-    let video = try decoder.decode(Video.self, from: Data(json.utf8))
-    #expect(video.groupID == 3)
-    #expect(video.plexKind == .tv)
-}
 
 @Test func decodesAnUnsortedVideo() throws {
-    let json = #"{"id":3,"url":"u","status":"done","subtitle_tracks":[]}"#
+    let json = #"{"id":3,"url":"u","status":"done"}"#
     let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
     #expect(video.groupID == nil)
-    #expect(video.plexKind == nil)
 }
 
-@Test func testDecodesLibraryFields() throws {
-    let json = """
-    {"id": 7, "url": "/vol/ep.mkv", "title": "System", "platform": null,
-     "source_key": null, "preview_url": "/videos/7/preview",
-     "group_id": null, "plex_kind": "tv", "position": 3, "status": "unconverted",
-     "error_msg": null, "stream_path": "/videos/7/stream",
-     "source": "library", "show_title": "The Bear", "season": 1,
-     "episode": 1, "summary": "Carmy.", "show_preview_url": "/videos/7/preview?kind=show"}
-    """.data(using: .utf8)!
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
-    let video = try decoder.decode(Video.self, from: json)
-    #expect(video.source == "library")
-    #expect(video.isLibrary == true)
-    #expect(video.showTitle == "The Bear")
-    #expect(video.season == 1)
-    #expect(video.episode == 1)
-    #expect(video.summary == "Carmy.")
-    #expect(video.showPreviewUrl == "/videos/7/preview?kind=show")
-}
 
 @Test func testDecodesLegacyPayloadWithoutLibraryFields() throws {
     let json = """
     {"id": 1, "url": "https://x.com/s/1", "title": null, "platform": "twitter",
-     "source_key": null, "preview_url": null, "group_id": 1, "plex_kind": null,
+     "source_key": null, "preview_url": null, "group_id": 1,
      "position": 1, "status": "done", "error_msg": null,
      "stream_path": "/videos/1/stream"}
     """.data(using: .utf8)!
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     let video = try decoder.decode(Video.self, from: json)
-    #expect(video.source == nil)
-    #expect(video.isLibrary == false)
+    #expect(video.groupID == 1)
 }
 
-@Test func decodesAudioMetadataAndDefaultsLegacyVersions() throws {
-    let json = """
-    {"id": 1, "url": "u", "title": null, "platform": null,
-     "source_key": null, "preview_url": null, "group_id": 1, "plex_kind": null,
-     "position": 1, "status": "done", "error_msg": null,
-     "stream_path": "/videos/1/stream", "audio_lang": "es",
-     "versions": [{"id": 2, "label": "HD", "status": "done", "is_chosen": true},
-                  {"id": 3, "label": null, "status": "done", "is_chosen": false,
-                   "audio_tracks": [{"lang": "en", "title": "English", "available": true}]}]}
-    """.data(using: .utf8)!
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
-
-    let video = try decoder.decode(Video.self, from: json)
-
-    #expect(video.audioLang == "es")
-    #expect(video.versions[0].audioTracks.isEmpty)
-    #expect(video.versions[1].audioTracks == [AudioTrack(lang: "en", title: "English", available: true)])
-    #expect(video.withAudioLang("fr").audioLang == "fr")
-}
-
-@Test func decodesSubtitleLang() throws {
-    let json = #"{"id":1,"url":"u","status":"done","group_id":3,"plex_kind":null,"subtitle_lang":"es","subtitle_tracks":[]}"#
+@Test func decodesALegacyLibraryPayloadWithoutTheRemovedFields() throws {
+    // The old backend still sends these until the server cut ships; they must be ignored.
+    let json = #"{"id":7,"url":"","status":"done","plex_kind":"tv","show_title":"Bluey","season":1,"episode":2,"versions":[{"id":1,"label":null,"status":"done","is_chosen":true}],"source":"library"}"#
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     let video = try decoder.decode(Video.self, from: Data(json.utf8))
-    #expect(video.subtitleLang == "es")
+    #expect(video.id == 7)
 }
 
-@Test func subtitleLangDefaultsToNilWhenAbsent() throws {
-    let json = #"{"id":1,"url":"u","status":"done","subtitle_tracks":[]}"#
-    let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
-    #expect(video.subtitleLang == nil)
-}
 
-// Gap #5: an unchosen video applies nothing — AVKit auto-selects from the
-// playlist's DEFAULT=YES instead. The default track surfaces only through
-// `defaultSubtitleLang`, which the pickers use for display.
-@Test func effectiveSubtitleLangIsNilWhenNeverChosen() {
-    let video = Video(
-        id: 1, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
-        groupID: nil, plexKind: nil, position: nil, status: "done", errorMsg: nil,
-        streamPath: "", subtitleTracks: [
-            SubtitleTrack(language: "en", name: "English", default: true, forced: false),
-            SubtitleTrack(language: "es", name: "Spanish", default: false, forced: false),
-        ]
-    )
-    #expect(video.effectiveSubtitleLang == nil)
-    #expect(video.defaultSubtitleLang == "en")
-}
 
-@Test func defaultSubtitleLangIsNilWithoutAFlaggedTrack() {
-    let video = Video(
-        id: 1, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
-        groupID: nil, plexKind: nil, position: nil, status: "done", errorMsg: nil,
-        streamPath: "", subtitleTracks: [
-            SubtitleTrack(language: "es", name: "Spanish", default: false, forced: false),
-        ]
-    )
-    #expect(video.defaultSubtitleLang == nil)
-}
 
-@Test func effectiveSubtitleLangHonorsExplicitOff() {
-    let video = Video(
-        id: 1, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
-        groupID: nil, plexKind: nil, position: nil, status: "done", errorMsg: nil,
-        streamPath: "", subtitleTracks: [
-            SubtitleTrack(language: "en", name: "English", default: true, forced: false),
-        ], subtitleLang: ""
-    )
-    #expect(video.effectiveSubtitleLang == nil)
-}
 
-@Test func effectiveSubtitleLangHonorsExplicitChoice() {
-    let video = Video(
-        id: 1, url: "u", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
-        groupID: nil, plexKind: nil, position: nil, status: "done", errorMsg: nil,
-        streamPath: "", subtitleTracks: [
-            SubtitleTrack(language: "en", name: "English", default: true, forced: false),
-            SubtitleTrack(language: "es", name: "Spanish", default: false, forced: false),
-        ], subtitleLang: "es"
-    )
-    #expect(video.effectiveSubtitleLang == "es")
-}
+
+
 
 @Test func decodesTheYouTubeChannel() throws {
-    let json = #"{"id":9,"url":"u","status":"done","channel":"Veritasium","subtitle_tracks":[]}"#
+    let json = #"{"id":9,"url":"u","status":"done","channel":"Veritasium"}"#
     let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
     #expect(video.channel == "Veritasium")
 }
 
 @Test func channelIsNilWhenTheServerOmitsIt() throws {
     // Cached UserDefaults blobs written before the field existed decode too.
-    let json = #"{"id":9,"url":"u","status":"done","subtitle_tracks":[]}"#
+    let json = #"{"id":9,"url":"u","status":"done"}"#
     let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
     #expect(video.channel == nil)
 }
 
 @Test func copyHelpersCarryTheChannel() throws {
-    let json = #"{"id":9,"url":"u","status":"done","channel":"Kurzgesagt","subtitle_tracks":[]}"#
+    let json = #"{"id":9,"url":"u","status":"done","channel":"Kurzgesagt"}"#
     let video = try JSONDecoder().decode(Video.self, from: Data(json.utf8))
     #expect(video.withGroupID(4).channel == "Kurzgesagt")
-    #expect(video.withAudioLang("eng").channel == "Kurzgesagt")
-    #expect(video.withSubtitleLang("eng").channel == "Kurzgesagt")
-    #expect(video.withChosenVersion(nil).channel == "Kurzgesagt")
 }

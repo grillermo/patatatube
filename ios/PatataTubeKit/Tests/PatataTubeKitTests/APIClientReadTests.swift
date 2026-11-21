@@ -20,7 +20,7 @@ struct APIClientTests {
                 #expect(req.url?.path == "/api/videos")
                 let body = """
                 [{"id":1,"url":"u","title":"t","platform":"youtube","source_key":"k",
-                  "preview_url":"p","group_id":1,"plex_kind":null,"position":1,
+                  "preview_url":"p","group_id":1,"position":1,
                   "status":"completed","error_msg":null,"stream_path":"/videos/1/stream"}]
                 """.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)
@@ -37,14 +37,6 @@ struct APIClientTests {
             }
             let videos = try await makeClient().videos(feed: .group(id: 3))
             #expect(videos.isEmpty)
-        }
-
-        @Test func videosSendsThePlexKindQuery() async throws {
-            MockURLProtocol.handler = { req in
-                #expect(req.url?.query == "plex_kind=movies")
-                return (jsonResponse(req.url!), "[]".data(using: .utf8)!)
-            }
-            _ = try await makeClient().videos(feed: .plex(.movies))
         }
 
         @Test func videosSendsNoQueryForAll() async throws {
@@ -93,39 +85,31 @@ struct APIClientTests {
             #expect(try await makeClient(token: nil).groups().isEmpty)
         }
 
-        @Test func decodesHlsAndSubtitleMetadata() async throws {
+        @Test func decodesHlsMetadata() async throws {
             MockURLProtocol.handler = { req in
                 let body = """
                 [{"id":1,"url":"u","title":"t","platform":null,"source_key":null,
-                  "preview_url":null,"group_id":1,"plex_kind":null,"position":1,
+                  "preview_url":null,"group_id":1,"position":1,
                   "status":"done","error_msg":null,"stream_path":"/videos/1/stream",
-                  "hls_path":"/videos/1/hls/master.m3u8",
-                  "subtitle_lang":"en",
-                  "subtitle_tracks":[{"language":"en","name":"English","default":true,"forced":false}]}]
+                  "hls_path":"/videos/1/hls/master.m3u8"}]
                 """.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)
             }
             let videos = try await makeClient().videos(feed: .all)
             #expect(videos[0].hlsPath == "/videos/1/hls/master.m3u8")
-            #expect(videos[0].subtitleTracks.count == 1)
-            #expect(videos[0].subtitleTracks[0].language == "en")
-            #expect(videos[0].subtitleTracks[0].name == "English")
-            #expect(videos[0].subtitleTracks[0].default == true)
-            #expect(videos[0].subtitleLang == "en")
         }
 
         @Test func decodesVideoWithoutHlsFields() async throws {
             MockURLProtocol.handler = { req in
                 let body = """
                 [{"id":2,"url":"u","title":null,"platform":null,"source_key":null,
-                  "preview_url":null,"group_id":1,"plex_kind":null,"position":1,
+                  "preview_url":null,"group_id":1,"position":1,
                   "status":"done","error_msg":null,"stream_path":"/videos/2/stream"}]
                 """.data(using: .utf8)!
                 return (jsonResponse(req.url!), body)
             }
             let videos = try await makeClient().videos(feed: .all)
             #expect(videos[0].hlsPath == nil)
-            #expect(videos[0].subtitleTracks.isEmpty)
         }
 
         @Test func throwsOnBadStatus() async {
@@ -197,16 +181,6 @@ struct APIClientTests {
             }
             let group = try await makeClient().setGroupDescription(id: 1, "   ")
             #expect(group.description == nil)
-        }
-
-        @Test func chooseAudioSendsLanguage() async throws {
-            MockURLProtocol.handler = { req in
-                #expect(req.url?.path == "/api/videos/3/audio")
-                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: String]
-                #expect(json["lang"] == "es")
-                return (jsonResponse(req.url!), #"{"ok":true}"#.data(using: .utf8)!)
-            }
-            #expect(try await makeClient().chooseAudio(id: 3, lang: "es"))
         }
 
         @Test func uploadReturnsNewId() async throws {

@@ -479,9 +479,9 @@ public final class CacheManager:
 
     /// Local file URL of a cached preview image, or nil if none is cached.
     ///
-    /// Version-aware: the filename embeds a hash of the preview URL, which carries
-    /// Plex's thumb version (`?v=`). A poster changed on Plex gets a new URL → new
-    /// hash → this returns nil → the caller refetches the current poster. Passing
+    /// Version-aware: the filename embeds a hash of the preview URL, so a poster
+    /// served from a new URL gets a new hash → this returns nil → the caller
+    /// refetches the current poster. Passing
     /// `path: nil` falls back to a plain id match (no URL to key on).
     public func cachedPreviewURL(for id: Int, path: String?) -> URL? {
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
@@ -490,8 +490,8 @@ public final class CacheManager:
         return root.appendingPathComponent(name)
     }
 
-    /// Writes preview bytes for a movie. Best-effort: failures leave the preview uncached.
-    /// Any prior poster version for this movie is dropped so only the current one remains.
+    /// Writes preview bytes for a video. Best-effort: failures leave the preview uncached.
+    /// Any prior poster version for this video is dropped so only the current one remains.
     public func storePreview(_ data: Data, for id: Int, path: String) {
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         let prefix = "\(id).preview."

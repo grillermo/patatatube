@@ -3,12 +3,11 @@ import XCTest
 
 final class VideoHashableTests: XCTestCase {
     func testVideoIsHashable() {
-        let video = Video(id: 1, url: "https://example.com", title: "A Movie",
+        let video = Video(id: 1, url: "https://example.com", title: "A Video",
                           platform: nil, sourceKey: nil, previewUrl: nil,
-                          groupID: nil, plexKind: .movies, position: nil, status: "done",
+                          groupID: nil, position: nil, status: "done",
                           errorMsg: nil, streamPath: "/videos/1/stream",
-                          versions: [VideoVersion(id: 1, label: "1080p", status: "done", isChosen: true)],
-                          subtitleTracks: [SubtitleTrack(language: "en", name: "English", default: true, forced: false)])
+                          hlsPath: "/videos/1/hls/master.m3u8")
         XCTAssertEqual(Set([video, video]).count, 1)
     }
 }

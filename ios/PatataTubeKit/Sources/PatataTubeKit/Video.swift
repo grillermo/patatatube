@@ -1,55 +1,3 @@
-public struct AudioTrack: Codable, Equatable, Hashable, Sendable {
-    public let lang: String
-    public let title: String
-    public let available: Bool
-
-    public init(lang: String, title: String, available: Bool) {
-        self.lang = lang; self.title = title; self.available = available
-    }
-}
-
-public struct VideoVersion: Codable, Equatable, Hashable, Sendable, Identifiable {
-    public let id: Int
-    public let label: String?
-    public let status: String
-    public let isChosen: Bool
-    public let audioTracks: [AudioTrack]
-
-    public init(id: Int, label: String?, status: String, isChosen: Bool,
-                audioTracks: [AudioTrack] = []) {
-        self.id = id
-        self.label = label
-        self.status = status
-        self.isChosen = isChosen
-        self.audioTracks = audioTracks
-    }
-
-    enum CodingKeys: String, CodingKey { case id, label, status, isChosen, audioTracks }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try c.decode(Int.self, forKey: .id)
-        self.label = try c.decodeIfPresent(String.self, forKey: .label)
-        self.status = try c.decode(String.self, forKey: .status)
-        self.isChosen = try c.decode(Bool.self, forKey: .isChosen)
-        self.audioTracks = try c.decodeIfPresent([AudioTrack].self, forKey: .audioTracks) ?? []
-    }
-}
-
-public struct SubtitleTrack: Codable, Equatable, Hashable, Sendable {
-    public let language: String
-    public let name: String
-    public let `default`: Bool
-    public let forced: Bool
-
-    public init(language: String, name: String, default: Bool, forced: Bool) {
-        self.language = language
-        self.name = name
-        self.`default` = `default`
-        self.forced = forced
-    }
-}
-
 public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: Int
     public let url: String
@@ -57,31 +5,20 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let platform: String?
     public let sourceKey: String?
     /// The YouTube channel this video came from, when the server knows it.
-    /// Nil for Twitter, uploads, Plex rows, and YouTube downloads that
-    /// predate the server recording it.
+    /// Nil for Twitter, uploads, and YouTube downloads that predate the
+    /// server recording it.
     public let channel: String?
     public let previewUrl: String?
-    /// The group this video is in, or nil when it is a Plex item or unsorted.
+    /// The group this video is in, or nil when it is unsorted.
     public let groupID: Int?
-    /// Set for Plex library rows; mutually exclusive with `groupID`.
-    public let plexKind: PlexKind?
     public let position: Int?
     public let status: String
     public let errorMsg: String?
     public let streamPath: String
-    public let source: String?
-    public let showTitle: String?
-    public let season: Int?
-    public let episode: Int?
-    public let summary: String?
-    public let showPreviewUrl: String?
+    /// Always nil from the current server; kept because the offline cache and
+    /// the stream proxy still key files on it (`versionId` plumbing).
     public let chosenVersionId: Int?
-    public let versions: [VideoVersion]
     public let hlsPath: String?
-    public let subtitleTracks: [SubtitleTrack]
-    public let sourceFilename: String?
-    public let audioLang: String?
-    public let subtitleLang: String?
     public let resumeSecs: Double
     /// Announced by the server and never played: what the red dot marks. The
     /// server decides (it is the same rule its group badge counts); the app
@@ -90,49 +27,30 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, platform, sourceKey, channel, previewUrl, position
-        case groupID = "groupId", plexKind
-        case status, errorMsg, streamPath, source, showTitle, season, episode, summary
-        case showPreviewUrl, chosenVersionId, versions, hlsPath, subtitleTracks
-        case sourceFilename
-        case audioLang
-        case subtitleLang
+        case groupID = "groupId"
+        case status, errorMsg, streamPath, chosenVersionId, hlsPath
         case resumeSecs
         case unwatched
     }
 
     private enum RawGroupCodingKeys: String, CodingKey {
-        case groupID = "group_id", plexKind = "plex_kind"
+        case groupID = "group_id"
     }
 
-    public var isLibrary: Bool { source == "library" }
-
-    /// Plex items get the resume prompt and the episode/movie chrome; group
-    /// videos do not. This used to be a name comparison against "tv"/"movies".
-    public var isPlexItem: Bool { plexKind != nil }
-
     public init(id: Int, url: String, title: String?, platform: String?,
-                sourceKey: String?, previewUrl: String?, groupID: Int?, plexKind: PlexKind?,
-            position: Int?, status: String, errorMsg: String?, streamPath: String,
-            source: String? = nil, showTitle: String? = nil, season: Int? = nil,
-            episode: Int? = nil, summary: String? = nil, showPreviewUrl: String? = nil,
-            chosenVersionId: Int? = nil, versions: [VideoVersion] = [],
-            hlsPath: String? = nil, subtitleTracks: [SubtitleTrack] = [],
-            sourceFilename: String? = nil, audioLang: String? = nil,
-            subtitleLang: String? = nil,
-            resumeSecs: Double = 0,
-            channel: String? = nil,
-            unwatched: Bool = false) {
+                sourceKey: String?, previewUrl: String?, groupID: Int?,
+                position: Int?, status: String, errorMsg: String?, streamPath: String,
+                chosenVersionId: Int? = nil,
+                hlsPath: String? = nil,
+                resumeSecs: Double = 0,
+                channel: String? = nil,
+                unwatched: Bool = false) {
         self.id = id; self.url = url; self.title = title; self.platform = platform
         self.sourceKey = sourceKey; self.previewUrl = previewUrl
-        self.groupID = groupID; self.plexKind = plexKind; self.position = position
+        self.groupID = groupID; self.position = position
         self.status = status; self.errorMsg = errorMsg; self.streamPath = streamPath
-        self.source = source; self.showTitle = showTitle; self.season = season
-        self.episode = episode; self.summary = summary; self.showPreviewUrl = showPreviewUrl
-        self.chosenVersionId = chosenVersionId; self.versions = versions
-        self.hlsPath = hlsPath; self.subtitleTracks = subtitleTracks
-        self.sourceFilename = sourceFilename
-        self.audioLang = audioLang
-        self.subtitleLang = subtitleLang
+        self.chosenVersionId = chosenVersionId
+        self.hlsPath = hlsPath
         self.resumeSecs = resumeSecs
         self.channel = channel
         self.unwatched = unwatched
@@ -149,25 +67,12 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.previewUrl = try c.decodeIfPresent(String.self, forKey: .previewUrl)
         self.groupID = try raw.decodeIfPresent(Int.self, forKey: .groupID)
             ?? c.decodeIfPresent(Int.self, forKey: .groupID)
-        self.plexKind = try raw.decodeIfPresent(PlexKind.self, forKey: .plexKind)
-            ?? c.decodeIfPresent(PlexKind.self, forKey: .plexKind)
         self.position = try c.decodeIfPresent(Int.self, forKey: .position)
         self.status = try c.decode(String.self, forKey: .status)
         self.errorMsg = try c.decodeIfPresent(String.self, forKey: .errorMsg)
         self.streamPath = try c.decodeIfPresent(String.self, forKey: .streamPath) ?? ""
-        self.source = try c.decodeIfPresent(String.self, forKey: .source)
-        self.showTitle = try c.decodeIfPresent(String.self, forKey: .showTitle)
-        self.season = try c.decodeIfPresent(Int.self, forKey: .season)
-        self.episode = try c.decodeIfPresent(Int.self, forKey: .episode)
-        self.summary = try c.decodeIfPresent(String.self, forKey: .summary)
-        self.showPreviewUrl = try c.decodeIfPresent(String.self, forKey: .showPreviewUrl)
         self.chosenVersionId = try c.decodeIfPresent(Int.self, forKey: .chosenVersionId)
-        self.versions = try c.decodeIfPresent([VideoVersion].self, forKey: .versions) ?? []
         self.hlsPath = try c.decodeIfPresent(String.self, forKey: .hlsPath)
-        self.subtitleTracks = try c.decodeIfPresent([SubtitleTrack].self, forKey: .subtitleTracks) ?? []
-        self.sourceFilename = try c.decodeIfPresent(String.self, forKey: .sourceFilename)
-        self.audioLang = try c.decodeIfPresent(String.self, forKey: .audioLang)
-        self.subtitleLang = try c.decodeIfPresent(String.self, forKey: .subtitleLang)
         self.resumeSecs = try c.decodeIfPresent(Double.self, forKey: .resumeSecs) ?? 0
         self.channel = try c.decodeIfPresent(String.self, forKey: .channel)
         // Absent from lists cached before the field existed.
@@ -180,80 +85,11 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         return copy
     }
 
-    public func withChosenVersion(_ versionId: Int) -> Video {
-        withChosenVersion(Optional(versionId))
-    }
-
-    public func withChosenVersion(_ versionId: Int?) -> Video {
-        let selected = versions.first { $0.id == versionId }
-        return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
-              previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: position,
-              status: selected?.status ?? status, errorMsg: errorMsg, streamPath: streamPath,
-              source: source, showTitle: showTitle, season: season,
-              episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
-              chosenVersionId: versionId,
-              versions: versions.map {
-                  VideoVersion(id: $0.id, label: $0.label, status: $0.status,
-                               isChosen: $0.id == versionId, audioTracks: $0.audioTracks)
-              },
-              hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-              sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs, channel: channel, unwatched: unwatched)
-    }
-
     func withGroupID(_ groupID: Int?) -> Video {
         Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
-              previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: position,
+              previewUrl: previewUrl, groupID: groupID, position: position,
               status: status, errorMsg: errorMsg, streamPath: streamPath,
-              source: source, showTitle: showTitle, season: season,
-              episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
-              chosenVersionId: chosenVersionId, versions: versions,
-              hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-              sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: subtitleLang,
+              chosenVersionId: chosenVersionId, hlsPath: hlsPath,
               resumeSecs: resumeSecs, channel: channel, unwatched: unwatched)
-    }
-
-    func withAudioLang(_ lang: String) -> Video {
-        return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
-              previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: position,
-              status: status, errorMsg: errorMsg, streamPath: streamPath,
-              source: source, showTitle: showTitle, season: season,
-              episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
-              chosenVersionId: chosenVersionId, versions: versions,
-              hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-              sourceFilename: sourceFilename, audioLang: lang, subtitleLang: subtitleLang,
-              resumeSecs: resumeSecs, channel: channel, unwatched: unwatched)
-    }
-
-    func withSubtitleLang(_ lang: String?) -> Video {
-        return Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
-              previewUrl: previewUrl, groupID: groupID, plexKind: plexKind, position: position,
-              status: status, errorMsg: errorMsg, streamPath: streamPath,
-              source: source, showTitle: showTitle, season: season,
-              episode: episode, summary: summary, showPreviewUrl: showPreviewUrl,
-              chosenVersionId: chosenVersionId, versions: versions,
-              hlsPath: hlsPath, subtitleTracks: subtitleTracks,
-              sourceFilename: sourceFilename, audioLang: audioLang, subtitleLang: lang,
-              resumeSecs: resumeSecs, channel: channel, unwatched: unwatched)
-    }
-
-    /// The subtitle language to force on the player, or `nil` to force nothing.
-    /// Only an explicit stored choice counts (`""` means explicitly off). A
-    /// video the user has never touched deliberately resolves to `nil`: the HLS
-    /// multivariant playlist already carries DEFAULT=YES/AUTOSELECT=YES for the
-    /// server's default track (see hls._master_playlist), so AVKit's own
-    /// auto-select honours the viewer's system captions preference. Forcing a
-    /// selection here would override it. See `defaultSubtitleLang` for the
-    /// display-side resolution the pickers use.
-    public var effectiveSubtitleLang: String? {
-        guard let subtitleLang, !subtitleLang.isEmpty else { return nil }
-        return subtitleLang
-    }
-
-    /// Whichever track the server flagged `default`, for showing a sensible
-    /// pre-selection in a picker. Never fed to the player — see
-    /// `effectiveSubtitleLang`.
-    public var defaultSubtitleLang: String? {
-        subtitleTracks.first(where: { $0.default })?.language
     }
 }

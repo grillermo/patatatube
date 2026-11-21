@@ -81,16 +81,16 @@ final class GroupStoreTests: XCTestCase {
         let store = GroupStore(defaults: makeDefaults())
         store.apply(sample)
         store.setRememberPosition(id: 2, true)
-        func video(groupID: Int?, plexKind: PlexKind? = nil) -> Video {
+        func video(groupID: Int?) -> Video {
             Video(id: 1, url: "", title: nil, platform: nil, sourceKey: nil, previewUrl: nil,
-                  groupID: groupID, plexKind: plexKind, position: nil, status: "done",
+                  groupID: groupID, position: nil, status: "done",
                   errorMsg: nil, streamPath: "")
         }
 
         XCTAssertTrue(store.remembersPosition(video(groupID: 2)))
         XCTAssertFalse(store.remembersPosition(video(groupID: 1)))
         XCTAssertFalse(store.remembersPosition(video(groupID: 99)))
-        XCTAssertTrue(store.remembersPosition(video(groupID: nil, plexKind: .tv)))
+        XCTAssertFalse(store.remembersPosition(video(groupID: nil)))
     }
 
     func testTheOtherCopyHelpersCarryRememberPositionThrough() {

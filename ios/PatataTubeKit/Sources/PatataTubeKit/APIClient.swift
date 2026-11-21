@@ -7,33 +7,18 @@ public enum APIError: Error, Equatable {
     case decoding(String)
 }
 
-public struct ScanResult: Decodable, Equatable, Sendable {
-    public let added: Int
-    public let updated: Int
-    public let skipped: Int
-
-    public init(added: Int, updated: Int, skipped: Int) {
-        self.added = added; self.updated = updated; self.skipped = skipped
-    }
-}
-
 public protocol VideoAPI: Sendable {
     func videos(feed: Feed) async throws -> [Video]
     func groups() async throws -> [VideoGroup]
     func createGroup(name: String, label: String, emoji: String?) async throws -> VideoGroup
     func updateGroup(id: Int, label: String?, emoji: String?) async throws -> VideoGroup
     func setGroup(id: Int, groupID: Int) async throws -> Bool
-    func chooseVersion(id: Int, versionId: Int) async throws -> Bool
-    func chooseAudio(id: Int, lang: String) async throws -> Bool
-    func chooseSubtitle(id: Int, lang: String?) async throws -> Bool
     func savePosition(id: Int, secs: Double) async throws
     func savePosition(
         id: Int, secs: Double, destinationServerIdentity: String
     ) async throws
     func upload(url: String, groupID: Int?) async throws -> Int
     func delete(id: Int) async throws -> Bool
-    func scanLibrary() async throws -> ScanResult
-    func prepare(id: Int, bulk: Bool) async throws -> String
     func video(id: Int) async throws -> Video
     func imageData(path: String) async throws -> Data
     func jobs() async throws -> JobsSnapshot
@@ -53,7 +38,6 @@ public extension VideoAPI {
     }
     func setGroup(id: Int, groupID: Int) async throws -> Bool { false }
     func sendToYoto(id: Int) async throws { throw APIError.notConfigured }
-    func chooseSubtitle(id: Int, lang: String?) async throws -> Bool { false }
 
     func savePosition(
         id: Int, secs: Double, destinationServerIdentity: String
@@ -181,18 +165,6 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         try await postOK("api/videos/\(id)/group", body: ["group_id": groupID])
     }
 
-    public func chooseVersion(id: Int, versionId: Int) async throws -> Bool {
-        try await postOK("api/videos/\(id)/version", body: ["version_id": versionId])
-    }
-
-    public func chooseAudio(id: Int, lang: String) async throws -> Bool {
-        try await postOK("api/videos/\(id)/audio", body: ["lang": lang])
-    }
-
-    public func chooseSubtitle(id: Int, lang: String?) async throws -> Bool {
-        try await postOK("api/videos/\(id)/subtitle", body: ["lang": lang ?? NSNull()])
-    }
-
     /// Reports where playback got to. The server answers 204 with no body, so
     /// there is nothing to decode — a throw is the only failure signal.
     public func savePosition(id: Int, secs: Double) async throws {
@@ -239,20 +211,6 @@ public final class APIClient: VideoAPI, JobsAPI, @unchecked Sendable {
         let data = try await authedPost("upload", body: body)
         struct Result: Decodable { let id: Int }
         do { return try JSONDecoder().decode(Result.self, from: data).id }
-        catch { throw APIError.decoding(String(describing: error)) }
-    }
-
-    public func scanLibrary() async throws -> ScanResult {
-        let data = try await authedPost("api/library/scan", body: [:])
-        do { return try Self.makeDecoder().decode(ScanResult.self, from: data) }
-        catch { throw APIError.decoding(String(describing: error)) }
-    }
-
-    public func prepare(id: Int, bulk: Bool = false) async throws -> String {
-        let body: [String: String] = bulk ? ["priority": "bulk"] : [:]
-        let data = try await authedPost("api/videos/\(id)/prepare", body: body)
-        struct Result: Decodable { let status: String }
-        do { return try JSONDecoder().decode(Result.self, from: data).status }
         catch { throw APIError.decoding(String(describing: error)) }
     }
 

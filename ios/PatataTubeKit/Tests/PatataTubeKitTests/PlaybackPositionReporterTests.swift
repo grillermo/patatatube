@@ -18,12 +18,8 @@ private final class SpyAPI: VideoAPI, @unchecked Sendable {
     }
 
     func videos(feed: Feed) async throws -> [Video] { [] }
-    func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
-    func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
     func upload(url: String, groupID: Int?) async throws -> Int { 0 }
     func delete(id: Int) async throws -> Bool { true }
-    func scanLibrary() async throws -> ScanResult { ScanResult(added: 0, updated: 0, skipped: 0) }
-    func prepare(id: Int, bulk: Bool) async throws -> String { "done" }
     func video(id: Int) async throws -> Video { throw APIError.notConfigured }
     func imageData(path: String) async throws -> Data { Data() }
     func jobs() async throws -> JobsSnapshot { .empty }
@@ -96,12 +92,8 @@ private final class ControlledSpyAPI: VideoAPI, @unchecked Sendable {
     }
 
     func videos(feed: Feed) async throws -> [Video] { [] }
-    func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
-    func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
     func upload(url: String, groupID: Int?) async throws -> Int { 0 }
     func delete(id: Int) async throws -> Bool { true }
-    func scanLibrary() async throws -> ScanResult { ScanResult(added: 0, updated: 0, skipped: 0) }
-    func prepare(id: Int, bulk: Bool) async throws -> String { "done" }
     func video(id: Int) async throws -> Video { throw APIError.notConfigured }
     func imageData(path: String) async throws -> Data { Data() }
     func jobs() async throws -> JobsSnapshot { .empty }
@@ -171,12 +163,8 @@ private final class DestinationControlledAPI: VideoAPI, @unchecked Sendable {
     }
 
     func videos(feed: Feed) async throws -> [Video] { [] }
-    func chooseVersion(id: Int, versionId: Int) async throws -> Bool { true }
-    func chooseAudio(id: Int, lang: String) async throws -> Bool { true }
     func upload(url: String, groupID: Int?) async throws -> Int { 0 }
     func delete(id: Int) async throws -> Bool { true }
-    func scanLibrary() async throws -> ScanResult { ScanResult(added: 0, updated: 0, skipped: 0) }
-    func prepare(id: Int, bulk: Bool) async throws -> String { "done" }
     func video(id: Int) async throws -> Video { throw APIError.notConfigured }
     func imageData(path: String) async throws -> Data { Data() }
     func jobs() async throws -> JobsSnapshot { .empty }

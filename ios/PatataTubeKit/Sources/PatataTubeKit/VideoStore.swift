@@ -1,10 +1,6 @@
 import Foundation
 import Combine
 
-public enum PrepareError: Error, Equatable {
-    case conversionFailed(String)
-}
-
 /// The one thing VideoStore needs from CacheManager: dropping a video's
 /// downloaded files once the server says the video is gone.
 public protocol MediaCaching: Sendable {
@@ -216,8 +212,6 @@ public final class VideoStore: ObservableObject {
                     } else {
                         videos.removeAll { $0.id == id }
                     }
-                case .plex:
-                    break
                 }
                 cache.save(videos, feed: feed)
             }
@@ -283,8 +277,6 @@ public final class VideoStore: ObservableObject {
                 } else {
                     videos.removeAll { $0.id == mutation.id }
                 }
-            case .plex:
-                break
             }
             await reconcileGroupMutationCache(
                 id: mutation.id, groupID: settledGroupID,
@@ -303,7 +295,6 @@ public final class VideoStore: ObservableObject {
     public func setGroup(id: Int, groupID: Int) async {
         guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
         let previous = videos[index]
-        guard !previous.isPlexItem else { return }
         loadGeneration += 1
         contentInvalidation += 1
         isLoading = false
@@ -330,54 +321,6 @@ public final class VideoStore: ObservableObject {
             _ = await finishGroupMutation(mutation, succeeded: succeeded)
         } catch {
             if await finishGroupMutation(mutation, succeeded: false) { report(error) }
-        }
-    }
-
-    public func chooseVersion(id: Int, versionId: Int) async {
-        guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
-        let previous = videos[index]
-        videos[index] = videos[index].withChosenVersion(versionId)
-        do {
-            let ok = try await api.chooseVersion(id: id, versionId: versionId)
-            if !ok { videos[index] = previous }
-        } catch {
-            videos[index] = previous
-            report(error)
-        }
-    }
-
-    /// Optimistically records the chosen audio language, then reloads so a
-    /// server-triggered re-conversion ("converting" status) shows up.
-    public func chooseAudio(id: Int, lang: String) async {
-        guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
-        let previous = videos[index]
-        videos[index] = videos[index].withAudioLang(lang)
-        do {
-            let ok = try await api.chooseAudio(id: id, lang: lang)
-            if ok {
-                await load()
-            } else {
-                videos[index] = previous
-            }
-        } catch {
-            videos[index] = previous
-            report(error)
-        }
-    }
-
-    /// Optimistically records the chosen subtitle language. Unlike audio, this
-    /// never triggers a server-side reconversion (every subtitle language is
-    /// already packaged into HLS), so there is no need to reload after.
-    public func chooseSubtitle(id: Int, lang: String?) async {
-        guard let index = videos.firstIndex(where: { $0.id == id }) else { return }
-        let previous = videos[index]
-        videos[index] = videos[index].withSubtitleLang(lang)
-        do {
-            let ok = try await api.chooseSubtitle(id: id, lang: lang)
-            if !ok { videos[index] = previous }
-        } catch {
-            videos[index] = previous
-            report(error)
         }
     }
 
@@ -428,71 +371,8 @@ public final class VideoStore: ObservableObject {
     /// fetch then returned silently with the server's answer thrown away, so a
     /// pull never showed a new video while leaving the group and coming back
     /// (the same request, from a `.task`) did.
-    ///
-    /// Only a Plex feed scans the library first: a group holds downloads, which
-    /// a Plex scan cannot change, and the scan cost two seconds per pull.
     public func refresh() async {
-        await Task {
-            if case .plex = feed {
-                await refreshLibrary()
-            } else {
-                await load()
-            }
-        }.value
-    }
-
-    /// Scan the server-side Plex library, then reload the list.
-    /// A failed scan surfaces in errorText but still refreshes the list.
-    public func refreshLibrary() async {
-        var scanErrorText: String?
-        do {
-            _ = try await api.scanLibrary()
-        } catch {
-            if !Self.isCancellation(error) { scanErrorText = String(describing: error) }
-        }
-        await load()
-        // If the scan failed but load() itself succeeded (errorText is nil),
-        // restore the scan failure so it still surfaces to the user. If load()
-        // failed too, its error is more relevant and takes precedence.
-        if let scanErrorText, errorText == nil {
-            errorText = scanErrorText
-        }
-    }
-
-    /// Kicks off server-side conversion (if needed) and polls until the video
-    /// is streamable. Throws PrepareError when the server reports a failed conversion.
-    public func ensureReady(id: Int, bulk: Bool = false, pollIntervalSeconds: Double = 2.0) async throws -> Video {
-        let status = try await api.prepare(id: id, bulk: bulk)
-        DevLog.event(.net, "ensureReady prepare returned", [
-            "video_id": "\(id)", "status": status, "bulk": "\(bulk)",
-        ])
-        if status == "done" {
-            return try await api.video(id: id)
-        }
-        var polls = 0
-        while true {
-            let video = try await api.video(id: id)
-            polls += 1
-            // Every poll, not just the exit: 108 of these ran past a server-side
-            // 'done' once, and only the per-poll status shows whether the client
-            // saw a stale value or ignored a fresh one.
-            DevLog.event(.net, "ensureReady poll", [
-                "video_id": "\(id)", "poll": "\(polls)", "status": video.status,
-                "error_msg": video.errorMsg ?? "-",
-                "chosen_version_id": video.chosenVersionId.map(String.init) ?? "-",
-            ])
-            if video.status == "done" {
-                DevLog.event(.net, "ensureReady done", ["video_id": "\(id)", "polls": "\(polls)"])
-                return video
-            }
-            if let message = video.errorMsg, !message.isEmpty {
-                DevLog.event(.error, "ensureReady conversion failed", [
-                    "video_id": "\(id)", "polls": "\(polls)", "error_msg": message,
-                ])
-                throw PrepareError.conversionFailed(message)
-            }
-            try await Task.sleep(nanoseconds: UInt64(pollIntervalSeconds * 1_000_000_000))
-        }
+        await Task { await load() }.value
     }
 
     /// Wipes the on-disk offline list cache and empties the in-memory list.

@@ -10,11 +10,10 @@ public struct ConversionJob: Decodable, Equatable, Identifiable, Sendable {
     public let kind: String
     public let progress: Double?
     public let title: String?
-    public let showTitle: String?
 
     public init(
         id: Int, videoID: Int, versionID: Int?, kind: String,
-        progress: Double?, title: String?, showTitle: String?
+        progress: Double?, title: String?
     ) {
         self.id = id
         self.videoID = videoID
@@ -22,7 +21,6 @@ public struct ConversionJob: Decodable, Equatable, Identifiable, Sendable {
         self.kind = kind
         self.progress = progress
         self.title = title
-        self.showTitle = showTitle
     }
 
     // JSONDecoder's .convertFromSnakeCase turns "video_id" into "videoId" and
@@ -31,7 +29,7 @@ public struct ConversionJob: Decodable, Equatable, Identifiable, Sendable {
     // this codebase's convention -- see Video.groupID). Explicit keys needed
     // for just these two; the rest convert automatically.
     private enum CodingKeys: String, CodingKey {
-        case id, kind, progress, title, showTitle
+        case id, kind, progress, title
         case videoID = "videoId"
         case versionID = "versionId"
     }
