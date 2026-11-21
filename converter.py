@@ -20,7 +20,6 @@ load_dotenv()
 
 import app_logging  # noqa: E402
 import db  # noqa: E402
-import hls  # noqa: E402
 import sd  # noqa: E402
 from paths import ensure_media_root  # noqa: E402
 
@@ -36,17 +35,9 @@ def _positive_int_env(name: str, default: int) -> int:
 FFMPEG_JOB_LIMIT = _positive_int_env("FFMPEG_JOB_LIMIT", 2)
 
 
-def _handle_hls(job: dict, on_progress) -> None:
-    payload = job.get("payload") or {}
-    hls.prepare(
-        job["video_id"], payload["source_path"],
-        raise_errors=True, on_progress=on_progress,
-    )
-
-
 def _handle_normalize(job: dict, on_progress) -> dict:
     # Imported lazily: downloader pulls in pybalt, which the other kinds do not
-    # need, and a normalize job is rare compared to hls.
+    # need, and a normalize job is rare.
     from downloader import _normalize_media_for_ios_sync
 
     payload = job.get("payload") or {}
@@ -63,7 +54,6 @@ def _handle_sd(job: dict, on_progress) -> None:
 
 
 JOB_HANDLERS = {
-    "hls": _handle_hls,
     "normalize": _handle_normalize,
     "sd": _handle_sd,
 }
@@ -102,9 +92,7 @@ def cleanup_orphan(job: dict) -> None:
     failure here must not stop the runner from draining the queue.
     """
     try:
-        if job["kind"] == "hls":
-            hls.invalidate(job["video_id"])
-        elif job["kind"] == "sd":
+        if job["kind"] == "sd":
             sd.part_path(job["video_id"]).unlink(missing_ok=True)
         # normalize writes into the system temp dir, which the OS reaps.
     except Exception:  # noqa: BLE001
@@ -140,7 +128,7 @@ def main() -> None:
     parser.add_argument("--poll-interval", type=float, default=1.0)
     args = parser.parse_args()
 
-    # Classification runs here, after each HLS job; without this its log lines
+    # Classification can log from this process too; without this those lines
     # never reach ./serve's "convert" stream.
     app_logging.configure()
     ensure_media_root()

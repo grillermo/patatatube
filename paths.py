@@ -1,6 +1,6 @@
 """Media storage roots, read from env at import time.
 
-MEDIA_ROOT unset defaults to '.', which keeps VIDEOS_DIR/HLS_DIR byte-identical
+MEDIA_ROOT unset defaults to '.', which keeps VIDEOS_DIR byte-identical
 to the repo-relative paths every other module used before this existed.
 """
 
@@ -9,7 +9,6 @@ from pathlib import Path
 
 MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "."))
 VIDEOS_DIR = Path(os.getenv("VIDEOS_DIR", str(MEDIA_ROOT / "videos")))
-HLS_DIR = Path(os.getenv("HLS_DIR", str(MEDIA_ROOT / "data/hls")))
 
 
 def ensure_media_root() -> None:

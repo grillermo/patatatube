@@ -11,7 +11,7 @@ def _restore_paths_module():
     yield
     import os
 
-    for var in ("MEDIA_ROOT", "VIDEOS_DIR", "HLS_DIR"):
+    for var in ("MEDIA_ROOT", "VIDEOS_DIR"):
         os.environ.pop(var, None)
     importlib.reload(paths)
 
@@ -19,28 +19,22 @@ def _restore_paths_module():
 def test_defaults_match_repo_relative_paths(monkeypatch):
     monkeypatch.delenv("MEDIA_ROOT", raising=False)
     monkeypatch.delenv("VIDEOS_DIR", raising=False)
-    monkeypatch.delenv("HLS_DIR", raising=False)
     importlib.reload(paths)
     assert paths.VIDEOS_DIR == Path("videos")
-    assert paths.HLS_DIR == Path("data/hls")
 
 
 def test_media_root_composes_subdirs(monkeypatch, tmp_path):
     monkeypatch.setenv("MEDIA_ROOT", str(tmp_path))
     monkeypatch.delenv("VIDEOS_DIR", raising=False)
-    monkeypatch.delenv("HLS_DIR", raising=False)
     importlib.reload(paths)
     assert paths.VIDEOS_DIR == tmp_path / "videos"
-    assert paths.HLS_DIR == tmp_path / "data/hls"
 
 
 def test_explicit_dirs_override_media_root(monkeypatch, tmp_path):
     monkeypatch.setenv("MEDIA_ROOT", str(tmp_path))
     monkeypatch.setenv("VIDEOS_DIR", "/custom/videos")
-    monkeypatch.setenv("HLS_DIR", "/custom/hls")
     importlib.reload(paths)
     assert paths.VIDEOS_DIR == Path("/custom/videos")
-    assert paths.HLS_DIR == Path("/custom/hls")
 
 
 def test_ensure_media_root_noop_when_unset(monkeypatch):

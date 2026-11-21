@@ -19,7 +19,6 @@ from pydantic import BaseModel, FiniteFloat, field_validator
 
 import db
 import devlog
-import hls
 import sd
 import services
 import yosubee
@@ -323,7 +322,7 @@ def _classify_url(raw_url: str) -> dict:
 
 @router.get("/check-auth")
 async def check_auth(request: Request):
-    # Accepts ?token= too: Caddy's forward_auth re-sends stream/HLS requests
+    # Accepts ?token= too: Caddy's forward_auth re-sends stream requests
     # here (uri /check-auth?{query}), and <video> tags can't send headers.
     _check_token_or_query(request)
     return {"ok": True}
@@ -673,52 +672,6 @@ async def stream_sd_video(video_id: int, request: Request):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="SD file missing")
     return _file_response(file_path, "video/mp4", request, video.get("title"))
-
-
-def _resolve_hls_source(video: dict, request: Request) -> Path:
-    """Resolve the on-disk source for HLS exactly as /videos/{id}/stream does.
-
-    Raises 409 when the video is not ready (status other than 'done').
-    """
-    if video["status"] != "done" or not video["filename"]:
-        raise HTTPException(status_code=409, detail="Video not ready")
-    return VIDEOS_DIR / video["filename"]
-
-
-@router.get("/videos/{video_id}/hls/{asset_path:path}")
-async def hls_asset(
-    video_id: int, asset_path: str, request: Request
-):
-    _check_token_or_query(request)
-    video = db.get_video(video_id)
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-
-    source = _resolve_hls_source(video, request)
-    if not source.exists():
-        raise HTTPException(status_code=404, detail="Source file missing")
-
-    target = hls.safe_asset_path(video_id, asset_path)
-    if target is None:
-        raise HTTPException(status_code=404, detail="Not found")
-
-    if target.exists():
-        media_type = hls.HLS_CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
-        return FileResponse(target, media_type=media_type)
-
-    # Nothing on disk yet. Only the master request triggers packaging; segment
-    # and subtitle requests before readiness are simply 404. Packaging is queued
-    # for converter.py and the client polls the master URL until it is 200.
-    if asset_path == "master.m3u8":
-        if video.get("hls_status") != "converting":
-            db.set_hls_status(video_id, "converting")
-        payload = {"source_path": str(source)}
-        db.enqueue_job(
-            "hls", video_id, priority=db.PRIORITY_INTERACTIVE, payload=payload,
-        )
-        return JSONResponse({"detail": "HLS preparing"}, status_code=409)
-
-    raise HTTPException(status_code=404, detail="Not found")
 
 
 @router.get("/favicon.ico", include_in_schema=False)
@@ -1071,16 +1024,13 @@ async def api_video(video_id: int, request: Request):
     return serialize_video(video)
 
 
-# The next 20 queued jobs is plenty for a UI list; the bulk Download-all path
-# can leave 200+ behind it, and this endpoint is polled every 2s.
-JOBS_QUEUED_LIMIT = 20
-
-
 @router.get("/api/jobs")
 async def api_jobs(request: Request):
-    """Active ffmpeg work, for the iOS conversion spinners and Downloads list."""
+    """Kept only for PatataTube iOS 2.8.0, which polls it every 2s. Nothing
+    reports progress any more: only HLS packaging did. Removed in Task C1 of
+    docs/superpowers/plans/2026-11-21-remove-hls.md."""
     _check_token(request)
-    return db.active_jobs(queued_limit=JOBS_QUEUED_LIMIT)
+    return {"running": [], "queued": [], "queued_total": 0}
 
 
 def _safe_next(raw: str | None) -> str:

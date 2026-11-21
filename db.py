@@ -25,7 +25,7 @@ DEFAULT_UPLOAD_GROUP = "inbox"
 # DEFAULT_UPLOAD_GROUP, so renaming its label or reordering groups is harmless.
 SD_DEFAULT_GROUP = "children"
 
-JOB_KINDS = ("hls", "normalize", "sd")
+JOB_KINDS = ("normalize", "sd")
 PRIORITY_INTERACTIVE = 0
 PRIORITY_BULK = 100
 

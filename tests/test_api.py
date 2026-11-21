@@ -1108,110 +1108,6 @@ def _seed_done_download(status_num="900", filename="900.mp4"):
     return vid, p
 
 
-def _fake_build(video_id, source_path, *a, **k):
-    """Stand in for ffmpeg packaging: lay down a full HLS tree on disk."""
-    import hls
-
-    out = hls.hls_dir_for(video_id)
-    (out / "subtitles").mkdir(parents=True, exist_ok=True)
-    (out / "master.m3u8").write_text(
-        "#EXTM3U\n#EXT-X-INDEPENDENT-SEGMENTS\n"
-        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",LANGUAGE="en",NAME="English",'
-        'DEFAULT=YES,AUTOSELECT=YES,FORCED=NO,URI="subtitles/en.m3u8"\n'
-        '#EXT-X-STREAM-INF:BANDWIDTH=1500000,SUBTITLES="subs"\nvideo.m3u8\n'
-    )
-    (out / "video.m3u8").write_text("#EXTM3U\n")
-    (out / "segment_00000.m4s").write_bytes(b"SEG")
-    (out / "subtitles" / "en.m3u8").write_text("#EXTM3U\n")
-    (out / "subtitles" / "en.vtt").write_text("WEBVTT\n")
-
-
-def test_hls_master_requires_auth(client):
-    # Clear the cookie to test that access without auth is rejected
-    del client.cookies["upload_token"]
-    resp = client.get("/videos/1/hls/master.m3u8")
-    assert resp.status_code == 401
-
-
-def test_hls_master_404_for_missing_video(client):
-    resp = client.get("/videos/999/hls/master.m3u8", headers=AUTH)
-    assert resp.status_code == 404
-
-
-def test_hls_master_409_when_source_not_ready(client):
-    import db
-
-    vid = db.add_video("https://twitter.com/x/status/901")  # queued, no file
-    resp = client.get(f"/videos/{vid}/hls/master.m3u8", headers=AUTH)
-    assert resp.status_code == 409
-
-
-def test_cold_master_playlist_enqueues_an_hls_job(client, tmp_path, monkeypatch):
-    import db
-    import hls
-
-    packaged = []
-    monkeypatch.setattr(hls, "prepare", lambda vid, src: packaged.append(vid))
-    monkeypatch.setattr(hls, "HLS_DIR", tmp_path / "hls")
-    video_id, _ = _seed_done_download()
-
-    response = client.get(f"/videos/{video_id}/hls/master.m3u8", headers=AUTH)
-
-    assert response.status_code == 409
-    assert packaged == []
-    job = db.claim_job()
-    assert job["kind"] == "hls"
-    assert job["payload"]["source_path"]
-
-
-def test_hls_master_prepares_then_serves_tree(client, monkeypatch, tmp_path):
-    import db
-    import hls
-
-    monkeypatch.setattr(hls, "HLS_DIR", tmp_path / "hls")
-    monkeypatch.setattr(hls, "build_hls_package", _fake_build)
-    vid, p = _seed_done_download()
-    try:
-        # First hit: source ready but no package -> queues prep, 409.
-        first = client.get(f"/videos/{vid}/hls/master.m3u8", headers=AUTH)
-        assert first.status_code == 409
-
-        job = db.claim_job()
-        assert job["kind"] == "hls"
-        hls.prepare(job["video_id"], job["payload"]["source_path"])
-
-        master = client.get(f"/videos/{vid}/hls/master.m3u8", headers=AUTH)
-        assert master.status_code == 200
-        assert master.headers["content-type"].startswith("application/vnd.apple.mpegurl")
-        assert "TYPE=SUBTITLES" in master.text
-
-        assert client.get(f"/videos/{vid}/hls/video.m3u8", headers=AUTH).status_code == 200
-        seg = client.get(f"/videos/{vid}/hls/segment_00000.m4s", headers=AUTH)
-        assert seg.status_code == 200
-        assert client.get(f"/videos/{vid}/hls/subtitles/en.m3u8", headers=AUTH).status_code == 200
-
-        vtt = client.get(f"/videos/{vid}/hls/subtitles/en.vtt", headers=AUTH)
-        assert vtt.status_code == 200
-        assert vtt.headers["content-type"].startswith("text/vtt")
-    finally:
-        p.unlink(missing_ok=True)
-
-
-def test_hls_rejects_path_traversal(client, monkeypatch, tmp_path):
-    import hls
-
-    monkeypatch.setattr(hls, "HLS_DIR", tmp_path / "hls")
-    vid, p = _seed_done_download(status_num="902", filename="902.mp4")
-    try:
-        resp = client.get(f"/videos/{vid}/hls/../../secret", headers=AUTH)
-        # httpx normalizes ../ in the client, so hit the encoded form too.
-        assert resp.status_code in (404, 409)
-        resp2 = client.get(f"/videos/{vid}/hls/%2e%2e%2f%2e%2e%2fsecret", headers=AUTH)
-        assert resp2.status_code == 404
-    finally:
-        p.unlink(missing_ok=True)
-
-
 def test_upload_file_no_longer_rejects_plex_kinds(client, auth_headers, monkeypatch):
     import db
 
@@ -1360,31 +1256,6 @@ def test_video_list_includes_resume_secs(client, monkeypatch):
 
 def test_jobs_requires_a_token(client):
     assert client.get("/api/jobs").status_code == 401
-
-
-def test_jobs_returns_running_and_queued(client, auth_headers):
-    import db
-    running_id = db.enqueue_job("hls", video_id=1, version_id=1)
-    db.claim_job()
-    db.set_job_progress(running_id, 0.6)
-    db.enqueue_job("hls", video_id=2, version_id=2)
-
-    body = client.get("/api/jobs", headers=auth_headers).json()
-    assert [job["id"] for job in body["running"]] == [running_id]
-    assert body["running"][0]["progress"] == 0.6
-    assert body["running"][0]["kind"] == "hls"
-    assert [job["video_id"] for job in body["queued"]] == [2]
-    assert body["queued"][0]["progress"] is None
-    assert body["queued_total"] == 1
-
-
-def test_jobs_caps_the_queued_list_at_twenty(client, auth_headers):
-    import db
-    for video_id in range(1, 26):
-        db.enqueue_job("hls", video_id=video_id, version_id=video_id)
-    body = client.get("/api/jobs", headers=auth_headers).json()
-    assert len(body["queued"]) == 20
-    assert body["queued_total"] == 25
 
 
 def test_jobs_is_empty_when_nothing_is_pending(client, auth_headers):
@@ -1786,3 +1657,22 @@ def test_group_named_tv_is_allowed_now(client, auth_headers):
     response = client.post("/api/groups", headers=auth_headers,
                            json={"name": "tv", "label": "TV"})
     assert response.status_code == 201
+
+
+def test_hls_urls_are_gone(client):
+    import db
+
+    video_id, _ = _seed_done_download()
+    resp = client.get(f"/videos/{video_id}/hls/master.m3u8", headers=AUTH)
+
+    assert resp.status_code == 404
+    assert db.claim_job() is None
+
+
+def test_jobs_endpoint_always_reports_nothing(client, auth_headers):
+    import db
+
+    video_id, _ = _seed_done_download()
+    db.enqueue_job("sd", video_id)
+    body = client.get("/api/jobs", headers=auth_headers).json()
+    assert body == {"running": [], "queued": [], "queued_total": 0}

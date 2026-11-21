@@ -19,8 +19,8 @@ def test_handler_raising_marks_job_failed_with_the_message(tmp_db, monkeypatch):
     def boom(job, on_progress):
         raise RuntimeError("ffmpeg exploded")
 
-    monkeypatch.setitem(converter.JOB_HANDLERS, "hls", boom)
-    tmp_db.enqueue_job("hls", video_id=42)
+    monkeypatch.setitem(converter.JOB_HANDLERS, "sd", boom)
+    tmp_db.enqueue_job("sd", video_id=42)
 
     converter.run_job(tmp_db.claim_job())
 
@@ -32,13 +32,13 @@ def test_handler_raising_marks_job_failed_with_the_message(tmp_db, monkeypatch):
 def test_run_job_writes_progress_to_the_job_row(tmp_db, monkeypatch):
     import converter
 
-    job_id = tmp_db.enqueue_job("hls", video_id=1, payload={"source_path": "/x.mp4"})
+    job_id = tmp_db.enqueue_job("sd", video_id=1)
     job = tmp_db.claim_job()
 
-    def fake_prepare(video_id, source_path, *, raise_errors=False, on_progress=None):
+    def fake_prepare(video_id, on_progress=None):
         on_progress(0.75)
 
-    monkeypatch.setattr(converter.hls, "prepare", fake_prepare)
+    monkeypatch.setattr(converter.sd, "build_sd", fake_prepare)
 
     converter.run_job(job)
 
@@ -49,43 +49,19 @@ def test_run_job_still_marks_failures(tmp_db, monkeypatch):
     """Regression guard: adding the callback must not swallow handler exceptions."""
     import converter
 
-    job_id = tmp_db.enqueue_job("hls", video_id=1, payload={"source_path": "/x.mp4"})
+    job_id = tmp_db.enqueue_job("sd", video_id=1)
     job = tmp_db.claim_job()
 
     def boom(*args, **kwargs):
         raise RuntimeError("nope")
 
-    monkeypatch.setattr(converter.hls, "prepare", boom)
+    monkeypatch.setattr(converter.sd, "build_sd", boom)
 
     converter.run_job(job)
 
     row = tmp_db.get_job(job_id)
     assert row["status"] == "failed"
     assert "nope" in row["error_msg"]
-
-
-def test_hls_failure_resets_video_and_marks_job_failed(tmp_db, monkeypatch, tmp_path):
-    import converter
-    import hls
-
-    video_id = tmp_db.add_video("https://example.com/video")
-    tmp_db.set_hls_status(video_id, "converting")
-
-    def fail_hls(*args, **kwargs):
-        raise RuntimeError("hls exploded")
-
-    monkeypatch.setattr(hls, "build_hls_package", fail_hls)
-    tmp_db.enqueue_job(
-        "hls", video_id=video_id, payload={"source_path": str(tmp_path / "movie.mp4")}
-    )
-
-    converter.run_job(tmp_db.claim_job())
-
-    video = tmp_db.get_video(video_id)
-    job = tmp_db.get_job(1)
-    assert video["hls_status"] == "none"
-    assert job["status"] == "failed"
-    assert job["error_msg"] == "hls exploded"
 
 
 def test_handler_result_is_stored_on_the_job(tmp_db, monkeypatch):
@@ -105,7 +81,7 @@ def test_handler_result_is_stored_on_the_job(tmp_db, monkeypatch):
 def test_unknown_kind_fails_the_job_instead_of_crashing_the_runner(tmp_db):
     import converter
 
-    tmp_db.enqueue_job("hls", video_id=1)
+    tmp_db.enqueue_job("sd", video_id=1)
     job = tmp_db.claim_job()
     job["kind"] = "bogus"
 
@@ -117,9 +93,9 @@ def test_unknown_kind_fails_the_job_instead_of_crashing_the_runner(tmp_db):
 def test_worker_loop_drains_the_queue_then_idles(tmp_db, monkeypatch):
     import converter
 
-    monkeypatch.setitem(converter.JOB_HANDLERS, "hls", lambda job, on_progress: None)
+    monkeypatch.setitem(converter.JOB_HANDLERS, "sd", lambda job, on_progress: None)
     for video_id in range(1, 4):
-        tmp_db.enqueue_job("hls", video_id=video_id)
+        tmp_db.enqueue_job("sd", video_id=video_id)
 
     stop = threading.Event()
     thread = threading.Thread(
@@ -155,9 +131,9 @@ def test_cap_holds_under_a_burst(tmp_db, monkeypatch):
         with guard:
             concurrent -= 1
 
-    monkeypatch.setitem(converter.JOB_HANDLERS, "hls", handler)
+    monkeypatch.setitem(converter.JOB_HANDLERS, "sd", handler)
     for video_id in range(1, 21):
-        tmp_db.enqueue_job("hls", video_id=video_id)
+        tmp_db.enqueue_job("sd", video_id=video_id)
 
     stop = threading.Event()
     threads = [
@@ -177,18 +153,6 @@ def test_cap_holds_under_a_burst(tmp_db, monkeypatch):
 
     assert tmp_db.queued_job_count() == 0
     assert peak <= limit
-
-
-def test_cleanup_orphan_invalidates_partial_hls_output(tmp_db, monkeypatch):
-    import converter
-    import hls
-
-    invalidated = []
-    monkeypatch.setattr(hls, "invalidate", invalidated.append)
-
-    converter.cleanup_orphan({"kind": "hls", "video_id": 42, "payload": None})
-
-    assert invalidated == [42]
 
 
 def test_normalize_handler_forwards_the_channel_tag(tmp_db, monkeypatch):
