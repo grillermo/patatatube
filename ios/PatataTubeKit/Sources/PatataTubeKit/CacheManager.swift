@@ -331,9 +331,20 @@ public final class CacheManager: @unchecked Sendable {
             tuning: tuning,
             onProgress: { [weak self] manifest in self?.recordProgress(key: key, manifest: manifest) }
         )
-        let (job, task, created) = lock.withLock { () -> (RunningJob, Task<Void, Error>, Bool) in
-            if let existing = jobs[key], let task = existing.task { return (existing, task, false) }
-            let job = RunningJob(params: params)
+        // Results leave the lock through captured variables rather than a
+        // returned (RunningJob, Task, Bool) tuple: the tuple form is
+        // miscompiled by the Swift 6.2 optimizer (-c release only), which
+        // over-releases `job` and crashes the unwind on a failed download.
+        var job = RunningJob(params: params)
+        var task: Task<Void, Error>?
+        var created = false
+        lock.withLock {
+            if let existing = jobs[key], let existingTask = existing.task {
+                job = existing
+                task = existingTask
+                return
+            }
+            created = true
             jobs[key] = job
             let previous = pinned[key]
             pinned[key] = PinnedRecord(
@@ -349,15 +360,16 @@ public final class CacheManager: @unchecked Sendable {
                 totalByteCount: previous?.totalByteCount
             )
             let pinWritten = enqueueStoreWorkLocked { await $0.setPin(key: key, pin: PinState(job: params, paused: false)) }
-            let task = Task {
+            let newTask = Task {
                 await pinWritten.value
                 try await runner.run()
             }
-            job.task = task
-            return (job, task, true)
+            job.task = newTask
+            task = newTask
         }
+        let joinedTask = task!  // set on both branches above
         do {
-            try await task.value
+            try await joinedTask.value
             if created { finishJob(key: key, job: job, error: nil) }
         } catch {
             if created { finishJob(key: key, job: job, error: error) }
