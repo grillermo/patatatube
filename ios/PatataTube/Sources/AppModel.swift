@@ -11,7 +11,6 @@ final class AppModel: ObservableObject {
     /// remote URL otherwise. Nil when the store isn't routed (tests).
     let serverPicker: ServerPicker?
     let cache: CacheManager
-    let streamCache: StreamCache
     let streamProxy: StreamProxy
     let store: VideoStore
     let api: APIClient
@@ -146,15 +145,13 @@ final class AppModel: ObservableObject {
     ) {
         let api = APIClient(store: credentials)
         let resumeStore = ResumePositionStore(serverURL: credentials.identityURL)
-        let streamCache = StreamCache()
         let cache = CacheManager(root: cacheRoot, credentials: credentials)
         self.credentials = credentials
         let routed = credentials as? RoutedCredentialStore
         self.serverPicker = routed.map(ServerPicker.init(store:))
-        self.streamCache = streamCache
         self.cache = cache
         self.streamProxy = StreamProxy(
-            cache: streamCache,
+            store: cache.mediaStore,
             credentials: credentials
         )
         self.api = api
@@ -344,7 +341,7 @@ final class AppModel: ObservableObject {
     func makeCacheStatisticsCollector() -> CacheStatisticsCollector {
         CacheStatisticsCollector(
             videosRoot: cache.videosRoot,
-            streamRoot: streamCache.root,
+            streamRoot: cache.mediaStore.storeRoot,
             videoListRoot: videoListCache.root
         )
     }

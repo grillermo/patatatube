@@ -1,31 +1,52 @@
 import FlyingFox
+import FlyingSocks
 import Foundation
 
-/// Loopback read-through caching proxy. AVPlayer requests
-/// `http://127.0.0.1:{port}/{secret}/...`; the proxy serves from StreamCache,
-/// fetching misses upstream with the Bearer token. Playback must survive any
-/// cache failure: fall back to pass-through, never block.
+/// Loopback proxy for AVPlayer. It requests
+/// `http://127.0.0.1:{port}/{secret}/mp4/{id}/{v}` and gets the **whole**
+/// requested range as one streamed 206, read from and written to the
+/// `MediaStore` that downloads share. Before 2.9 this answered with buffered
+/// 8 MB windows, and AVPlayer failed every file larger than that.
 public final class StreamProxy: @unchecked Sendable {
-    private static let mp4Window: Int64 = 8 * 1024 * 1024
+    public struct Tuning: Sendable {
+        /// Wait for a fetcher at most this far behind the playhead rather
+        /// than start a second one.
+        public var waitWithin: Int64 = 4 * 1_048_576
+        /// A playback fetcher parks once this far ahead of what was sent.
+        public var readAhead: Int64 = 32 * 1_048_576
+        public var readSize = 256 * 1024
+        public var commitSize = 256 * 1024
+        /// 1 + 2 retries, then the response ends early and AVPlayer retries.
+        public var maxAttempts = 3
+
+        public init() {}
+    }
+
+    /// Playback never waits for connectivity: a hole while offline must
+    /// error in seconds, not hang. Committed bytes still play.
+    public static func defaultSession() -> URLSession {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = false
+        configuration.timeoutIntervalForRequest = 10
+        return URLSession(configuration: configuration)
+    }
 
     public let secret = UUID().uuidString
-    private let cache: StreamCache
+    private let store: MediaStore
     private let credentials: CredentialStore
     private let session: URLSession
+    private let tuning: Tuning
     private let lock = NSLock()
     private var _port: UInt16?
     private var serverTask: Task<Void, Never>?
-    /// Not private so tests can kill the listener the way iOS does — out from
-    /// under the proxy, without going through `stop()`.
+    /// Not private so tests can kill the listener the way iOS does.
     var server: HTTPServer?
-    /// Loopback liveness probe. Separate from `session`, which callers replace
-    /// with a mock protocol for the upstream side.
     private let probeSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 2
         return URLSession(configuration: configuration)
     }()
-    private let probeSingleFlight = SingleFlight<DownloadProbe>()
+    private let probeSingleFlight = SingleFlight<MediaIdentity>()
 
     public private(set) var port: UInt16? {
         get { lock.withLock { _port } }
@@ -33,14 +54,17 @@ public final class StreamProxy: @unchecked Sendable {
     }
 
     public init(
-        cache: StreamCache,
+        store: MediaStore,
         credentials: CredentialStore,
-        session: URLSession = .shared
+        session: URLSession = StreamProxy.defaultSession(),
+        tuning: Tuning = Tuning()
     ) {
-        self.cache = cache
+        self.store = store
         self.credentials = credentials
         self.session = session
+        self.tuning = tuning
     }
+
 
     public func start() async {
         DevLog.event(.proxy, "proxy start requested")
@@ -218,322 +242,123 @@ public final class StreamProxy: @unchecked Sendable {
         }
         return components.url
     }
-
-    private func upstreamRequest(url: URL, range: String? = nil) -> URLRequest {
-        var request = URLRequest(url: url)
-        if let token = credentials.token {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        if let range {
-            request.setValue(range, forHTTPHeaderField: "Range")
-        }
-        return request
-    }
-
-    private func isSuccessful(_ response: URLResponse) -> Bool {
-        guard let response = response as? HTTPURLResponse else { return false }
-        return (200..<300).contains(response.statusCode)
-    }
-
     // MARK: - MP4
 
     private func handleMP4(_ request: HTTPRequest) async -> HTTPResponse {
         guard let params = mp4Params(of: request) else {
             return HTTPResponse(statusCode: .notFound)
         }
-        let key = params.versionId.map { "\(params.videoId):\($0)" } ?? "\(params.videoId)"
-        guard let url = upstreamURL(
-            path: "videos/\(params.videoId)/stream",
-            versionId: params.versionId
-        ) else {
-            return HTTPResponse(statusCode: .badGateway)
-        }
-
-        var manifest = await cache.ranges.manifest(key: key)
-        if manifest == nil {
-            let probe: DownloadProbe
-            do {
-                probe = try await probeSingleFlight.run(key: key) { [self] in
-                    let (body, response) = try await session.data(
-                        for: upstreamRequest(url: url, range: "bytes=0-0")
-                    )
-                    guard let response = response as? HTTPURLResponse else {
-                        throw SegmentedDownloadError.invalidProbe
-                    }
-                    return try SegmentedDownloadStore.validateProbe(
-                        response,
-                        bodyCount: body.count
-                    )
-                }
-            } catch {
-                DevLog.event(.proxy, "MP4 probe failed -> 502", [
-                    "video_id": "\(params.videoId)", "err": "\(error)",
-                ])
-                return HTTPResponse(statusCode: .badGateway)
-            }
-            do {
-                try await prepareMP4WithRecovery(
-                    key: key,
-                    etag: probe.etag,
-                    totalByteCount: probe.totalByteCount
-                )
-            } catch {
-                guard let window = boundedWindow(
-                    rangeHeader: request.headers[.range],
-                    total: probe.totalByteCount
-                ) else {
-                    DevLog.event(.proxy, "MP4 range not satisfiable", [
-                        "video_id": "\(params.videoId)",
-                        "range": request.headers[.range] ?? "-",
-                        "total": "\(probe.totalByteCount)",
-                    ])
-                    return HTTPResponse(statusCode: .rangeNotSatisfiable)
-                }
-                DevLog.event(.proxy, "MP4 prepare failed, passing through", [
-                    "video_id": "\(params.videoId)", "err": "\(error)",
-                ])
-                return await passthroughMP4(
-                    window: window,
-                    total: probe.totalByteCount,
-                    url: url
-                ) ?? HTTPResponse(statusCode: .badGateway)
-            }
-            manifest = await cache.ranges.manifest(key: key)
-        }
-        guard var manifest else {
-            return HTTPResponse(statusCode: .badGateway)
-        }
-
-        var total = manifest.totalByteCount
+        let key = MediaKey.key(videoId: params.videoId, versionId: params.versionId)
         let rangeHeader = request.headers[.range]
-        guard var window = boundedWindow(
-            rangeHeader: rangeHeader,
-            total: total
-        ) else {
-            return HTTPResponse(statusCode: .rangeNotSatisfiable)
-        }
 
-        var missing = manifest.ranges.missingRanges(in: window)
-        while !missing.isEmpty {
-            var entityChanged = false
-            for hole in missing {
-                do {
-                    let (body, response) = try await session.data(
-                        for: upstreamRequest(url: url, range: hole.headerValue)
-                    )
-                    guard let response = response as? HTTPURLResponse,
-                          response.statusCode == 206
-                    else {
-                        throw APIError.badStatus(
-                            (response as? HTTPURLResponse)?.statusCode ?? 0
-                        )
-                    }
-                    guard let responseETag = response.value(forHTTPHeaderField: "ETag") else {
-                        throw SegmentedDownloadError.changedEntity
-                    }
-                    if responseETag != manifest.etag {
-                        guard let contentRange = response.value(
-                            forHTTPHeaderField: "Content-Range"
-                        ).flatMap(parseContentRange),
-                            contentRange.range.start == hole.start,
-                            contentRange.range.end
-                                == hole.start + Int64(body.count) - 1,
-                            let replacementWindow = boundedWindow(
-                                rangeHeader: rangeHeader,
-                                total: contentRange.total
-                            )
-                        else {
-                            throw SegmentedDownloadError.changedEntity
-                        }
-                        // The file changed underneath an in-flight playback —
-                        // the server re-encoded or re-promoted it. Everything
-                        // cached for this key is now wrong.
-                        DevLog.event(.proxy, "MP4 entity changed mid-stream", [
-                            "video_id": "\(params.videoId)",
-                            "old_etag": manifest.etag,
-                            "new_etag": responseETag,
-                            "old_total": "\(manifest.totalByteCount)",
-                            "new_total": "\(contentRange.total)",
-                        ])
-                        total = contentRange.total
-                        window = replacementWindow
-                        try await prepareMP4WithRecovery(
-                            key: key,
-                            etag: responseETag,
-                            totalByteCount: total
-                        )
-                        guard let refreshed = await cache.ranges.manifest(key: key) else {
-                            throw SegmentedDownloadError.changedEntity
-                        }
-                        manifest = refreshed
-                        missing = [window]
-                        entityChanged = true
-                        break
-                    }
-                    let committed = try await writeMP4WithRecovery(
-                        key: key,
-                        offset: hole.start,
-                        data: body,
-                        manifest: manifest
-                    )
-                    guard committed else {
-                        guard
-                            let refreshed = await cache.ranges.manifest(key: key),
-                            let refreshedWindow = boundedWindow(
-                                rangeHeader: rangeHeader,
-                                total: refreshed.totalByteCount
-                            )
-                        else {
-                            throw SegmentedDownloadError.changedEntity
-                        }
-                        manifest = refreshed
-                        total = refreshed.totalByteCount
-                        window = refreshedWindow
-                        missing = refreshed.ranges.missingRanges(in: refreshedWindow)
-                        entityChanged = true
-                        break
-                    }
-                    cache.touchAndEnforce(entryDir: cache.ranges.entryDir(key: key))
-                } catch {
-                    DevLog.event(.proxy, "MP4 hole fetch failed, passing through", [
-                        "video_id": "\(params.videoId)",
-                        "hole": "\(hole.start)-\(hole.end)",
-                        "err": "\(error)",
-                    ])
-                    return await passthroughMP4(window: window, total: total, url: url)
-                        ?? HTTPResponse(statusCode: .badGateway)
-                }
-            }
-            if !entityChanged {
-                missing = []
-            }
+        if let response = finishedFileResponse(key: key, rangeHeader: rangeHeader) {
+            return response
         }
+        guard let url = upstreamURL(path: "videos/\(params.videoId)/stream", versionId: params.versionId) else {
+            return HTTPResponse(statusCode: .badGateway)
+        }
+        let upstream = UpstreamRequests(url: url, credentials: credentials)
 
+        let resolved: (identity: MediaIdentity, generation: Int?)
         do {
-            guard let data = try await cache.ranges.read(key: key, range: window) else {
-                // The bytes were there a moment ago (the holes were just
-                // filled) and now are not — an eviction between write and read
-                // is the shape to look for here.
-                DevLog.event(.proxy, "MP4 cache read empty, passing through", [
-                    "video_id": "\(params.videoId)",
-                    "window": "\(window.start)-\(window.end)",
-                ])
-                return await passthroughMP4(window: window, total: total, url: url)
-                    ?? HTTPResponse(statusCode: .badGateway)
-            }
-            cache.touchAndEnforce(entryDir: cache.ranges.entryDir(key: key))
-            return partialResponse(data: data, window: window, total: total)
+            resolved = try await resolveIdentity(key: key, upstream: upstream)
         } catch {
-            DevLog.event(.proxy, "MP4 cache read failed, passing through", [
-                "video_id": "\(params.videoId)",
-                "window": "\(window.start)-\(window.end)",
-                "err": "\(error)",
+            DevLog.event(.proxy, "MP4 probe failed -> 502", [
+                "video_id": "\(params.videoId)", "err": "\(error)",
             ])
-            return await passthroughMP4(window: window, total: total, url: url)
-                ?? HTTPResponse(statusCode: .badGateway)
+            return HTTPResponse(statusCode: .badGateway)
         }
-    }
-
-    private func prepareMP4WithRecovery(
-        key: String,
-        etag: String,
-        totalByteCount: Int64
-    ) async throws {
-        do {
-            try await cache.ranges.prepare(
-                key: key,
-                etag: etag,
-                totalByteCount: totalByteCount
+        let total = resolved.identity.totalByteCount
+        guard let window = Self.window(rangeHeader: rangeHeader, total: total) else {
+            return unsatisfiable(total: total)
+        }
+        let reader: ProxyReadSession
+        if let generation = resolved.generation {
+            await store.beginRead(key: key)
+            reader = ProxyReadSession(
+                store: store, key: key, identity: resolved.identity, generation: generation,
+                window: window, upstream: upstream, session: session, tuning: tuning
             )
-        } catch {
-            let entry = cache.ranges.entryDir(key: key)
-            DevLog.event(.cache, "MP4 prepare failed, evicting and retrying", [
-                "key": key, "err": "\(error)",
-            ])
-            await cache.evictForStorageFailure(failedEntry: entry)
-            _ = try await cache.ranges.prepareForWriteRetry(
-                key: key,
-                expectedETag: etag,
-                expectedTotalByteCount: totalByteCount
+        } else {
+            DevLog.event(.proxy, "MP4 store unavailable, passing through", ["video_id": "\(params.videoId)"])
+            reader = ProxyReadSession(
+                passthroughOf: window, key: key, identity: resolved.identity,
+                upstream: upstream, session: session, tuning: tuning
             )
         }
-    }
-
-    private func writeMP4WithRecovery(
-        key: String,
-        offset: Int64,
-        data: Data,
-        manifest: RangeStoreManifest
-    ) async throws -> Bool {
-        do {
-            return try await cache.ranges.write(
-                key: key,
-                at: offset,
-                data: data,
-                expectedETag: manifest.etag,
-                expectedTotalByteCount: manifest.totalByteCount
-            )
-        } catch {
-            let entry = cache.ranges.entryDir(key: key)
-            DevLog.event(.cache, "MP4 write failed, evicting and retrying", [
-                "key": key, "offset": "\(offset)", "bytes": "\(data.count)",
-                "err": "\(error)",
-            ])
-            await cache.evictForStorageFailure(failedEntry: entry)
-            guard try await cache.ranges.prepareForWriteRetry(
-                key: key,
-                expectedETag: manifest.etag,
-                expectedTotalByteCount: manifest.totalByteCount
-            ) else {
-                return false
-            }
-            return try await cache.ranges.write(
-                key: key,
-                at: offset,
-                data: data,
-                expectedETag: manifest.etag,
-                expectedTotalByteCount: manifest.totalByteCount
-            )
-        }
-    }
-
-    private func passthroughMP4(
-        window: DownloadByteRange,
-        total: Int64,
-        url: URL
-    ) async -> HTTPResponse? {
-        guard let (data, response) = try? await session.data(
-            for: upstreamRequest(url: url, range: window.headerValue)
-        ), (response as? HTTPURLResponse)?.statusCode == 206 else {
-            return nil
-        }
-        return partialResponse(data: data, window: window, total: total)
-    }
-
-    private func partialResponse(
-        data: Data,
-        window: DownloadByteRange,
-        total: Int64
-    ) -> HTTPResponse {
-        HTTPResponse(
+        return HTTPResponse(
             statusCode: .partialContent,
-            headers: [
-                .contentType: "video/mp4",
-                .contentRange: "bytes \(window.start)-\(window.end)/\(total)",
-                .acceptRanges: "bytes",
-            ],
-            body: data
+            headers: Self.partialHeaders(window, total: total),
+            body: HTTPBodySequence(
+                from: ProxyBody(reader: reader),
+                count: Int(window.length),
+                suggestedBufferSize: tuning.readSize
+            )
         )
     }
 
-    private func parseRange(_ header: String?, total: Int64) -> DownloadByteRange? {
+    /// A nil generation means the store could not make room for the entry.
+    private func resolveIdentity(
+        key: String,
+        upstream: UpstreamRequests
+    ) async throws -> (identity: MediaIdentity, generation: Int?) {
+        if let known = await store.verifiedIdentity(key: key) {
+            return (known.identity, known.generation)
+        }
+        let session = session
+        let identity = try await probeSingleFlight.run(key: key) {
+            try await IdentityProbe.fetch(upstream.probe(), session: session)
+        }
+        do {
+            return (identity, try await store.open(key: key, identity: identity))
+        } catch {
+            guard await store.evictForStorageFailure(excluding: key),
+                  let generation = try? await store.open(key: key, identity: identity)
+            else { return (identity, nil) }
+            return (identity, generation)
+        }
+    }
+
+    private func finishedFileResponse(key: String, rangeHeader: String?) -> HTTPResponse? {
+        let url = store.finishedURL(key: key)
+        guard let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?
+            .int64Value, size > 0
+        else { return nil }
+        guard let window = Self.window(rangeHeader: rangeHeader, total: size) else {
+            return unsatisfiable(total: size)
+        }
+        guard let body = try? HTTPBodySequence(
+            file: url,
+            range: Int(window.start)..<Int(window.end + 1),
+            suggestedBufferSize: tuning.readSize
+        ) else { return nil }
+        return HTTPResponse(statusCode: .partialContent, headers: Self.partialHeaders(window, total: size), body: body)
+    }
+
+    private func unsatisfiable(total: Int64) -> HTTPResponse {
+        HTTPResponse(statusCode: .rangeNotSatisfiable, headers: [.contentRange: "bytes */\(total)"])
+    }
+
+    private static func partialHeaders(_ window: DownloadByteRange, total: Int64) -> HTTPHeaders {
+        [
+            .contentType: "video/mp4",
+            .contentRange: "bytes \(window.start)-\(window.end)/\(total)",
+            .acceptRanges: "bytes",
+        ]
+    }
+
+    /// The requested range clamped to the file, **never capped**: AVPlayer
+    /// asks for the whole file and fails the item on anything shorter.
+    static func window(rangeHeader: String?, total: Int64) -> DownloadByteRange? {
+        let requested = parseRange(rangeHeader, total: total) ?? DownloadByteRange(start: 0, end: total - 1)
+        guard requested.start >= 0, requested.start < total else { return nil }
+        return DownloadByteRange(start: requested.start, end: min(requested.end, total - 1))
+    }
+
+    private static func parseRange(_ header: String?, total: Int64) -> DownloadByteRange? {
         guard let header, header.hasPrefix("bytes=") else { return nil }
-        let spec = header.dropFirst("bytes=".count)
-        let parts = spec.split(
-            separator: "-",
-            maxSplits: 1,
-            omittingEmptySubsequences: false
-        )
+        let parts = header.dropFirst("bytes=".count)
+            .split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2 else { return nil }
         if parts[0].isEmpty, let suffix = Int64(parts[1]), suffix > 0 {
             return DownloadByteRange(start: max(0, total - suffix), end: total - 1)
@@ -543,54 +368,8 @@ public final class StreamProxy: @unchecked Sendable {
         guard end >= start else { return nil }
         return DownloadByteRange(start: start, end: min(end, total - 1))
     }
-
-    private struct ParsedContentRange {
-        let range: DownloadByteRange
-        let total: Int64
-    }
-
-    private func parseContentRange(_ value: String) -> ParsedContentRange? {
-        guard value.hasPrefix("bytes "),
-              let slash = value.firstIndex(of: "/"),
-              let total = Int64(value[value.index(after: slash)...]),
-              total > 0
-        else {
-            return nil
-        }
-        let interval = value[value.index(value.startIndex, offsetBy: 6)..<slash]
-        let bounds = interval.split(separator: "-", maxSplits: 1)
-        guard bounds.count == 2,
-              let start = Int64(bounds[0]),
-              let end = Int64(bounds[1]),
-              start >= 0,
-              end >= start,
-              end < total
-        else {
-            return nil
-        }
-        return ParsedContentRange(
-            range: DownloadByteRange(start: start, end: end),
-            total: total
-        )
-    }
-
-    private func boundedWindow(
-        rangeHeader: String?,
-        total: Int64
-    ) -> DownloadByteRange? {
-        let requested = parseRange(rangeHeader, total: total)
-            ?? DownloadByteRange(start: 0, end: total - 1)
-        guard requested.start >= 0, requested.start < total else { return nil }
-        return DownloadByteRange(
-            start: requested.start,
-            end: min(
-                requested.end,
-                min(requested.start + Self.mp4Window - 1, total - 1)
-            )
-        )
-    }
-
 }
+
 
 /// Deduplicates concurrent identical upstream fetches.
 actor SingleFlight<Value: Sendable> {

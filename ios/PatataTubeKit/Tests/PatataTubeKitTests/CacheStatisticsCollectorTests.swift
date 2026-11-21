@@ -36,7 +36,7 @@ final class CacheStatisticsCollectorTests: XCTestCase {
         try write(videos.appendingPathComponent("download-completions.json"))
         try write(videos.appendingPathComponent("mystery.dat"))
 
-        try write(stream.appendingPathComponent("mp4/3:9/data.bin"))
+        try write(stream.appendingPathComponent("3:9/data.bin"))
 
         try write(lists.appendingPathComponent("all.json"))
         try write(lists.appendingPathComponent("children.json"))
@@ -154,7 +154,7 @@ final class CacheStatisticsCollectorTests: XCTestCase {
         )
         let stats = await collector.collect()
         let proxyTotal = stat(stats, "proxy.total")
-        XCTAssertEqual(proxyTotal.budgetBytes, StreamCache.defaultBudgetBytes)
+        XCTAssertEqual(proxyTotal.budgetBytes, MediaStore.defaultBudgetBytes)
         XCTAssertEqual(
             proxyTotal.byteCount,
             stat(stats, "proxy.mp4").byteCount
@@ -164,4 +164,23 @@ final class CacheStatisticsCollectorTests: XCTestCase {
             stat(stats, "proxy.mp4").itemCount
         )
     }
+
+    func testTheStoreInsideTheVideosRootIsNotCountedTwice() async throws {
+        let videos = makeRoot()
+        let lists = makeRoot()
+        let tmp = makeRoot()
+        defer { [videos, lists, tmp].forEach { try? fileManager.removeItem(at: $0) } }
+        try write(videos.appendingPathComponent(".store/3/data.bin"))
+        let collector = CacheStatisticsCollector(
+            videosRoot: videos,
+            streamRoot: videos.appendingPathComponent(".store", isDirectory: true),
+            videoListRoot: lists,
+            tmpRoot: tmp
+        )
+        let stats = await collector.collect()
+        XCTAssertEqual(stat(stats, "proxy.mp4").byteCount, Int64(blockSize))
+        XCTAssertEqual(stat(stats, "other").byteCount, 0)
+        XCTAssertEqual(stat(stats, "total").byteCount, Int64(blockSize))
+    }
 }
+

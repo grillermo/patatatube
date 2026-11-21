@@ -70,7 +70,7 @@ public actor CacheStatisticsCollector {
         videoListRoot: URL,
         tmpRoot: URL = FileManager.default.temporaryDirectory,
         fileManager: FileManager = .default,
-        proxyBudgetBytes: Int64 = StreamCache.defaultBudgetBytes
+        proxyBudgetBytes: Int64 = MediaStore.defaultBudgetBytes
     ) {
         self.videosRoot = videosRoot
         self.streamRoot = streamRoot
@@ -81,14 +81,14 @@ public actor CacheStatisticsCollector {
     }
 
     public func collect() -> [CacheStat] {
-        let proxyMP4 = scanProxyRoot(streamRoot.appendingPathComponent("mp4", isDirectory: true))
+        let proxyMP4 = scanProxyRoot(streamRoot)
         let videos = scanVideosRoot()
         let lists = scanFlatDirectory(videoListRoot, matchingExtension: "json")
         let staging = scanStagingRoot()
 
         var stats: [CacheStat] = [
             CacheStat(
-                id: "proxy.mp4", label: "Proxy — MP4 ranges",
+                id: "proxy.mp4", label: "Streamed & partial downloads",
                 byteCount: proxyMP4.byteCount, itemCount: proxyMP4.itemCount, budgetBytes: nil
             ),
             CacheStat(
@@ -161,6 +161,7 @@ public actor CacheStatisticsCollector {
         )) ?? []
 
         for entry in entries {
+            if entry.lastPathComponent == ".store" { continue }
             let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             let bytes = recursiveSize(of: entry)
 
