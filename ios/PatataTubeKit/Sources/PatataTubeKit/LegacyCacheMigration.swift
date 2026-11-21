@@ -30,7 +30,10 @@ enum LegacyCacheMigration {
             let finished = videosRoot.appendingPathComponent(MediaKey.finishedFilename(key))
             guard !fm.fileExists(atPath: finished.path),
                   MediaStore.readManifest(storeRoot: storeRoot, key: key) == nil
-            else { continue }
+            else {
+                legacy.remove(key)  // nothing left to convert for this one
+                continue
+            }
             let manifest = MediaEntryManifest(
                 key: key,
                 identity: nil,
@@ -47,10 +50,11 @@ enum LegacyCacheMigration {
                 ),
                 lastAccess: now
             )
+            // A failed write keeps its legacy entry, so the next launch retries.
             guard (try? MediaStore.writeManifest(manifest, storeRoot: storeRoot)) != nil else { continue }
+            legacy.remove(key)
             converted.append(key)
         }
-        legacy.removeAll()
         DevLog.event(.download, "legacy paused downloads carried over", [
             "keys": converted.joined(separator: ","),
         ])

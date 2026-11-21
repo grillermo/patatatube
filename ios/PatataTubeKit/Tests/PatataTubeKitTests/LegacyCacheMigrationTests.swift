@@ -67,4 +67,20 @@ struct LegacyCacheMigrationTests {
         #expect(LegacyCacheMigration.run(videosRoot: videos, legacyStreamRoot: nil, now: Date()).isEmpty)
         #expect(MediaStore.loadManifests(storeRoot: MediaStore.storeRoot(videosRoot: videos)).count == 1)
     }
+
+    @Test func keepsALegacyEntryWhoseManifestCouldNotBeWritten() throws {
+        let videos = temporaryVideosRoot("migrate")
+        var legacy = PausedDownloadStore(root: videos)
+        legacy.insert(paused(5, url: "https://srv.test/videos/5/stream"))
+        legacy.insert(paused(6, url: "https://srv.test/videos/6/stream"))
+        // A plain file where entry 5's directory belongs makes its write fail.
+        let storeRoot = MediaStore.storeRoot(videosRoot: videos)
+        try FileManager.default.createDirectory(at: storeRoot, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: storeRoot.appendingPathComponent("5"))
+
+        let converted = LegacyCacheMigration.run(videosRoot: videos, legacyStreamRoot: nil, now: Date())
+
+        #expect(converted == ["6"])
+        #expect(PausedDownloadStore(root: videos).entries.map(\.id) == ["5"])
+    }
 }
