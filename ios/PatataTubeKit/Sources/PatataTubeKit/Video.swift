@@ -18,7 +18,6 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// Always nil from the current server; kept because the offline cache and
     /// the stream proxy still key files on it (`versionId` plumbing).
     public let chosenVersionId: Int?
-    public let hlsPath: String?
     public let resumeSecs: Double
     /// Announced by the server and never played: what the red dot marks. The
     /// server decides (it is the same rule its group badge counts); the app
@@ -28,7 +27,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, url, title, platform, sourceKey, channel, previewUrl, position
         case groupID = "groupId"
-        case status, errorMsg, streamPath, chosenVersionId, hlsPath
+        case status, errorMsg, streamPath, chosenVersionId
         case resumeSecs
         case unwatched
     }
@@ -41,7 +40,6 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
                 sourceKey: String?, previewUrl: String?, groupID: Int?,
                 position: Int?, status: String, errorMsg: String?, streamPath: String,
                 chosenVersionId: Int? = nil,
-                hlsPath: String? = nil,
                 resumeSecs: Double = 0,
                 channel: String? = nil,
                 unwatched: Bool = false) {
@@ -50,7 +48,6 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.groupID = groupID; self.position = position
         self.status = status; self.errorMsg = errorMsg; self.streamPath = streamPath
         self.chosenVersionId = chosenVersionId
-        self.hlsPath = hlsPath
         self.resumeSecs = resumeSecs
         self.channel = channel
         self.unwatched = unwatched
@@ -72,7 +69,6 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.errorMsg = try c.decodeIfPresent(String.self, forKey: .errorMsg)
         self.streamPath = try c.decodeIfPresent(String.self, forKey: .streamPath) ?? ""
         self.chosenVersionId = try c.decodeIfPresent(Int.self, forKey: .chosenVersionId)
-        self.hlsPath = try c.decodeIfPresent(String.self, forKey: .hlsPath)
         self.resumeSecs = try c.decodeIfPresent(Double.self, forKey: .resumeSecs) ?? 0
         self.channel = try c.decodeIfPresent(String.self, forKey: .channel)
         // Absent from lists cached before the field existed.
@@ -89,7 +85,7 @@ public struct Video: Codable, Identifiable, Equatable, Hashable, Sendable {
         Video(id: id, url: url, title: title, platform: platform, sourceKey: sourceKey,
               previewUrl: previewUrl, groupID: groupID, position: position,
               status: status, errorMsg: errorMsg, streamPath: streamPath,
-              chosenVersionId: chosenVersionId, hlsPath: hlsPath,
+              chosenVersionId: chosenVersionId,
               resumeSecs: resumeSecs, channel: channel, unwatched: unwatched)
     }
 }

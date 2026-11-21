@@ -85,7 +85,7 @@ struct APIClientTests {
             #expect(try await makeClient(token: nil).groups().isEmpty)
         }
 
-        @Test func decodesHlsMetadata() async throws {
+        @Test func ignoresALegacyHlsPathField() async throws {
             MockURLProtocol.handler = { req in
                 let body = """
                 [{"id":1,"url":"u","title":"t","platform":null,"source_key":null,
@@ -96,20 +96,9 @@ struct APIClientTests {
                 return (jsonResponse(req.url!), body)
             }
             let videos = try await makeClient().videos(feed: .all)
-            #expect(videos[0].hlsPath == "/videos/1/hls/master.m3u8")
-        }
-
-        @Test func decodesVideoWithoutHlsFields() async throws {
-            MockURLProtocol.handler = { req in
-                let body = """
-                [{"id":2,"url":"u","title":null,"platform":null,"source_key":null,
-                  "preview_url":null,"group_id":1,"position":1,
-                  "status":"done","error_msg":null,"stream_path":"/videos/2/stream"}]
-                """.data(using: .utf8)!
-                return (jsonResponse(req.url!), body)
-            }
-            let videos = try await makeClient().videos(feed: .all)
-            #expect(videos[0].hlsPath == nil)
+            // A 2.8-era server still sends hls_path; decoding ignores it.
+            #expect(videos.count == 1)
+            #expect(videos[0].streamPath == "/videos/1/stream")
         }
 
         @Test func throwsOnBadStatus() async {

@@ -22,7 +22,6 @@ private final class SpyAPI: VideoAPI, @unchecked Sendable {
     func delete(id: Int) async throws -> Bool { true }
     func video(id: Int) async throws -> Video { throw APIError.notConfigured }
     func imageData(path: String) async throws -> Data { Data() }
-    func jobs() async throws -> JobsSnapshot { .empty }
 }
 
 private final class TestClock: @unchecked Sendable {
@@ -96,7 +95,6 @@ private final class ControlledSpyAPI: VideoAPI, @unchecked Sendable {
     func delete(id: Int) async throws -> Bool { true }
     func video(id: Int) async throws -> Video { throw APIError.notConfigured }
     func imageData(path: String) async throws -> Data { Data() }
-    func jobs() async throws -> JobsSnapshot { .empty }
 }
 
 private final class DestinationControlledAPI: VideoAPI, @unchecked Sendable {
@@ -167,7 +165,6 @@ private final class DestinationControlledAPI: VideoAPI, @unchecked Sendable {
     func delete(id: Int) async throws -> Bool { true }
     func video(id: Int) async throws -> Video { throw APIError.notConfigured }
     func imageData(path: String) async throws -> Data { Data() }
-    func jobs() async throws -> JobsSnapshot { .empty }
 }
 
 final class PlaybackPositionReporterTests: XCTestCase {

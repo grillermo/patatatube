@@ -71,9 +71,9 @@ extension APIClientTests {
             MockURLProtocol.handler = { req in
                 hosts.append(req.url!.host!)
                 if req.url!.host == "192.168.1.1" { throw URLError(.cannotConnectToHost) }
-                return (jsonResponse(req.url!), #"{"running":[],"queued":[],"queued_total":0}"#.data(using: .utf8)!)
+                return (jsonResponse(req.url!), "[]".data(using: .utf8)!)
             }
-            _ = try await APIClient(store: store, session: mockSession()).jobs()
+            _ = try await APIClient(store: store, session: mockSession()).groups()
             #expect(hosts == ["192.168.1.1", "srv.test"])
             #expect(store.route == .remote)
         }
