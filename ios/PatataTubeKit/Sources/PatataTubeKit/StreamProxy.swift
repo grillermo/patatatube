@@ -259,33 +259,49 @@ public final class StreamProxy: @unchecked Sendable {
         }
         let upstream = UpstreamRequests(url: url, credentials: credentials)
 
-        let resolved: (identity: MediaIdentity, generation: Int?)
-        do {
-            resolved = try await resolveIdentity(key: key, upstream: upstream)
-        } catch {
-            DevLog.event(.proxy, "MP4 probe failed -> 502", [
-                "video_id": "\(params.videoId)", "err": "\(error)",
-            ])
-            return HTTPResponse(statusCode: .badGateway)
-        }
-        let total = resolved.identity.totalByteCount
-        guard let window = Self.window(rangeHeader: rangeHeader, total: total) else {
-            return unsatisfiable(total: total)
-        }
-        let reader: ProxyReadSession
-        if let generation = resolved.generation {
-            await store.beginRead(key: key)
-            reader = ProxyReadSession(
-                store: store, key: key, identity: resolved.identity, generation: generation,
-                window: window, upstream: upstream, session: session, tuning: tuning
-            )
-        } else {
+        // The entry can be evicted between `open` and `beginRead`; a read is
+        // only held when `beginRead` says so, and then the whole resolve is
+        // tried once more.
+        var reader: ProxyReadSession?
+        var window = DownloadByteRange(start: 0, end: 0)
+        var total: Int64 = 0
+        for attempt in 0..<2 {
+            let resolved: (identity: MediaIdentity, generation: Int?)
+            do {
+                resolved = try await resolveIdentity(key: key, upstream: upstream)
+            } catch {
+                DevLog.event(.proxy, "MP4 probe failed -> 502", [
+                    "video_id": "\(params.videoId)", "err": "\(error)",
+                ])
+                return HTTPResponse(statusCode: .badGateway)
+            }
+            total = resolved.identity.totalByteCount
+            guard let resolvedWindow = Self.window(rangeHeader: rangeHeader, total: total) else {
+                return unsatisfiable(total: total)
+            }
+            window = resolvedWindow
+            if let generation = resolved.generation {
+                if await store.beginRead(key: key, generation: generation) {
+                    reader = ProxyReadSession(
+                        store: store, key: key, identity: resolved.identity, generation: generation,
+                        window: window, upstream: upstream, session: session, tuning: tuning
+                    )
+                    break
+                }
+                DevLog.event(.proxy, "MP4 entry vanished before read began", [
+                    "video_id": "\(params.videoId)", "attempt": "\(attempt)",
+                ])
+                await store.invalidate(key: key)
+                if attempt == 0 { continue }
+            }
             DevLog.event(.proxy, "MP4 store unavailable, passing through", ["video_id": "\(params.videoId)"])
             reader = ProxyReadSession(
                 passthroughOf: window, key: key, identity: resolved.identity,
                 upstream: upstream, session: session, tuning: tuning
             )
+            break
         }
+        guard let reader else { return HTTPResponse(statusCode: .badGateway) }
         return HTTPResponse(
             statusCode: .partialContent,
             headers: Self.partialHeaders(window, total: total),
@@ -306,8 +322,17 @@ public final class StreamProxy: @unchecked Sendable {
             return (known.identity, known.generation)
         }
         let session = session
-        let identity = try await probeSingleFlight.run(key: key) {
-            try await IdentityProbe.fetch(upstream.probe(), session: session)
+        let identity: MediaIdentity
+        do {
+            identity = try await probeSingleFlight.run(key: key) {
+                try await IdentityProbe.fetch(upstream.probe(), session: session)
+            }
+        } catch let error as URLError where error.code != .cancelled {
+            // Offline: committed bytes of a partial entry still play. A hole
+            // makes the reader's own fetch fail, which ends the response.
+            guard let stored = await store.storedIdentity(key: key) else { throw error }
+            DevLog.event(.proxy, "probe failed, serving stored entry", ["key": key, "err": "\(error.code.rawValue)"])
+            return (stored.identity, stored.generation)
         }
         do {
             return (identity, try await store.open(key: key, identity: identity))
@@ -348,28 +373,43 @@ public final class StreamProxy: @unchecked Sendable {
     }
 
     /// The requested range clamped to the file, **never capped**: AVPlayer
-    /// asks for the whole file and fails the item on anything shorter.
+    /// asks for the whole file and fails the item on anything shorter. A
+    /// header that does not parse is ignored (whole file); one that parses but
+    /// starts past the end is unsatisfiable (nil).
     static func window(rangeHeader: String?, total: Int64) -> DownloadByteRange? {
-        let requested = parseRange(rangeHeader, total: total) ?? DownloadByteRange(start: 0, end: total - 1)
-        guard requested.start >= 0, requested.start < total else { return nil }
-        return DownloadByteRange(start: requested.start, end: min(requested.end, total - 1))
+        switch parseRange(rangeHeader, total: total) {
+        case .ignore: return DownloadByteRange(start: 0, end: total - 1)
+        case .unsatisfiable: return nil
+        case .range(let range): return range
+        }
     }
 
-    private static func parseRange(_ header: String?, total: Int64) -> DownloadByteRange? {
-        guard let header, header.hasPrefix("bytes=") else { return nil }
+    private enum ParsedRange {
+        case ignore
+        case unsatisfiable
+        case range(DownloadByteRange)
+    }
+
+    private static func parseRange(_ header: String?, total: Int64) -> ParsedRange {
+        guard let header, header.hasPrefix("bytes=") else { return .ignore }
         let parts = header.dropFirst("bytes=".count)
             .split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
-        guard parts.count == 2 else { return nil }
-        if parts[0].isEmpty, let suffix = Int64(parts[1]), suffix > 0 {
-            return DownloadByteRange(start: max(0, total - suffix), end: total - 1)
+        guard parts.count == 2 else { return .ignore }
+        if parts[0].isEmpty {
+            guard let suffix = Int64(parts[1]), suffix >= 0 else { return .ignore }
+            guard suffix > 0 else { return .unsatisfiable }
+            return .range(DownloadByteRange(start: max(0, total - suffix), end: total - 1))
         }
-        guard let start = Int64(parts[0]) else { return nil }
-        let end = Int64(parts[1]) ?? (total - 1)
-        guard end >= start else { return nil }
-        return DownloadByteRange(start: start, end: min(end, total - 1))
+        guard let start = Int64(parts[0]), start >= 0 else { return .ignore }
+        var end = total - 1
+        if !parts[1].isEmpty {
+            guard let requested = Int64(parts[1]), requested >= start else { return .ignore }
+            end = min(requested, total - 1)
+        }
+        guard start < total else { return .unsatisfiable }
+        return .range(DownloadByteRange(start: start, end: end))
     }
 }
-
 
 /// Deduplicates concurrent identical upstream fetches.
 actor SingleFlight<Value: Sendable> {

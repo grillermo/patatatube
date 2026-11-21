@@ -586,10 +586,25 @@ public actor MediaStore {
 extension MediaStore {
     /// An open proxy response started reading `key`. While any are open the
     /// entry is never evicted, and a discard waits for the last one.
-    func beginRead(key: String) {
-        guard let entry = entry(key) else { return }
+    /// False when the entry is gone, or is no longer the one `generation`
+    /// names (evicted and re-created since the caller opened it). Only a
+    /// `true` answer may be balanced by `endRead`.
+    @discardableResult
+    func beginRead(key: String, generation: Int? = nil) -> Bool {
+        guard let entry = entry(key) else { return false }
+        if let generation, entry.generation != generation { return false }
         entry.readers += 1
         entry.manifest.lastAccess = now()
+        return true
+    }
+
+    /// The identity and generation of a partial entry on disk, verified or
+    /// not: what offline playback of committed bytes falls back on.
+    func storedIdentity(key: String) -> (identity: MediaIdentity, generation: Int)? {
+        guard let entry = entry(key), !entry.promoted, let identity = entry.manifest.identity else {
+            return nil
+        }
+        return (identity, entry.generation)
     }
 
     func endRead(key: String) {
@@ -684,7 +699,7 @@ extension MediaStore {
             "total": "\(total)", "budget": "\(budgetBytes)", "entries": "\(unpinned.count)",
         ])
         let candidates = unpinned
-            .filter { $0.value.readers == 0 && $0.value.claims.isEmpty }
+            .filter { $0.value.readers == 0 && $0.value.claims.isEmpty && $0.value.manifest.committed.totalBytes > 0 }
             .sorted { $0.value.manifest.lastAccess < $1.value.manifest.lastAccess }
         for (key, entry) in candidates {
             guard total > budgetBytes else { break }

@@ -68,13 +68,15 @@ final class ProxyReadSession: @unchecked Sendable {
     private var handle: FileHandle?
     private var passthrough: DataTaskStream?
     private var passthroughOnly: Bool
+    private let holdsRead: Bool
 
     private let lock = NSLock()
     private var fetcherTask: Task<Void, Never>?
     private var limiter: ReadAheadLimiter?
     private var fetcherResult: Result<FetchOutcome, Error>?
 
-    /// The caller has already called `store.beginRead(key:)`.
+    /// The caller has already had `store.beginRead(key:generation:)` answer
+    /// true; only then is `endRead` balanced in `deinit`.
     init(store: MediaStore, key: String, identity: MediaIdentity, generation: Int,
          window: DownloadByteRange, upstream: UpstreamRequests, session: URLSession,
          tuning: StreamProxy.Tuning) {
@@ -88,6 +90,7 @@ final class ProxyReadSession: @unchecked Sendable {
         self.tuning = tuning
         self.position = window.start
         self.passthroughOnly = false
+        self.holdsRead = true
     }
 
     /// No room in the store even after evicting: stream without keeping.
@@ -103,6 +106,7 @@ final class ProxyReadSession: @unchecked Sendable {
         self.tuning = tuning
         self.position = window.start
         self.passthroughOnly = true
+        self.holdsRead = false
     }
 
     deinit {
@@ -111,7 +115,7 @@ final class ProxyReadSession: @unchecked Sendable {
         limiter?.cancel()
         passthrough?.cancel()
         try? handle?.close()
-        if let store {
+        if let store, holdsRead {
             let key = key
             Task { await store.endRead(key: key) }
         }
@@ -180,9 +184,15 @@ final class ProxyReadSession: @unchecked Sendable {
                 passthroughOnly = true
                 return true
             }
-            if case .entityChanged(let changed)? = error as? RangeFetchError, let changed {
-                // Reset now, so the next request starts on the new file.
-                _ = try? await store.open(key: key, identity: changed)
+            if case .entityChanged(let changed)? = error as? RangeFetchError {
+                if let changed {
+                    // Reset now, so the next request starts on the new file.
+                    _ = try? await store.open(key: key, identity: changed)
+                } else {
+                    // A 200 to If-Range names no new identity: forget the
+                    // stale one so the next request probes again.
+                    await store.invalidate(key: key)
+                }
             }
             throw error
         }

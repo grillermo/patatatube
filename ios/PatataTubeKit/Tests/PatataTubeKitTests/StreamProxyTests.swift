@@ -232,6 +232,104 @@ final class StreamProxyTests: XCTestCase {
         await playing.stop()
     }
 
+    // MARK: - Range parsing
+
+    func testRangeHeadersAreInterpretedPerRFC() {
+        func window(_ header: String?) -> DownloadByteRange? { StreamProxy.window(rangeHeader: header, total: 1000) }
+        XCTAssertNil(window("bytes=2000-"))
+        XCTAssertNil(window("bytes=1000-"))
+        XCTAssertNil(window("bytes=-0"))
+        XCTAssertEqual(window("bytes=-500"), DownloadByteRange(start: 500, end: 999))
+        XCTAssertEqual(window("bytes=-5000"), DownloadByteRange(start: 0, end: 999))
+        XCTAssertEqual(window("bytes=100-"), DownloadByteRange(start: 100, end: 999))
+        XCTAssertEqual(window("bytes=100-5000"), DownloadByteRange(start: 100, end: 999))
+        XCTAssertEqual(window(nil), DownloadByteRange(start: 0, end: 999))
+        XCTAssertEqual(window("bytes=0-1,5-6"), DownloadByteRange(start: 0, end: 999))
+        XCTAssertEqual(window("bytes=9-3"), DownloadByteRange(start: 0, end: 999))
+    }
+
+    func testAnOpenRangePastTheEndIs416() async throws {
+        let body = sampleBody(1000)
+        MockURLProtocol.stubRanged(path: "/videos/20/stream", fullBody: body, etag: "\"e1\"")
+        let url = try XCTUnwrap(proxy.mp4URL(videoId: 20, versionId: nil))
+        let (_, past) = try await get(url, range: "bytes=2000-")
+        XCTAssertEqual(past.statusCode, 416)
+        let (_, zero) = try await get(url, range: "bytes=-0")
+        XCTAssertEqual(zero.statusCode, 416)
+        let (tail, response) = try await get(url, range: "bytes=-500")
+        XCTAssertEqual(response.value(forHTTPHeaderField: "Content-Range"), "bytes 500-999/1000")
+        XCTAssertEqual(tail, body.subdata(in: 500..<1000))
+        let (all, whole) = try await get(url, range: "bytes=-5000")
+        XCTAssertEqual(whole.value(forHTTPHeaderField: "Content-Range"), "bytes 0-999/1000")
+        XCTAssertEqual(all, body)
+    }
+
+    // MARK: - Reads, changed files, offline
+
+    func testBeginReadRefusesAnEntryThatWasRecreated() async throws {
+        let identity = MediaIdentity(etag: "\"r\"", totalByteCount: 100)
+        let old = try await store.open(key: "21", identity: identity)
+        await store.discard(key: "21")
+        let fresh = try await store.open(key: "21", identity: identity)
+        XCTAssertNotEqual(old, fresh)
+        let staleBegan = await store.beginRead(key: "21", generation: old)
+        XCTAssertFalse(staleBegan)
+        let readers = await store.readers(key: "21")
+        XCTAssertEqual(readers, 0)
+        let freshBegan = await store.beginRead(key: "21", generation: fresh)
+        XCTAssertTrue(freshBegan)
+        await store.endRead(key: "21")
+        let missing = await store.beginRead(key: "nope")
+        XCTAssertFalse(missing)
+    }
+
+    func testA200ToIfRangeForgetsTheVerifiedIdentity() async throws {
+        let body = sampleBody(1000)
+        let changed = ServerChanged()
+        MockURLProtocol.registerCounting(path: "/videos/22/stream") { request in
+            if request.value(forHTTPHeaderField: "Range") != "bytes=0-0", !changed.value {
+                // Server ignores If-Range's mismatch: the whole new file, 200.
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                        headerFields: ["ETag": "\"new\""])!, body)
+            }
+            return try rangedResponse(request: request, fullBody: body, etag: changed.value ? "\"new\"" : "\"old\"")
+        }
+        let url = try XCTUnwrap(proxy.mp4URL(videoId: 22, versionId: nil))
+        do {
+            _ = try await get(url, range: "bytes=0-999")
+            XCTFail("expected the response to end early")
+        } catch {}
+        let verified = await eventually { await self.store.verifiedIdentity(key: "22") == nil }
+        XCTAssertTrue(verified, "stale identity stayed verified")
+        changed.value = true
+        let (data, _) = try await get(url, range: "bytes=0-999")
+        XCTAssertEqual(data, body)
+    }
+
+    func testCommittedBytesPlayOfflineInAFreshProcess() async throws {
+        let body = sampleBody(4000)
+        let identity = MediaIdentity(etag: "\"o\"", totalByteCount: 4000)
+        let generation = try await store.open(key: "23", identity: identity)
+        try await put(store, key: "23", DownloadByteRange(start: 0, end: 1999), generation: generation, from: body)
+        await store.endRead(key: "23")
+        let reopened = MediaStore(videosRoot: root)
+        MockURLProtocol.registerCounting(path: "/videos/23/stream") { _ in throw URLError(.notConnectedToInternet) }
+        let offline = await makeProxy(store: reopened, protocolClass: MockURLProtocol.self)
+        let url = try XCTUnwrap(offline.mp4URL(videoId: 23, versionId: nil))
+
+        let (data, response) = try await get(url, range: "bytes=100-1099")
+        XCTAssertEqual(response.statusCode, 206)
+        XCTAssertEqual(data, body.subdata(in: 100..<1100))
+
+        let started = Date()
+        do {
+            _ = try await get(url, range: "bytes=1500-2999")
+            XCTFail("a range that reaches a hole must fail offline")
+        } catch {}
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        await offline.stop()
+    }
+
     // MARK: - Listener liveness
 
     func testServerExitClearsPortSoURLsGoNil() async throws {
@@ -290,4 +388,13 @@ private func rangedResponse(request: URLRequest, fullBody: Data, etag: String) t
         ])!,
         data
     )
+}
+
+private final class ServerChanged: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+    var value: Bool {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
 }
