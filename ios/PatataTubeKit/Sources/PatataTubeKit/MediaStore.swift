@@ -519,6 +519,7 @@ public actor MediaStore {
         }
         entry.dirtyBytes = 0
         entry.lastFlush = now()
+        if entry.manifest.pin == nil { enforceBudget() }
     }
 
     /// Renames the complete `data.bin` to the finished mp4. Open read handles
@@ -577,5 +578,146 @@ public actor MediaStore {
         versions[key, default: 0] &+= 1
         guard let woken = waiters.removeValue(forKey: key) else { return }
         for continuation in woken.values { continuation.resume() }
+    }
+}
+
+// MARK: - Readers, pins, deletion, eviction
+
+extension MediaStore {
+    /// An open proxy response started reading `key`. While any are open the
+    /// entry is never evicted, and a discard waits for the last one.
+    func beginRead(key: String) {
+        guard let entry = entry(key) else { return }
+        entry.readers += 1
+        entry.manifest.lastAccess = now()
+    }
+
+    func endRead(key: String) {
+        guard let entry = entries[key] else { return }
+        entry.readers = max(entry.readers - 1, 0)
+        guard entry.readers == 0 else { return }
+        if entry.deleteWhenIdle {
+            delete(key)
+        } else if entry.promoted {
+            entries[key] = nil
+        } else {
+            try? flush(key, entry)
+            enforceBudget()
+        }
+    }
+
+    /// A handle on the bytes: `data.bin`, or the mp4 once promoted.
+    func openReadHandle(key: String) -> FileHandle? {
+        guard let entry = entry(key), !entry.promoted else {
+            return try? FileHandle(forReadingFrom: finishedURL(key: key))
+        }
+        return try? FileHandle(forReadingFrom: dataURL(key: key))
+    }
+
+    /// `nil` unpins. Pinning a key that has no entry yet creates an
+    /// identity-less one; the job's probe fills it in through `open`.
+    func setPin(key: String, pin: PinState?) {
+        let existing = entry(key)
+        guard let entry = existing ?? (pin == nil ? nil : try? create(key: key, identity: nil)) else {
+            return
+        }
+        entry.manifest.pin = pin
+        if pin != nil { entry.deleteWhenIdle = false }
+        try? flush(key, entry)
+        bump(key)
+    }
+
+    /// Unpins and deletes the entry, or, while a player response still
+    /// reads it, deletes it when the last one ends, so cancelling a
+    /// download never cuts off what is playing.
+    func discard(key: String) {
+        guard let entry = entry(key) else { return }
+        entry.manifest.pin = nil
+        guard entry.readers == 0 else {
+            entry.deleteWhenIdle = true
+            DevLog.event(.cache, "store entry delete deferred: still read", [
+                "key": key, "readers": "\(entry.readers)",
+            ])
+            return
+        }
+        delete(key)
+    }
+
+    func discardAll(videoId: Int) {
+        loadAll()
+        for key in Array(entries.keys) where MediaKey.videoId(of: key) == videoId {
+            discard(key: key)
+        }
+    }
+
+    func discardAll() {
+        loadAll()
+        for key in Array(entries.keys) { discard(key: key) }
+    }
+
+    func readers(key: String) -> Int {
+        entries[key]?.readers ?? 0
+    }
+
+    /// For a job that finds nothing left to claim. True when the finished mp4
+    /// exists, promoting a complete entry whose earlier rename failed.
+    func promoteIfComplete(key: String) throws -> Bool {
+        if FileManager.default.fileExists(atPath: finishedURL(key: key).path) { return true }
+        guard let entry = entry(key), entry.manifest.isComplete else { return false }
+        if !entry.promoted {
+            try promote(key, entry)
+            bump(key)
+        }
+        return true
+    }
+
+    /// Evicts least recently used **unpinned** partial entries until they fit
+    /// the budget. Pinned entries (downloads), entries being read or fetched,
+    /// and finished mp4s are never touched. Sizes come from the manifests,
+    /// so a sweep never walks the disk.
+    func enforceBudget() {
+        loadAll()
+        let unpinned = entries.filter { $0.value.manifest.pin == nil && !$0.value.promoted }
+        var total = unpinned.values.reduce(Int64(0)) { $0 + $1.manifest.committed.totalBytes }
+        guard total > budgetBytes else { return }
+        DevLog.event(.cache, "store over budget", [
+            "total": "\(total)", "budget": "\(budgetBytes)", "entries": "\(unpinned.count)",
+        ])
+        let candidates = unpinned
+            .filter { $0.value.readers == 0 && $0.value.claims.isEmpty }
+            .sorted { $0.value.manifest.lastAccess < $1.value.manifest.lastAccess }
+        for (key, entry) in candidates {
+            guard total > budgetBytes else { break }
+            total -= entry.manifest.committed.totalBytes
+            delete(key)
+            DevLog.event(.cache, "store evicted", [
+                "key": key, "bytes": "\(entry.manifest.committed.totalBytes)", "remaining": "\(total)",
+            ])
+        }
+    }
+
+    /// Frees one idle unpinned entry other than `excluded` after a write
+    /// failed. False when there is nothing to free.
+    func evictForStorageFailure(excluding excluded: String) -> Bool {
+        loadAll()
+        let victim = entries
+            .filter {
+                $0.key != excluded && $0.value.manifest.pin == nil && !$0.value.promoted
+                    && $0.value.readers == 0 && $0.value.claims.isEmpty
+            }
+            .min { $0.value.manifest.lastAccess < $1.value.manifest.lastAccess }
+        guard let victim else {
+            DevLog.event(.cache, "storage-failure eviction found nothing to free", ["excluded": excluded])
+            return false
+        }
+        delete(victim.key)
+        DevLog.event(.cache, "evicted for storage failure", ["key": victim.key, "excluded": excluded])
+        return true
+    }
+
+    private func delete(_ key: String) {
+        entries[key] = nil
+        try? FileManager.default.removeItem(at: entryDir(key: key))
+        bump(key)
     }
 }
