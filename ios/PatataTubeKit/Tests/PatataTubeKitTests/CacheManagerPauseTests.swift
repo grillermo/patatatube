@@ -14,6 +14,31 @@ private final class RecordingGate: DownloadConcurrencyGating, @unchecked Sendabl
     var counts: (acquires: Int, releases: Int) { lock.withLock { (acquires, releases) } }
 }
 
+/// A real one-slot gate that also counts, so a test can park downloads in the
+/// queue and see whether every permit came back.
+private final class SpyGate: DownloadConcurrencyGating, @unchecked Sendable {
+    private let inner: DownloadConcurrencyGate
+    private let lock = NSLock()
+    private var waitingCount = 0
+    private var granted = 0
+    private var released = 0
+    init(limit: Int) { inner = DownloadConcurrencyGate(limit: limit) }
+    func acquire() async {
+        lock.withLock { waitingCount += 1 }
+        await inner.acquire()
+        lock.withLock { waitingCount -= 1; granted += 1 }
+    }
+    func release() {
+        lock.withLock { released += 1 }
+        inner.release()
+    }
+    func setLimit(_ n: Int) { inner.setLimit(n) }
+    var currentLimit: Int { inner.currentLimit }
+    var waiting: Int { lock.withLock { waitingCount } }
+    /// Permits handed out and not yet returned.
+    var outstanding: Int { lock.withLock { granted - released } }
+}
+
 @Suite("Cache manager pause, resume and cancel")
 struct CacheManagerPauseTests {
     private func manager(root: URL, gate: any DownloadConcurrencyGating = DownloadConcurrencyGate(limit: 3)) -> CacheManager {
@@ -153,5 +178,90 @@ struct CacheManagerPauseTests {
         let manager = manager(root: temporaryVideosRoot("pause"))
         try await manager.resume(id: 999)
         #expect(manager.state(for: 999) == .notCached)
+    }
+
+    // MARK: - Stops that arrive while a download is still queued at the gate
+
+    private func queuedDownload(_ manager: CacheManager, id: Int, path: String) -> Task<Result<Void, Error>, Never> {
+        Task {
+            do {
+                try await manager.download(id: id, from: URL(string: "https://srv.test\(path)")!)
+                return .success(())
+            } catch { return .failure(error) }
+        }
+    }
+
+    @Test func pausingAQueuedDownloadKeepsItFromStartingAndLeaksNoPermit() async throws {
+        let root = temporaryVideosRoot("pause")
+        let path = "/videos/91/stream"
+        let gate = SpyGate(limit: 1)
+        let manager = manager(root: root, gate: gate)
+        ChunkedRangeProtocol.stub(path: path, plan: .init(fullBody: sampleBody(256), etag: "\"q91\"", chunkSize: 64, failureError: URLError(.networkConnectionLost), afterChunk: { _ in true }))
+        defer { ChunkedRangeProtocol.reset(path: path) }
+        await gate.acquire()  // the gate is full
+        let queued = queuedDownload(manager, id: 91, path: path)
+        #expect(await eventually { gate.waiting == 1 })
+
+        manager.pause(id: 91, remote: URL(string: "https://srv.test\(path)")!, streamCount: 1)
+        gate.release()
+
+        let result = await queued.value
+        if case .failure(let error) = result { #expect(error is DownloadPausedError) } else {
+            Issue.record("a paused queued download must not complete")
+        }
+        #expect(ChunkedRangeProtocol.recordedRanges(path: path).isEmpty)
+        await manager.settleStoreWork()
+        #expect(try #require(await manager.mediaStore.manifest(key: "91")).pin?.paused == true)
+        #expect(manager.activeDownloads().map(\.isPaused) == [true])
+        #expect(gate.outstanding == 0)
+    }
+
+    @Test func cancellingAQueuedDownloadKeepsItFromStartingAndLeaksNoPermit() async throws {
+        let root = temporaryVideosRoot("pause")
+        let path = "/videos/92/stream"
+        let gate = SpyGate(limit: 1)
+        let manager = manager(root: root, gate: gate)
+        ChunkedRangeProtocol.stub(path: path, plan: .init(fullBody: sampleBody(256), etag: "\"q92\"", chunkSize: 64, failureError: URLError(.networkConnectionLost), afterChunk: { _ in true }))
+        defer { ChunkedRangeProtocol.reset(path: path) }
+        await gate.acquire()
+        let queued = queuedDownload(manager, id: 92, path: path)
+        #expect(await eventually { gate.waiting == 1 })
+
+        manager.cancel(id: 92)
+        gate.release()
+
+        let result = await queued.value
+        if case .failure(let error) = result { #expect(error is CancellationError) } else {
+            Issue.record("a cancelled queued download must not complete")
+        }
+        #expect(ChunkedRangeProtocol.recordedRanges(path: path).isEmpty)
+        await manager.settleStoreWork()
+        #expect(manager.state(for: 92) == .notCached)
+        #expect(manager.activeDownloads().isEmpty)
+        #expect(gate.outstanding == 0)
+    }
+
+    @Test func clearAllVideosStopsEveryQueuedDownload() async throws {
+        let root = temporaryVideosRoot("pause")
+        let gate = SpyGate(limit: 1)
+        let manager = manager(root: root, gate: gate)
+        let paths = (93...95).map { "/videos/\($0)/stream" }
+        for path in paths {
+            ChunkedRangeProtocol.stub(path: path, plan: .init(fullBody: sampleBody(256), etag: "\"q\(path)\"", chunkSize: 64, failureError: URLError(.networkConnectionLost), afterChunk: { _ in true }))
+        }
+        defer { paths.forEach(ChunkedRangeProtocol.reset(path:)) }
+        await gate.acquire()
+        let queued = zip(93...95, paths).map { queuedDownload(manager, id: $0, path: $1) }
+        #expect(await eventually { gate.waiting == 3 })
+
+        manager.clearAllVideos()
+        gate.release()
+
+        for task in queued {
+            if case .success = await task.value { Issue.record("a download queued before clearAllVideos must not complete") }
+        }
+        for path in paths { #expect(ChunkedRangeProtocol.recordedRanges(path: path).isEmpty) }
+        #expect(await eventually { gate.outstanding == 0 })
+        #expect(manager.activeDownloads().isEmpty)
     }
 }

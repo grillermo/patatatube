@@ -61,6 +61,10 @@ public final class CacheManager: @unchecked Sendable {
     /// Keys whose `download` is waiting at the gate, so `resumeInterrupted`
     /// on a quick background/foreground does not queue them twice.
     private var queuedKeys: Set<String> = []
+    /// A pause or cancel that arrived while the key's `download` was still
+    /// queued at the gate. `download` takes it right after `acquire`, returns
+    /// the permit it was just given and does not start the job.
+    private var queuedStops: [String: StopReason] = [:]
     private var storeChain: Task<Void, Never>?
     /// Paused keys. A paused download keeps its gate permit (as in 2.8).
     private var pausedKeys: Set<String> = []
@@ -294,7 +298,23 @@ public final class CacheManager: @unchecked Sendable {
         )
         lock.withLock { _ = queuedKeys.insert(key) }
         await concurrencyGate.acquire()
-        lock.withLock { _ = queuedKeys.remove(key) }
+        var stop: StopReason?
+        lock.withLock {
+            queuedKeys.remove(key)
+            stop = queuedStops.removeValue(forKey: key)
+        }
+        if let stop {
+            // Stopped while waiting: the permit is the only thing this call
+            // holds (a pause that never started holds none for later).
+            DevLog.event(.download, "queued download stopped at gate", [
+                "video_id": "\(id)", "reason": stop == .paused ? "paused" : "cancelled",
+            ])
+            concurrencyGate.release()
+            switch stop {
+            case .paused: throw DownloadPausedError()
+            case .cancelled: throw CancellationError()
+            }
+        }
         DevLog.event(.download, "download passed gate", ["video_id": "\(id)"])
         defer {
             DevLog.event(.download, "download releasing gate", ["video_id": "\(id)"])
@@ -437,8 +457,14 @@ public final class CacheManager: @unchecked Sendable {
         showPoster: URL? = nil
     ) {
         let key = cacheKey(videoId: id, versionId: versionId)
-        let outcome = lock.withLock { () -> (task: Task<Void, Error>?, progress: Double)? in
-            guard !pausedKeys.contains(key) else { return nil }
+        // Results leave the lock through captured variables, not a returned
+        // tuple (see runJob: tuples of class instances crash -c release).
+        var applied = false
+        var jobTask: Task<Void, Error>?
+        var progress = 0.0
+        lock.withLock {
+            guard !pausedKeys.contains(key) else { return }
+            applied = true
             let job = jobs[key]
             let params = job?.params ?? pinned[key]?.params ?? DownloadJobParameters(
                 remoteURL: remote,
@@ -458,20 +484,27 @@ public final class CacheManager: @unchecked Sendable {
             )
             pinned[key] = record
             pausedKeys.insert(key)
-            permitOwnerKeys.insert(key)
+            if job == nil, queuedKeys.contains(key) {
+                // Still waiting at the gate: no permit is held yet, so claim
+                // none; `download` stops itself when it reaches the front.
+                queuedStops[key] = .paused
+            } else {
+                permitOwnerKeys.insert(key)
+            }
             job?.stopReason = .paused
             jobs[key] = nil
             inFlight[key] = nil
             _ = enqueueStoreWorkLocked { await $0.setPin(key: key, pin: PinState(job: params, paused: true)) }
-            return (job?.task, record.progress)
+            jobTask = job?.task
+            progress = record.progress
         }
-        guard let outcome else { return }
+        guard applied else { return }
         DevLog.event(.download, "pause", [
             "video_id": "\(id)",
             "version_id": versionId.map(String.init) ?? "-",
-            "progress": String(format: "%.3f", outcome.progress),
+            "progress": String(format: "%.3f", progress),
         ])
-        outcome.task?.cancel()
+        jobTask?.cancel()
     }
 
     /// Restarts a paused download on the permit it has been holding. Only
@@ -482,6 +515,20 @@ public final class CacheManager: @unchecked Sendable {
         // Can block while more entries are paused than the gate allows, so
         // nothing is claimed before it returns.
         await awaitPermit(for: key)
+        // A download paused while still queued never got a permit: take one
+        // now, so its resumed transfer counts against the gate like any other.
+        let needsPermit = lock.withLock {
+            !pausedPermitKeys.contains(key) && !permitOwnerKeys.contains(key) && pausedReservations[key] == nil
+        }
+        if needsPermit {
+            await concurrencyGate.acquire()
+            let adopted = lock.withLock { () -> Bool in
+                guard pinned[key]?.paused == true, !pausedPermitKeys.contains(key) else { return false }
+                pausedPermitKeys.insert(key)
+                return true
+            }
+            if !adopted { concurrencyGate.release(); return }
+        }
         guard let params = lock.withLock({ () -> DownloadJobParameters? in
             guard let record = pinned[key], record.paused else { return nil }
             pinned[key]?.paused = false
@@ -542,14 +589,20 @@ public final class CacheManager: @unchecked Sendable {
     }
 
     private func discardDownload(key: String) {
-        let (task, wasPaused) = lock.withLock { () -> (Task<Void, Error>?, Bool) in
-            let wasPaused = pausedKeys.remove(key) != nil
+        var task: Task<Void, Error>?
+        var wasPaused = false
+        lock.withLock {
+            // A paused-while-queued key holds no permit yet; its `download`
+            // stops itself, so there is none to release here.
+            let hadQueuedStop = queuedStops[key] != nil
+            wasPaused = pausedKeys.remove(key) != nil && !hadQueuedStop
             let job = jobs.removeValue(forKey: key)
             job?.stopReason = .cancelled
+            if job == nil, queuedKeys.contains(key) { queuedStops[key] = .cancelled }
             inFlight[key] = nil
             pinned[key] = nil
             _ = enqueueStoreWorkLocked { await $0.discard(key: key) }
-            return (job?.task, wasPaused)
+            task = job?.task
         }
         if wasPaused { releasePausedPermit(for: key) }
         task?.cancel()
@@ -583,7 +636,9 @@ public final class CacheManager: @unchecked Sendable {
     /// posters are kept — small, still useful offline.
     public func removeAllCached(id: Int) {
         DevLog.event(.cache, "removeAllCached", ["video_id": "\(id)"])
-        let keys = lock.withLock { Set(jobs.keys).union(pinned.keys).filter { MediaKey.videoId(of: $0) == id } }
+        let keys = lock.withLock {
+            Set(jobs.keys).union(pinned.keys).union(queuedKeys).filter { MediaKey.videoId(of: $0) == id }
+        }
         keys.forEach(discardDownload)
         for name in cachedVideoFilenames(id: id) {
             try? fileManager.removeItem(at: root.appendingPathComponent(name))
@@ -620,7 +675,7 @@ public final class CacheManager: @unchecked Sendable {
     /// Cancels every download and deletes every MP4, store entry and the
     /// completion history. Previews and posters stay (see `clearAllCovers`).
     public func clearAllVideos() {
-        let keys = lock.withLock { Set(jobs.keys).union(pinned.keys) }
+        let keys = lock.withLock { Set(jobs.keys).union(pinned.keys).union(queuedKeys) }
         DevLog.event(.cache, "clearAllVideos", ["downloads": "\(keys.count)"])
         keys.forEach(discardDownload)
         let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
