@@ -13,7 +13,10 @@ let package = Package(
     targets: [
         .target(
             name: "PatataTubeKit",
-            dependencies: [.product(name: "FlyingFox", package: "FlyingFox")],
+            dependencies: [
+                .product(name: "FlyingFox", package: "FlyingFox"),
+                .product(name: "FlyingSocks", package: "FlyingFox"),
+            ],
             // DevLog's instrumentation (DevLog.swift) is compiled out unless
             // DEVLOG is defined. Debug builds get it automatically so a plain
             // Xcode Run in the Simulator is always instrumented.
