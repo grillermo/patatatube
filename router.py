@@ -1024,15 +1024,6 @@ async def api_video(video_id: int, request: Request):
     return serialize_video(video)
 
 
-@router.get("/api/jobs")
-async def api_jobs(request: Request):
-    """Kept only for PatataTube iOS 2.8.0, which polls it every 2s. Nothing
-    reports progress any more: only HLS packaging did. Removed in Task C1 of
-    docs/superpowers/plans/2026-11-21-remove-hls.md."""
-    _check_token(request)
-    return {"running": [], "queued": [], "queued_total": 0}
-
-
 def _safe_next(raw: str | None) -> str:
     """Same-site paths only. '//evil.example.com/' is a protocol-relative URL:
     it starts with '/' but browsers treat it as an absolute offsite address."""

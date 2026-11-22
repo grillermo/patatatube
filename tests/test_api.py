@@ -1254,15 +1254,6 @@ def test_video_list_includes_resume_secs(client, monkeypatch):
     assert row["resume_secs"] == 42.0
 
 
-def test_jobs_requires_a_token(client):
-    assert client.get("/api/jobs").status_code == 401
-
-
-def test_jobs_is_empty_when_nothing_is_pending(client, auth_headers):
-    body = client.get("/api/jobs", headers=auth_headers).json()
-    assert body == {"running": [], "queued": [], "queued_total": 0}
-
-
 def test_upload_accepts_youtube_music_watch_url(client, monkeypatch):
     monkeypatch.setattr("router.download_video", lambda *a, **kw: None)
 
@@ -1669,10 +1660,5 @@ def test_hls_urls_are_gone(client):
     assert db.claim_job() is None
 
 
-def test_jobs_endpoint_always_reports_nothing(client, auth_headers):
-    import db
-
-    video_id, _ = _seed_done_download()
-    db.enqueue_job("sd", video_id)
-    body = client.get("/api/jobs", headers=auth_headers).json()
-    assert body == {"running": [], "queued": [], "queued_total": 0}
+def test_jobs_endpoint_is_gone(client, auth_headers):
+    assert client.get("/api/jobs", headers=auth_headers).status_code == 404
