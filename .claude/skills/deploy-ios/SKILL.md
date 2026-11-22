@@ -19,9 +19,12 @@ Paths below are relative to the **repo root** (`/Users/grillermo/c/patatatube`).
 
 ## Prerequisites
 
-- Run on the macmini: files.chiq.me's file_server serves `../file_server/files`
-  on this machine, and publishing is a copy into it (`PATATATUBE_PUBLISH_DIR`
-  overrides the path).
+- **Build on the immunemac, not the macmini.** The macmini's Xcode 26.3 (Swift
+  6.2.4) crashes compiling PatataTubeKit in Release; Xcode 27.x builds it.
+  files.chiq.me's file_server still serves `~/c/file_server/files` on the
+  macmini: a machine without that directory publishes there over SSH
+  (`scp` + `mv`; `PATATATUBE_PUBLISH_HOST` / `PATATATUBE_PUBLISH_REMOTE_DIR`
+  override it), and on the macmini it is a local copy.
 - Ruby, xcodegen and full Xcode (for `scripts/deploy/ipa_builder.rb`).
 - `PATATATUBE_UPLOAD_BASE=https://files.chiq.me` in the repo `.env`, and
   `ios/PatataTube/Config/Local.xcconfig` (gitignored) with

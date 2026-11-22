@@ -34,6 +34,11 @@
 #     PATATATUBE_UPLOAD_BASE=https://files.chiq.me   public URL of file_server (required)
 #     PATATATUBE_PUBLISH_DIR=/path/to/files          the directory it serves
 #                                                     (default ../file_server/files)
+#     PATATATUBE_PUBLISH_HOST=macmini                publish over SSH instead; used
+#                                                     by default when neither the dir
+#                                                     above is set nor
+#                                                     ../file_server/files exists here
+#     PATATATUBE_PUBLISH_REMOTE_DIR=c/file_server/files  its path there (from ~)
 #   ios/PatataTube/Config/Local.xcconfig (gitignored):
 #     PATATATUBE_BUNDLE_ID = com.patatatube.app
 #     DEVELOPMENT_TEAM = <team id>
@@ -117,7 +122,7 @@ taken = [tag, R.legacy_tag_for(version)].find { |t| git("tag -l #{t.shellescape}
 B.die("tag #{taken} already exists -- #{version} was already released; bump to a new version") if taken
 
 publish_dir = Uploader.check_publish_dir!
-B.die("#{asset} is already published in #{publish_dir} -- bump to a new version") if File.exist?(File.join(publish_dir, asset))
+B.die("#{asset} is already published in #{publish_dir} -- bump to a new version") if Uploader.published?(asset)
 
 B.check_signing_config!
 # Last, because it may prompt for the login password.

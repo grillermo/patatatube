@@ -559,8 +559,9 @@ from `.env`. `xcodebuild
 (`patatatube-icon.png`, from `AppIcon.appiconset/icon-1024.png`), the manifest
 (`patatatube-manifest.plist`) and the install page (`patatatube-install.html`,
 plus the legacy `3cf25ffc-…-Install_PatataTube.html` name for old bookmarks)
-straight into `../file_server/files`, the directory files.chiq.me's file_server
-serves from this machine (the macmini), then commits the version bump, tags
+into `~/c/file_server/files` on the macmini, the directory files.chiq.me's
+file_server serves (over SSH from any other machine; a local copy on the
+macmini itself), then commits the version bump, tags
 `patatatube-ota-vX.Y.Z` (releases up to 2.7.31 were `vX.Y.Z`) and pushes. **The
 manifest and install page URLs are constant across releases** — that is what
 makes a Home Screen bookmark a permanent update button, so don't version them.
@@ -579,6 +580,10 @@ Builds made by `./deploy` carry `PatataTubeOTAManifestURL` in Info.plist (an
 xcodebuild command-line setting; any other build leaves it empty). With it, the
 app registers a dynamic **Install Latest** quick action at launch, which opens
 the `itms-services://` link and exits 1.5 s later so iOS can replace the bundle.
+
+**Build and deploy from the immunemac, not the macmini** (since 2026-11-21): the
+macmini's Xcode 26.3 / Swift 6.2.4 crashes compiling PatataTubeKit in Release
+(`MediaStore`'s manifest flush), while Xcode 27.x builds it.
 
 Full setup and troubleshooting: `ios/install.md`.
 

@@ -2,10 +2,13 @@
 # frozen_string_literal: true
 
 # Publishes release artifacts into the files/ directory that file_server
-# (files.chiq.me) serves from this machine.
+# (files.chiq.me) serves from the macmini.
 #
 # Publishing is a copy into that directory, not an HTTP upload: request bodies
-# over ~12 MB stall in the Cloudflare tunnel and come back as 524s.
+# over ~12 MB stall in the Cloudflare tunnel and come back as 524s. On the
+# macmini it is a local copy; anywhere else (builds moved off the macmini on
+# 2026-11-21, whose Xcode 26.3 crashes compiling the Kit in Release) it is an
+# scp into the same directory over the LAN, then a rename on the far side.
 #
 # Every publish is pinned. The artifact lands at exactly the name given and
 # overwrites what was there, which is what keeps the manifest and install page
@@ -16,6 +19,9 @@ require_relative "ipa_builder"
 
 module Uploader
   DEFAULT_PUBLISH_DIR = File.expand_path("../file_server/files", IpaBuilder::REPO_ROOT)
+  # Relative to the remote user's home; `~/c/<project>` on every machine.
+  DEFAULT_REMOTE_DIR = "c/file_server/files"
+  DEFAULT_REMOTE_HOST = "macmini"
 
   module_function
 
@@ -29,9 +35,52 @@ module Uploader
 
   def url_for(name) = "#{base_url}/files/#{name}"
 
-  def publish_dir = ENV.fetch("PATATATUBE_PUBLISH_DIR", DEFAULT_PUBLISH_DIR)
+  def default_publish_dir = DEFAULT_PUBLISH_DIR
+  def publish_dir = ENV.fetch("PATATATUBE_PUBLISH_DIR", default_publish_dir)
 
+  # The host to publish to over SSH, or nil to copy locally.
+  # PATATATUBE_PUBLISH_HOST wins; otherwise a machine without the local
+  # file_server checkout (and no explicit PATATATUBE_PUBLISH_DIR) publishes to
+  # the macmini.
+  def publish_host
+    host = ENV["PATATATUBE_PUBLISH_HOST"].to_s
+    return host unless host.empty?
+    return nil if ENV.key?("PATATATUBE_PUBLISH_DIR") || File.directory?(default_publish_dir)
+
+    DEFAULT_REMOTE_HOST
+  end
+
+  def remote_dir = ENV.fetch("PATATATUBE_PUBLISH_REMOTE_DIR", DEFAULT_REMOTE_DIR)
+
+  # Runs argv, dying with `what` on failure. Swappable in tests.
+  def run!(argv, what)
+    IpaBuilder.die("#{what} failed: #{argv.join(" ")}") unless system(*argv)
+  end
+
+  SSH_OPTS = %w[-o BatchMode=yes -o ConnectTimeout=15].freeze
+
+  # Where releases land, for messages: a local path or host:path.
+  def publish_label
+    host = publish_host
+    host ? "#{host}:#{remote_dir}" : publish_dir
+  end
+
+  # Whether `name` is already published (a version must never be overwritten).
+  def published?(name)
+    host = publish_host
+    return File.exist?(File.join(publish_dir, name)) unless host
+
+    system("ssh", *SSH_OPTS, host, "test -e '#{remote_dir}/#{name}'")
+  end
+
+  # Dies unless the publish target exists. Returns publish_label.
   def check_publish_dir!
+    if (host = publish_host)
+      return publish_label if system("ssh", *SSH_OPTS, host, "test -d '#{remote_dir}'")
+
+      IpaBuilder.die("#{publish_label} is not a directory, or #{host} is unreachable over SSH.")
+    end
+
     dir = publish_dir
     return dir if File.directory?(dir)
 
@@ -49,6 +98,9 @@ module Uploader
     IpaBuilder.die("file to publish not found: #{path}") unless File.file?(path)
     IpaBuilder.die("unsafe publish name: #{name.inspect}") unless name == File.basename(name)
 
+    host = publish_host
+    return upload_remote(path, name: name, host: host) if host
+
     target = File.join(check_publish_dir!, name)
     staged = "#{target}.publishing-#{Process.pid}"
     begin
@@ -57,6 +109,16 @@ module Uploader
     ensure
       FileUtils.rm_f(staged)
     end
+    url_for(name)
+  end
+
+  # Same staged-copy-then-rename as the local path, across SSH. Names were
+  # already checked to be bare filenames, so they are safe to put in a path.
+  def upload_remote(path, name:, host:)
+    target = "#{remote_dir}/#{name}"
+    staged = "#{target}.publishing-#{Process.pid}"
+    run!(["scp", "-q", *SSH_OPTS, path, "#{host}:#{staged}"], "publishing #{name} to #{host}")
+    run!(["ssh", *SSH_OPTS, host, "mv -f '#{staged}' '#{target}'"], "renaming #{name} on #{host}")
     url_for(name)
   end
 end
