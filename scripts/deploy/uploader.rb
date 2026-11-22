@@ -15,6 +15,7 @@
 # URLs fixed, so one Home Screen bookmark keeps installing the newest release.
 
 require "fileutils"
+require "socket"
 require_relative "ipa_builder"
 
 module Uploader
@@ -35,20 +36,22 @@ module Uploader
 
   def url_for(name) = "#{base_url}/files/#{name}"
 
-  def default_publish_dir = DEFAULT_PUBLISH_DIR
-  def publish_dir = ENV.fetch("PATATATUBE_PUBLISH_DIR", default_publish_dir)
+  def publish_dir = ENV.fetch("PATATATUBE_PUBLISH_DIR", DEFAULT_PUBLISH_DIR)
 
   # The host to publish to over SSH, or nil to copy locally.
-  # PATATATUBE_PUBLISH_HOST wins; otherwise a machine without the local
-  # file_server checkout (and no explicit PATATATUBE_PUBLISH_DIR) publishes to
-  # the macmini.
+  # PATATATUBE_PUBLISH_HOST wins, then an explicit PATATATUBE_PUBLISH_DIR
+  # (local). Otherwise it is local only on the macmini itself: other machines
+  # have their own ~/c/file_server checkout, but nothing serves it, and the
+  # first build off the macmini (2.9.0) published into the immunemac's copy.
   def publish_host
     host = ENV["PATATATUBE_PUBLISH_HOST"].to_s
     return host unless host.empty?
-    return nil if ENV.key?("PATATATUBE_PUBLISH_DIR") || File.directory?(default_publish_dir)
+    return nil if ENV.key?("PATATATUBE_PUBLISH_DIR") || local_host == DEFAULT_REMOTE_HOST
 
     DEFAULT_REMOTE_HOST
   end
+
+  def local_host = Socket.gethostname.split(".").first.to_s.downcase
 
   def remote_dir = ENV.fetch("PATATATUBE_PUBLISH_REMOTE_DIR", DEFAULT_REMOTE_DIR)
 

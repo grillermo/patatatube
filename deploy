@@ -34,10 +34,10 @@
 #     PATATATUBE_UPLOAD_BASE=https://files.chiq.me   public URL of file_server (required)
 #     PATATATUBE_PUBLISH_DIR=/path/to/files          the directory it serves
 #                                                     (default ../file_server/files)
-#     PATATATUBE_PUBLISH_HOST=macmini                publish over SSH instead; used
-#                                                     by default when neither the dir
-#                                                     above is set nor
-#                                                     ../file_server/files exists here
+#     PATATATUBE_PUBLISH_HOST=macmini                publish over SSH instead; the
+#                                                     default on any machine but the
+#                                                     macmini unless the dir above
+#                                                     is set
 #     PATATATUBE_PUBLISH_REMOTE_DIR=c/file_server/files  its path there (from ~)
 #   ios/PatataTube/Config/Local.xcconfig (gitignored):
 #     PATATATUBE_BUNDLE_ID = com.patatatube.app
@@ -229,7 +229,9 @@ rel = ->(p) { p.delete_prefix("#{REPO_ROOT}/").shellescape }
 B.run("git add #{rel.(B::PROJECT_YML)} #{rel.(B::INFO_PLIST)}", chdir: REPO_ROOT)
 B.run("git commit -m #{"Release #{B::APP_NAME} OTA #{tag}".shellescape}", chdir: REPO_ROOT)
 committed = true # the bump lives in a commit now; at_exit must not undo it
-B.run("git tag #{tag.shellescape}", chdir: REPO_ROOT)
+# Lightweight, like every earlier release tag. A machine with
+# tag.gpgsign=true would otherwise make it a signed tag that needs a message.
+B.run("git -c tag.gpgsign=false tag #{tag.shellescape}", chdir: REPO_ROOT)
 
 # git-sync's global post-commit hook pushes to the same remote the instant the
 # commit lands, so our push can lose the race ("cannot lock ref ... is at X but

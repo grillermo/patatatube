@@ -71,11 +71,17 @@ class UploaderTest < Minitest::Test
     assert_equal "box", Uploader.publish_host
   end
 
-  def test_no_local_checkout_defaults_to_the_macmini
+  def test_off_the_macmini_publishes_to_it
     ENV.delete("PATATATUBE_PUBLISH_DIR")
-    missing = File.join(@dir, "missing")
-    with_stub(:default_publish_dir, -> { missing }) do
+    with_stub(:local_host, -> { "immunemac" }) do
       assert_equal "macmini", Uploader.publish_host
+    end
+  end
+
+  def test_on_the_macmini_publishes_locally
+    ENV.delete("PATATATUBE_PUBLISH_DIR")
+    with_stub(:local_host, -> { "macmini" }) do
+      assert_nil Uploader.publish_host
     end
   end
 
