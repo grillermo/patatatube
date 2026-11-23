@@ -22,11 +22,23 @@ public final class InMemoryCredentialStore: CredentialStore {
     }
 }
 
-public final class KeychainCredentialStore: CredentialStore {
+/// The token is read on every upstream request, including while the phone is
+/// locked and a video keeps playing (or downloading) in the background. The
+/// Keychain default, `WhenUnlocked`, makes that read fail the moment the screen
+/// locks: requests went out without `Authorization`, the server answered 401,
+/// and playback stopped once the read-ahead ran dry. So the item is stored
+/// `AfterFirstUnlock`, items saved before that are moved to it on the first
+/// unlocked read, and the last value read is kept in memory as well.
+public final class KeychainCredentialStore: CredentialStore, @unchecked Sendable {
     private let account = "patatatube.uploadToken"
     private let service = "patatatube"
     private let baseURLKey = "patatatube.baseURL"
     private let defaults = UserDefaults.standard
+    private let lock = NSLock()
+    private var cachedToken: String?
+    private var accessibilityMigrated = false
+
+    static var accessibility: CFString { kSecAttrAccessibleAfterFirstUnlock }
 
     public init() {}
 
@@ -35,31 +47,54 @@ public final class KeychainCredentialStore: CredentialStore {
         set { defaults.set(newValue?.absoluteString, forKey: baseURLKey) }
     }
 
+    private var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+    }
+
     public var token: String? {
         get {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: account,
-                kSecReturnData as String: true,
-                kSecMatchLimit as String: kSecMatchLimitOne,
-            ]
-            var item: CFTypeRef?
-            guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-                  let data = item as? Data else { return nil }
-            return String(data: data, encoding: .utf8)
+            lock.withLock {
+                if let cachedToken { return cachedToken }
+                var query = baseQuery
+                query[kSecReturnData as String] = true
+                query[kSecMatchLimit as String] = kSecMatchLimitOne
+                var item: CFTypeRef?
+                guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+                      let data = item as? Data,
+                      let value = String(data: data, encoding: .utf8)
+                else { return nil }
+                cachedToken = value
+                migrateAccessibilityIfNeeded()
+                return value
+            }
         }
         set {
-            let base: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: account,
-            ]
-            SecItemDelete(base as CFDictionary)
-            guard let value = newValue, let data = value.data(using: .utf8) else { return }
-            var add = base
-            add[kSecValueData as String] = data
-            SecItemAdd(add as CFDictionary, nil)
+            lock.withLock {
+                SecItemDelete(baseQuery as CFDictionary)
+                cachedToken = newValue
+                accessibilityMigrated = true
+                guard let value = newValue, let data = value.data(using: .utf8) else { return }
+                var add = baseQuery
+                add[kSecValueData as String] = data
+                add[kSecAttrAccessible as String] = Self.accessibility
+                SecItemAdd(add as CFDictionary, nil)
+            }
         }
+    }
+
+    /// Items written before 2.9.1 carry the `WhenUnlocked` default. A read
+    /// just succeeded, so the device is unlocked and the update can land.
+    private func migrateAccessibilityIfNeeded() {
+        guard !accessibilityMigrated else { return }
+        let status = SecItemUpdate(
+            baseQuery as CFDictionary,
+            [kSecAttrAccessible as String: Self.accessibility] as CFDictionary
+        )
+        accessibilityMigrated = status == errSecSuccess
+        DevLog.event(.state, "keychain token accessibility update", ["status": "\(status)"])
     }
 }
