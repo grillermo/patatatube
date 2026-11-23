@@ -1,18 +1,50 @@
 import Combine
 import SwiftUI
 
+/// Mirrors AVPlayerViewController's own transport-bar rules so the custom
+/// buttons come and go with the system ones: a tap on the video toggles them,
+/// they auto-hide after a few seconds while playing, and stay up while paused.
 @MainActor
 final class OrientationControlVisibility: ObservableObject {
     @Published private(set) var isVisible = false
     private var hideTask: Task<Void, Never>?
+    private var isPlaying = true
+    private var clock: any Clock<Duration> = ContinuousClock()
+
+    /// A tap on the video itself (not on one of AVKit's controls).
+    func toggle() {
+        if isVisible { hide() } else { reveal() }
+    }
 
     func reveal() {
-        reveal(using: ContinuousClock())
+        isVisible = true
+        rearm()
     }
 
     func reveal<C: Clock>(using clock: C) where C.Duration == Duration {
+        self.clock = clock
+        reveal()
+    }
+
+    /// Paused keeps the buttons up indefinitely, like AVKit; resuming starts
+    /// the countdown again.
+    func setPlaying(_ playing: Bool) {
+        guard playing != isPlaying else { return }
+        isPlaying = playing
+        if isVisible { rearm() }
+    }
+
+    func hide() {
         hideTask?.cancel()
-        isVisible = true
+        hideTask = nil
+        isVisible = false
+    }
+
+    private func rearm() {
+        hideTask?.cancel()
+        hideTask = nil
+        guard isPlaying else { return }
+        let clock = self.clock
         hideTask = Task { @MainActor [weak self] in
             do {
                 try await clock.sleep(for: .seconds(4))
@@ -22,12 +54,6 @@ final class OrientationControlVisibility: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.isVisible = false
         }
-    }
-
-    func hide() {
-        hideTask?.cancel()
-        hideTask = nil
-        isVisible = false
     }
 }
 

@@ -109,4 +109,24 @@ struct HorizontalLockOverlayTests {
         await clock.advance(by: .seconds(1))
         await eventually("Refreshed control never auto-hid") { !sut.isVisible }
     }
+
+    @Test func tapTogglesLikeTheSystemControls() {
+        let sut = OrientationControlVisibility()
+        sut.toggle()
+        #expect(sut.isVisible)
+        sut.toggle()
+        #expect(!sut.isVisible)
+    }
+
+    @Test func pausedKeepsControlsUpAndResumingRestartsTheTimeout() async {
+        let clock = TestClock()
+        let sut = OrientationControlVisibility()
+        sut.setPlaying(false)
+        sut.reveal(using: clock)
+        await clock.advance(by: .seconds(10))
+        #expect(sut.isVisible)
+        sut.setPlaying(true)
+        await clock.advance(by: .seconds(4))
+        await eventually("Control never auto-hid after resuming") { !sut.isVisible }
+    }
 }

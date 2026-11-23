@@ -124,7 +124,7 @@ struct VideoPlayerView: View {
                     attached: attached,
                     resumeAfterDetaching: resumeAfterDetaching,
                     revealControlsToken: revealControlsToken,
-                    onPlayerTap: { orientationControlVisibility.reveal() },
+                    onPlayerTap: { orientationControlVisibility.toggle() },
                     onSceneAvailable: { horizontalLock.beginPlayerSession(in: $0) }
                 )
                     .ignoresSafeArea()
@@ -487,6 +487,11 @@ struct VideoPlayerView: View {
     ) {
         pauseTransitionObserver?.invalidate()
         pauseTransitionObserver = player.observe(\.timeControlStatus, options: [.new]) { player, _ in
+            let playing = player.timeControlStatus != .paused
+            Task { @MainActor in
+                guard self.player === player else { return }
+                orientationControlVisibility.setPlaying(playing)
+            }
             guard Self.shouldForceReportPosition(for: player.timeControlStatus),
                   player.currentItem === observedItem else { return }
             Task { @MainActor in
@@ -565,6 +570,7 @@ struct VideoPlayerView: View {
                 // obviously resumable.
                 self.suppressAutoplayOnce = false
                 self.revealControlsToken += 1
+                self.orientationControlVisibility.setPlaying(false)
                 self.orientationControlVisibility.reveal()
             } else {
                 player.play()

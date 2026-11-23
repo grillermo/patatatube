@@ -126,6 +126,20 @@ struct PlayerViewController: UIViewControllerRepresentable {
             return recognizer
         }
 
+        /// A tap on one of AVKit's own controls (play/pause, skip, scrubber,
+        /// close…) isn't a tap on the video: AVKit doesn't toggle its bar for
+        /// it, so the custom overlay mustn't either.
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch
+        ) -> Bool {
+            var view = touch.view
+            while let current = view, current !== gestureRecognizer.view {
+                if current is UIControl { return false }
+                view = current.superview
+            }
+            return true
+        }
+
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
