@@ -109,16 +109,32 @@ struct HorizontalLockOverlay: View {
 
     private func controlIcon(_ systemName: String, active: Bool) -> some View {
         controlIcon(active: active) {
-            Image(systemName: systemName).font(.title3.weight(.semibold))
+            Image(systemName: systemName).font(.system(size: 19, weight: .medium))
         }
     }
 
+    /// Matches AVPlayerViewController's own chrome (close, PiP, volume, ⋯):
+    /// a 44pt Liquid Glass circle on iOS 26, a dark material disc before it.
+    /// A flat black disc vanished over the letterbox bars, leaving bare glyphs.
     private func controlIcon<Content: View>(
         active: Bool, @ViewBuilder content: () -> Content
     ) -> some View {
         content()
             .foregroundStyle(active ? Color.accentColor : .white)
             .frame(width: 44, height: 44)
-            .background(.black.opacity(0.55), in: Circle())
+            .modifier(SystemChromeBackground())
+            .contentShape(Circle())
+    }
+}
+
+private struct SystemChromeBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: Circle())
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Circle())
+                .environment(\.colorScheme, .dark)
+        }
     }
 }
