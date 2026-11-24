@@ -320,6 +320,18 @@ The `groups` table is the source of truth for video groups. The iOS app's root r
 
 Adding a group is `POST /api/groups`. Deleting one is `DELETE /api/groups/{id}` (the card's `⋯` menu → Delete group): its videos are **moved into the inbox**, never deleted, and if `/sd` was playing it, `sd_state` falls back to no group. The inbox itself can't be deleted (409), and with no inbox at all every delete is refused, since there'd be nowhere to put the videos.
 
+**Group covers can be generated pixel art (PixelLab).** `POST /api/icons/generate
+{"prompt"}` calls PixelLab's Pixen model (`pixellab.py`, `PIXELLABS_API_TOKEN`,
+the same call yosubee makes) and waits ~30-40s for a 64x64 PNG, saved as
+`data/group_icons/<random hex>.png`. It is only a preview: nothing touches a
+group until `PUT /api/groups/{id}/icon {"icon": name}` stores the name in
+`groups.icon` (`null` clears it). `serialize_group` exposes it as `icon_url`
+(`/group-icons/<name>.png`, unauthenticated, immutable). On iOS it wins over
+the emoji (`PixelIconView`, nearest-neighbour, disk-cached by name), and the
+emoji comes back when the icon is removed. 64px, not yosubee's 16: a Yoto
+screen is 16x16, a group card isn't. Unused previews are never deleted (a few
+KB each).
+
 **Per-group display settings live on the group row, not in a client's
 UserDefaults.** `groups.display_titles` (added by an idempotent `ALTER TABLE`
 guard, default 0) overlays each video's title on its player in that group's
