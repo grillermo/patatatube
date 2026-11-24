@@ -20,6 +20,7 @@ struct GroupsView: View {
     @State private var describing: EditingGroup?
     @State private var creating = false
     @State private var deleting: EditingGroup?
+    @State private var generatingIcon: EditingGroup?
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 16)]
 
@@ -42,6 +43,12 @@ struct GroupsView: View {
             CoverPickerView(group: item.group, current: item.group.emoji) { text in
                 save(text, for: item.group)
                 editing = nil
+            }
+        }
+        .sheet(item: $generatingIcon) { item in
+            PixelIconGeneratorView(group: item.group) { icon in
+                setIcon(icon.icon, url: icon.iconUrl, for: item.group)
+                generatingIcon = nil
             }
         }
         .sheet(item: $renaming) { item in
@@ -89,7 +96,8 @@ struct GroupsView: View {
             $0.id == group.id
                 ? VideoGroup(id: $0.id, name: $0.name, label: $0.label, emoji: emoji,
                              position: $0.position, displayTitles: $0.displayTitles, rememberPosition: $0.rememberPosition,
-                             description: $0.description, unreadCount: $0.unreadCount)
+                             description: $0.description, unreadCount: $0.unreadCount,
+                             iconUrl: $0.iconUrl)
                 : $0
         })
         Task {
@@ -112,7 +120,8 @@ struct GroupsView: View {
             $0.id == group.id
                 ? VideoGroup(id: $0.id, name: $0.name, label: trimmed, emoji: $0.emoji,
                              position: $0.position, displayTitles: $0.displayTitles, rememberPosition: $0.rememberPosition,
-                             description: $0.description, unreadCount: $0.unreadCount)
+                             description: $0.description, unreadCount: $0.unreadCount,
+                             iconUrl: $0.iconUrl)
                 : $0
         })
         Task {
@@ -141,6 +150,22 @@ struct GroupsView: View {
                 _ = try await model.api.setGroupDescription(id: group.id, new)
             } catch {
                 groups.setDescription(id: group.id, previous)
+                saveError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Optimistic like `describe`: the card switches at once, a failed PUT
+    /// puts the previous cover back. `icon` nil removes the generated icon,
+    /// which brings the emoji back.
+    private func setIcon(_ icon: String?, url: String?, for group: VideoGroup) {
+        let previous = group.iconUrl
+        groups.setIconUrl(id: group.id, url)
+        Task {
+            do {
+                _ = try await model.api.setGroupIcon(id: group.id, icon: icon)
+            } catch {
+                groups.setIconUrl(id: group.id, previous)
                 saveError = error.localizedDescription
             }
         }
@@ -214,7 +239,7 @@ struct GroupsView: View {
             NavigationLink(value: Route.group(id: group.id)) {
                 Rectangle().fill(.clear)
                     .aspectRatio(2.0/3.0, contentMode: .fit)
-                    .overlay { artwork(for: group.emoji) }
+                    .overlay { artwork(for: group) }
                     .background(.secondary.opacity(0.2))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(alignment: .bottomTrailing) {
@@ -270,8 +295,13 @@ struct GroupsView: View {
         Menu {
             Button("Rename") { renaming = EditingGroup(group: group) }
             Button("Edit description") { describing = EditingGroup(group: group) }
-            Button("Choose cover") { editing = EditingGroup(group: group) }
-            if group.emoji != nil {
+            Button("Generate pixel icon…") { generatingIcon = EditingGroup(group: group) }
+            Button("Choose emoji cover") { editing = EditingGroup(group: group) }
+            if group.iconUrl != nil {
+                Button("Remove pixel icon", role: .destructive) {
+                    setIcon(nil, url: nil, for: group)
+                }
+            } else if group.emoji != nil {
                 Button("Remove cover", role: .destructive) { save(nil, for: group) }
             }
             // The inbox is where a deleted group's videos go; the server
@@ -298,8 +328,25 @@ struct GroupsView: View {
         .padding(6)
     }
 
+    /// A generated pixel icon wins over the emoji; the emoji (or the empty
+    /// placeholder) shows while the icon loads and if it can't be loaded.
     @ViewBuilder
-    private func artwork(for emoji: String?) -> some View {
+    private func artwork(for group: VideoGroup) -> some View {
+        if let iconUrl = group.iconUrl {
+            GeometryReader { geo in
+                // 80% of the tile's width: the 64px art lands at 2-3pt per
+                // pixel on a 160-250pt card.
+                PixelIconView(path: iconUrl) { emojiArtwork(group.emoji) }
+                    .frame(width: geo.size.width * 0.8)
+                    .frame(width: geo.size.width, height: geo.size.height)
+            }
+        } else {
+            emojiArtwork(group.emoji)
+        }
+    }
+
+    @ViewBuilder
+    private func emojiArtwork(_ emoji: String?) -> some View {
         if let emoji {
             // Scales with the tile: the emoji is the art, not a badge on it.
             GeometryReader { geo in

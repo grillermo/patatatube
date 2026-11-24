@@ -172,6 +172,40 @@ struct APIClientTests {
             #expect(group.description == nil)
         }
 
+        @Test func groupsDecodesTheIconUrl() async throws {
+            MockURLProtocol.handler = { req in
+                let body = #"{"groups":[{"id":1,"name":"children","label":"Children","emoji":"🧒","position":0,"icon_url":"/group-icons/abc.png"}]}"#.data(using: .utf8)!
+                return (jsonResponse(req.url!), body)
+            }
+            #expect(try await makeClient().groups()[0].iconUrl == "/group-icons/abc.png")
+        }
+
+        @Test func generateIconSendsThePromptWithALongTimeout() async throws {
+            MockURLProtocol.handler = { req in
+                #expect(req.url?.path == "/api/icons/generate")
+                #expect(req.httpMethod == "POST")
+                #expect(req.timeoutInterval == APIClient.iconGenerationTimeout)
+                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: Any]
+                #expect(json["prompt"] as? String == "sleepy cat")
+                return (jsonResponse(req.url!), #"{"icon":"abc","icon_url":"/group-icons/abc.png"}"#.data(using: .utf8)!)
+            }
+            let icon = try await makeClient().generateIcon(prompt: "sleepy cat")
+            #expect(icon == GeneratedIcon(icon: "abc", iconUrl: "/group-icons/abc.png"))
+        }
+
+        @Test func setGroupIconSendsNullToGoBackToTheEmoji() async throws {
+            MockURLProtocol.handler = { req in
+                #expect(req.url?.path == "/api/groups/1/icon")
+                #expect(req.httpMethod == "PUT")
+                let json = try JSONSerialization.jsonObject(with: req.httpBodyData()) as! [String: Any]
+                #expect(json["icon"] is NSNull)
+                return (jsonResponse(req.url!), #"{"id":1,"name":"children","label":"Children","emoji":"🧒","position":0,"icon_url":null}"#.data(using: .utf8)!)
+            }
+            let group = try await makeClient().setGroupIcon(id: 1, icon: nil)
+            #expect(group.iconUrl == nil)
+            #expect(group.emoji == "🧒")
+        }
+
         @Test func uploadReturnsNewId() async throws {
             MockURLProtocol.handler = { req in
                 #expect(req.url?.path == "/upload")

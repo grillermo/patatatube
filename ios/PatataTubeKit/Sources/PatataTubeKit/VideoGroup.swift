@@ -24,10 +24,16 @@ public struct VideoGroup: Codable, Identifiable, Hashable, Sendable {
     /// from `videos.play_count` (announced, never played). The wire name stays
     /// `unread_count`. The card hides its badge at 0.
     public let unreadCount: Int
+    /// Server-relative path of a PixelLab-generated 64x64 cover
+    /// (`/group-icons/<name>.png`). When set it replaces the emoji on the card;
+    /// the emoji stays stored underneath and comes back when the icon is
+    /// removed. Named like `Video.previewUrl` so the API's snake_case decoder
+    /// and the UserDefaults mirror agree on the key.
+    public let iconUrl: String?
 
     public init(id: Int, name: String, label: String, emoji: String?, position: Int,
                 displayTitles: Bool = false, rememberPosition: Bool = false,
-                description: String? = nil, unreadCount: Int = 0) {
+                description: String? = nil, unreadCount: Int = 0, iconUrl: String? = nil) {
         self.id = id
         self.name = name
         self.label = label
@@ -37,6 +43,7 @@ public struct VideoGroup: Codable, Identifiable, Hashable, Sendable {
         self.rememberPosition = rememberPosition
         self.description = description
         self.unreadCount = unreadCount
+        self.iconUrl = iconUrl
     }
 
     /// Hand-rolled so a payload without `displayTitles` (or `rememberPosition`, `description`, `unreadCount`)
@@ -54,24 +61,31 @@ public struct VideoGroup: Codable, Identifiable, Hashable, Sendable {
         rememberPosition = try c.decodeIfPresent(Bool.self, forKey: .rememberPosition) ?? false
         description = try c.decodeIfPresent(String.self, forKey: .description)
         unreadCount = try c.decodeIfPresent(Int.self, forKey: .unreadCount) ?? 0
+        iconUrl = try c.decodeIfPresent(String.self, forKey: .iconUrl)
     }
 
     public func withDisplayTitles(_ on: Bool) -> VideoGroup {
         VideoGroup(id: id, name: name, label: label, emoji: emoji, position: position,
                    displayTitles: on, rememberPosition: rememberPosition,
-                   description: description, unreadCount: unreadCount)
+                   description: description, unreadCount: unreadCount, iconUrl: iconUrl)
     }
 
     public func withRememberPosition(_ on: Bool) -> VideoGroup {
         VideoGroup(id: id, name: name, label: label, emoji: emoji, position: position,
                    displayTitles: displayTitles, rememberPosition: on,
-                   description: description, unreadCount: unreadCount)
+                   description: description, unreadCount: unreadCount, iconUrl: iconUrl)
     }
 
     public func withDescription(_ text: String?) -> VideoGroup {
         VideoGroup(id: id, name: name, label: label, emoji: emoji, position: position,
                    displayTitles: displayTitles, rememberPosition: rememberPosition,
-                   description: text, unreadCount: unreadCount)
+                   description: text, unreadCount: unreadCount, iconUrl: iconUrl)
+    }
+
+    public func withIconUrl(_ url: String?) -> VideoGroup {
+        VideoGroup(id: id, name: name, label: label, emoji: emoji, position: position,
+                   displayTitles: displayTitles, rememberPosition: rememberPosition,
+                   description: description, unreadCount: unreadCount, iconUrl: url)
     }
 
     public var feed: Feed { .group(id: id) }

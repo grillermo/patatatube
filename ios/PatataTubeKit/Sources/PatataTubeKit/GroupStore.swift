@@ -67,6 +67,15 @@ public final class GroupStore: ObservableObject, @unchecked Sendable {
         persist()
     }
 
+    /// Local edit of one group's generated icon, same contract as
+    /// `setDisplayTitles`.
+    public func setIconUrl(id: Int, _ url: String?) {
+        guard let index = groups.firstIndex(where: { $0.id == id }),
+              groups[index].iconUrl != url else { return }
+        groups[index] = groups[index].withIconUrl(url)
+        persist()
+    }
+
     private func persist() {
         if let data = try? JSONEncoder().encode(groups) {
             defaults.set(data, forKey: Self.defaultsKey)

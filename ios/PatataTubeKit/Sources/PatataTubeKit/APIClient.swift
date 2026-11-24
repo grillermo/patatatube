@@ -7,6 +7,18 @@ public enum APIError: Error, Equatable {
     case decoding(String)
 }
 
+/// A PixelLab preview: generated and stored by the server, attached to no
+/// group until `setGroupIcon` picks it.
+public struct GeneratedIcon: Decodable, Equatable, Sendable {
+    public let icon: String
+    public let iconUrl: String
+
+    public init(icon: String, iconUrl: String) {
+        self.icon = icon
+        self.iconUrl = iconUrl
+    }
+}
+
 public protocol VideoAPI: Sendable {
     func videos(feed: Feed) async throws -> [Video]
     func groups() async throws -> [VideoGroup]
@@ -154,6 +166,31 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         catch { throw APIError.decoding(String(describing: error)) }
     }
 
+    /// PixelLab takes ~30-40s to answer and the server waits for it, so this
+    /// request gets a much longer timeout than URLRequest's 60s default.
+    public static let iconGenerationTimeout: TimeInterval = 180
+
+    /// Generates a 64x64 pixel-art preview for `prompt`. Not attached to any
+    /// group; call `setGroupIcon` with the result to use it.
+    public func generateIcon(prompt: String) async throws -> GeneratedIcon {
+        let data = try await authedRequest(
+            "api/icons/generate", method: "POST", body: ["prompt": prompt],
+            timeout: Self.iconGenerationTimeout
+        )
+        do { return try Self.makeDecoder().decode(GeneratedIcon.self, from: data) }
+        catch { throw APIError.decoding(String(describing: error)) }
+    }
+
+    /// Uses a generated icon as the group's cover; nil goes back to the emoji.
+    /// Its own endpoint, so the emoji and every other field are untouched.
+    public func setGroupIcon(id: Int, icon: String?) async throws -> VideoGroup {
+        let data = try await authedRequest(
+            "api/groups/\(id)/icon", method: "PUT", body: ["icon": icon ?? NSNull()]
+        )
+        do { return try Self.makeDecoder().decode(VideoGroup.self, from: data) }
+        catch { throw APIError.decoding(String(describing: error)) }
+    }
+
     /// The server moves the group's videos into the inbox before deleting it,
     /// and refuses (409) to delete the inbox itself.
     public func deleteGroup(id: Int) async throws {
@@ -267,7 +304,8 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         _ path: String,
         method: String,
         body: [String: Any]? = nil,
-        destinationServerIdentity: String? = nil
+        destinationServerIdentity: String? = nil,
+        timeout: TimeInterval? = nil
     ) async throws -> Data {
         guard let token = store.token, !token.isEmpty else { throw APIError.notConfigured }
         let baseURL = try base()
@@ -280,6 +318,7 @@ public final class APIClient: VideoAPI, @unchecked Sendable {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
+        if let timeout { request.timeoutInterval = timeout }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

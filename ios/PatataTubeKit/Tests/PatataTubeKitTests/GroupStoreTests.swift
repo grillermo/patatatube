@@ -37,6 +37,28 @@ final class GroupStoreTests: XCTestCase {
         XCTAssertEqual(store.groups.map(\.id), [1])
     }
 
+    func testIconUrlSurvivesTheMirrorAndOtherLocalEdits() {
+        let defaults = makeDefaults()
+        let store = GroupStore(defaults: defaults)
+        store.apply(sample)
+        store.setIconUrl(id: 1, "/group-icons/abc.png")
+        store.setDescription(id: 1, "Kids")
+        store.setDisplayTitles(id: 1, true)
+        XCTAssertEqual(GroupStore(defaults: defaults).group(id: 1)?.iconUrl, "/group-icons/abc.png")
+        store.setIconUrl(id: 1, nil)
+        XCTAssertNil(GroupStore(defaults: defaults).group(id: 1)?.iconUrl)
+        XCTAssertEqual(store.group(id: 1)?.emoji, "🧒")
+    }
+
+    func testMirrorWrittenBeforeIconsDecodesWithoutOne() throws {
+        let defaults = makeDefaults()
+        let legacy = #"[{"id":1,"name":"children","label":"Children","emoji":"🧒","position":0}]"#
+        defaults.set(legacy.data(using: .utf8)!, forKey: GroupStore.defaultsKey)
+        let store = GroupStore(defaults: defaults)
+        XCTAssertEqual(store.groups.count, 1)
+        XCTAssertNil(store.groups[0].iconUrl)
+    }
+
     func testLookupByIDAndName() {
         let store = GroupStore(defaults: makeDefaults())
         store.apply(sample)
