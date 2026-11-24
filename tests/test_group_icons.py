@@ -55,7 +55,9 @@ def test_generate_sends_the_prompt_and_serves_the_preview(client, monkeypatch):
     body = resp.json()
     assert body["icon_url"] == f"/group-icons/{body['icon']}.png"
     assert seen["auth"] == "Bearer px-token"
-    assert "a sleepy cat" in seen["body"] and '"width": 16' in seen["body"].replace('":16', '": 16')
+    sent = __import__("json").loads(seen["body"])
+    assert "a sleepy cat" in sent["description"] and "64 x 64" in sent["description"]
+    assert sent["image_size"] == {"width": 64, "height": 64} and sent["no_background"] is True
 
     img = client.get(body["icon_url"])
     assert img.status_code == 200 and img.content == PNG
