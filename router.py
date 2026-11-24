@@ -19,6 +19,7 @@ from pydantic import BaseModel, FiniteFloat, field_validator
 
 import db
 import devlog
+import pixellab
 import sd
 import services
 import yosubee
@@ -186,6 +187,14 @@ class GroupCreateRequest(BaseModel):
     name: str
     label: str
     emoji: str | None = None
+
+
+class IconGenerateRequest(BaseModel):
+    prompt: str
+
+
+class GroupIconRequest(BaseModel):
+    icon: str | None = None
 
 
 class GroupUpdateRequest(BaseModel):
@@ -789,6 +798,7 @@ def serialize_group(group: dict) -> dict:
         "display_titles": bool(group["display_titles"]),
         "remember_position": bool(group["remember_position"]),
         "description": group["description"],
+        "icon_url": pixellab.icon_url(group.get("icon")),
         # Wire name kept from the days this was a boolean `unread` column; it
         # is the count of announced-but-never-played videos, `play_count = 0`.
         "unread_count": (
@@ -880,6 +890,61 @@ async def api_delete_group(group_id: int, request: Request):
         flush=True,
     )
     return {"deleted": group_id, "moved": moved}
+
+
+@router.post("/api/icons/generate")
+async def api_generate_icon(body: IconGenerateRequest, request: Request):
+    """Generate a pixel-art preview for a prompt. Nothing is attached to a
+    group yet: the app shows the preview, may regenerate, and then PUTs the
+    one it likes to /api/groups/{id}/icon. Takes ~30-40s (PixelLab)."""
+    _check_token(request)
+    prompt = body.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt is required")
+    if len(prompt) > pixellab.MAX_PROMPT_CHARS:
+        raise HTTPException(status_code=400, detail="Prompt is too long")
+    try:
+        name = await pixellab.generate(prompt)
+    except pixellab.NotConfiguredError:
+        raise HTTPException(status_code=503, detail="Icon generation not configured") from None
+    except pixellab.QuotaExhaustedError as exc:
+        print(f"[icons] {exc}", flush=True)
+        raise HTTPException(status_code=429, detail="Out of PixelLab credits") from None
+    except pixellab.PixelLabError as exc:
+        print(f"[icons] generate failed prompt={prompt!r}: {exc}", flush=True)
+        raise HTTPException(status_code=502, detail="Icon generation failed") from None
+    print(f"[icons] generated {name} prompt={prompt!r}", flush=True)
+    return {"icon": name, "icon_url": pixellab.icon_url(name)}
+
+
+@router.put("/api/groups/{group_id}/icon")
+async def api_set_group_icon(group_id: int, body: GroupIconRequest, request: Request):
+    """Use a generated icon as the group's cover; `{"icon": null}` goes back
+    to the emoji."""
+    _check_token(request)
+    icon = body.icon
+    if icon is not None and (
+        not pixellab.is_icon_name(icon) or not pixellab.icon_path(icon).is_file()
+    ):
+        raise HTTPException(status_code=400, detail="Unknown icon")
+    group = db.set_group_icon(group_id, icon)
+    if group is None:
+        raise HTTPException(status_code=404, detail="No such group")
+    print(f"[groups] icon {group_id} ({group['name']}) -> {icon}", flush=True)
+    return serialize_group(group)
+
+
+@router.get("/group-icons/{filename}")
+async def group_icon_file(filename: str):
+    """Unauthenticated, like /api/groups: names are 128-bit random and the
+    images are cartoon pixel art. Immutable — a new icon is a new name."""
+    name, _, ext = filename.partition(".")
+    if ext != "png" or not pixellab.is_icon_name(name):
+        raise HTTPException(status_code=404)
+    path = pixellab.icon_path(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404)
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": VIDEO_CACHE_CONTROL})
 
 
 def _validated_emoji(raw: str | None) -> str | None:

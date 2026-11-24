@@ -225,6 +225,10 @@ def init_db():
         # alike ("dormir" vs "videos musicales"). NULL falls back to the label.
         if "description" not in group_columns:
             _add_column(conn, "ALTER TABLE groups ADD COLUMN description TEXT")
+        # A PixelLab-generated cover (pixellab.py), stored as the file's name in
+        # data/group_icons/. When set, clients show it instead of the emoji.
+        if "icon" not in group_columns:
+            _add_column(conn, "ALTER TABLE groups ADD COLUMN icon TEXT")
         # Whether a stored `resume_secs` may produce a resume prompt for the
         # group's videos: a group video prompts only when its group has this on.
         # Position is recorded either way, so
@@ -623,6 +627,19 @@ def update_group(
             sets.append("updated_at = CURRENT_TIMESTAMP")
             params.append(group_id)
             conn.execute(f"UPDATE groups SET {', '.join(sets)} WHERE id = ?", params)
+        row = conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
+        return dict(row)
+
+
+def set_group_icon(group_id: int, icon: str | None) -> dict | None:
+    """Set (or, with None, clear) a group's generated cover icon."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE groups SET icon = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (icon, group_id),
+        )
+        if cur.rowcount == 0:
+            return None
         row = conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
         return dict(row)
 

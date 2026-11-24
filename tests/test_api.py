@@ -816,7 +816,7 @@ def test_get_groups_lists_the_defaults(client):
     assert [g["name"] for g in groups] == ["children", "adults", "anabel", "asmr"]
     assert set(groups[0]) == {
         "id", "name", "label", "emoji", "position", "display_titles", "remember_position",
-        "description", "unread_count",
+        "description", "icon_url", "unread_count",
     }
     assert all(g["description"] is None for g in groups)
     assert all(g["display_titles"] is False for g in groups)
