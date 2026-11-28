@@ -43,8 +43,14 @@ final class AppModel: ObservableObject {
     let audio = AudioQueuePlayer()
     let videoListCache: VideoListCache
     let groups = GroupStore()
-    /// Groups this device downloads by itself on every activation.
-    let autoDownload = AutoDownloadStore()
+    /// Groups this device downloads by itself while in the foreground.
+    let autoDownload = DeviceGroupFlags(key: DeviceGroupFlags.autoDownloadDefaultsKey)
+    /// Groups whose newly arrived videos start playing on their own once the
+    /// auto-download has a head start. Only acts with `autoDownload` on too.
+    let autoPlay = DeviceGroupFlags(key: DeviceGroupFlags.autoPlayDefaultsKey)
+    /// A new video that is ready to auto play. `VideoGridView` plays it (if
+    /// its group is open and nothing is playing) and clears this either way.
+    @Published var autoPlayRequest: Video?
     private let downloadSettings: DownloadStreamSettings
     private let simultaneousSettings: SimultaneousDownloadSettings
 
@@ -244,6 +250,12 @@ final class AppModel: ObservableObject {
     /// 5s; the next activation clears it.
     private var autoDownloadFailed: Set<Int> = []
     private var autoDownloadPrunedGroups = false
+    /// Groups listed at least once this session. Videos found on a group's
+    /// first listing are the backlog, not new arrivals, so they never auto
+    /// play — opening the app must not start an old video.
+    private var autoDownloadBaselined: Set<Int> = []
+    /// Ids that should auto play once their download has a head start.
+    private var autoPlayCandidates: Set<Int> = []
 
     /// Starts checking the "Download automatically" groups every 5s. Called on
     /// every `.active` scene phase and when a group's switch turns on; a
@@ -254,6 +266,7 @@ final class AppModel: ObservableObject {
         guard autoDownloadPoll == nil, !autoDownload.groupIDs.isEmpty else { return }
         autoDownloadFailed = []
         autoDownloadPrunedGroups = false
+        autoDownloadBaselined = []
         DevLog.event(.download, "auto-download polling started",
                      ["groups": autoDownload.groupIDs.sorted().map(String.init).joined(separator: ",")])
         autoDownloadPollGeneration += 1
@@ -289,7 +302,8 @@ final class AppModel: ObservableObject {
             do {
                 let videos = try await api.videos(feed: .group(id: id))
                 refreshOpenGroupIfChanged(id, serverList: videos)
-                let fresh = AutoDownloadStore.targets(in: videos) {
+                defer { autoDownloadBaselined.insert(id) }
+                let fresh = AutoDownload.targets(in: videos) {
                     self.cache.state(for: $0.id, versionId: $0.chosenVersionId)
                 }.filter { !autoDownloadKnown.contains($0.id) && !autoDownloadFailed.contains($0.id) }
                 guard !fresh.isEmpty else { continue }
@@ -297,6 +311,9 @@ final class AppModel: ObservableObject {
                              ["group_id": "\(id)", "ids": fresh.map { "\($0.id)" }.joined(separator: ",")])
                 autoDownloadKnown.formUnion(fresh.map(\.id))
                 autoDownloadQueue += fresh
+                if autoDownloadBaselined.contains(id), autoPlay.isOn(id) {
+                    autoPlayCandidates.formUnion(fresh.map(\.id))
+                }
             } catch {
                 DevLog.error(error, "auto-download list failed", ["group_id": "\(id)"])
             }
@@ -319,6 +336,34 @@ final class AppModel: ObservableObject {
         Task { await store.refresh() }
     }
 
+    /// Checks a just-started auto-download twice a second and publishes
+    /// `autoPlayRequest` once it has a head start (`AutoDownload.readyToAutoPlay`).
+    /// Gives up if the download ends without one (failed, cancelled, paused),
+    /// the app leaves the foreground, the group's auto play is switched off,
+    /// or ten minutes pass.
+    private func watchForAutoPlay(_ video: Video) {
+        let id = video.id
+        Task { @MainActor [weak self] in
+            for _ in 0..<1200 {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, self.autoDownloadPoll != nil,
+                      let groupID = video.groupID, self.autoPlay.isOn(groupID) else { return }
+                let state = self.cache.state(for: id, versionId: video.chosenVersionId)
+                let activity = self.cache.activeDownloads().first { $0.videoID == id }
+                if AutoDownload.readyToAutoPlay(state: state,
+                                                transferred: activity?.transferredByteCount ?? 0,
+                                                total: activity?.totalByteCount) {
+                    DevLog.event(.play, "auto play ready",
+                                 ["video_id": "\(id)", "bytes": "\(activity?.transferredByteCount ?? -1)"])
+                    self.autoPlayRequest = video
+                    return
+                }
+                if activity?.isPaused == true { return }
+                if state == .notCached, !self.autoDownloadKnown.contains(id) { return }
+            }
+        }
+    }
+
     /// Starts queued downloads up to `maxConcurrentDownloads` at once — the
     /// bounded window every bulk action needs (226 simultaneous calls took the
     /// server down on 2026-07-31). Each finish pulls the next one, so a new
@@ -336,6 +381,7 @@ final class AppModel: ObservableObject {
             let token = credentials.token
             let streams = downloadStreamCount
             let preview = imageURL(video.previewUrl)
+            if autoPlayCandidates.remove(video.id) != nil { watchForAutoPlay(video) }
             Task { @MainActor in
                 do {
                     try await self.cache.download(id: video.id, versionId: video.chosenVersionId,

@@ -82,6 +82,7 @@ private struct OptionsMenuHeader: View {
                 DisplayTitlesToggle(groups: model.groups, api: model.api, groupID: id)
                 RememberPositionToggle(groups: model.groups, api: model.api, groupID: id)
                 AutoDownloadToggle(store: model.autoDownload, groupID: id)
+                AutoPlayNewToggle(autoDownload: model.autoDownload, autoPlay: model.autoPlay, groupID: id)
             }
         }
     }
@@ -159,10 +160,10 @@ struct RememberPositionToggle: View {
 }
 
 /// The per-group "Download automatically" switch. Stored on this device only
-/// (`AutoDownloadStore`); turning it on starts the 5s polling right away
+/// (`DeviceGroupFlags`); turning it on starts the 5s polling right away
 /// instead of waiting for the next activation.
 struct AutoDownloadToggle: View {
-    @ObservedObject var store: AutoDownloadStore
+    @ObservedObject var store: DeviceGroupFlags
     let groupID: Int
 
     @EnvironmentObject var model: AppModel
@@ -178,6 +179,29 @@ struct AutoDownloadToggle: View {
         )) {
             Label("Download automatically", systemImage: "arrow.down.circle.dotted")
         }
+    }
+}
+
+/// The per-group "Auto play new videos" switch: a video that arrives in the
+/// group while it is open starts playing once its auto-download has a head
+/// start. Device-only like Download automatically, and greyed out without it,
+/// since the download is what it waits on.
+struct AutoPlayNewToggle: View {
+    @ObservedObject var autoDownload: DeviceGroupFlags
+    @ObservedObject var autoPlay: DeviceGroupFlags
+    let groupID: Int
+
+    var body: some View {
+        Toggle(isOn: Binding(
+            get: { autoPlay.isOn(groupID) },
+            set: { on in
+                DevLog.event(.tap, "auto play new toggled", ["group_id": "\(groupID)", "on": "\(on)"])
+                autoPlay.set(groupID, on)
+            }
+        )) {
+            Label("Auto play new videos", systemImage: "play.square.stack")
+        }
+        .disabled(!autoDownload.isOn(groupID))
     }
 }
 

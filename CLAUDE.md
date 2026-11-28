@@ -430,7 +430,7 @@ logged in.
   the server on 2026-07-31. New bulk actions go through the bounded window, not
   a bare `withTaskGroup`.
 - **"Download automatically" is a per-group switch stored on the device, not
-  on the group row** (`AutoDownloadStore`, UserDefaults `autoDownloadGroups`),
+  on the group row** (`DeviceGroupFlags`, UserDefaults `autoDownloadGroups`),
   because a download spends that device's storage. It sits in the group's `⋯`
   menu next to Remember position. While the app is in the foreground and any
   group is marked, `AppModel.startAutoDownloadPolling` lists each marked group
@@ -442,6 +442,14 @@ logged in.
   failed one isn't retried until the next activation. When the polled group
   is the feed on screen and its ids/statuses differ from the grid's, the poll
   calls `store.refresh()` so the new video appears without a pull.
+- **"Auto play new videos"** is a second device-local flag (`DeviceGroupFlags`,
+  `autoPlayNewGroups`) that only acts with Download automatically on (its
+  toggle is disabled otherwise). A video found on a poll *after* the group's
+  first listing of the session is new — the first listing is the backlog, so
+  opening the app never starts an old video. Once its auto-download has 4 MB
+  (`AutoDownload.readyToAutoPlay`), `AppModel.autoPlayRequest` is published and
+  `VideoGridView.autoPlayNew` plays it like a tap (audio in list mode), only if
+  that group is open and nothing is playing (player, audio, PiP, resume alert).
 - **The group-detail list plays audio, not video.** In a pushed group
   (`currentGroupID != nil`) at list size (`GridDisplayMode.list`), tapping a row
   starts `AppModel.audio` (`AudioQueuePlayer`) instead of presenting

@@ -291,6 +291,7 @@ struct VideoGridView: View {
             .fullScreenCover(item: $playing) { request in
                 playerCover(request)
             }
+            .onReceive(model.$autoPlayRequest.compactMap { $0 }) { autoPlayNew($0) }
             .overlay { if let error = store.errorText { errorBanner(error) } }
             .overlay { if let notice = store.noticeText { noticeBanner(notice) } }
         }
@@ -749,6 +750,35 @@ struct VideoGridView: View {
     private func play(_ video: Video, queueSnapshot: [Video], sleepMode: Bool = false, caller: String = "?") {
         DevLog.event(.nav, "play requested", ["video_id": "\(video.id)", "caller": caller])
         startPlayback(video, queueSnapshot: queueSnapshot, sleepMode: sleepMode, caller: caller)
+    }
+
+    /// "Auto play new videos": plays a just-arrived video the way a tap would
+    /// (audio in list mode, the full-screen player otherwise), but only when
+    /// its group is the one open and nothing is playing — it never cuts into a
+    /// video, the audio queue, a floating PiP or a pending resume prompt. The
+    /// request is cleared either way, so a skipped one doesn't fire later.
+    private func autoPlayNew(_ video: Video) {
+        model.autoPlayRequest = nil
+        let busy = playing != nil || pendingResume != nil || model.audio.isPlaying
+            || model.pip.floatingVideo != nil
+        guard let groupID = video.groupID, currentGroupID == groupID, !busy else {
+            DevLog.event(.play, "auto play skipped", [
+                "video_id": "\(video.id)", "open_group": currentGroupID.map(String.init) ?? "nil", "busy": "\(busy)",
+            ])
+            return
+        }
+        // The open grid may not list it yet (its refresh can still be in
+        // flight), so lead the queue with it rather than fall back to [video].
+        let listed = filteredVideos
+        let queue = listed.contains { $0.id == video.id } ? listed : [video] + listed
+        if audioOnlyMode {
+            DevLog.event(.nav, "audio requested", ["video_id": "\(video.id)", "caller": "auto-play"])
+            let index = queue.firstIndex { $0.id == video.id } ?? 0
+            model.audio.start(videos: queue, startIndex: index, scope: playbackScope,
+                              sleepMode: false, model: model)
+        } else {
+            play(video, queueSnapshot: queue, caller: "auto-play")
+        }
     }
 
     /// Row tap in audio mode: the current item toggles, anything else starts.
