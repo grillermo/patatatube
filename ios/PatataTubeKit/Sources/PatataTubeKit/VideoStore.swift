@@ -334,9 +334,12 @@ public final class VideoStore: ObservableObject {
     }
 
     /// Deletes on the server, then refreshes the list (and cache) from the API.
+    /// A download of it on this device stops and its bytes go too: nothing
+    /// could ever play them again, and a pinned partial entry is never evicted.
     public func delete(id: Int) async {
         do {
             if try await api.delete(id: id) {
+                mediaCache?.removeAllCached(id: id)
                 await removeDeletedVideo(id: id)
             }
             await load()

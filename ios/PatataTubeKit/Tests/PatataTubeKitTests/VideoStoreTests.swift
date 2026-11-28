@@ -1201,3 +1201,30 @@ private func tempCache() -> VideoListCache {
     #expect(cache.load(feed: .group(id: 1))?.map(\.id) == [1])
     #expect(cache.load(feed: .group(id: 2))?.map(\.id) == [2])
 }
+
+
+private final class RecordingMediaCache: MediaCaching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _removed: [Int] = []
+    var removed: [Int] { lock.withLock { _removed } }
+    func removeAllCached(id: Int) { lock.withLock { _removed.append(id) } }
+}
+
+@MainActor @Test func deleteStopsAndRemovesTheDevicesDownload() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
+    let media = RecordingMediaCache()
+    let store = VideoStore(api: api, mediaCache: media, defaults: makeDefaults())
+    await store.load()
+    await store.delete(id: 1)
+    #expect(media.removed == [1])
+}
+
+@MainActor @Test func refusedDeleteKeepsTheDevicesDownload() async {
+    let api = FakeAPI(); api.videosToReturn = [makeVideo(id: 1)]
+    api.deleteResult = false
+    let media = RecordingMediaCache()
+    let store = VideoStore(api: api, mediaCache: media, defaults: makeDefaults())
+    await store.load()
+    await store.delete(id: 1)
+    #expect(media.removed.isEmpty)
+}
