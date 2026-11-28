@@ -159,7 +159,7 @@ struct RememberPositionToggle: View {
 }
 
 /// The per-group "Download automatically" switch. Stored on this device only
-/// (`AutoDownloadStore`); turning it on starts the first pass right away
+/// (`AutoDownloadStore`); turning it on starts the 5s polling right away
 /// instead of waiting for the next activation.
 struct AutoDownloadToggle: View {
     @ObservedObject var store: AutoDownloadStore
@@ -173,7 +173,7 @@ struct AutoDownloadToggle: View {
             set: { on in
                 DevLog.event(.tap, "auto-download toggled", ["group_id": "\(groupID)", "on": "\(on)"])
                 store.set(groupID, on)
-                if on { model.runAutoDownloads() }
+                if on { model.startAutoDownloadPolling() }
             }
         )) {
             Label("Download automatically", systemImage: "arrow.down.circle.dotted")

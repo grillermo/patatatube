@@ -225,54 +225,115 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private var autoDownloadRunning = false
+    // MARK: - Download automatically
 
-    /// Downloads every finished, not-yet-cached video in the groups marked
-    /// "Download automatically". Runs on every activation and when a group is
-    /// switched on. One pass at a time; videos already downloading, paused or
-    /// on disk are skipped, so rerunning it is cheap and never undoes a pause.
-    /// Bounded like Download all — one task per video is what sent 226
-    /// simultaneous calls at the server on 2026-07-31.
-    func runAutoDownloads() {
-        guard !autoDownload.groupIDs.isEmpty, !autoDownloadRunning,
-              credentials.baseURL != nil else { return }
-        autoDownloadRunning = true
-        Task { @MainActor in
-            defer { self.autoDownloadRunning = false }
-            // Fresh list: a group deleted on another device drops out here
-            // instead of 404ing on every activation.
-            if let remote = try? await api.groups() {
-                groups.apply(remote)
-                autoDownload.retain(only: Set(remote.map(\.id)))
+    /// Seconds between checks while the app is in the foreground.
+    static let autoDownloadPollInterval: Duration = .seconds(5)
+
+    private var autoDownloadPoll: Task<Void, Never>?
+    /// Bumped per poll loop, so a cancelled loop finishing late can't clear
+    /// the handle of the one that replaced it.
+    private var autoDownloadPollGeneration = 0
+    /// Found but not started yet, in discovery order.
+    private var autoDownloadQueue: [Video] = []
+    /// Ids queued or downloading, so a poll never starts the same video twice
+    /// (the cache only reports `.downloading` once its job is registered).
+    private var autoDownloadKnown: Set<Int> = []
+    private var autoDownloadActive = 0
+    /// Ids whose download failed this foreground session. Not retried every
+    /// 5s; the next activation clears it.
+    private var autoDownloadFailed: Set<Int> = []
+    private var autoDownloadPrunedGroups = false
+
+    /// Starts checking the "Download automatically" groups every 5s. Called on
+    /// every `.active` scene phase and when a group's switch turns on; a
+    /// running poll is left alone. The loop exits on its own once no group is
+    /// marked, and `stopAutoDownloadPolling` ends it on the way out of the
+    /// foreground (downloads use a foreground session anyway).
+    func startAutoDownloadPolling() {
+        guard autoDownloadPoll == nil, !autoDownload.groupIDs.isEmpty else { return }
+        autoDownloadFailed = []
+        autoDownloadPrunedGroups = false
+        DevLog.event(.download, "auto-download polling started",
+                     ["groups": autoDownload.groupIDs.sorted().map(String.init).joined(separator: ",")])
+        autoDownloadPollGeneration += 1
+        let generation = autoDownloadPollGeneration
+        autoDownloadPoll = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self, !self.autoDownload.groupIDs.isEmpty else { break }
+                await self.pollAutoDownloadGroups()
+                try? await Task.sleep(for: Self.autoDownloadPollInterval)
             }
-            var targets: [Video] = []
-            for id in autoDownload.groupIDs.sorted() {
-                do {
-                    let videos = try await api.videos(feed: .group(id: id))
-                    targets += AutoDownloadStore.targets(in: videos) {
-                        self.cache.state(for: $0.id, versionId: $0.chosenVersionId)
-                    }
-                } catch {
-                    DevLog.error(error, "auto-download list failed", ["group_id": "\(id)"])
-                }
+            if self?.autoDownloadPollGeneration == generation { self?.autoDownloadPoll = nil }
+        }
+    }
+
+    func stopAutoDownloadPolling() {
+        autoDownloadPoll?.cancel()
+        autoDownloadPoll = nil
+    }
+
+    /// One check: list each marked group and queue every finished video that
+    /// isn't on the device, downloading, paused, queued or failed already.
+    private func pollAutoDownloadGroups() async {
+        guard credentials.baseURL != nil else { return }
+        // Once per session: a group deleted on another device drops out
+        // instead of 404ing every 5s.
+        if !autoDownloadPrunedGroups, let remote = try? await api.groups() {
+            autoDownloadPrunedGroups = true
+            groups.apply(remote)
+            autoDownload.retain(only: Set(remote.map(\.id)))
+        }
+        for id in autoDownload.groupIDs.sorted() {
+            guard !Task.isCancelled else { return }
+            do {
+                let videos = try await api.videos(feed: .group(id: id))
+                let fresh = AutoDownloadStore.targets(in: videos) {
+                    self.cache.state(for: $0.id, versionId: $0.chosenVersionId)
+                }.filter { !autoDownloadKnown.contains($0.id) && !autoDownloadFailed.contains($0.id) }
+                guard !fresh.isEmpty else { continue }
+                DevLog.event(.download, "auto-download found",
+                             ["group_id": "\(id)", "ids": fresh.map { "\($0.id)" }.joined(separator: ",")])
+                autoDownloadKnown.formUnion(fresh.map(\.id))
+                autoDownloadQueue += fresh
+            } catch {
+                DevLog.error(error, "auto-download list failed", ["group_id": "\(id)"])
             }
-            DevLog.event(.download, "auto-download pass", ["targets": "\(targets.count)"])
-            guard !targets.isEmpty else { return }
+        }
+        pumpAutoDownloads()
+    }
+
+    /// Starts queued downloads up to `maxConcurrentDownloads` at once — the
+    /// bounded window every bulk action needs (226 simultaneous calls took the
+    /// server down on 2026-07-31). Each finish pulls the next one, so a new
+    /// video found mid-batch doesn't wait for the whole batch.
+    private func pumpAutoDownloads() {
+        while autoDownloadActive < cache.maxConcurrentDownloads, !autoDownloadQueue.isEmpty {
+            let video = autoDownloadQueue.removeFirst()
+            // A tap may have started it while it sat in the queue.
+            guard cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached,
+                  let url = streamURL(for: video) else {
+                autoDownloadKnown.remove(video.id)
+                continue
+            }
+            autoDownloadActive += 1
             let token = credentials.token
             let streams = downloadStreamCount
-            await withBoundedTaskGroup(limit: cache.maxConcurrentDownloads, over: targets) { video in
-                // Re-checked at start: a tap may have begun it while queued.
-                guard self.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached,
-                      let url = self.streamURL(for: video) else { return }
+            let preview = imageURL(video.previewUrl)
+            Task { @MainActor in
                 do {
                     try await self.cache.download(id: video.id, versionId: video.chosenVersionId,
-                                                  from: url, preview: self.imageURL(video.previewUrl),
+                                                  from: url, preview: preview,
                                                   bearerToken: token, streamCount: streams)
                 } catch is CancellationError {
                 } catch is DownloadPausedError {
                 } catch {
                     DevLog.error(error, "auto-download failed", ["video_id": "\(video.id)"])
+                    self.autoDownloadFailed.insert(video.id)
                 }
+                self.autoDownloadActive -= 1
+                self.autoDownloadKnown.remove(video.id)
+                self.pumpAutoDownloads()
             }
         }
     }

@@ -111,7 +111,7 @@ struct PatataTubeApp: App {
                         if let picker = model.serverPicker { Task { await picker.probe() } }
                         model.cache.resumeInterrupted(bearerToken: model.credentials.token)
                         model.migrateLegacyHLSDownloads()
-                        model.runAutoDownloads()
+                        model.startAutoDownloadPolling()
                         // iOS reclaims the loopback listener while the app is
                         // suspended, and a proxy that came back dead takes every
                         // cached video's playback URL with it.
@@ -121,6 +121,7 @@ struct PatataTubeApp: App {
                         // from the background passes through `.inactive` too,
                         // and marking there would hide the idle gap.
                         if oldPhase == .active { model.idle.markEngaged() }
+                        model.stopAutoDownloadPolling()
                         // Last chance to get pending records out before the app
                         // is suspended or killed.
                         DevLog.flush()
