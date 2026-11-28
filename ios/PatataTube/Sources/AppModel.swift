@@ -288,6 +288,7 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled else { return }
             do {
                 let videos = try await api.videos(feed: .group(id: id))
+                refreshOpenGroupIfChanged(id, serverList: videos)
                 let fresh = AutoDownloadStore.targets(in: videos) {
                     self.cache.state(for: $0.id, versionId: $0.chosenVersionId)
                 }.filter { !autoDownloadKnown.contains($0.id) && !autoDownloadFailed.contains($0.id) }
@@ -301,6 +302,21 @@ final class AppModel: ObservableObject {
             }
         }
         pumpAutoDownloads()
+    }
+
+    /// The poll already fetched this group's list, so if it's the feed on
+    /// screen and the server has a video (or a status) the grid doesn't show,
+    /// reload it — the same `refresh()` pull-to-refresh runs, so a new video
+    /// appears at the top on its own. Compares ids and statuses only; the
+    /// reload makes them equal again, so this never loops.
+    private func refreshOpenGroupIfChanged(_ groupID: Int, serverList: [Video]) {
+        guard store.feed == .group(id: groupID), !store.isLoading else { return }
+        let onScreen = Dictionary(store.videos.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
+        let onServer = Dictionary(serverList.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
+        guard onScreen != onServer else { return }
+        DevLog.event(.download, "auto-download refreshing open group",
+                     ["group_id": "\(groupID)", "server": "\(onServer.count)", "screen": "\(onScreen.count)"])
+        Task { await store.refresh() }
     }
 
     /// Starts queued downloads up to `maxConcurrentDownloads` at once — the

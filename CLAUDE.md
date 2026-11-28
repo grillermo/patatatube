@@ -439,7 +439,9 @@ logged in.
   next, so a video added mid-batch doesn't wait for the batch. Polling starts
   on `.active` and when the switch turns on, and stops on leaving `.active`.
   Paused or running downloads aren't `.notCached`, so a hand pause sticks; a
-  failed one isn't retried until the next activation.
+  failed one isn't retried until the next activation. When the polled group
+  is the feed on screen and its ids/statuses differ from the grid's, the poll
+  calls `store.refresh()` so the new video appears without a pull.
 - **The group-detail list plays audio, not video.** In a pushed group
   (`currentGroupID != nil`) at list size (`GridDisplayMode.list`), tapping a row
   starts `AppModel.audio` (`AudioQueuePlayer`) instead of presenting
