@@ -87,6 +87,11 @@ def build_sd(video_id: int, on_progress=None) -> None:
     except BaseException:
         part.unlink(missing_ok=True)
         raise
+    if db.get_video(video_id) is None:
+        # Deleted while ffmpeg ran: the delete already swept videos/, so this
+        # rendition would be the one file left behind.
+        sd_path(video_id).unlink(missing_ok=True)
+        raise ValueError(f"video {video_id} was deleted during its SD encode")
     db.set_sd_ready(video_id, True)
 
 

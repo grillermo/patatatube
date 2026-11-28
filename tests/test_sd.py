@@ -466,3 +466,20 @@ def test_backfill_force_requeues_already_ready_rows(tmp_db, capsys):
     job = tmp_db.get_job(1)
     assert (job["kind"], job["video_id"], job["priority"]) == ("sd", ready, 50)
     assert "queued 1" in capsys.readouterr().out
+
+
+def test_build_sd_of_a_video_deleted_mid_encode_leaves_no_rendition(tmp_db, videos_dir, monkeypatch):
+    import sd
+    vid = _done_video(tmp_db, _children(tmp_db))
+    (videos_dir / f"{vid}.mp4").write_bytes(b"src")
+
+    def fake_run(cmd, **kw):
+        tmp_db.delete_video(vid)
+        Path(cmd[-1]).write_bytes(b"sd")
+
+    monkeypatch.setattr(sd, "run_ffmpeg", fake_run)
+    monkeypatch.setattr(sd, "_source_duration", lambda path: None)
+
+    with pytest.raises(ValueError, match="deleted"):
+        sd.build_sd(vid)
+    assert list(videos_dir.glob("*.sd.mp4*")) == []

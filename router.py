@@ -1028,13 +1028,30 @@ async def api_delete_video(video_id: int, request: Request):
     _check_token(request)
     video = db.get_video(video_id)
     if video:
+        # Row first: a download still running checks for it before writing
+        # anything into videos/, and cleans up after itself once it is gone.
+        db.delete_video(video_id)
         if video.get("filename"):
             (VIDEOS_DIR / video["filename"]).unlink(missing_ok=True)
+        # Mid-download rows have no filename yet, but the mp4 may land between
+        # the read above and the delete -- its name is fixed, so drop it anyway.
+        (VIDEOS_DIR / f"{video_id}.mp4").unlink(missing_ok=True)
         (VIDEOS_DIR / sd.sd_filename(video_id)).unlink(missing_ok=True)
         # The generated poster is derived from that mp4 — drop it too.
         (PREVIEWS_DIR / f"dl{video_id}.{PREVIEW_CACHE_SUFFIX}.jpg").unlink(missing_ok=True)
-        db.delete_video(video_id)
+        _remove_pending_upload(video)
     return {"ok": True}
+
+
+def _remove_pending_upload(video: dict) -> None:
+    """An upload not yet processed keeps its bytes in a temp file named by
+    `url`. Only ever a path upload_file wrote into the temp dir: for every
+    other platform `url` is a web address, not ours to touch."""
+    if video.get("platform") != "upload" or video.get("status") == "done":
+        return
+    tmp = Path(video["url"]).resolve()
+    if tmp.parent == Path(tempfile.gettempdir()).resolve():
+        tmp.unlink(missing_ok=True)
 
 
 @router.post("/api/videos/backfill-channels", status_code=202)

@@ -1662,3 +1662,43 @@ def test_hls_urls_are_gone(client):
 
 def test_jobs_endpoint_is_gone(client, auth_headers):
     assert client.get("/api/jobs", headers=auth_headers).status_code == 404
+
+
+def test_api_delete_mid_download_removes_the_landed_mp4_and_upload_temp(
+    client, monkeypatch, tmp_path
+):
+    """A row still downloading has no filename yet; its mp4 and an unprocessed
+    upload's temp file must go anyway."""
+    import db
+    import router
+    import tempfile
+
+    monkeypatch.setattr(router, "VIDEOS_DIR", tmp_path)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        upload_tmp = Path(tmp.name)
+    vid = db.add_video(str(upload_tmp), platform="upload")
+    db.update_video(vid, status="downloading")
+    landed = tmp_path / f"{vid}.mp4"
+    landed.write_bytes(b"data")
+
+    resp = client.post(f"/api/video/{vid}/delete", headers=AUTH)
+
+    assert resp.status_code == 200
+    assert db.get_video(vid) is None
+    assert not landed.exists()
+    assert not upload_tmp.exists()
+
+
+def test_api_delete_never_touches_a_url_outside_the_temp_dir(client, monkeypatch, tmp_path):
+    import db
+    import router
+
+    monkeypatch.setattr(router, "VIDEOS_DIR", tmp_path / "videos")
+    (tmp_path / "videos").mkdir()
+    precious = tmp_path / "precious.mp4"
+    precious.write_bytes(b"keep")
+    vid = db.add_video(str(precious), platform="upload")
+
+    client.post(f"/api/video/{vid}/delete", headers=AUTH)
+
+    assert precious.exists()

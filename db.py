@@ -671,8 +671,16 @@ def get_video(video_id: int) -> dict | None:
 
 
 def delete_video(video_id: int):
+    """Delete the row and any ffmpeg work still waiting for it.
+
+    Only *queued* jobs go: a running one belongs to converter.py, and the
+    downloader polling it must still see it finish so it can throw the output
+    away (`downloader._normalize_media_for_ios` treats a vanished job as a
+    deleted video).
+    """
     with _conn() as conn:
         conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+        conn.execute("DELETE FROM jobs WHERE video_id = ? AND status = 'queued'", (video_id,))
 
 
 _SD_ELIGIBLE_WHERE = """
@@ -805,13 +813,15 @@ def update_video(
     title: str | None = None,
     preview_url: str | None = None,
     channel: str | None = None,
-):
+) -> bool:
+    """False when there is no such row: the video was deleted while it was
+    downloading, and whatever the caller just wrote for it is now an orphan."""
     if status == "error":
         delete_video(video_id)
-        return
+        return False
 
     with _conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             UPDATE videos
             SET status = ?,
@@ -824,6 +834,7 @@ def update_video(
             """,
             (status, filename, error_msg, title, preview_url, channel, video_id),
         )
+        return cur.rowcount > 0
 
 
 def youtube_preview_url(source_key: str | None) -> str | None:

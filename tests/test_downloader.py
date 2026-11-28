@@ -1467,3 +1467,170 @@ async def test_failed_download_leaves_no_unplayed(monkeypatch, downloader_env):
     await downloader.download_video(video_id)
 
     assert db.unplayed_count(group_id) == 0
+
+
+# --- Deleting a video while it downloads leaves nothing behind ---------------
+
+
+def _youtube_row(db):
+    return db.add_video(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        platform="youtube",
+        source_key="dQw4w9WgXcQ",
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_during_ytdlp_skips_ffmpeg_and_drops_the_download(
+    monkeypatch, downloader_env, tmp_path
+):
+    db, downloader, videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"youtube-bytes")
+    video_id = _youtube_row(db)
+
+    async def fake_download(url):
+        db.delete_video(video_id)  # the user deletes it while yt-dlp runs
+        return downloader.YoutubeDownload(source_file, "T", "C")
+
+    async def fake_normalize(*args, **kwargs):
+        raise AssertionError("no ffmpeg work for a deleted video")
+
+    monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    await downloader.download_video(video_id, classify=True)
+
+    assert not source_file.exists()
+    assert list(videos_dir.iterdir()) == []
+    assert db.get_video(video_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_during_normalize_removes_the_finished_mp4(
+    monkeypatch, downloader_env, tmp_path
+):
+    db, downloader, videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"youtube-bytes")
+    normalized = tmp_path / "normalized.mp4"
+    video_id = _youtube_row(db)
+
+    async def fake_download(url):
+        return downloader.YoutubeDownload(source_file, "T", "C")
+
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
+        db.delete_video(video_id)  # deleted while converter.py works on it
+        normalized.write_bytes(b"normalized")
+        return normalized
+
+    monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    await downloader.download_video(video_id)
+
+    assert list(videos_dir.iterdir()) == []
+    assert not source_file.exists()
+    assert not normalized.exists()
+    assert db.get_video(video_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_during_twitter_download_drops_the_pybalt_file(
+    monkeypatch, downloader_env, tmp_path
+):
+    db, downloader, videos_dir = downloader_env
+    source_file = tmp_path / "tweet.mp4"
+    source_file.write_bytes(b"tweet-bytes")
+    video_id = db.add_video("https://twitter.com/user/status/123", platform="twitter")
+
+    async def fake_pybalt(url):
+        db.delete_video(video_id)
+        return str(source_file)
+
+    monkeypatch.setattr(downloader, "pybalt_download", fake_pybalt)
+
+    await downloader.download_video(video_id)
+
+    assert not source_file.exists()
+    assert list(videos_dir.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_normalize_removes_the_downloaded_input(
+    monkeypatch, downloader_env, tmp_path
+):
+    db, downloader, videos_dir = downloader_env
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"youtube-bytes")
+
+    async def fake_download(url):
+        return downloader.YoutubeDownload(source_file, "T", "C")
+
+    async def fake_normalize(*args, **kwargs):
+        raise RuntimeError("bad codec")
+
+    monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    video_id = _youtube_row(db)
+    await downloader.download_video(video_id)
+
+    assert not source_file.exists()
+    assert list(videos_dir.iterdir()) == []
+    assert db.get_video(video_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_during_upload_processing_removes_mp4_and_tmpfile(
+    monkeypatch, downloader_env, tmp_path
+):
+    db, downloader, videos_dir = downloader_env
+    tmp_upload = tmp_path / "upload.mp4"
+    tmp_upload.write_bytes(b"uploaded-bytes")
+    video_id = db.add_video(str(tmp_upload), platform="upload", title="Up")
+
+    async def fake_normalize(path, video_id, channel=None, source_key=None):
+        db.delete_video(video_id)
+        out = tmp_path / "out.mp4"
+        out.write_bytes(b"normalized")
+        return out
+
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios", fake_normalize)
+
+    await downloader.process_uploaded_video(video_id)
+
+    assert list(videos_dir.iterdir()) == []
+    assert not tmp_upload.exists()
+    assert not (tmp_path / "out.mp4").exists()
+
+
+def test_delete_video_drops_queued_jobs_but_not_running_ones(downloader_env):
+    db, _downloader, _videos_dir = downloader_env
+    queued_for = db.add_video("https://twitter.com/x/status/1")
+    running_for = db.add_video("https://twitter.com/x/status/2")
+    running_job = db.enqueue_job("normalize", running_for, payload={"input_path": "x"})
+    db.claim_job()
+    queued_job = db.enqueue_job("normalize", queued_for, payload={"input_path": "y"})
+
+    db.delete_video(queued_for)
+    db.delete_video(running_for)
+
+    assert db.get_job(queued_job) is None
+    assert db.get_job(running_job)["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_normalize_poll_stops_when_its_queued_job_is_dropped(downloader_env, tmp_path):
+    db, downloader, _videos_dir = downloader_env
+    video_id = db.add_video("https://twitter.com/x/status/1")
+
+    async def delete_the_video():
+        await asyncio.sleep(0)
+        db.delete_video(video_id)
+
+    with pytest.raises(downloader.VideoDeleted):
+        await asyncio.gather(
+            downloader._normalize_media_for_ios(tmp_path / "in.mp4", video_id=video_id),
+            delete_the_video(),
+        )

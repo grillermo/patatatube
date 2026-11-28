@@ -38,6 +38,10 @@ class YoutubeDownload(NamedTuple):
     description: str | None = None
 
 
+class VideoDeleted(Exception):
+    """The row went away while its download or conversion was running."""
+
+
 async def download_video(video_id: int, classify: bool = False):
     """`classify` files the finished video into a group chosen by the
     classifier. The router sets it only when the caller named no group."""
@@ -49,6 +53,7 @@ async def download_video(video_id: int, classify: bool = False):
     try:
         if video["platform"] == "youtube":
             meta = await _download_youtube_media(video["url"])
+            _ensure_still_wanted(video_id, meta.path)
             if classify:
                 # File it now, while the mp4 is still to be normalized: the
                 # video should show up in its group as soon as we know which
@@ -66,35 +71,50 @@ async def download_video(video_id: int, classify: bool = False):
             dest_name = await _store_ios_compatible_video(
                 video_id, meta.path, channel=meta.channel, source_key=video["source_key"]
             )
-            db.update_video(
-                video_id,
-                status="done",
-                filename=dest_name,
-                title=meta.title,
-                channel=meta.channel,
-            )
-            await _announce_new_video(video_id)
-            sd.enqueue_if_selected(video_id)
+            _finish(video_id, dest_name, title=meta.title, channel=meta.channel)
             return
 
         if video["platform"] in (None, "twitter"):
             dest_name = await _download_twitter(video_id, video["url"])
-            db.update_video(video_id, status="done", filename=dest_name)
-            await _announce_new_video(video_id)
-            sd.enqueue_if_selected(video_id)
+            _finish(video_id, dest_name)
             return
 
         raise ValueError(f"Unsupported platform: {video['platform']}")
+    except VideoDeleted:
+        logger.info("Video %s was deleted mid-download; discarded its files", video_id)
     except Exception as exc:
         logger.warning("Download failed; deleting video row %s: %s", video_id, exc)
         db.delete_video(video_id)
+        _remove_video_file(video_id)
 
 
-async def _announce_new_video(video_id: int) -> None:
+def _ensure_still_wanted(video_id: int, downloaded_path: Path) -> None:
+    """Drop a fresh download whose row was deleted while it ran, before any
+    ffmpeg work is spent on it."""
+    if db.get_video(video_id) is None:
+        Path(downloaded_path).unlink(missing_ok=True)
+        raise VideoDeleted(video_id)
+
+
+def _finish(video_id: int, dest_name: str, **fields) -> None:
+    """Mark the row done, or -- when it was deleted while we worked -- delete
+    the mp4 just moved into videos/, which nothing would ever point at again."""
+    if not db.update_video(video_id, status="done", filename=dest_name, **fields):
+        (VIDEOS_DIR / dest_name).unlink(missing_ok=True)
+        raise VideoDeleted(video_id)
+    _announce_new_video(video_id)
+    sd.enqueue_if_selected(video_id)
+
+
+def _announce_new_video(video_id: int) -> None:
     """Announce a finished download -- start counting its plays at 0, which is
     what puts it in its group's badge.
     """
     db.mark_announced(video_id)
+
+
+def _remove_video_file(video_id: int) -> None:
+    (VIDEOS_DIR / f"{video_id}.mp4").unlink(missing_ok=True)
 
 
 async def process_uploaded_video(video_id: int):
@@ -106,19 +126,20 @@ async def process_uploaded_video(video_id: int):
     tmp_path = Path(video["url"])
     try:
         dest_name = await _store_ios_compatible_video(video_id, tmp_path)
-        db.update_video(video_id, status="done", filename=dest_name)
-        await _announce_new_video(video_id)
-        sd.enqueue_if_selected(video_id)
+        _finish(video_id, dest_name)
+    except VideoDeleted:
+        logger.info("Upload %s was deleted mid-processing; discarded its files", video_id)
     except Exception as exc:
         logger.warning("Upload processing failed; deleting video row %s: %s", video_id, exc)
         db.delete_video(video_id)
-        with suppress(FileNotFoundError):
-            tmp_path.unlink()
+        _remove_video_file(video_id)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 async def _download_twitter(video_id: int, url: str) -> str:
-    downloaded_path = await pybalt_download(url)
-    downloaded_path = Path(downloaded_path)
+    downloaded_path = Path(await pybalt_download(url))
+    _ensure_still_wanted(video_id, downloaded_path)
     return await _store_ios_compatible_video(video_id, downloaded_path)
 
 
@@ -128,16 +149,26 @@ async def _store_ios_compatible_video(
     channel: str | None = None,
     source_key: str | None = None,
 ) -> str:
-    normalized_path = await _normalize_media_for_ios(
-        downloaded_path, video_id, channel=channel, source_key=source_key
-    )
-    dest = VIDEOS_DIR / f"{video_id}.mp4"
-    VIDEOS_DIR.mkdir(exist_ok=True)
-    shutil.move(str(normalized_path), str(dest))
+    """Normalize `downloaded_path` into videos/{id}.mp4.
 
-    if normalized_path != downloaded_path:
-        with suppress(FileNotFoundError):
-            downloaded_path.unlink()
+    The input is always consumed, success or not: it is a temp copy (yt-dlp,
+    an upload) or a file pybalt dropped in ~/Downloads, and a failed or
+    deleted download must not leave it behind.
+    """
+    try:
+        normalized_path = await _normalize_media_for_ios(
+            downloaded_path, video_id, channel=channel, source_key=source_key
+        )
+        try:
+            dest = VIDEOS_DIR / f"{video_id}.mp4"
+            VIDEOS_DIR.mkdir(exist_ok=True)
+            shutil.move(str(normalized_path), str(dest))
+        finally:
+            if normalized_path != downloaded_path:
+                normalized_path.unlink(missing_ok=True)
+    finally:
+        if Path(downloaded_path) != VIDEOS_DIR / f"{video_id}.mp4":
+            Path(downloaded_path).unlink(missing_ok=True)
 
     return dest.name
 
@@ -170,6 +201,9 @@ async def _normalize_media_for_ios(
 
     while True:
         job = db.get_job(job_id)
+        if job is None:
+            # db.delete_video drops queued jobs along with the row.
+            raise VideoDeleted(video_id)
         if job["status"] == "done":
             return Path((job["result"] or {})["output_path"])
         if job["status"] == "failed":
