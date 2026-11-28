@@ -43,6 +43,8 @@ final class AppModel: ObservableObject {
     let audio = AudioQueuePlayer()
     let videoListCache: VideoListCache
     let groups = GroupStore()
+    /// Groups this device downloads by itself on every activation.
+    let autoDownload = AutoDownloadStore()
     private let downloadSettings: DownloadStreamSettings
     private let simultaneousSettings: SimultaneousDownloadSettings
 
@@ -221,6 +223,67 @@ final class AppModel: ObservableObject {
             }
             self.legacyHLSMigrationRunning = false
         }
+    }
+
+    private var autoDownloadRunning = false
+
+    /// Downloads every finished, not-yet-cached video in the groups marked
+    /// "Download automatically". Runs on every activation and when a group is
+    /// switched on. One pass at a time; videos already downloading, paused or
+    /// on disk are skipped, so rerunning it is cheap and never undoes a pause.
+    /// Bounded like Download all — one task per video is what sent 226
+    /// simultaneous calls at the server on 2026-07-31.
+    func runAutoDownloads() {
+        guard !autoDownload.groupIDs.isEmpty, !autoDownloadRunning,
+              credentials.baseURL != nil else { return }
+        autoDownloadRunning = true
+        Task { @MainActor in
+            defer { self.autoDownloadRunning = false }
+            // Fresh list: a group deleted on another device drops out here
+            // instead of 404ing on every activation.
+            if let remote = try? await api.groups() {
+                groups.apply(remote)
+                autoDownload.retain(only: Set(remote.map(\.id)))
+            }
+            var targets: [Video] = []
+            for id in autoDownload.groupIDs.sorted() {
+                do {
+                    let videos = try await api.videos(feed: .group(id: id))
+                    targets += AutoDownloadStore.targets(in: videos) {
+                        self.cache.state(for: $0.id, versionId: $0.chosenVersionId)
+                    }
+                } catch {
+                    DevLog.error(error, "auto-download list failed", ["group_id": "\(id)"])
+                }
+            }
+            DevLog.event(.download, "auto-download pass", ["targets": "\(targets.count)"])
+            guard !targets.isEmpty else { return }
+            let token = credentials.token
+            let streams = downloadStreamCount
+            await withBoundedTaskGroup(limit: cache.maxConcurrentDownloads, over: targets) { video in
+                // Re-checked at start: a tap may have begun it while queued.
+                guard self.cache.state(for: video.id, versionId: video.chosenVersionId) == .notCached,
+                      let url = self.streamURL(for: video) else { return }
+                do {
+                    try await self.cache.download(id: video.id, versionId: video.chosenVersionId,
+                                                  from: url, preview: self.imageURL(video.previewUrl),
+                                                  bearerToken: token, streamCount: streams)
+                } catch is CancellationError {
+                } catch is DownloadPausedError {
+                } catch {
+                    DevLog.error(error, "auto-download failed", ["video_id": "\(video.id)"])
+                }
+            }
+        }
+    }
+
+    /// Absolute URL for a server image path; absolute URLs pass through.
+    private func imageURL(_ path: String?) -> URL? {
+        guard let path else { return nil }
+        if path.hasPrefix("http") { return URL(string: path) }
+        guard let base = credentials.baseURL else { return nil }
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return URL(string: trimmed, relativeTo: base.appendingPathComponent("/"))
     }
 
     /// Called whenever the scene becomes active. After more than an hour away

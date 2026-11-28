@@ -81,6 +81,7 @@ private struct OptionsMenuHeader: View {
             if case .feed(.group(let id)) = scope {
                 DisplayTitlesToggle(groups: model.groups, api: model.api, groupID: id)
                 RememberPositionToggle(groups: model.groups, api: model.api, groupID: id)
+                AutoDownloadToggle(store: model.autoDownload, groupID: id)
             }
         }
     }
@@ -153,6 +154,29 @@ struct RememberPositionToggle: View {
                 DevLog.error(error, "remember position PATCH failed", ["group_id": "\(id)", "on": "\(on)"])
                 await MainActor.run { groups.setRememberPosition(id: groupID, !on) }
             }
+        }
+    }
+}
+
+/// The per-group "Download automatically" switch. Stored on this device only
+/// (`AutoDownloadStore`); turning it on starts the first pass right away
+/// instead of waiting for the next activation.
+struct AutoDownloadToggle: View {
+    @ObservedObject var store: AutoDownloadStore
+    let groupID: Int
+
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Toggle(isOn: Binding(
+            get: { store.isOn(groupID) },
+            set: { on in
+                DevLog.event(.tap, "auto-download toggled", ["group_id": "\(groupID)", "on": "\(on)"])
+                store.set(groupID, on)
+                if on { model.runAutoDownloads() }
+            }
+        )) {
+            Label("Download automatically", systemImage: "arrow.down.circle.dotted")
         }
     }
 }

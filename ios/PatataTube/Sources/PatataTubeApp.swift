@@ -111,6 +111,7 @@ struct PatataTubeApp: App {
                         if let picker = model.serverPicker { Task { await picker.probe() } }
                         model.cache.resumeInterrupted(bearerToken: model.credentials.token)
                         model.migrateLegacyHLSDownloads()
+                        model.runAutoDownloads()
                         // iOS reclaims the loopback listener while the app is
                         // suspended, and a proxy that came back dead takes every
                         // cached video's playback URL with it.

@@ -429,6 +429,14 @@ logged in.
   only the transfer. One task per video is what sent 226 concurrent calls at
   the server on 2026-07-31. New bulk actions go through the bounded window, not
   a bare `withTaskGroup`.
+- **"Download automatically" is a per-group switch stored on the device, not
+  on the group row** (`AutoDownloadStore`, UserDefaults `autoDownloadGroups`),
+  because a download spends that device's storage. It sits in the group's `⋯`
+  menu next to Remember position. `AppModel.runAutoDownloads` runs on every
+  `.active` scene phase and when the switch turns on: it refetches
+  `/api/groups` (dropping ids of deleted groups), lists each marked group, and
+  downloads the `done`, `.notCached` videos through `withBoundedTaskGroup`.
+  Paused or running downloads aren't `.notCached`, so a hand pause sticks.
 - **The group-detail list plays audio, not video.** In a pushed group
   (`currentGroupID != nil`) at list size (`GridDisplayMode.list`), tapping a row
   starts `AppModel.audio` (`AudioQueuePlayer`) instead of presenting
