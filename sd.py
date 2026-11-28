@@ -65,7 +65,7 @@ def _source_duration(path: Path) -> float | None:
         return None
 
 
-def build_sd(video_id: int, on_progress=None) -> None:
+def build_sd(video_id: int, on_progress=None, should_stop=None) -> None:
     """Converter handler body. Raises on failure; sd_ready then stays 0."""
     video = db.get_video(video_id)
     if not video or video.get("status") != "done":
@@ -82,6 +82,7 @@ def build_sd(video_id: int, on_progress=None) -> None:
             encode_cmd(src, part),
             duration=_source_duration(src),
             on_progress=on_progress,
+            should_stop=should_stop,
         )
         os.replace(part, sd_path(video_id))
     except BaseException:

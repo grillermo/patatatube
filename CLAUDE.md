@@ -232,6 +232,16 @@ map for the intermittent-playback investigation:
    good descriptions, not of tuning the threshold. Twitter and file uploads
    are not classified (no title or description to read).
 5. Status transitions queued → downloading → done. **Failures don't get an `error` status** — `db.update_video(status="error")` and the download exception handler both *delete the row* instead. Don't rely on error rows existing.
+5b. **Deleting a video mid-download stops the work, then leaves nothing behind.** Every
+   stage polls "is the row still there" (`cancel.py`, 1s): yt-dlp's whole process
+   group is killed (it runs its own ffmpeg), the pybalt task is cancelled (it
+   downloads into its own temp dir, removed wholesale), and converter.py kills a
+   running `normalize`/`sd` ffmpeg and records the job `failed` / `cancelled: video
+   deleted`. `db.delete_video` drops the video's *queued* jobs. Whatever already
+   reached `videos/` is removed by whichever side notices second: the endpoint
+   deletes `{id}.mp4` even before the row has a filename, and the downloader's
+   final `update_video` returns False for a vanished row and unlinks what it just
+   moved in. A new stage that writes a file must keep both halves.
 6. `GET /videos/{id}/stream` serves the MP4 with HTTP Range support (206 partial content), hand-rolled in `_parse_byte_range` / `_iter_file_range`, gated by an asyncio semaphore (`VIDEO_STREAM_LIMIT`).
 
 ### ffmpeg runs in exactly one process

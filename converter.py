@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import app_logging  # noqa: E402
+import cancel  # noqa: E402
 import db  # noqa: E402
 import sd  # noqa: E402
 from paths import ensure_media_root  # noqa: E402
@@ -35,6 +36,12 @@ def _positive_int_env(name: str, default: int) -> int:
 FFMPEG_JOB_LIMIT = _positive_int_env("FFMPEG_JOB_LIMIT", 2)
 
 
+def _video_deleted(job: dict):
+    """Stops a job's ffmpeg once its video is deleted: nothing will ever read
+    the output, so finishing it only burns the CPU slot."""
+    return lambda: db.get_video(job["video_id"]) is None
+
+
 def _handle_normalize(job: dict, on_progress) -> dict:
     # Imported lazily: downloader pulls in pybalt, which the other kinds do not
     # need, and a normalize job is rare.
@@ -45,12 +52,13 @@ def _handle_normalize(job: dict, on_progress) -> dict:
         Path(payload["input_path"]),
         channel=payload.get("channel"),
         source_key=payload.get("source_key"),
+        should_stop=_video_deleted(job),
     )
     return {"output_path": str(output)}
 
 
 def _handle_sd(job: dict, on_progress) -> None:
-    sd.build_sd(job["video_id"], on_progress=on_progress)
+    sd.build_sd(job["video_id"], on_progress=on_progress, should_stop=_video_deleted(job))
 
 
 JOB_HANDLERS = {
@@ -74,6 +82,9 @@ def run_job(job: dict) -> None:
         result = handler(job, lambda fraction: db.set_job_progress(job["id"], fraction))
         db.finish_job(job["id"], "done", result=result)
         status = "done"
+    except cancel.Cancelled:
+        db.finish_job(job["id"], "failed", error_msg="cancelled: video deleted")
+        status = "cancelled"
     except Exception as exc:  # noqa: BLE001 - a bad job must not kill the runner
         traceback.print_exc()
         db.finish_job(job["id"], "failed", error_msg=str(exc))

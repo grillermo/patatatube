@@ -12,6 +12,7 @@ from typing import NamedTuple
 
 from pybalt import download as pybalt_download
 
+import cancel
 import classifier
 import db
 import sd
@@ -38,8 +39,13 @@ class YoutubeDownload(NamedTuple):
     description: str | None = None
 
 
-class VideoDeleted(Exception):
+class VideoDeleted(cancel.Cancelled):
     """The row went away while its download or conversion was running."""
+
+
+def _deleted(video_id: int):
+    """A should_stop check: true once the video's row is gone."""
+    return lambda: db.get_video(video_id) is None
 
 
 async def download_video(video_id: int, classify: bool = False):
@@ -52,7 +58,7 @@ async def download_video(video_id: int, classify: bool = False):
     db.update_video(video_id, status="downloading")
     try:
         if video["platform"] == "youtube":
-            meta = await _download_youtube_media(video["url"])
+            meta = await _download_youtube_media(video["url"], should_stop=_deleted(video_id))
             _ensure_still_wanted(video_id, meta.path)
             if classify:
                 # File it now, while the mp4 is still to be normalized: the
@@ -80,8 +86,8 @@ async def download_video(video_id: int, classify: bool = False):
             return
 
         raise ValueError(f"Unsupported platform: {video['platform']}")
-    except VideoDeleted:
-        logger.info("Video %s was deleted mid-download; discarded its files", video_id)
+    except cancel.Cancelled:
+        logger.info("Video %s was deleted mid-download; stopped and discarded it", video_id)
     except Exception as exc:
         logger.warning("Download failed; deleting video row %s: %s", video_id, exc)
         db.delete_video(video_id)
@@ -127,8 +133,8 @@ async def process_uploaded_video(video_id: int):
     try:
         dest_name = await _store_ios_compatible_video(video_id, tmp_path)
         _finish(video_id, dest_name)
-    except VideoDeleted:
-        logger.info("Upload %s was deleted mid-processing; discarded its files", video_id)
+    except cancel.Cancelled:
+        logger.info("Upload %s was deleted mid-processing; stopped and discarded it", video_id)
     except Exception as exc:
         logger.warning("Upload processing failed; deleting video row %s: %s", video_id, exc)
         db.delete_video(video_id)
@@ -138,9 +144,23 @@ async def process_uploaded_video(video_id: int):
 
 
 async def _download_twitter(video_id: int, url: str) -> str:
-    downloaded_path = Path(await pybalt_download(url))
-    _ensure_still_wanted(video_id, downloaded_path)
-    return await _store_ios_compatible_video(video_id, downloaded_path)
+    """pybalt downloads into a folder of our own, so a download stopped
+    halfway leaves its partial file somewhere we can remove wholesale."""
+    folder = Path(tempfile.mkdtemp(prefix="patatatube-pybalt-"))
+    try:
+        task = asyncio.ensure_future(pybalt_download(url, folder_path=folder))
+        while not task.done():
+            await asyncio.wait({task}, timeout=cancel.STOP_POLL_SECONDS)
+            if not task.done() and db.get_video(video_id) is None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+                raise VideoDeleted(video_id)
+        downloaded_path = Path(task.result())
+        _ensure_still_wanted(video_id, downloaded_path)
+        return await _store_ios_compatible_video(video_id, downloaded_path)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 async def _store_ios_compatible_video(
@@ -207,13 +227,20 @@ async def _normalize_media_for_ios(
         if job["status"] == "done":
             return Path((job["result"] or {})["output_path"])
         if job["status"] == "failed":
+            if db.get_video(video_id) is None:
+                raise VideoDeleted(video_id)  # converter.py stopped it for us
             raise RuntimeError(job["error_msg"] or "normalization failed")
         await asyncio.sleep(NORMALIZE_POLL_SECONDS)
 
 
 def _normalize_media_for_ios_sync(
-    input_path: Path, channel: str | None = None, source_key: str | None = None
+    input_path: Path,
+    channel: str | None = None,
+    source_key: str | None = None,
+    should_stop=None,
 ) -> Path:
+    """`should_stop` kills ffmpeg partway (raising cancel.Cancelled) -- the
+    converter passes "this video was deleted"."""
     input_path = Path(input_path)
     probe = _probe_media(input_path)
     video_stream = _first_stream(probe, "video")
@@ -253,7 +280,12 @@ def _normalize_media_for_ios_sync(
     ]
 
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        proc = cancel.run(
+            cmd, should_stop, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+    except cancel.Cancelled:
+        output_path.unlink(missing_ok=True)
+        raise
     except FileNotFoundError as exc:
         output_path.unlink(missing_ok=True)
         raise RuntimeError(f"ffmpeg not found at {FFMPEG_BIN!r}; install ffmpeg or set FFMPEG_BIN") from exc
@@ -360,11 +392,13 @@ CHANNEL_FIELD_TEMPLATE = "%(channel,uploader|)s"
 CHANNEL_PRINT_TEMPLATE = f"after_move:TW2WL_CHANNEL:{CHANNEL_FIELD_TEMPLATE}"
 
 
-async def _download_youtube_media(url: str) -> YoutubeDownload:
-    return await asyncio.to_thread(_download_youtube_media_sync, url)
+async def _download_youtube_media(url: str, should_stop=None) -> YoutubeDownload:
+    return await asyncio.to_thread(_download_youtube_media_sync, url, should_stop)
 
 
-def _download_youtube_media_sync(url: str) -> YoutubeDownload:
+def _download_youtube_media_sync(url: str, should_stop=None) -> YoutubeDownload:
+    """`should_stop` kills yt-dlp partway (raising cancel.Cancelled); the
+    temp dir, partial fragments and all, goes with the `with`."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         outtmpl = str(tmpdir_path / "%(id)s.%(ext)s")
@@ -398,8 +432,8 @@ def _download_youtube_media_sync(url: str) -> YoutubeDownload:
                 "--newline",
                 url,
             ]
-            return subprocess.run(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            return cancel.run(
+                cmd, should_stop, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
             )
 
         proc = run(True)

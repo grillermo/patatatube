@@ -35,7 +35,7 @@ def test_run_job_writes_progress_to_the_job_row(tmp_db, monkeypatch):
     job_id = tmp_db.enqueue_job("sd", video_id=1)
     job = tmp_db.claim_job()
 
-    def fake_prepare(video_id, on_progress=None):
+    def fake_prepare(video_id, on_progress=None, should_stop=None):
         on_progress(0.75)
 
     monkeypatch.setattr(converter.sd, "build_sd", fake_prepare)
@@ -163,7 +163,7 @@ def test_normalize_handler_forwards_the_channel_tag(tmp_db, monkeypatch):
 
     seen = {}
 
-    def fake_normalize(input_path, channel=None, source_key=None):
+    def fake_normalize(input_path, channel=None, source_key=None, should_stop=None):
         seen["input_path"] = input_path
         seen["channel"] = channel
         return Path("/tmp/out.mp4")
@@ -186,7 +186,7 @@ def test_normalize_handler_forwards_the_youtube_id(tmp_db, monkeypatch):
 
     seen = {}
 
-    def fake_normalize(input_path, channel=None, source_key=None):
+    def fake_normalize(input_path, channel=None, source_key=None, should_stop=None):
         seen["channel"] = channel
         seen["source_key"] = source_key
         return Path("/tmp/out.mp4")
@@ -200,3 +200,32 @@ def test_normalize_handler_forwards_the_youtube_id(tmp_db, monkeypatch):
     converter.run_job(tmp_db.claim_job())
 
     assert seen == {"channel": None, "source_key": "dQw4w9WgXcQ"}
+
+
+def test_run_job_stops_a_deleted_videos_normalize(monkeypatch, tmp_path):
+    """A cancelled job is recorded as failed with a reason, and the runner lives on."""
+    import cancel
+    import converter
+    import db
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "t.db"))
+    import importlib
+    importlib.reload(db)
+    db.init_db()
+    vid = db.add_video("https://twitter.com/x/status/1")
+    job_id = db.enqueue_job("normalize", vid, payload={"input_path": "x"})
+    job = db.claim_job()
+
+    def fake_normalize(input_path, channel=None, source_key=None, should_stop=None):
+        db.delete_video(vid)
+        assert should_stop()
+        raise cancel.Cancelled()
+
+    import downloader
+    monkeypatch.setattr(downloader, "_normalize_media_for_ios_sync", fake_normalize)
+
+    converter.run_job(job)
+
+    row = db.get_job(job_id)
+    assert row["status"] == "failed"
+    assert "cancelled" in row["error_msg"]

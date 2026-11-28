@@ -210,7 +210,7 @@ def test_build_sd_writes_atomically_and_marks_ready(tmp_db, videos_dir, monkeypa
     (videos_dir / f"{vid}.mp4").write_bytes(b"src")
     seen = {}
 
-    def fake_run(cmd, *, duration=None, on_progress=None):
+    def fake_run(cmd, *, duration=None, on_progress=None, should_stop=None):
         seen["duration"] = duration
         part = Path(cmd[-1])
         assert part.name == f"{vid}.sd.mp4.part"
@@ -256,7 +256,7 @@ def test_converter_dispatches_sd_jobs(tmp_db, monkeypatch):
     import converter
     import sd
     built = []
-    monkeypatch.setattr(sd, "build_sd", lambda vid, on_progress=None: built.append(vid))
+    monkeypatch.setattr(sd, "build_sd", lambda vid, on_progress=None, should_stop=None: built.append(vid))
     tmp_db.enqueue_job("sd", video_id=7, priority=200)
 
     converter.run_job(tmp_db.claim_job())

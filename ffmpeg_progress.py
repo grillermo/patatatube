@@ -7,6 +7,8 @@ is drained on a thread -- a full stderr pipe would otherwise deadlock the
 stdout reader on any verbose failure.
 """
 import subprocess
+
+import cancel
 import threading
 import time
 from collections import deque
@@ -77,6 +79,7 @@ def run_ffmpeg(
     *,
     duration: float | None = None,
     on_progress: Callable[[float], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
     _debug_line_sink: Callable[[str], None] | None = None,
 ) -> None:
     """Run ffmpeg to completion. Raises RuntimeError with stderr on failure.
@@ -84,6 +87,8 @@ def run_ffmpeg(
     With no duration or no callback this behaves exactly like the old
     subprocess.run path: no extra flags, nothing parsed. That covers passthrough
     conversions and any caller that cannot determine a duration.
+
+    `should_stop` kills ffmpeg partway and raises cancel.Cancelled.
 
     `_debug_line_sink` receives every stdout line and exists only for tests.
     """
@@ -101,7 +106,8 @@ def run_ffmpeg(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-    ) as proc:
+        start_new_session=should_stop is not None,
+    ) as proc, cancel.kill_when(proc, should_stop):
 
         def drain_stderr() -> None:
             assert proc.stderr is not None

@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,7 @@ async def test_download_youtube_success_persists_title(monkeypatch, downloader_e
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"youtube-bytes")
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         assert url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         return downloader.YoutubeDownload(source_file, "Downloaded Title", "Veritasium")
 
@@ -65,7 +66,7 @@ async def test_download_youtube_success_persists_title(monkeypatch, downloader_e
 async def test_download_youtube_failure_deletes_video(monkeypatch, downloader_env):
     db, downloader, _videos_dir = downloader_env
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         raise RuntimeError("yt-dlp failed")
 
     monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
@@ -86,7 +87,7 @@ async def test_download_twitter_uses_pybalt(monkeypatch, downloader_env, tmp_pat
     source_file = tmp_path / "tweet.mp4"
     source_file.write_bytes(b"tweet-bytes")
 
-    async def fake_pybalt(url):
+    async def fake_pybalt(url, folder_path=None):
         assert url == "https://twitter.com/user/status/123"
         return str(source_file)
 
@@ -431,9 +432,12 @@ async def test_normalize_raises_when_the_job_fails(monkeypatch, downloader_env, 
         job = db.claim_job()
         db.finish_job(job["id"], "failed", error_msg="bad codec")
 
+    # A real row: a failed job for a video that no longer exists reads as a
+    # deleted video, not a failure.
+    video_id = db.add_video("https://twitter.com/x/status/1")
     with pytest.raises(RuntimeError, match="bad codec"):
         await asyncio.gather(
-            downloader._normalize_media_for_ios(source, video_id=42),
+            downloader._normalize_media_for_ios(source, video_id=video_id),
             fail_the_job(),
         )
 
@@ -839,7 +843,7 @@ async def test_download_youtube_persists_the_channel(monkeypatch, downloader_env
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"youtube-bytes")
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         return downloader.YoutubeDownload(source_file, "Downloaded Title", "Veritasium")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
@@ -870,7 +874,7 @@ async def test_download_youtube_passes_the_channel_to_normalization(
     source_file.write_bytes(b"youtube-bytes")
     seen = {}
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         return downloader.YoutubeDownload(source_file, "Downloaded Title", "Veritasium")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
@@ -1112,7 +1116,7 @@ async def test_download_youtube_passes_the_id_to_normalization(
     source_file.write_bytes(b"youtube-bytes")
     seen = {}
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         return downloader.YoutubeDownload(source_file, "Downloaded Title", "Veritasium")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
@@ -1140,7 +1144,7 @@ async def test_download_youtube_queues_no_packaging_job(
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"youtube-bytes")
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         return downloader.YoutubeDownload(source_file, "Downloaded Title", "Veritasium")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
@@ -1170,7 +1174,7 @@ async def test_twitter_downloads_are_not_tagged_with_a_source_key(
     source_file.write_bytes(b"tweet-bytes")
     seen = {}
 
-    async def fake_pybalt(url):
+    async def fake_pybalt(url, folder_path=None):
         return str(source_file)
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
@@ -1258,7 +1262,7 @@ def classify_env(monkeypatch, downloader_env, tmp_path):
     source_file.write_bytes(b"youtube-bytes")
     calls = []
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         return downloader.YoutubeDownload(
             source_file, "Rain sounds", "Calm", duration_secs=3600, description="sleep"
         )
@@ -1414,7 +1418,7 @@ async def test_finished_youtube_download_adds_one_unplayed_to_its_group(monkeypa
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"youtube-bytes")
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         return downloader.YoutubeDownload(source_file, "T", "Ch")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
@@ -1456,7 +1460,7 @@ async def test_finished_upload_adds_one_unplayed(monkeypatch, downloader_env, tm
 async def test_failed_download_leaves_no_unplayed(monkeypatch, downloader_env):
     db, downloader, _videos_dir = downloader_env
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         raise RuntimeError("yt-dlp failed")
 
     monkeypatch.setattr(downloader, "_download_youtube_media", fake_download)
@@ -1489,7 +1493,7 @@ async def test_delete_during_ytdlp_skips_ffmpeg_and_drops_the_download(
     source_file.write_bytes(b"youtube-bytes")
     video_id = _youtube_row(db)
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         db.delete_video(video_id)  # the user deletes it while yt-dlp runs
         return downloader.YoutubeDownload(source_file, "T", "C")
 
@@ -1516,7 +1520,7 @@ async def test_delete_during_normalize_removes_the_finished_mp4(
     normalized = tmp_path / "normalized.mp4"
     video_id = _youtube_row(db)
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         return downloader.YoutubeDownload(source_file, "T", "C")
 
     async def fake_normalize(path, video_id, channel=None, source_key=None):
@@ -1544,7 +1548,7 @@ async def test_delete_during_twitter_download_drops_the_pybalt_file(
     source_file.write_bytes(b"tweet-bytes")
     video_id = db.add_video("https://twitter.com/user/status/123", platform="twitter")
 
-    async def fake_pybalt(url):
+    async def fake_pybalt(url, folder_path=None):
         db.delete_video(video_id)
         return str(source_file)
 
@@ -1564,7 +1568,7 @@ async def test_failed_normalize_removes_the_downloaded_input(
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"youtube-bytes")
 
-    async def fake_download(url):
+    async def fake_download(url, should_stop=None):
         return downloader.YoutubeDownload(source_file, "T", "C")
 
     async def fake_normalize(*args, **kwargs):
@@ -1634,3 +1638,52 @@ async def test_normalize_poll_stops_when_its_queued_job_is_dropped(downloader_en
             downloader._normalize_media_for_ios(tmp_path / "in.mp4", video_id=video_id),
             delete_the_video(),
         )
+
+
+def test_ytdlp_is_killed_when_should_stop_fires(monkeypatch, downloader_env, tmp_path):
+    import cancel
+
+    _db, downloader, _videos_dir = downloader_env
+    monkeypatch.setattr(cancel, "STOP_POLL_SECONDS", 0.05)
+    fake_ytdlp = tmp_path / "yt-dlp"
+    fake_ytdlp.write_text("#!/bin/sh\nsleep 30\n")
+    fake_ytdlp.chmod(0o755)
+    monkeypatch.setattr(downloader, "YTDLP_BIN", str(fake_ytdlp))
+
+    started = time.monotonic()
+    with pytest.raises(cancel.Cancelled):
+        downloader._download_youtube_media_sync("https://youtu.be/x", lambda: True)
+    assert time.monotonic() - started < 5
+
+
+@pytest.mark.asyncio
+async def test_delete_stops_a_running_twitter_download(monkeypatch, downloader_env, tmp_path):
+    import cancel
+
+    db, downloader, videos_dir = downloader_env
+    monkeypatch.setattr(cancel, "STOP_POLL_SECONDS", 0.05)
+    video_id = db.add_video("https://twitter.com/user/status/123", platform="twitter")
+    seen = {}
+
+    async def slow_pybalt(url, folder_path=None):
+        seen["folder"] = Path(folder_path)
+        (seen["folder"] / "partial.mp4").write_bytes(b"half")
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            seen["cancelled"] = True
+            raise
+
+    monkeypatch.setattr(downloader, "pybalt_download", slow_pybalt)
+
+    async def delete_soon():
+        await asyncio.sleep(0.1)
+        db.delete_video(video_id)
+
+    started = time.monotonic()
+    await asyncio.gather(downloader.download_video(video_id), delete_soon())
+
+    assert time.monotonic() - started < 5
+    assert seen["cancelled"]
+    assert not seen["folder"].exists()
+    assert list(videos_dir.iterdir()) == []
